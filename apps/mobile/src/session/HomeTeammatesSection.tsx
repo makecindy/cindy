@@ -40,6 +40,7 @@ import { useTeammateCreateController } from './TeammateCreateController';
 import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } from './TeammateList';
 import { cloudCompanionRoute } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
+import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
 
 /** Desktop previews five in a 260px sidebar; three keeps the first screen of tasks on a phone. */
 export const HOME_TEAMMATE_PREVIEW_LIMIT = 3;
@@ -127,13 +128,13 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
   const stored = local?.owner === owner ? local.collapsed : navigation.teammatesCollapsed;
   // Search results are always rows; the stored fold returns with the search cleared.
   const collapsed = stored && !search;
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
   const toggleCollapsed = useCallback(() => {
     const next = !stored;
     runDisclosure(() => { setLocal({ owner, collapsed: next }); if (next) setShowAll(false); });
     void setTeammatesCollapsed(next);
-  }, [stored, owner, runDisclosure, setTeammatesCollapsed]);
+  }, [stored, owner, runDisclosure, setTeammatesCollapsed, setShowAll]);
   const createTargets = useStableValue(roster.createTargets, sameHosts);
   const groupCreateTargets = useStableValue(roster.groupTargets.filter(groups.isOnline), sameHosts);
   const canCreate = createTargets.length > 0 || groupCreateTargets.length > 0;
@@ -146,16 +147,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure only adds a header action,
   // never a notice row that changes the list's height.
-  const error = groups.error ?? roster.error;
+  const error = groups.error ?? roster.error ?? cloud.error;
   const errorKey = error === 'CHAT_ENDPOINT_UNAVAILABLE' ? 'groupChat.server.endpointUnavailable'
     : error === 'CHAT_LIST_FAILED' ? 'groupChat.server.loadFailed'
     : entries.length ? 'devices.companions.stale' : 'devices.resources.loadFailed';
   const retrying = roster.refreshing || groups.refreshing;
   const showError = useDelayedConnectionNotice(!!error && focused && visible && !search);
   const retry = () => {
-    void roster.refresh();
-    if (groups.supported) void groups.refresh();
-    if (cloud.supported) void refreshCloud();
+    if (roster.error) void roster.refresh();
+    if (groups.error) void groups.refresh();
+    if (cloud.error) void refreshCloud();
   };
   // A first read with nothing cached stays out of the way instead of flashing an empty section.
   const shown = visible && (search ? entries.length > 0 : !!error || !(!entries.length && (!canCreate || roster.loading)));

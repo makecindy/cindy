@@ -33,6 +33,7 @@ import { ExecutorGate, executorGateModeFor, type ExecutorAction } from '../execu
 import { GitCredentialHistory } from '../executor/gitCredentials';
 import type { GuardedFetch } from '../executor/webFetch';
 import { ExecutorWorkspace, projectPathText } from '../executor/workspace';
+import { remoteAgentStartupTiming } from '../startupTiming';
 import type {
   RemoteAgentOpenPayload,
   RemoteAgentWireAncestorFile,
@@ -132,6 +133,7 @@ export interface StartRemoteAgentDeps {
   groupSwitch?: { token?: string; offer(token: string): void; takeNewRound?(): boolean };
   newId(): string;
   log?: {
+    debug?(message: string, meta?: Record<string, unknown>): void;
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
@@ -308,9 +310,14 @@ export async function startRemoteAgentSession(
   const cancels = pendingStarts.get(sessionId) ?? new Set<() => void>();
   pendingStarts.set(sessionId, cancels);
   cancels.add(cancel);
+  const timing = remoteAgentStartupTiming(deps.log, { side: 'controller', kind, sessionId });
+  let status: 'ok' | 'failed' = 'failed';
   try {
-    return await prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal);
+    const handle = await prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing);
+    status = 'ok';
+    return handle;
   } finally {
+    timing.finish(status);
     cancels.delete(cancel);
     if (!cancels.size && pendingStarts.get(sessionId) === cancels) pendingStarts.delete(sessionId);
   }
@@ -321,6 +328,7 @@ async function prepareAndStartRemoteAgentSession(
   opts: StartSessionOptions,
   deps: StartRemoteAgentDeps,
   signal: AbortSignal,
+  startupTiming: ReturnType<typeof remoteAgentStartupTiming>,
 ): Promise<AgentSessionHandle> {
   // 附加目录(只读引用)与可写目录分开跟踪，运行中任一侧变化都重算执行器根目录：
   // 否则新授予的目录过不了本机 shell/root 判定，撤掉的还被本机上限当可信根。
@@ -370,10 +378,12 @@ async function prepareAndStartRemoteAgentSession(
       : {}),
   });
   const vendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
-  const mcp = await deps.prepareMcp({ kind, opts, vendorOptions }).catch((error) => {
-    void executor.close();
-    throw error;
-  });
+  const mcp = await startupTiming
+    .measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }))
+    .catch((error) => {
+      void executor.close();
+      throw error;
+    });
   if (signal.aborted) {
     try { mcp.dispose(); } finally { await executor.close(); }
     throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
@@ -686,22 +696,47 @@ async function prepareAndStartRemoteAgentSession(
     return next;
   }
 
-  async function buildPayload(reconnect: boolean): Promise<RemoteAgentOpenPayload> {
+  async function buildPayload(
+    reconnect: boolean,
+    timing: ReturnType<typeof remoteAgentStartupTiming>,
+  ): Promise<RemoteAgentOpenPayload> {
     // 每次打开都读最新的图片清空代次：让出期间清空过的，连回的新进程按新代次交付。
-    const imageDeliveryEpoch = await deps.readImageDeliveryEpoch?.(opts.sessionId!);
+    const imageDeliveryEpoch = await timing.measure('image-epoch', async () =>
+      deps.readImageDeliveryEpoch?.(opts.sessionId!),
+    );
     const startOptions = openOptions(reconnect);
-    const projectFiles = await deps.collectProjectFiles(opts.workingDir).catch(() => []);
-    const ancestorFiles = await (deps.collectAncestorFiles?.(opts.workingDir) ?? Promise.resolve([])).catch(() => []);
+    const projectFiles = await timing
+      .measure('project-files', () => deps.collectProjectFiles(opts.workingDir))
+      .catch(() => []);
+    const ancestorFiles = await timing
+      .measure(
+        'ancestor-files',
+        () => (deps.collectAncestorFiles?.(opts.workingDir) ?? Promise.resolve([])),
+      )
+      .catch(() => []);
     // 每次打开(含连回)都重新看一遍：上级目录里的标记以这次打开时为准。
-    const ancestorMarkers = await (deps.collectAncestorMarkers?.(opts.workingDir) ?? Promise.resolve(undefined))
+    const ancestorMarkers = await timing
+      .measure(
+        'ancestor-markers',
+        () => (deps.collectAncestorMarkers?.(opts.workingDir) ?? Promise.resolve(undefined)),
+      )
       .catch(() => undefined);
-    const collectedPersonal = await (deps.collectPersonal?.(kind, projectFiles) ?? Promise.resolve(null))
+    const collectedPersonal = await timing
+      .measure(
+        'personal-config',
+        () => (deps.collectPersonal?.(kind, projectFiles) ?? Promise.resolve(null)),
+      )
       .catch(() => null);
     personalRoots = collectedPersonal?.roots ?? [];
     const personal = collectedPersonal?.personal ?? { files: [] };
-    const importFiles = kind === 'claude-code' && deps.collectImports
-      ? await deps.collectImports({ workingDir: opts.workingDir, projectFiles, ancestorFiles, personal }).catch(() => [])
-      : [];
+    const importFiles =
+      kind === 'claude-code' && deps.collectImports
+        ? await timing
+            .measure('instruction-imports', () =>
+              deps.collectImports!({ workingDir: opts.workingDir, projectFiles, ancestorFiles, personal }),
+            )
+            .catch(() => [])
+        : [];
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
@@ -716,7 +751,9 @@ async function prepareAndStartRemoteAgentSession(
         osVersion: `${os.type()} ${os.release()}`,
         // 仅供被控端把项目说明中的本机 Home 路径投影到虚拟工作区；不会进入 deviceHosted。
         homeDir: os.homedir(),
-        isGitRepo: await deps.isGitRepo(opts.workingDir).catch(() => false),
+        isGitRepo: await timing
+          .measure('git-probe', () => deps.isGitRepo(opts.workingDir))
+          .catch(() => false),
       },
       projectFiles,
       ancestorFiles,
@@ -739,26 +776,49 @@ async function prepareAndStartRemoteAgentSession(
     reconnect: boolean,
     onOpened: (started: RemoteStartedInfo) => void,
   ): Promise<RemoteAgentRunClient> {
-    // 重启恢复可能撞上 relay 尚未上线/拥堵冷却；只重试无副作用的能力读取，
-    // 等既有链路自行恢复。open/upload/send 的交付不确定时不能整次重放。
-    const caps = await withTransientRemoteRetry(() => {
-      if (linkState === 'closed') {
-        throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
-      }
-      return RemoteAgentRunClient.caps(deps.invoke);
-    });
-    if (caps.virtualWorkspace !== true) {
-      throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
-    }
-    deps.pool?.noteMaxRuns(caps.maxRuns);
-    deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
-    await deps.pool?.beforeOpen(member);
-    const payload = await buildPayload(reconnect);
+    const timing = reconnect
+      ? remoteAgentStartupTiming(deps.log, {
+          side: 'controller',
+          kind,
+          sessionId: opts.sessionId,
+          reconnect,
+        })
+      : startupTiming;
+    let status: 'ok' | 'failed' = 'failed';
     try {
-      return await openRun(payload, reconnect, onOpened);
-    } catch (error) {
-      if (!deps.pool || linkState === 'closed' || !isRemoteRunLimitError(error) || !await deps.pool.releaseForRetry(member)) throw error;
-      return await openRun(payload, reconnect, onOpened);
+      // 重启恢复可能撞上 relay 尚未上线/拥堵冷却；只重试无副作用的能力读取，
+      // 等既有链路自行恢复。open/upload/send 的交付不确定时不能整次重放。
+      const caps = await timing.measure('capability-handshake', () =>
+        withTransientRemoteRetry(() => {
+          if (linkState === 'closed') {
+            throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+          }
+          return RemoteAgentRunClient.caps(deps.invoke);
+        }),
+      );
+      if (caps.virtualWorkspace !== true) {
+        throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
+      }
+      deps.pool?.noteMaxRuns(caps.maxRuns);
+      deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
+      await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
+      const payload = await buildPayload(reconnect, timing);
+      try {
+        const client = await timing.measure('remote-open', () =>
+          openRun(payload, reconnect, onOpened),
+        );
+        status = 'ok';
+        return client;
+      } catch (error) {
+        if (!deps.pool || linkState === 'closed' || !isRemoteRunLimitError(error) || !await deps.pool.releaseForRetry(member)) throw error;
+        const client = await timing.measure('remote-open', () =>
+          openRun(payload, reconnect, onOpened),
+        );
+        status = 'ok';
+        return client;
+      }
+    } finally {
+      if (reconnect) timing.finish(status);
     }
   }
 

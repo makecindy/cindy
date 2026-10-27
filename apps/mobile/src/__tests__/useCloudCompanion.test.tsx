@@ -6,7 +6,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   owner: 'owner:1:global', current: true, readDeviceList: vi.fn(),
   capabilities: vi.fn(), actors: vi.fn(),
+  disk: new Map<string, string>(),
 }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
+  getItem: async (key: string) => h.disk.get(key) ?? null,
+  setItem: async (key: string, value: string) => { h.disk.set(key, value); },
+  removeItem: async (key: string) => { h.disk.delete(key); },
+  getAllKeys: async () => [...h.disk.keys()],
+  multiRemove: async (keys: string[]) => { keys.forEach(key => h.disk.delete(key)); },
+} }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
@@ -15,10 +23,12 @@ vi.mock('expo-router', async () => {
 vi.mock('@/chat/useChatServer', async () => {
   const { useMemo } = await import('react');
   return { useChatClient: () => useMemo(() => ({ owner: h.owner, enabled: true,
+    userId: h.owner.split(':')[0], realm: h.owner.split(':')[2],
     current: () => h.current, client: { capabilities: h.capabilities, actors: h.actors } }), [h.owner]) };
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ readDeviceList: h.readDeviceList }) }));
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
+import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -26,13 +36,32 @@ let result: ReturnType<typeof useCloudCompanionHome>;
 function Probe() { result = useCloudCompanionHome(true); return null; }
 const render = () => act(async () => root.render(createElement(Probe)));
 const actor = { id: 'actor', kind: 'bot', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'studio' };
-beforeEach(() => {
+beforeEach(async () => {
+  await clearRemoteResourceCache();
   vi.resetAllMocks(); h.owner = 'owner:1:global'; h.current = true;
   h.capabilities.mockResolvedValue({ companionHome: true }); h.actors.mockResolvedValue([actor]);
   h.readDeviceList.mockResolvedValue({ devices: [{ deviceId: 'studio', name: 'Mac Studio' }] });
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+
+it('keeps the whole cloud roster on remount while HTTP and the optional directory are unavailable', async () => {
+  await render();
+  expect(result.actors).toEqual([actor]);
+  act(() => root.unmount()); root = createRoot(document.createElement('div'));
+  h.capabilities.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.supported).toBe(true);
+  expect(result.actors).toEqual([actor]);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+});
+
+it('publishes the companion roster before a slow optional computer-name request completes', async () => {
+  h.readDeviceList.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.actors).toEqual([actor]);
+  expect(result.error).toBeNull();
+});
 
 // Tier: behavior. A successful actor refresh plus a failed optional directory read
 // previously replaced a known computer name with its ID. Pure row tests miss this

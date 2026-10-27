@@ -622,6 +622,14 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_TEST_CONNECTION: 'maker:provider:test-connection',
   /**
+   * 供应商账户余额查询（API Key 计费连接的余额卡,见 maker-host/provider-account-usage）。
+   * 入参 ProviderAccountUsageRequest（{providerId, forceRefresh?}）,端点在 main 硬编码
+   * 官方清单里,renderer 不传 URL;返回查询型结构化结果 ProviderAccountUsageResult（规则 13
+   * 例外条款:renderer 需要 error 渲染分类文案与重试入口）。快照不含密钥材料;虽只读,
+   * 但会把该供应商已存 key 发往其官方端点,不进 device-link 白名单（口径同 test-connection）。
+   */
+  PROVIDER_ACCOUNT_USAGE: 'maker:provider:account-usage',
+  /**
    * 供应商「获取模型列表」—— 用表单值（baseUrl / modelsUrl / key / headers 内存透传）GET
    * 该供应商的列模型端点（见 maker-host/provider-model-fetch）。返回查询型结构化结果
    * ProviderModelsFetchResult（{ok, models?, code?, status?}，规则 13 例外条款：renderer
@@ -851,6 +859,8 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
   BOT_GROUP_DELETE: 'maker:bot-group:delete',
   BOT_GROUP_SEND: 'maker:bot-group:send',
+  CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
+  BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',

@@ -112,18 +112,35 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133]);
+      expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(columnNames(db, 'sessions')).toContain('last_activity_at');
       expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
       expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
       expect(tableExists(db, 'plugin_usage_events')).toBe(true);
+      expect(columnNames(db, 'plugin_usage_events')).toContain('entry_kind');
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
       expect(tableExists(db, 'orca_remote_opens')).toBe(true);
       if (shape !== 'missing') {
         expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
         expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
       }
+    } finally { cleanup(); }
+  });
+  it('keeps existing tool usage when upgrading the invocation ledger', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)');
+      db.exec(readFileSync(path.join(drizzleDir(), '0128_demonic_odin.sql'), 'utf-8'));
+      db.prepare('INSERT INTO plugin_usage_subjects (id,source_kind,ghost_id,display_name,recording_started_at) VALUES (?,?,?,?,?)')
+        .run('subject', 'manual', 'plugin', 'Plugin', 100);
+      db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')
+        .run('legacy-tool', 'subject', 0, 100, 'run');
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 131 });
+      expect(db.prepare('SELECT call_id,subject_id,occurred_at,entry_kind FROM plugin_usage_events').all()).toEqual([
+        { call_id: 'legacy-tool', subject_id: 'subject', occurred_at: 100, entry_kind: 'tool' },
+      ]);
     } finally { cleanup(); }
   });
   it('adds nullable sessions.hidden_at to a populated database without touching existing tasks', () => {

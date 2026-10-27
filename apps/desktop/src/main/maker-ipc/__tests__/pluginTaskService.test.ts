@@ -205,6 +205,24 @@ function fixture() {
   };
 }
 
+// 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
+// unit；现有任务测试检查任务状态，未检查宿主统计观察者收到哪些事实。
+it('records one accepted input after create and does not count receipt replay or rejected dispatch', async () => {
+  const f = fixture();
+  const accepted: string[] = [];
+  f.deps.prepareInvocation = (_pluginId, id) => id;
+  f.deps.acceptInvocation = (_pluginId, id) => { accepted.push(id); };
+  const task = await f.create();
+  expect(accepted).toEqual([]);
+  const request = { taskId: task.taskId, requestKey: 'first-input', expectedRevision: task.revision, text: 'hello' };
+  const run = await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(accepted).toEqual([run.runId]);
+  vi.mocked(f.deps.dispatch).mockResolvedValueOnce({ ok: false });
+  await f.service.send('p', { ...request, requestKey: 'rejected-input' });
+  expect(accepted).toEqual([run.runId]);
+});
+
 // Targets create in a selected project through the same service, not directly through
 // session persistence. Without its create receipt, helper tools and uninstall lose ownership.
 // Minimal regression: a Host-supplied task ID + project, then get and uninstall (unit).

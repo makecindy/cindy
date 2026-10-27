@@ -106,6 +106,8 @@ import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import * as sessionsBus from '@/lib/sessionsBus';
 import { setRemoteOptimisticAttachmentUrls } from '@/lib/composerDraftStore';
+import { getToastSnapshot, toast } from '@/lib/toast';
+import i18n from '@/i18n';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   __resetStickySessionOriginForTest,
@@ -5991,6 +5993,56 @@ describe('makerChatStore text delta batching', () => {
       deviceLinkInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue'),
     ).toBe(false);
     expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  // #2281 / unit: exercise the public steer entry with each explicit mirror
+  // guard. Existing rejection tests protect error recovery, not immediate user
+  // feedback or the no-send boundary. ChatInput's false-result restore path is
+  // covered by chatInputAnnotationAbort.test.tsx.
+  it.each([
+    { steeringQueueClientIds: ['steer-in-flight'] },
+    { queueAbortPending: true },
+  ])('immediately reports an unsent composer steer without dispatching: %j', async (guard) => {
+    onInputProjection?.(projection(SESSION_ID, guard));
+    // A delayed refresh must not delay feedback or retry the rejected input.
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.getProjection.mockReturnValueOnce(new Promise<AgentInputProjection>((resolve) => {
+      resolveProjection = resolve;
+    }));
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+    const onInputCreated = vi.fn();
+    const beforeEnqueue = vi.fn(async () => true);
+    const file: AttachedFile = {
+      id: 'draft-image', name: 'draft.png', path: 'draft.png', ext: '.png',
+      size: 10, category: 'image', mimeType: 'image/png',
+      annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }],
+    };
+    try {
+      const result = makerChatStore.steerMessage(
+        SESSION_ID, 'keep my draft', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+        [file], undefined, { onInputCreated, beforeEnqueue },
+      );
+      expect(getToastSnapshot()).toContainEqual(expect.objectContaining({
+        variant: 'warning', message: i18n.t('newChat.chatInput.steerNotSent'),
+      }));
+      await expect(result).resolves.toBe(false);
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toBe(before);
+      expect(input.getProjection).toHaveBeenCalledWith(SESSION_ID);
+      resolveProjection(projection(SESSION_ID));
+      await flushPromises();
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(before.messages);
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual(before.pendingQueue);
+      expect(input.steer).not.toHaveBeenCalled();
+      expect(input.enqueue).not.toHaveBeenCalled();
+      expect(onInputCreated).not.toHaveBeenCalled();
+      expect(beforeEnqueue).not.toHaveBeenCalled();
+      expect(messageService.create).not.toHaveBeenCalled();
+      expect(sessionService.touchUserSend).not.toHaveBeenCalled();
+      expect(window.electronAPI.cacheMediaForSession).not.toHaveBeenCalled();
+    } finally {
+      toast.dismissAll();
+      vi.advanceTimersByTime(300);
+    }
   });
 
   it('drops a standalone late projection when the data owner changes', async () => {

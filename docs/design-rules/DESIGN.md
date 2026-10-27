@@ -1185,7 +1185,8 @@ Known but deliberately-deferred cleanups are tracked in the decision log's backl
 
 Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc. **Not** ordinary single-line editors in Settings — there Enter must not submit.
 
-- **Enter = submit**, **Shift+Enter = newline**.
+- By default, **Enter = submit**, **Shift+Enter = newline**. The desktop chat composer also supports the existing **Cmd/Ctrl+Enter = submit** preference; when enabled, **Enter = newline**.
+- Composer list continuation follows newline intent: Enter in that preference, as well as Shift/Alt+Enter, continues a list or exits an empty item. Send shortcuts and IME confirmation must not edit lists; fenced code keeps native newline behavior. The shared key handler is `handleComposerListEnter` in `apps/desktop/src/renderer/components/new-chat/ComposerListNodes.ts`, covered by `apps/desktop/src/renderer/lib/__tests__/composerListContinuationEditor.test.ts`.
 - **Enter during IME composition must not submit** — check `event.nativeEvent.isComposing` (a CJK user confirming a candidate must not accidentally send).
 - Centralize this logic in code; do not re-implement it per field and let behavior drift (per "code-first determinism" in `docs/dev-rules/maker-core-and-agent-behavior.md`).
 
@@ -1204,24 +1205,6 @@ before activation. Recording/refinement, Stop, Queue and queue editing retain th
 existing actions. Other composers keep their existing behavior.
 
 #### Motion tokens (the only tier source)
-
-**Message arrival and delivery continuity (2026-10-25).** Keep the existing bubble
-colors, shape and typography. New timeline rows enter once with a subtle opacity /
-6px/pt translation while their occupied space grows continuously on mobile. Arrival
-comes from visible message identities, not the age of the first token. Initial
-history, older pages, replacement windows and recycled cells do not replay; streaming
-updates and delivery acknowledgement retain their row identity. Reduced motion shows
-the final state immediately, including when enabled during an entrance.
-
-Animate occupied space through streamed wrapping, thinking/work previews, action-row
-changes, recommendations and status removal. Retain exiting content until its space
-closes. Only one scroll owner follows the tail; keyboard and composer reservation must
-use the same evolving geometry as scroll compensation. A reader's drag/history position
-takes precedence. Keep native text selection and the existing message actions; pending
-sends retain the settled action-row space. Reserve streaming action space without
-exposing unfinished-message actions, and collapse intermediate replies' unused space
-continuously. Frame-rate claims require actual display/frame evidence, not interpolated
-recordings or an animation-duration setting.
 
 Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 radius scale. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
 

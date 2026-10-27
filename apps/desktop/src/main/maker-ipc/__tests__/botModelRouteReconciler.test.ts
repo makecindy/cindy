@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { withSendToSessionLock } from '../sendToSessionLock';
 import { createScheduledModelScope } from '../scheduledModelSelection';
-import { createBotModelRouteReconciler } from '../botModelRouteReconciler';
+import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import type { BotModelRoute } from '../../../shared/botModelChain';
-import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
+import { acceptSessionRuntimeMutation, cancelPendingSessionRuntimeMutation, clearSessionRuntimeControlState,
+  getSessionRuntimeControlSnapshot, type SessionRuntimeProfile } from '../sessionRuntimeControl';
 
 function harness() {
   let owner = 'owner-a';
@@ -464,4 +465,52 @@ it('rereads a newer durable save when acceptance loses its database compare-and-
   expect(h.state.current.model).toBe('newest-model');
   expect(accepted).toHaveBeenCalledTimes(2);
   expect(baseline).toBe('');
+});
+
+// #7241 / #7177, unit tier: the real runtime control queues a same-Harness
+// selection outside the Harness-switch registry. Earlier tests only rejected
+// staging itself; they did not exercise successful staging that remains pending.
+it.each(['same-engine', 'cross-engine'] as const)('keeps accepted recovery until a deferred %s choice lands', async kind => {
+  const sessionId = `pending-bot-route-${kind}`;
+  const current: SessionRuntimeProfile = { agentKind: 'codex', model: 'old', providerId: 'xd', effort: 'medium', fastMode: false };
+  let baseline: string | null = JSON.stringify({ ...current, scopeId: 'legacy', pendingBotProfileVersion: 2 });
+  const original = baseline;
+  let deferred = true;
+  let harnessPending = false;
+  let effective = current;
+  const apply = createBotModelRouteApplier({
+    stage: async (_id, route) => {
+      const profile: SessionRuntimeProfile = { ...route, effort: 'medium' };
+      if (kind === 'same-engine') acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile, deferred });
+      else harnessPending = deferred;
+      if (!deferred) effective = profile;
+    },
+    isIdle: () => !deferred,
+    applyPendingSwitch: async () => {},
+    hasPendingSwitch: () => harnessPending,
+    onApplied: async () => { baseline = null; },
+  });
+  const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner',
+    read: async () => ({ chain: [{ harness: kind === 'same-engine' ? 'codex' : 'pi',
+      model: 'saved', providerId: 'xd', effort: 'medium', fastMode: false }],
+      current: effective, hasRuntimeOverride: true, scheduledModelBaseline: baseline }),
+    apply, onSelectionAccepted: async () => { baseline = null; },
+  });
+  try {
+    await expect(reconcile(sessionId)).rejects.toThrow('Saved companion route is still pending');
+    expect(baseline).toBe(original);
+    // A failed safe-boundary apply cancels its pending mutation, not the saved
+    // permanent choice. The next reconciliation must still be able to retry.
+    const pending = getSessionRuntimeControlSnapshot(sessionId).pending;
+    if (pending) cancelPendingSessionRuntimeMutation(sessionId, pending.generation);
+    harnessPending = false;
+    expect(effective.model).toBe('old');
+    expect(baseline).toBe(original);
+    deferred = false;
+    await reconcile(sessionId);
+    expect(effective.model).toBe('saved');
+    expect(baseline).toBeNull();
+  } finally {
+    clearSessionRuntimeControlState(sessionId);
+  }
 });

@@ -4,11 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 
 const h = vi.hoisted(() => ({
+  owner: { dataOwnerId: 'test-owner', generation: 0 },
   navigate: vi.fn(),
   toast: vi.fn(),
   ensureLoaded: vi.fn(async (): Promise<Array<{ id: string; status: string }>> => []),
   profiles: [] as Array<{ id: string; status: string }>,
   devices: [{ deviceId: 'tablet', name: 'Tablet', isSelf: false }],
+}));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => h.owner,
+  isDataOwnerGenerationCurrent: (owner: unknown) => owner === h.owner,
+  isDataOwnerPushCurrent: () => true,
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 vi.mock('react-i18next', () => ({
@@ -32,6 +38,7 @@ import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCl
 import { BotConnectionStatus } from '../BotConnectionStatus';
 
 const maker = {
+  chatDisplayCache: vi.fn(),
   getCompanionCloudState: vi.fn(),
   onCompanionCloudChanged: vi.fn(() => () => undefined),
   getCompanionTranscript: vi.fn(),
@@ -48,13 +55,26 @@ const snapshot = (home: string | null, enabled = true): CompanionCloudSnapshot =
 });
 
 beforeEach(() => {
+  h.owner = { dataOwnerId: 'test-owner', generation: h.owner.generation + 1 };
   for (const fn of Object.values(maker)) fn.mockReset();
+  maker.chatDisplayCache.mockResolvedValue(null);
   maker.onCompanionCloudChanged.mockImplementation(() => () => undefined);
   h.navigate.mockReset();
   h.toast.mockReset();
   Object.defineProperty(window, 'electronAPI', { configurable: true, writable: true, value: { maker } });
 });
 afterEach(() => { cleanup(); });
+
+// Integration tier: slow/failing IPC must not obscure a locally saved transcript.
+it('renders the saved cloud transcript before the remote read and preserves it on failure', async () => {
+  maker.chatDisplayCache.mockResolvedValue({ messages: [{ id: 'saved', seq: '1', text: 'Saved cloud chat', role: 'user', createdAt: 1 }] });
+  let fail!: (error: Error) => void;
+  maker.getCompanionTranscript.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+  render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
+  expect(await screen.findByText('Saved cloud chat')).toBeTruthy();
+  await act(async () => fail(new Error('offline')));
+  expect(screen.getByText('Saved cloud chat')).toBeTruthy();
+});
 
 describe('presentation helpers', () => {
   it('hides demoted copies and adds unseen cloud homes as offline rows', () => {

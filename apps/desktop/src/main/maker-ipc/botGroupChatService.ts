@@ -123,6 +123,8 @@ export async function settleBotGroupLaneTerminal(
 }
 
 export interface BotGroupChatServiceDeps {
+  /** A durable, owner-captured UI projection; tests and hosts without persistence can omit it. */
+  chatHistoryStore?: (endpoint: string, humanActorId: string, readerActorId: string, current: () => boolean) => import('@cindy/maker-shared/chat-history').ChatHistoryStore;
   /**
    * With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4); with
    * `threadRootId`, the Bot's own lane for that Thread (§3); with `talkPlanId`, its own

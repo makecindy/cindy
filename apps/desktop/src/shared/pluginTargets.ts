@@ -31,5 +31,7 @@ export type PluginTargetRequest =
       title?: string;
       route?: PluginTaskRoute;
       delivery?: PluginTargetDelivery;
+      /** Reference an already confirmed Host tool invocation; never grants execution authority. */
+      invocationId?: string;
     }
   | { kind: 'cancel'; requestKey: string };

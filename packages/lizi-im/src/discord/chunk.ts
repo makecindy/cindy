@@ -66,9 +66,7 @@ export function chunkDiscordText(text: string, limit = MAX_MESSAGE_LEN): string[
     }
   }
 
-  if (current.length > 0) {
-    chunks.push(current);
-  }
+  flush();
 
   return chunks;
 }

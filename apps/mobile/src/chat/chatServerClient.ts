@@ -1,4 +1,5 @@
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
+import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
 import { botGroupMessageSummaryText, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
@@ -25,12 +26,12 @@ export interface ChatMessage {
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
-export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }> }
+export interface ChatSnapshot { cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }> }
 export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[] }
+export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; historyRevision?: string }
 /** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string, signal?: AbortSignal) => Promise<T>;
 /** An actor the account owns; a companion's `externalId` is its bot id on every computer. */
@@ -38,7 +39,7 @@ export interface ChatActor { id: string; kind: string; externalId: string; name:
 export interface ChatCapabilities { companionHome: boolean }
 /** Compare-and-set result: a conflict carries the main computer another device already chose. */
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
-export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null }
+export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
   | { type: 'update'; expectedRevision: number; name?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' };
@@ -48,6 +49,15 @@ export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
   const managers = snapshot.members.filter(member => member.state === 'joined'
     && (member.id === self || member.ownerActorId === self) && ['owner', 'admin'].includes(member.role));
   return managers.find(member => member.role === 'owner') ?? managers.find(member => member.id === self) ?? managers[0];
+}
+
+export interface ChatSendInput {
+  conversationKind?: 'direct';
+  clientId: string; text: string; mentions: { all: boolean; botIds: string[] };
+  quote?: { messageId: string }; threadRootId?: string;
+}
+export interface ChatSendBody {
+  operationId: string; content: ChatMessage['content']; mentions: string[]; threadRootId?: string;
 }
 
 export function chatId(value: string): string {
@@ -228,7 +238,14 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     hasMoreBefore: page.before !== null, round: { status: 'idle', speakers: [], canContinue: false }, supportsAttachments: false };
 }
 
-export function createChatServerClient(request: ChatRequest, personalList = createConversationListState()) {
+export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
+  openHistory?: (human: string) => Promise<ChatHistory>) {
+  let historyCache: Promise<ChatHistory> | undefined;
+  const cache = () => openHistory ? historyCache ??= identity().then(openHistory).catch(error => { historyCache = undefined; throw error; }) : undefined;
+  async function messagePage(room: string, query: string) {
+    const stored = await cache();
+    return stored ? stored.page<ChatMessage>(room, new URLSearchParams(query)) : request<ChatMessage[]>(`/conversations/${room}/messages?${query}`);
+  }
   // Preserve the posted quote through a lost response. Retrying an operation must
   // not change its content/recipients if the original is subsequently edited or removed.
   const postedQuotes = new Map<string, { content: ChatMessage['content']; mentions: string[] }>();
@@ -249,25 +266,41 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     if (!Array.isArray(value)) throw new Error('INVALID_CHAT_EXECUTIONS');
     return value.filter(row => sources.has(row.source_message_id));
   }
-  async function history(roomId: string, before?: string | null): Promise<ChatHistoryPage> {
-    const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
+  async function history(roomId: string, before?: string | null, shownIds: string[] = [], attempt = 0): Promise<ChatHistoryPage> {
+    const stored = await cache();
+    if (!before) stored?.invalidate(roomId);
+    const snapshot = await stored?.snapshot(roomId);
+    const messages = await messagePage(chatId(roomId), `limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
     if (!Array.isArray(messages)) throw new Error('INVALID_CHAT_MESSAGES');
     const next = messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null;
     if (before && next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
-    return { messages, before: next };
+    const projection = await stored?.projection<ChatMessage>(roomId, shownIds);
+    if (projection && snapshot?.cacheGeneration !== projection.generation) {
+      if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
+      return history(roomId, before, shownIds, attempt + 1);
+    }
+    return { messages, before: next, ...(projection ? { historyRevision: projection.generation, messageUpdates: projection.messages } : {}) };
   }
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let singleSpeaker = false;
+  let lastIdentity: { id: string; at: number } | undefined;
+  let readingIdentity: Promise<string> | undefined;
   async function identity() {
-    const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number } }>('/me');
-    if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
-    supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
-    supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
-    singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
-    return chatId(me.actor.id);
+    if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
+    return readingIdentity ??= (async () => {
+      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number } }>('/me');
+      if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+      supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
+      supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
+      singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
+      const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
+      return id;
+    })().finally(() => { readingIdentity = undefined; });
   }
   return {
+    invalidateHistory(room: string, metadata = false) { void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+    async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
     personalList,
     lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker }),
     async groupSettings(roomId: string) {
@@ -388,7 +421,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     /** Main-timeline messages of any room kind (a companion's room is `direct`), newest first. */
     history,
-    async snapshot(roomId: string): Promise<ChatSnapshot> {
+    async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
+      const stored = await cache();
+      if (stored) { stored.invalidate(roomId, metadata); return stored.snapshot<ChatSnapshot>(chatId(roomId)); }
       return request(`/conversations/${chatId(roomId)}/snapshot`);
     },
     async members(roomId: string): Promise<ChatMember[]> {
@@ -396,19 +431,20 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (!Array.isArray(members)) throw new Error('INVALID_CHAT_MEMBERS');
       return members;
     },
-    async load(roomId: string, oldest?: string, threadRootId?: string): Promise<ChatPage> {
+    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0): Promise<ChatPage> {
       const room = chatId(roomId);
       const threadQuery = threadRootId ? `&threadRootId=${chatId(threadRootId)}` : '';
-      const snapshot = await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
+      const stored = await cache();
+      const snapshot = stored ? await stored.snapshot<ChatSnapshot>(room) : await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
       if (snapshot.room.id !== room || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       chatCursor(snapshot.cursor);
       // Snapshot includes Thread replies; the message endpoint selects the main timeline.
-      let batch = await request<ChatMessage[]>(`/conversations/${room}/messages?limit=100${threadQuery}`);
+      let batch = await messagePage(room, `limit=100${threadQuery}`);
       const messages = [...batch];
       let before = batch.length === 100 ? chatCursor(batch.at(-1)!.seq) : null;
       // Reauthorize and re-read the displayed window on invalidation, including edits/removals.
       while (oldest && before && BigInt(before) > BigInt(chatCursor(oldest))) {
-        batch = await request<ChatMessage[]>(`/conversations/${room}/messages?limit=100&before=${before}${threadQuery}`);
+        batch = await messagePage(room, `limit=100&before=${before}${threadQuery}`);
         const next = batch.length === 100 ? chatCursor(batch.at(-1)!.seq) : null;
         if (next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
         messages.push(...batch); before = next;
@@ -417,13 +453,25 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const root = await request<ChatMessage>(`/conversations/${room}/messages/${chatId(threadRootId)}`);
         messages.push(root);
       }
-      return { snapshot, messages, before, ...(threadRootId ? { threadRootId } : {}), failures: await failures(room, messages) };
+      const executionFailures = await failures(room, messages);
+      const projection = await stored?.projection<ChatMessage>(room, []);
+      if (projection && snapshot.cacheGeneration !== projection.generation) {
+        if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
+        return this.load(roomId, undefined, threadRootId, attempt + 1);
+      }
+      return { snapshot, messages, before, ...(projection ? { historyRevision: projection.generation } : {}),
+        ...(threadRootId ? { threadRootId } : {}), failures: executionFailures };
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;
-      const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100&before=${chatCursor(page.before)}${page.threadRootId ? `&threadRootId=${chatId(page.threadRootId)}` : ''}`);
-      const loaded = [...page.messages, ...messages];
-      return { ...page, messages: loaded, failures: await failures(roomId, loaded),
+      const messages = await messagePage(chatId(roomId), `limit=100&before=${chatCursor(page.before)}${page.threadRootId ? `&threadRootId=${chatId(page.threadRootId)}` : ''}`);
+      const projection = await (await cache())?.projection<ChatMessage>(roomId, page.messages.map(message => message.id));
+      if (projection && projection.generation !== page.historyRevision) return this.load(roomId, undefined, page.threadRootId);
+      const updates = new Map(projection?.messages.map(message => [message.id, message]));
+      const loaded = [...page.messages.map(message => updates.get(message.id) ?? message), ...messages];
+      const executionFailures = await failures(roomId, loaded);
+      if (projection && (await cache())?.generation(roomId) !== projection.generation) return this.load(roomId, undefined, page.threadRootId);
+      return { ...page, messages: loaded, failures: executionFailures,
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> {
@@ -450,7 +498,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (current) { if (BigInt(readSeq) > BigInt(current.read_seq)) current.read_seq = readSeq; }
       else page.snapshot.reads.push({ thread_key: key, read_seq: readSeq });
     },
-    async send(roomId: string, input: { conversationKind?: 'direct'; clientId: string; text: string; mentions: { all: boolean; botIds: string[] }; quote?: { messageId: string }; threadRootId?: string }) {
+    async send(roomId: string, input: ChatSendInput, durable?: {
+      body?: ChatSendBody;
+      save(body: ChatSendBody): Promise<void>;
+    }) {
+      if (durable?.body) return request<ChatMessage>(`/conversations/${chatId(roomId)}/messages`, 'POST', durable.body);
       const key = JSON.stringify([roomId, input.clientId, input.text, input.mentions, input.quote?.messageId, input.threadRootId]);
       const known = input.quote ? postedQuotes.get(key) : undefined;
       const content: ChatMessage['content'] = known?.content ?? [{ type: 'text', text: input.text }];
@@ -475,8 +527,12 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (postedQuotes.size > 128) postedQuotes.delete(postedQuotes.keys().next().value!);
       }
       try {
-        const result = await request(`/conversations/${chatId(roomId)}/messages`, 'POST', { operationId: input.clientId,
-          content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) });
+        const body: ChatSendBody = { operationId: input.clientId,
+          content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) };
+        // The exact body is durable before POST. A lost response/restart must not
+        // rebuild its quote or recipients under the same operationId.
+        await durable?.save(body);
+        const result = await request<ChatMessage>(`/conversations/${chatId(roomId)}/messages`, 'POST', body);
         postedQuotes.delete(key);
         return result;
       } catch (error) {

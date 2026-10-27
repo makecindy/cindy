@@ -6,8 +6,8 @@ import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, 
 
 const dataOwner = vi.hoisted(() => ({ generation: 1 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => dataOwner.generation,
-  isDataOwnerGenerationCurrent: (owner: number) => owner === dataOwner.generation,
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: dataOwner.generation }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) => owner.generation === dataOwner.generation,
   isDataOwnerPushCurrent: () => true,
 }));
 
@@ -18,15 +18,17 @@ const summary = (name: string): BotGroupSummary => ({
 
 let push: (payload: BotGroupChangedPayload, stamp?: unknown) => void = () => {};
 const listBotGroups = vi.fn();
+const chatDisplayCache = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers();
   dataOwner.generation = 1;
   resetBotGroupStoreForTests();
   listBotGroups.mockReset().mockResolvedValue({ ok: true, groups: [summary('周末出游')] });
+  chatDisplayCache.mockReset().mockResolvedValue(null);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { maker: { listBotGroups, onBotGroupChanged: (cb: typeof push) => { push = cb; return () => {}; } } },
+    value: { maker: { listBotGroups, chatDisplayCache, onBotGroupChanged: (cb: typeof push) => { push = cb; return () => {}; } } },
   });
 });
 
@@ -36,6 +38,27 @@ afterEach(() => {
 });
 
 describe('group list mirror', () => {
+  // Integration tier: disk and server can resolve in either order at cold startup.
+  it('shows saved groups during a pending refresh and does not resurrect a fresh deletion', async () => {
+    let finish!: (value: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    chatDisplayCache.mockResolvedValueOnce([summary('Saved group')]);
+    refreshBotGroups();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupListSnapshot().groups[0]?.name).toBe('Saved group');
+    finish({ ok: true, groups: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupListSnapshot().groups).toEqual([]);
+    resetBotGroupStoreForTests();
+    let disk!: (value: unknown) => void;
+    chatDisplayCache.mockImplementationOnce(() => new Promise(resolve => { disk = resolve; }));
+    listBotGroups.mockResolvedValueOnce({ ok: true, groups: [] });
+    refreshBotGroups();
+    await vi.advanceTimersByTimeAsync(0);
+    disk([summary('Deleted group')]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupListSnapshot().groups).toEqual([]);
+  });
   // Unit regression: the public sync entry must recover a completed companion's
   // sidebar state after its final push triggers a failed read. Previously only
   // successful push bursts were covered; no later push should be required.

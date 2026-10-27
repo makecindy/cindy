@@ -14,6 +14,39 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
+function finishFakeChild(
+  child: ChildProcessWithoutNullStreams,
+  exitCode: number | null,
+  signal: NodeJS.Signals | null = null,
+): void {
+  (child as any).exitCode = exitCode;
+  (child as any).signalCode = signal;
+  (child.stdout as PassThrough).end();
+  child.emit('close', exitCode, signal);
+}
+
+/** Models Node's killed flag: SIGTERM was delivered, but the process is still alive. */
+function createSigtermIgnoringChild(): ChildProcessWithoutNullStreams {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+  (child as any).stdout = new PassThrough();
+  (child as any).stderr = new PassThrough();
+  (child as any).killed = false;
+  (child as any).exitCode = null;
+  (child as any).signalCode = null;
+
+  child.kill = vi.fn((signal: NodeJS.Signals) => {
+    (child as any).killed = true;
+    if (signal === 'SIGKILL') finishFakeChild(child, null, signal);
+    return true;
+  }) as any;
+
+  return child;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 /* ------------------------------------------------------------------ */
 /* Mock child_process.spawn                                           */
 /* ------------------------------------------------------------------ */
@@ -104,6 +137,27 @@ describe('listAllFiles error handling', () => {
     expect(result.files.length).toBe(1);
     expect(result.truncated).toBe(true);
   });
+
+  it('escalates to SIGKILL when capped rg ignores SIGTERM', async () => {
+    vi.useFakeTimers();
+    const child = createSigtermIgnoringChild();
+    spawnHandler = () => child;
+
+    const { listAllFiles } = await import('../listAllFiles.js');
+    const resultPromise = listAllFiles({ rgPath: '/fake/rg', workdir: '/tmp/work', cap: 1 });
+    (child.stdout as PassThrough).write('a.ts\n');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+    await vi.advanceTimersByTimeAsync(200);
+    // Let the old implementation settle too, so the regression assertion cannot hang.
+    if (child.exitCode === null && child.signalCode === null) {
+      finishFakeChild(child, null, 'SIGKILL');
+    }
+    const result = await resultPromise;
+
+    expect(result.truncated).toBe(true);
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -192,6 +246,27 @@ describe('RipgrepSearcher fatal exit handling', () => {
     );
     expect(endEvents.length).toBe(1);
     expect((endEvents[0] as any).truncated).toBe(false);
+  });
+
+  it('escalates cancellation to SIGKILL when rg ignores SIGTERM', async () => {
+    vi.useFakeTimers();
+    const child = createSigtermIgnoringChild();
+    spawnHandler = () => child;
+
+    const RipgrepSearcher = await importSearcher();
+    const searcher = new RipgrepSearcher({ rgPath: '/fake/rg', logger: makeLogger() });
+    const searchId = searcher.start({
+      query: 'needle',
+      workdir: '/tmp/work',
+      caseSensitive: false,
+      maxMatches: 100,
+    });
+
+    searcher.cancel(searchId);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
   });
 
   it('emits type:end when rg exits with code 0', async () => {

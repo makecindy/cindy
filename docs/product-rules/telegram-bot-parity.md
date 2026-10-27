@@ -108,6 +108,14 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | **工具循环与输出上限终态的渠道文案** | `im/shared/turnRetryNotice.ts`（`terminalErrorText`） | `reason=tool_use_loop_detected` 的终态事件统一按受限 `toolLoop` 生成渠道可读说明；`reason=output-limit` 共用「回复可能不完整，可发送下一条消息继续」提示；个人侧 `turnRunner` 与官方侧 `hook-control/turnObserver` 都复用这份映射，原始 `loopHint` / `missing_required_field` 等内部分类只留在本地错误上下文，不外发。 |
 | **Auto 审阅的引用证据**（用户本条回复／引用的消息与附件数） | 投影与上限：`packages/maker-shared/src/autoReviewIntent.ts` 的 `projectAutoReviewUserReferences`；两侧映射：`im/shared/autoReviewReferences.ts` | 两侧都把宿主盖章的引用事实放进 `MAIN_OWNED_SEND_CONTEXT.autoReviewReferences`，由 maker-core 挂到当前消息的审阅意图上，审阅器以独立低信任块呈现，不算用户原话、不构成授权。**数据来源各不相同**：个人只取 adapter 的 `prepareAgentTurnText` 实际交给模型的回复投影（`replyContext`；飞书被注入扫描拦下时就是占位，模型没看到的回复审阅器也看不到），附件数取本条附件（`im/shared/turnRunner.ts`，纯图引用为「[图片]」占位）；官方由 `hook-control/dispatcher.ts` 在展示截短（只留最早 20 条）之前从服务端原始 `source.threadContext` 取回复目标（触发消息带 `replyToMessageId` 时按它找父消息、找不到不猜，否则取排除当前请求后的最后一条），连同实际送达附件数交给 `hook-control/session-runner.ts`。服务端在被引消息没有文字时不下发 threadContext、且附件不区分自带与引用，所以官方纯图引用只剩「本条带 N 张图」 |
 
+官方成功终稿的客户端发布有 **120 秒交接期限**（2026-10-27）：从 `publishFinal`
+开始计时，包含在途进度、终稿分段与过程消息清理。期限内沿用共享发送判据；超时关闭
+该轮载体、取消退避，返回 `clientFinal.complete=false`，完整正文经既有 `turn.end`
+出箱交回服务端，释放同任务队列。不会截短 `retry_after` 后继续由旧载体重发，也不重新
+调用模型；实际送达仍取决于服务端与 Telegram 状态。个人 bot 没有服务端出箱，不套用
+此期限。实现与回归：`hook-control/telegramTurnCarrier.ts`、
+`__tests__/telegramTurnCarrier.test.ts`、`__tests__/dispatcher.test.ts`。
+
 ### 放在共享目录、但**只有一侧消费**的
 
 | 东西 | 实际情况 |

@@ -2,7 +2,7 @@
 import { act, createContext, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), push: vi.fn(),
+const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
   openTeammate: vi.fn(async (_row: unknown) => {}),
   cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
@@ -33,7 +33,7 @@ vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: ({
 vi.mock('@/chat/cloudCompanion', () => ({ CLOUD_ROW_REVISION: 'cloud', cloudActorForRow: () => h.cloudActor, cloudCompanionRows: (items: unknown) => items }));
 vi.mock('@/session/teammateNavigation', () => ({ cloudCompanionRoute: () => '/cloud-chat' }));
 vi.mock('@/session/botGroupNavigation', () => ({ botGroupRoute: () => '/group-chat' }));
-vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => ({ supported: true, actors: [], deviceNames: {}, refresh: h.cloudRefresh }) }));
+vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => ({ supported: true, actors: [], deviceNames: {}, error: h.cloudError, refresh: h.cloudRefresh }) }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
   isRemoteResourceUnread: (_owner: string, _device: string, id: string) => h.unread || h.unreadIds.has(id),
   remoteResourceCacheRevision: () => h.cacheRevision,
@@ -66,6 +66,7 @@ vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () =>
   owner: 'owner', teammatesCollapsed: h.collapsed, lastTeammate: null,
   setTeammatesCollapsed: async () => {}, openTeammate: h.openTeammate, openCreatedTeammate: async () => {} }) }));
 import { HomeTeammatesSection } from '../session/HomeTeammatesSection';
+import { getHomeViewSession } from '../session/homeViewSession';
 import { CONNECTION_NOTICE_DELAY_MS } from '../components/connectionNoticeDelay';
 
 const item = { key: 'host:bot', host: { deviceId: 'host', deviceName: 'Mac' }, item: {
@@ -76,6 +77,7 @@ const groups = { items: [] as any[], supported: true, refreshing: false, error: 
 let root: Root; let node: HTMLDivElement;
 beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.unread = false; groups.items = [];
   h.cacheRevision = 0; h.unreadIds.clear(); h.stripRenders = []; h.avatarRenders = []; h.identityReads = 0;
+  h.cloudError = null; getHomeViewSession().write('teammatesShowAll', false);
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const render = (refreshKey: number, overrides: Partial<Parameters<typeof HomeTeammatesSection>[0]> = {}) => act(async () => root.render(el(HomeTeammatesSection, {
@@ -98,8 +100,8 @@ it('keeps cached teammates and offers a quiet header retry only for a lasting fa
   h.cloudRefresh.mockClear();
   await act(async () => byId('home.teammatesRetry')!.click());
   expect(roster.refresh).toHaveBeenCalledTimes(1);
-  expect(groups.refresh).toHaveBeenCalledTimes(1);
-  expect(h.cloudRefresh).toHaveBeenCalledTimes(1);
+  expect(groups.refresh).not.toHaveBeenCalled();
+  expect(h.cloudRefresh).not.toHaveBeenCalled();
   roster.error = null;
   await render(0);
   expect(byId('home.teammatesRetry')).toBeNull();
@@ -207,4 +209,27 @@ it('keeps a 50-companion strip quiet through ten refreshes and updates only the 
   expect(byId('avatar.Bot 17')?.textContent).toBe('🤖');
   await act(async () => byId('home.teammatesStrip.bot.host.bot17')!.click());
   expect(h.openTeammate).toHaveBeenCalledExactlyOnceWith(latest[17]);
+});
+
+// Integration: leaving the full home and mounting its sidebar used to collapse the
+// expanded roster and invalidate the retained scroll offset.
+it('keeps the expanded roster when the home presentation remounts', async () => {
+  const original = roster.items;
+  roster.items = Array.from({ length: 5 }, (_, index) => ({ ...item, key: String(index), item: { ...item.item, display: { title: `Teammate ${index}` } } }));
+  try {
+    await render(0);
+    await act(async () => byId('home.teammatesShowAll')!.click());
+    expect(node.querySelectorAll('[data-testid="row.bot"]')).toHaveLength(5);
+    await act(async () => root.unmount()); root = createRoot(node);
+    await render(0);
+    expect(node.querySelectorAll('[data-testid="row.bot"]')).toHaveLength(5);
+  } finally { roster.items = original; }
+});
+it('retries a cloud roster failure without restarting healthy computer or group lists', async () => {
+  roster.error = null; h.cloudError = 'CLOUD_ROSTER_FAILED';
+  await render(0); h.cloudRefresh.mockClear();
+  await act(async () => vi.advanceTimersByTimeAsync(CONNECTION_NOTICE_DELAY_MS));
+  await act(async () => byId('home.teammatesRetry')!.click());
+  expect(h.cloudRefresh).toHaveBeenCalledTimes(1);
+  expect(roster.refresh).not.toHaveBeenCalled(); expect(groups.refresh).not.toHaveBeenCalled();
 });

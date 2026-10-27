@@ -17,6 +17,8 @@ vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-to
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
+vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
@@ -64,6 +66,7 @@ vi.mock('ws', async () => {
 });
 import { withChatServer } from '../chatServer.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
+import type { ChatHistoryState, ChatHistoryStore } from '@cindy/maker-shared/chat-history';
 
 const selfId = '30000000-0000-4000-8000-000000000001';
 const rooms = Array.from({ length: 8 }, (_, index) => `10000000-0000-4000-8000-00000000000${index + 1}`);
@@ -118,6 +121,133 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged } as unknown as BotGroupChatServiceDeps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+  // Unit: a membership reset while execution metadata is loading must not relabel old messages as the new history.
+  it('retries a composed group view if its cached history resets during another HTTP read', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? { body: { cursor: '57', changes: [], hasMore: false } } : response(route));
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    await timed(() => service.getGroup(rooms[0])); await connected();
+    fixture.timing = route => ({ serve: 100, deliver: route.endsWith('/executions') ? 500 : 100 });
+    const pending = service.getGroup(rooms[0]);
+    // Latest message page has been read from disk; the response is waiting for execution state.
+    await vi.advanceTimersByTimeAsync(120);
+    fixture.page = [];
+    fixture.sockets[0].emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${rooms[0]}`, cursor: '58',
+      changes: [{ type: 'membership.changed' }] }));
+    const result = await timed(() => pending);
+    expect(result.value).toMatchObject({ ok: true, group: { messages: [] } });
+  });
+
+  // Unit: production adapter + persisted projection; old open-path tests only covered HTTP invalidation.
+  it('persists historical edits before ACK and reopens from disk with only an incremental read', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    let block: Promise<void> | undefined;
+    let finish!: () => void;
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      await block; if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    const open = () => withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    service.dispose(); service = open();
+    const old = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', revision: 1 };
+    fixture.page = Array.from({ length: 100 }, (_, index) => ({ ...message, seq: String(200 - index),
+      id: `50000000-0000-4000-8000-${String(200 - index).padStart(12, '0')}` }));
+    let head = '57';
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?') ? { body: { cursor: head, changes: [], hasMore: false } }
+      : route.includes('/messages?') && route.includes('before=5') ? { body: [old] } : response(route));
+    await timed(() => service.getGroup(rooms[0]));
+    await timed(() => service.getGroup(rooms[0], { beforeSequence: 5 }));
+    await connected();
+    await timed(() => service.getGroup(rooms[0]));
+    block = new Promise(resolve => { finish = resolve; });
+    const ws = fixture.sockets[0]; vi.mocked(ws.send).mockClear();
+    ws.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${rooms[0]}`, cursor: '58', changes: [
+      { type: 'message.updated', entityId: old.id, data: { message: { ...old, revision: 2, content: [{ type: 'text', text: 'edited remotely' }] } } },
+    ] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent().some(frame => frame.type === 'ack')).toBe(false);
+    expect(disk.get(rooms[0])?.cursor).toBe('57');
+    head = '58'; finish(); block = undefined;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent()).toContainEqual({ type: 'ack', scope: `conversation:${rooms[0]}`, cursor: '58' });
+    const refreshed = await timed(() => service.getGroup(rooms[0], { sourceMessageIds: [old.id] }));
+    expect(refreshed.value.ok && refreshed.value.group.messageUpdates?.[0]?.content).toBe('edited remotely');
+    service.dispose(); service = open();
+    const restart = await timed(() => service.getGroup(rooms[0], { beforeSequence: 5 }));
+    expect(restart.value.ok && restart.value.group.messages[0]?.content).toBe('edited remotely');
+    expect(restart.routes.filter(route => route.includes('/snapshot') || route.includes('/messages?'))).toEqual([]);
+    expect(restart.routes.some(route => route.startsWith('/changes?') && route.includes('after=58'))).toBe(true);
+  });
+
+  // Unit: an old-page update must retain the authoritative thread-share projection,
+  // including a deleted source, instead of replacing it with its untrusted fallback.
+  it('decorates cached old-page message updates with thread references', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const root = { ...message, id: '50000000-0000-4000-8000-000000000003', replyCount: 1 };
+    const reply = { ...message, id: '50000000-0000-4000-8000-000000000004', seq: '2', threadRootId: root.id, deleted: true, content: [] };
+    const share = { ...message, id: '50000000-0000-4000-8000-000000000005', seq: '3', content: [{ type: 'card',
+      namespace: 'cindy.thread-share', schemaRevision: 1, fallback: 'deleted private text', data: { messageId: reply.id, threadRootId: root.id } }] };
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?') ? { body: { cursor: '57', changes: [], hasMore: false } }
+      : route.endsWith('/snapshot') ? { body: { room: room(rooms[0]), members: [], messages: [{ ...reply, id: '50000000-0000-4000-8000-000000000006', deleted: false, content: message.content }, reply, root], cursor: '57' } }
+      : route.includes('/messages?') && route.includes('before=5') ? { body: [share, root] } : response(route));
+    await timed(() => service.getGroup(rooms[0], { beforeSequence: 5 }));
+    const result = await timed(() => service.getGroup(rooms[0], { sourceMessageIds: [share.id, root.id],
+      shownShares: [{ id: share.id, messageId: reply.id, threadRootId: root.id }] }));
+    expect(result.value.ok && result.value.group.messageUpdates?.find(view => view.id === share.id)?.threadShare)
+      .toMatchObject({ messageId: reply.id, status: 'unavailable', content: '' });
+    expect(result.value.ok && result.value.group.messageUpdates?.find(view => view.id === root.id)?.threadPreview?.replies[0]?.text).toBe('hello');
+  });
+
+  // Unit: all successful local /read writers must update the durable UI projection
+  // even while WS is unavailable; existing HTTP tests had no persistent cache.
+  it.each(['main', 'thread', 'follow'] as const)('invalidates personal metadata after a local %s write without a socket notice', async action => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const root = { ...message, authorId: '30000000-0000-4000-8000-000000000002', replyCount: 1 };
+    const reply = { ...root, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: root.id };
+    let mainRead = '0', threadRead = '0', following = false;
+    fixture.page = [root];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/read') && method === 'POST') {
+        if (body.threadRootId) { threadRead = body.readSeq; following = body.following ?? following; }
+        else mainRead = body.readSeq;
+        return { body: { following } };
+      }
+      if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [reply, root], cursor: '57',
+        reads: [{ thread_key: 'main', read_seq: mainRead }, { thread_key: root.id, read_seq: threadRead, following }] } };
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith(`/messages/${root.id}`)) return { body: root };
+      if (route.includes('threadRootId=')) return { body: [reply] };
+      if (route.startsWith('/changes?')) return { body: { cursor: '57', changes: [], hasMore: false } };
+      return response(route);
+    });
+    await timed(() => service.getGroup(rooms[0]));
+    const result = await timed(() => action === 'main'
+      ? service.chatServer!.manage({ groupId: rooms[0], action: { type: 'read', messageId: root.id } })
+      : action === 'thread' ? service.chatServer!.thread({ groupId: rooms[0], rootId: root.id, markRead: true })
+        : service.chatServer!.followThread({ groupId: rooms[0], rootId: root.id, following: true }));
+    expect(result.value.ok).toBe(true);
+    await timed(() => service.getGroup(rooms[0]));
+    expect(disk.get(rooms[0])?.snapshot).toMatchObject({ reads: [
+      { thread_key: 'main', read_seq: action === 'main' ? '1' : '0' },
+      { thread_key: root.id, read_seq: action === 'thread' ? '2' : '0', following: action === 'follow' },
+    ] });
+  });
 
   it('opens a group in three request rounds and a followed group in two', async () => {
     const firstOpen = await timed(() => service.getGroup(rooms[0]));
@@ -210,6 +340,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     vi.mocked(fixture.sockets[0].send).mockClear();
     onChanged.mockClear();
     fixture.sockets[0].emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
     expect(sent()).toContainEqual({ type: 'subscribe', scope: `conversation:${rooms[0]}`, after: '58' });
     // A reconnect still re-reads every followed room once, after the 150ms coalescing window.
     await vi.advanceTimersByTimeAsync(150);

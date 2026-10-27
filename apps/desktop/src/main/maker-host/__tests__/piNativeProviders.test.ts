@@ -447,6 +447,30 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     },
   );
 
+  it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])(
+    'sends the Google Gemini API preset %s to the native /v1beta root', (id) => {
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+      const config = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: {
+        pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [{ id, name: id }] },
+      } };
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config, { presets: [preset] })] };
+      const { providers } = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      // Discovery keeps the OpenAI-compatible connection root; the native SDK must not inherit it.
+      expect(providers[0].baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai');
+      expect(providers[0].models[0]).toMatchObject({
+        api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      });
+    },
+  );
+
+  it('never rewrites a custom Gemini proxy endpoint', () => {
+    const baseUrl = 'https://proxy.example/v1beta/openai';
+    const { providers } = buildPiNativeProvidersFromConfigs([{ id: 'gemini-proxy', name: 'Proxy', runtimes: {
+      pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
+    } }], () => 'fixture-key');
+    expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
     const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',
       'huggingface', 'nvidia', 'together', 'mistral', 'opencode', 'qwen-token-plan',

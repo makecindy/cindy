@@ -15,6 +15,7 @@ import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.j
 import type Database from 'better-sqlite3';
 
 import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/types.js';
+import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
 import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
 import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
@@ -70,6 +71,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'chatCache.execute':
+      return runChatCacheTransaction(db, txArgs as ChatCacheTransaction);
     case 'usage.recordMediaSpend':
       return recordMediaSpend(db, txArgs as import('../../client/tx/types.js').MediaSpendArgs);
     case 'authorization.readProjection':
@@ -432,11 +435,11 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     if (permissionMode !== undefined && !['ask', 'auto', 'bypassPermissions'].includes(permissionMode)) {
       throw new Error('Invalid canonical permission mode');
     }
-    const latest = editsContent || permissionMode !== undefined
+    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true
       ? db.prepare('SELECT capabilities_json AS json, identity_source AS identity FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
         .get(id, expectedVersion) as { json: string; identity: string } | undefined
       : undefined;
-    if ((editsContent || permissionMode !== undefined) && !latest) {
+    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true) && !latest) {
       throw Object.assign(new Error('Bot profile version missing'), { code: 'PRECONDITION_FAILED' });
     }
     const latestConfig = latest ? asRecord(JSON.parse(latest.json), 'capabilities') : undefined;
@@ -452,7 +455,10 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       else delete nextConfig.permissions;
     }
     // A same-value settings edit can become a real change while waiting to commit.
-    const changed = editsContent || (permission !== undefined && latestConfig?.permissions !== permission);
+    // Reaccepting the same saved model is a durable selection event too. Give
+    // it a version so cold sends can distinguish it from a legacy restore.
+    const changed = editsContent || p.clearScheduledModelBaseline === true
+      || (permission !== undefined && latestConfig?.permissions !== permission);
     const nextVersion = changed ? expectedVersion + 1 : expectedVersion;
     if (changed) {
       fields.push('current_version = ?');

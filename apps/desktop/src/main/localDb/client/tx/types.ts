@@ -1,7 +1,9 @@
 import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
   | 'pluginUsage.execute'
@@ -1412,6 +1414,7 @@ export type DbTxArgsByName = {
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
   'pluginUsage.execute': PluginUsageTransaction;
+  'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
@@ -1508,6 +1511,7 @@ export type DbTxResultByName = {
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
   'pluginUsage.execute': PluginUsageHandle | null;
+  'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;

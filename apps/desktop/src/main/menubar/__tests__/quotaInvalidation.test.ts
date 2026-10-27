@@ -3,13 +3,14 @@ import { DEFAULT_MENUBAR_SETTINGS, type MenubarHelperMessage } from '../../../sh
 import { emptyMenubarInputs } from '../collect';
 import * as subscriptions from '../../device-link/subscriptions';
 const mocks = vi.hoisted(() => ({
+  app: { isPackaged: true },
   auth: { mode: 'cloud', dataOwnerId: 'owner', ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   attentionCount: 0, attentionListeners: new Set<(count: number) => void>(), publish: vi.fn(),
   openRemoteSettings: vi.fn(), onHelperMessage: null as null | ((message: MenubarHelperMessage) => void),
 }));
-vi.mock('electron', () => ({ app: { isPackaged: true }, Notification: class {} }));
+vi.mock('electron', () => ({ app: mocks.app, Notification: class {} }));
 vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => ({
   getAttentionCount: () => mocks.attentionCount,
   subscribeAttentionCount: (listener: (count: number) => void) => {
@@ -50,6 +51,7 @@ vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { re
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
 beforeEach(() => {
+  mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
   mocks.attentionCount = 0; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
@@ -84,8 +86,10 @@ it('updates the native count immediately while a usage rebuild is still pending'
   expect(mocks.attentionListeners.size).toBe(0);
 });
 
-// Unit: the menu-bar dot uses the actual banner predicate, not mere device presence.
-it('lights only for active task controllers and clears after the last controller leaves', async () => {
+// Unit regression: dev builds forced the native indicator on with no controllers.
+// Existing coverage only used packaged builds; exercise the published state in both modes.
+it.each([true, false])('lights only for active controllers and clears on exit (packaged=%s)', async (isPackaged) => {
+  mocks.app.isPackaged = isPackaged;
   const service = new MenubarService({ openNewTask() {} });
   mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
   subscriptions.subscribe('phone', ['sessions', 'fs-watch:/repo']);

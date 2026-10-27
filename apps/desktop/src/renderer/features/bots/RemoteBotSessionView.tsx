@@ -1,7 +1,7 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
 import { REMOTE_RESOURCE_GET_CHANNEL, type RemoteResourceGetRequest } from '@cindy/device-link';
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,12 @@ export const CLOUD_HOME_GRACE_MS = 15_000;
 /** Verify companion identity with its host; pinned task links never adopt a replacement chat. */
 export function RemoteBotSessionView() {
   const { deviceId, botId, sessionId: requestedSessionId } = useParams();
+  const owner = getDataOwnerGeneration();
+  return <RemoteBotSessionGate key={JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, botId, requestedSessionId])} />;
+}
+
+function RemoteBotSessionGate() {
+  const { deviceId, botId, sessionId: requestedSessionId } = useParams();
   const location = useLocation();
   const [originalTask, setOriginalTask] = useState(false);
   const { t } = useTranslation();
@@ -34,7 +40,12 @@ export function RemoteBotSessionView() {
   const cloud = useCompanionCloud();
   const deviceList = useDeviceLinkDeviceList();
   const cloudActor = cloudCompanionAt(cloud, deviceId, botId);
-  const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(null);
+  const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(() => {
+    if (!bot?.sessionId || !deviceId || (requestedSessionId && requestedSessionId !== bot.sessionId)
+      || remoteProjectsStore.getSessionDeviceId(bot.sessionId) !== deviceId) return null;
+    const session = remoteProjectsStore.getDeviceSessions(deviceId).find(row => row.id === bot.sessionId);
+    return session?.source === 'bot' && session.status === 'active' ? { ...bot, sessionId: bot.sessionId, canonicalChat: true } : null;
+  });
   const [validatedSessionId, setValidatedSessionId] = useState<string | null | undefined>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -46,6 +57,7 @@ export function RemoteBotSessionView() {
     setFailed(false);
     setOriginalTask(false);
     if (!deviceId || !bot?.online) return;
+    setValidatedSessionId(null);
     const request: RemoteResourceGetRequest = {
       client: { protocolVersion: 1, primitives: ['status', 'session-link'] },
       ref: { collectionId: 'teammates', kind: 'bot', id: bot.id },
@@ -57,12 +69,13 @@ export function RemoteBotSessionView() {
         [request],
       );
       if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
+      if (!resource) { setReady(null); throw new Error('Companion is not ready'); }
       const [resolved] = parseRemoteBots(
         { collectionId: 'teammates', items: [resource] },
         deviceId,
         bot.deviceName,
       );
-      if (resolved.id !== bot.id || !resolved.sessionId) throw new Error('Companion is not ready');
+      if (!resolved || resolved.id !== bot.id || !resolved.sessionId) { setReady(null); throw new Error('Companion is not ready'); }
       const canonicalId = resolved.sessionId;
       if (requestedSessionId && canonicalId !== requestedSessionId) {
         setOriginalTask(true);
@@ -86,20 +99,33 @@ export function RemoteBotSessionView() {
       if (!session || session.id !== canonicalId || session.source !== 'bot' ||
         session.status !== 'active' ||
         (!readIsCurrent && session.deviceLinkConnectionStatus !== 'connected'))
-        throw new Error('Invalid remote companion session');
+        { setReady(null); throw new Error('Invalid remote companion session'); }
       if (readIsCurrent) remoteProjectsStore.mergeDeviceSessions(deviceId, currentMirror?.deviceLinkDeviceName ?? bot.deviceName, [
         isSessionReadCurrent.mergeActivity(session),
       ]);
       readOwner.current = owner;
       setReady({ ...resolved, sessionId: canonicalId, canonicalChat: true });
       setValidatedSessionId(sessionId);
-    })().catch(() => {
-      if (!disposed && isDataOwnerGenerationCurrent(owner)) setFailed(true);
+    })().catch((error: unknown) => {
+      if (!disposed && isDataOwnerGenerationCurrent(owner)) {
+        const code = (error as { code?: string })?.code;
+        const denied = ['NOT_FOUND', 'FORBIDDEN', 'PERMISSION_DENIED', 'ACCESS_REVOKED', 'DEVICE_REVOKED', 'AUTH_REQUIRED'];
+        if (denied.includes(code ?? '') || denied.some(value => String(error).includes(`[${value}]`))) setReady(null);
+        setFailed(true);
+      }
     });
     return () => {
       disposed = true;
     };
   }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry, requestedSessionId]);
+
+  useEffect(() => {
+    if (!failed || !bot?.online || !ready) return;
+    const timer = setTimeout(() => setRetry(value => value + 1), 5_000);
+    return () => clearTimeout(timer);
+  }, [failed, bot?.online, ready]);
+  const identity = useMemo(() => ready ? { ...ready, canonicalChat: !failed && validatedSessionId === bot?.sessionId } : null,
+    [ready, failed, validatedSessionId, bot?.sessionId]);
 
   const acknowledge = useCallback((at: number) => {
     if ((!requestedSessionId || ready?.sessionId === requestedSessionId) && !originalTask && isDataOwnerGenerationCurrent(readOwner.current) && bot?.online && !failed && ready?.id === bot.id && ready.deviceId === bot.deviceId
@@ -108,7 +134,8 @@ export function RemoteBotSessionView() {
     }
   }, [bot, failed, ready, validatedSessionId, requestedSessionId, originalTask]);
 
-  const liveChat = !originalTask && (!requestedSessionId || requestedSessionId === ready?.sessionId) && !!bot && !failed && !!ready?.sessionId && ready.id === botId && ready.deviceId === deviceId;
+  const liveChat = !originalTask && (!requestedSessionId || requestedSessionId === ready?.sessionId)
+    && !!bot && !!ready?.sessionId && ready.id === botId && ready.deviceId === deviceId;
   const homeAway = !!cloudActor && !!deviceId && !!botId && cloudActor.homeDeviceId !== cloud.selfDeviceId
     && (!bot || (!bot.online && bot.connectionKnown !== false));
   // Like IM, a brief drop keeps the open chat in place (cloud-companions.md §3.1).
@@ -142,7 +169,7 @@ export function RemoteBotSessionView() {
         key={`${deviceId}:${ready.sessionId}`}
         sessionIdProp={ready.sessionId}
         routeOwner
-        botIdentity={ready}
+        botIdentity={identity!}
         onBotReadThrough={acknowledge}
         readOnly={!bot.online || validatedSessionId !== bot.sessionId || failed}
       />

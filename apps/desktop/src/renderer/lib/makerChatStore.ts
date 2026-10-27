@@ -6805,7 +6805,7 @@ export function handleStreamEvent(
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
@@ -6829,7 +6829,9 @@ export function handleStreamEvent(
                     askUserReply,
                     askUserAnswers: answers,
                   }
-                : { ...m, askUserStatus: 'expired' as const }
+                : m.askUserStatus === 'pending'
+                  ? { ...m, askUserStatus: 'expired' as const }
+                  : m
               : m,
           ),
         };
@@ -15646,13 +15648,14 @@ function steerMessage(
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
-    // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
-    // main 拉一次 projection 自愈: 若镜像 stale (漏收 emit), 下一次点击就能恢复。
+    // 明确未受理：立即反馈，返回 false 让输入框恢复草稿；projection 刷新只修镜像，
+    // 不替用户重发。此时尚未创建消息或处理附件，不涉及已派发后的 ACK 边界。
     log.warn('steerMessage rejected: steering marker present in mirror', {
       sessionId,
       steeringQueueClientIds: current.steeringQueueClientIds,
       queueAbortPending: current.queueAbortPending,
     });
+    toast.warning(i18n.t('newChat.chatInput.steerNotSent'));
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }

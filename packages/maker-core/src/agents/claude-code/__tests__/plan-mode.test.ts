@@ -161,7 +161,8 @@ async function startPlanSession(
         systemPrompt?: { append?: string };
         hooks?: {
           PreToolUse?: Array<{
-            hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
+            hooks: Array<(input: Record<string, unknown>, toolUseId?: string,
+              options?: { signal: AbortSignal }) => Promise<Record<string, unknown>>>;
           }>;
         };
       }
@@ -584,7 +585,7 @@ describe('ClaudeCodeAgent plan mode', () => {
         for (const hook of group.hooks) {
           const decision = await hook({
             hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: {},
-          });
+          }, undefined, { signal: new AbortController().signal });
           expect(decision.hookSpecificOutput).not.toMatchObject({ permissionDecision: 'deny' });
         }
       }

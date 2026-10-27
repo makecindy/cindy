@@ -10,3 +10,4 @@ export * from './memory.js';
 export * from './account-rate-limits.js';
 export * from './pi-project-trust.js';
 export * from './vision-bridge.js';
+export * from './harness-capabilities.js';

@@ -1247,6 +1247,23 @@ export function createCindyGhostsMcpServer(
     version: "1.0.0",
   });
 
+  if (deps.nativeHarnessHook) server.tool(
+    "harness_hook",
+    "Internal callback for configured Codex native hooks. Ordinary model tool calls are rejected.",
+    {
+      event: z.enum(["PreToolUse", "PreCompact"]),
+      session: z.string().min(1),
+      turn: z.string().min(1),
+      tool_name: z.string().optional(),
+      tool_use_id: z.string().optional(),
+      tool_input: z.unknown().optional(),
+    },
+    async (input, extra) => {
+      try { return textResult(await deps.nativeHarnessHook!(input, extra._meta)); }
+      catch { return textResult({ errorCode: "NATIVE_HOOK_UNAVAILABLE" }, true); }
+    },
+  );
+
   // 花名册快照:装配时取一次,拼进 ghost_list 描述(语义召回的数据源);
   // system/developer 段由 host 在 session 装配时单独取数,两处共用同一序列化格式。
   // 无花名册 dep / 空清单 = 描述保持基线。

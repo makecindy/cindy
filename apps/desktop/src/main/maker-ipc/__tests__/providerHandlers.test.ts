@@ -132,6 +132,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     getModelCatalog: () => BUNDLED_CATALOG,
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
+    accountUsage: vi.fn(async (): Promise<import('../../../shared/providerAccountUsage.js').ProviderAccountUsageResult> => ({ status: 'unsupported' })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
     rediscoverModels: vi.fn(async () => null),
     refreshBuiltinModels: vi.fn(async () => {}),

@@ -793,8 +793,18 @@ export function restoreRemoteOptimisticDraft(
  * 带给 main，回收器把它们当活引用豁免。宁可多报(混着老 xdt-image 地址也
  * 没关系，main 侧只抽 cindy-media 指纹)。
  */
+// Renderer-only holders (for example a reply's prepared retry bytes) contribute
+// to the same recycler/reporting contract as persisted composer drafts.
+const draftAttachmentUrlSources = new Set<() => readonly string[]>();
+export function registerDraftAttachmentUrlSource(source: () => readonly string[]): () => void {
+  draftAttachmentUrlSources.add(source);
+  return () => { draftAttachmentUrlSources.delete(source); syncDraftUrlsToMain(); };
+}
+export function refreshDraftAttachmentUrls(): void { syncDraftUrlsToMain(); }
+
 export function getAllDraftAttachmentUrls(): string[] {
   const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls]);
+  for (const source of draftAttachmentUrlSources) for (const url of source()) urls.add(url);
   // Owner switches retain each owner's draft so switching back can restore it.
   // Protect every retained namespace as well; reporting only the active owner
   // would leave an old owner's still-restorable attachment eligible for sweep.

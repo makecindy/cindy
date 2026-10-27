@@ -50,6 +50,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
@@ -59,8 +60,12 @@ import {
   getDraft,
   isDraftDiscardTokenCurrent,
   saveDraft,
+  registerDraftAttachmentUrlSource,
+  refreshDraftAttachmentUrls,
   subscribeDraft,
 } from '@/lib/composerDraftStore';
+import { base64ToUint8Array } from '@/lib/fileTypeInference';
+import type { BotGroupTrackedMention } from './botGroupMentions';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
@@ -160,20 +165,70 @@ interface ThreadReplyAttempt {
   prepared?: AttachedFile[];
   mentions?: BotGroupMention;
   roster?: readonly BotGroupMemberView[];
+  draft: string;
+  files: readonly AttachedFile[];
+  tracked: readonly BotGroupTrackedMention[];
+  error?: string;
+  submit: NonNullable<Parameters<typeof BotGroupComposer>[0]['sendReply']>;
+}
+interface ThreadRetryEntry {
+  current: ThreadReplyAttempt | null;
+  held: Set<ThreadReplyAttempt>;
+  failed: ThreadReplyAttempt[];
+  token: ReturnType<typeof captureDraftDiscardToken>;
+  owner: ReturnType<typeof getDataOwnerGeneration>;
+  listeners: Set<() => void>;
+  restore?: (attempt: ThreadReplyAttempt) => boolean;
+  unsubscribe?: () => void;
 }
 // A failed upload may finish after its panel closes. Reopening that thread must
 // retry the same server operation, including the exact burned-in image bytes.
-const threadRetries = { owner: getDataOwnerGeneration().dataOwnerId, entries: new Map<string, { current: ThreadReplyAttempt | null; token: ReturnType<typeof captureDraftDiscardToken> }>() };
+const threadRetries = { owner: getDataOwnerGeneration().dataOwnerId, entries: new Map<string, ThreadRetryEntry>() };
 function threadRetry(key: string) {
   const owner = getDataOwnerGeneration().dataOwnerId;
-  if (threadRetries.owner !== owner) { threadRetries.owner = owner; threadRetries.entries.clear(); }
+  if (threadRetries.owner !== owner) {
+    for (const entry of threadRetries.entries.values()) entry.unsubscribe?.();
+    threadRetries.owner = owner;
+    threadRetries.entries.clear();
+    refreshDraftAttachmentUrls();
+  }
   let entry = threadRetries.entries.get(key);
   if (!entry || !isDraftDiscardTokenCurrent(entry.token)) {
-    entry = { current: null, token: captureDraftDiscardToken(key) };
+    entry?.unsubscribe?.();
+    entry = { current: null, held: new Set(), failed: [], token: captureDraftDiscardToken(key), owner: getDataOwnerGeneration(), listeners: new Set() };
     threadRetries.entries.set(key, entry);
+    const created = entry;
+    created.unsubscribe = subscribeDraft(key, () => {
+      if (isDraftDiscardTokenCurrent(created.token)) return;
+      // A discarded failed batch can own staged files outside the live tray.
+      // In-flight work still owns its files until its request settles.
+      const abandoned = new Set([...created.failed, ...(created.current ? [created.current] : [])]);
+      for (const attempt of abandoned) if (!created.held.has(attempt)) cleanupStagedChatAttachmentFiles(attempt.files);
+      created.current = null;
+      created.failed = [];
+      notifyThreadRetry(created);
+      created.unsubscribe?.();
+    });
   }
   return entry;
 }
+
+function notifyThreadRetry(entry: ThreadRetryEntry) {
+  refreshDraftAttachmentUrls();
+  for (const listener of entry.listeners) listener();
+}
+registerDraftAttachmentUrlSource(() => {
+  const urls: string[] = [];
+  for (const entry of threadRetries.entries.values()) {
+    if (entry.owner.dataOwnerId !== getDataOwnerGeneration().dataOwnerId || !isDraftDiscardTokenCurrent(entry.token)) continue;
+    const attempts = new Set([...entry.held, ...entry.failed, ...(entry.current ? [entry.current] : [])]);
+    for (const attempt of attempts) for (const file of [...attempt.files, ...(attempt.prepared ?? [])]) {
+      if (file.url) urls.push(file.url);
+      if (file.annotationSourceUrl) urls.push(file.annotationSourceUrl);
+    }
+  }
+  return urls;
+});
 
 const NO_ATTACHMENTS: BotGroupComposerAttachments = {
   attachments: [],
@@ -265,7 +320,10 @@ export function BotGroupComposer({
     text,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
-      if (thread && attemptRef.current && attemptRef.current.text !== value.trim()) attemptRef.current = null;
+      if (thread && attemptRef.current && attemptRef.current.text !== value.trim()) {
+        attemptRef.current = null;
+        refreshDraftAttachmentUrls();
+      }
       setText(value);
     },
     members,
@@ -278,7 +336,7 @@ export function BotGroupComposer({
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
   quoteRef.current = quote?.view ?? null;
-  const quotedMessageId = quote?.view.messageId ?? null;
+  const quoteView = quote?.view ?? null;
   const focusInputOnMenuCloseRef = useRef(false);
   const sendingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -288,9 +346,59 @@ export function BotGroupComposer({
   }, []);
   const stoppingRef = useRef(false);
   const localAttemptRef = useRef<ThreadReplyAttempt | null>(null);
-  const attemptRef = thread ? threadRetry(draftKey) : localAttemptRef;
+  const retryEntry = thread ? threadRetry(draftKey) : undefined;
+  const attemptRef = retryEntry ?? localAttemptRef;
+  const [, updateRetries] = useState(0);
+  const recoveredAttemptRef = useRef<ThreadReplyAttempt | null>(null);
+  const initialAttachmentSignatureRef = useRef(botGroupAttachmentSignature(getDraft(draftKey)?.attachments ?? []));
+  const attachmentsHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!retryEntry) return;
+    const update = () => updateRetries(value => value + 1);
+    retryEntry.listeners.add(update);
+    const restore = (attempt: ThreadReplyAttempt) => {
+      if (textRef.current || attachmentsRef.current.length) return false;
+      textRef.current = attempt.draft;
+      setText(attempt.draft);
+      mention.setTracked([...attempt.tracked]);
+      if (attempt.files.length) attachmentsRef.current = attachmentState.restoreFiles(attempt.files);
+      retryEntry.current = attempt;
+      setError(attempt.error ?? '');
+      return true;
+    };
+    retryEntry.restore = restore;
+    return () => {
+      retryEntry.listeners.delete(update);
+      if (retryEntry.restore === restore) retryEntry.restore = undefined;
+    };
+  }, [retryEntry]);
+  useEffect(() => {
+    if (!retryEntry) return;
+    // A restored draft must also restore the picked bot IDs and failure reason.
+    const current = retryEntry.current;
+    if (current && recoveredAttemptRef.current !== current && current.text === textRef.current.trim()
+      && current.attachmentSignature === botGroupAttachmentSignature(attachmentsRef.current)) {
+      recoveredAttemptRef.current = current;
+      mention.setTracked([...current.tracked]);
+      if (current.error) setError(current.error);
+    }
+  }, [retryEntry, attachmentState.attachments, text]);
+  useEffect(() => {
+    if (!attachmentsHydratedRef.current) {
+      if (botGroupAttachmentSignature(attachmentState.attachments) !== initialAttachmentSignatureRef.current) return;
+      attachmentsHydratedRef.current = true;
+    }
+    if (retryEntry?.current && !retryEntry.held.has(retryEntry.current)
+      && retryEntry.current.attachmentSignature !== botGroupAttachmentSignature(attachmentState.attachments)) {
+      retryEntry.current = null;
+      refreshDraftAttachmentUrls();
+    }
+  }, [retryEntry, attachmentState.attachments]);
   useEffect(() => () => {
-    if (thread && !attemptRef.current && threadRetries.entries.get(draftKey) === attemptRef) threadRetries.entries.delete(draftKey);
+    if (thread && retryEntry && !retryEntry.current && !retryEntry.held.size && !retryEntry.failed.length && threadRetries.entries.get(draftKey) === retryEntry) {
+      retryEntry.unsubscribe?.();
+      threadRetries.entries.delete(draftKey);
+    }
   }, [draftKey, thread]);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
@@ -306,10 +414,11 @@ export function BotGroupComposer({
   const showStop = !thread && running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
-  // Picking 引用回复 brings the caret here, ready to type the reply.
+  // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
+  // again (after clicking elsewhere) does too, since each pick is a new quote.
   useEffect(() => {
-    if (quotedMessageId) textareaRef.current?.focus();
-  }, [quotedMessageId]);
+    if (quoteView) textareaRef.current?.focus();
+  }, [quoteView]);
 
   // Keep the unsent text with the group (or 话题), like a task's composer draft.
   const discardTokenRef = useRef(captureDraftDiscardToken(draftKey));
@@ -356,12 +465,12 @@ export function BotGroupComposer({
    * refresh alone changes nothing and the host still rejects a departed target; re-picking
    * someone else gets a new clientId.
    */
-  const sendThreadReply = async () => {
-    if (!canSend || sendingRef.current || !sendReply) return;
+  const sendThreadReply = async (retry?: ThreadReplyAttempt) => {
+    if ((!retry && !canSend) || disabled || sendingRef.current || !sendReply || !retryEntry) return;
     const previous = attemptRef.current;
-    const files = attachmentState.attachments;
+    const files = retry?.files ?? attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
-    const attempt =
+    const attempt: ThreadReplyAttempt = retry ?? (
       previous?.mentions && previous.roster && previous.text === trimmed
       && previous.attachmentSignature === attachmentSignature
       && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions)
@@ -370,17 +479,24 @@ export function BotGroupComposer({
             text: trimmed, clientId: crypto.randomUUID(),
             attachmentSignature, prepared: undefined as AttachedFile[] | undefined,
             mentions: mention.resolve(text), roster: members,
-          };
-    attemptRef.current = attempt;
-    const draft = text;
+            draft: text, files, tracked: [...mention.tracked], submit: sendReply,
+          });
+    if (!retry) attemptRef.current = attempt;
+    retryEntry.held.add(attempt);
+    retryEntry.failed = retryEntry.failed.filter(item => item !== attempt);
+    notifyThreadRetry(retryEntry);
+    const draft = attempt.draft;
     const mentions = attempt.mentions!;
-    const tracked = mention.tracked;
     sendingRef.current = true;
     setSending(true);
-    setError('');
-    setText('');
-    mention.reset();
-    if (files.length > 0) attachmentState.clearFiles();
+    if (!retry) setError('');
+    if (!retry) {
+      textRef.current = '';
+      setText('');
+      mention.reset();
+      if (files.length > 0) attachmentState.clearFiles();
+      attachmentsRef.current = [];
+    }
     onSendStart?.({ clientId: attempt.clientId, text: attempt.text, mentions, attachments: files.map(botGroupAttachmentPreview), quote: null });
     const owner = getDataOwnerGeneration();
     const discardToken = discardTokenRef.current;
@@ -394,30 +510,45 @@ export function BotGroupComposer({
         file.url && !sourceUrls.has(file.url) ? [file.url] : []))];
       if (urls.length) void window.electronAPI.cleanupCachedImages(urls).catch(() => undefined);
       if (attemptRef.current === attempt) attemptRef.current = null;
+      retryEntry.held.delete(attempt);
+      notifyThreadRetry(retryEntry);
     };
     const fail = (message: string) => {
       if (!isCurrent()) { releaseUnsent(); return; }
       onSendSettled?.(attempt.clientId, { ok: false });
-      // A reply may fail after its panel closed. Recover only that thread's draft,
-      // without overwriting anything written since or reviving a discarded draft.
-      if (!mountedRef.current) {
+      attempt.error = message;
+      // Restore only a completely empty composer. Otherwise keep the complete
+      // failed operation separately; retry never consumes the newer draft.
+      if (attemptRef.current === attempt) attemptRef.current = null;
+      const restored = retryEntry.restore?.(attempt);
+      if (!restored && !retryEntry.restore) {
         const existing = getDraft(draftKey);
-        const ids = new Set(files.map(file => file.id));
-        saveDraft(draftKey, { ...existing, text: existing?.text ?? (draft ? botGroupDraftDoc(draft) : null),
-          attachments: [...files, ...(existing?.attachments ?? []).filter(file => !ids.has(file.id))] });
-        return;
-      }
-      if (!textRef.current) mention.setTracked(tracked);
-      setText((current) => (current ? current : draft));
-      if (files.length > 0) attachmentState.restoreFiles(files);
-      setError(message);
+        if (!botGroupDraftText(existing?.text) && !existing?.attachments.length) {
+          retryEntry.current = attempt;
+          saveDraft(draftKey, { ...existing, text: draft ? botGroupDraftDoc(draft) : null, attachments: [...files] });
+        } else retryEntry.failed.push(attempt);
+      } else if (!restored) retryEntry.failed.push(attempt);
+      notifyThreadRetry(retryEntry);
     };
     try {
       // Keep the same burned-in bytes on retry, as the main-group outbox does.
       if (!attempt.prepared) attempt.prepared = files.length
         ? await materializeAnnotatedAttachmentsForSend(files, attachmentScope, { burnFailure: 'abort' }) ?? [] : [];
       if (!isCurrent()) { releaseUnsent(); return; }
-      const result = await sendReply({ text: attempt.text, clientId: attempt.clientId, mentions,
+      notifyThreadRetry(retryEntry);
+      // Chat Server accepts managed URLs/paths, not clipboard placeholders.
+      // Cache fallback bitmap bytes before crossing that existing contract.
+      for (let index = 0; index < attempt.prepared.length; index += 1) {
+        const file = attempt.prepared[index]!;
+        if (file.category !== 'image' || file.url || !file.base64) continue;
+        const cached = await window.electronAPI.cacheImageFromBuffer({ sessionId: attachmentScope,
+          buffer: base64ToUint8Array(file.base64), mimeType: file.mimeType, suggestedName: file.name });
+        attempt.prepared[index] = { ...file, base64: undefined, url: cached.url };
+        if (!isCurrent()) { releaseUnsent(); return; }
+        notifyThreadRetry(retryEntry);
+      }
+      notifyThreadRetry(retryEntry);
+      const result = await attempt.submit({ text: attempt.text, clientId: attempt.clientId, mentions,
         ...(attempt.prepared.length ? { attachments: toBotGroupAttachmentInputs(attempt.prepared) } : {}) });
       if (!isCurrent()) {
         if (!result.ok) releaseUnsent();
@@ -430,8 +561,10 @@ export function BotGroupComposer({
     } catch (error) {
       fail(t(isAnnotationBurnInError(error) ? 'chat.media.annotateBurnFailedNotSent' : 'bots.groupChat.server.requestFailed'));
     } finally {
+      retryEntry.held.delete(attempt);
+      notifyThreadRetry(retryEntry);
       sendingRef.current = false;
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
@@ -470,10 +603,10 @@ export function BotGroupComposer({
     [groupId, thread],
   );
 
-  const send = () => {
+  const send = async () => {
     if (thread) { void sendThreadReply(); return; }
     // A second Enter before the cleared input has rendered must not send the same draft twice.
-    if (!canSend || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
+    if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
@@ -496,7 +629,8 @@ export function BotGroupComposer({
     const clientId = groupAttemptRef.current?.signature === signature ? groupAttemptRef.current.clientId : crypto.randomUUID();
     // The outbox owns this attempt now; a failure hands it back through `restore`.
     groupAttemptRef.current = null;
-    enqueueBotGroupSend({
+    sendingRef.current = true; setSending(true);
+    try { const saved = enqueueBotGroupSend({
       input: { ...fields, clientId },
       signature,
       draft: text,
@@ -505,6 +639,12 @@ export function BotGroupComposer({
       files,
       attachmentScope,
     });
+      if (botGroupApi()?.botGroupOutbox) await saved;
+      else void saved.catch(() => undefined);
+    } catch {
+      toast.error(t('bots.groupChat.composer.sendFailed'));
+      return;
+    } finally { sendingRef.current = false; setSending(false); }
     // Clear at once like any chat, so the next message can be written while this one
     // goes out. The batch leaves the tray without deleting its files: the message has them.
     textRef.current = '';
@@ -598,6 +738,26 @@ export function BotGroupComposer({
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
       <div className={BOT_GROUP_COMPOSER_COLUMN}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
+        {retryEntry?.failed.length ? <div className="mb-2 max-h-48 overflow-y-auto">
+          {retryEntry.failed.map(attempt => (
+            <div key={attempt.clientId} className="mb-2 flex flex-col gap-2 text-13 text-[var(--text-primary)]">
+              <p className="whitespace-pre-wrap break-words">{attempt.draft}</p>
+              {attempt.files.map(file => <span key={file.id} className="break-words text-[var(--text-secondary)]">{file.name}</span>)}
+              <p role="alert" className="text-[var(--error-fg)]">{attempt.error}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" size="sm" disabled={disabled || sending} onClick={() => void sendThreadReply(attempt)}>{t('bots.retry')}</Button>
+                <Tip text={text || attachmentCount ? t('bots.groupChat.outbox.editBlocked') : undefined}>
+                  <Button variant="secondary" tone="quiet" size="sm" disabled={disabled || sending || !!text || attachmentCount > 0} onClick={() => {
+                    if (!retryEntry.restore?.(attempt)) return;
+                    retryEntry.failed = retryEntry.failed.filter(item => item !== attempt);
+                    notifyThreadRetry(retryEntry);
+                    textareaRef.current?.focus();
+                  }}>{t('bots.groupChat.outbox.edit')}</Button>
+                </Tip>
+              </div>
+            </div>
+          ))}
+        </div> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
           <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
@@ -655,8 +815,8 @@ export function BotGroupComposer({
           {attachmentCount > 0 ? (
             <ThumbnailStrip
               attachments={attachmentState.attachments}
-              onRemove={sending ? noop : attachmentState.removeFile}
-              onUpdate={sending ? noop : attachmentState.updateFile}
+              onRemove={sending && !thread ? noop : attachmentState.removeFile}
+              onUpdate={sending && !thread ? noop : attachmentState.updateFile}
             />
           ) : null}
           <textarea
@@ -668,6 +828,7 @@ export function BotGroupComposer({
             // The Chat Server caps a 话题 reply; the field enforces it as typing does (a pick obeys it too).
             maxLength={thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined}
             {...mention.textareaProps}
+            readOnly={sending && !thread}
             placeholder={placeholder}
             onChange={(event) => mention.onChange(event.target.value)}
             onPaste={handlePaste}
@@ -779,7 +940,7 @@ export function BotGroupComposer({
             <span className="inline-flex rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
               <Tip text={actionLabel}>
                 <SendButton
-                  disabled={showStop ? stopping : !canSend}
+                  disabled={showStop ? stopping : !canSend || sending}
                   isStreaming={showStop}
                   ariaLabel={actionLabel}
                   onClick={() => void (showStop ? stop() : send())}

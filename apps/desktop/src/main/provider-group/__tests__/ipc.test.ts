@@ -25,6 +25,9 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn(), getSelfDeviceId: vi.fn(() => 'self'), remoteInvoke: vi.fn(), remoteBackgroundInvoke: vi.fn() }));
 // 同账号管理的转发另有 managementClient.test.ts；IPC 回归只替换转发，不拉进分享运行时。
 vi.mock('../managementClient.js', () => ({ invokeProviderManagement: vi.fn() }));
+vi.mock('../../device-link/providerShareGuest.js', () => ({
+  captureProviderShareGroupRecovery: vi.fn<() => (ids: readonly string[]) => Promise<void>>(() => async () => {}),
+}));
 vi.mock('../../device-link/providerShareRuntime.js', () => ({
   executeProviderShareManagementCommand: vi.fn(), parseProviderShareCommand: vi.fn(),
 }));
@@ -46,6 +49,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { executeProviderShareManagementCommand, parseProviderShareCommand } from '../../device-link/providerShareRuntime';
 import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
+import { captureProviderShareGroupRecovery } from '../../device-link/providerShareGuest';
 import { pruneProviderGroupBindings } from '../bindings';
 import { readProviderGroup, writeProviderGroup } from '../store';
 import { broadcast } from '../../device-link/index';
@@ -329,6 +333,31 @@ describe('provider group IPC remote management', () => {
     expect(readDeviceCatalog).toHaveBeenCalledExactlyOnceWith('share:s1');
     expect(result).toMatchObject({ members: [{ key: SHARED.key, state: 'full', running: 2, unreachableHere: true }] });
     expect(sharedView.members[0]).not.toHaveProperty('unreachableHere');
+  });
+
+  // Regression 2026-10-26, unit: the settings page uses remote-manage instead of
+  // remote-view. One authorized shared member missing locally used to appear unreachable.
+  it.each(groupRequests)('restores a missing shared member before probing the remote $command.action view', async (request) => {
+    const d = deps([]);
+    const sharedView = {
+      ...view, config: { ...config, members: [LOCAL, SHARED] },
+      members: [{ ...view.members[0], key: SHARED.key, kind: SHARED.kind }],
+    };
+    const restored = new Set<string>();
+    let recovery: Promise<void> | undefined;
+    vi.mocked(captureProviderShareGroupRecovery).mockReturnValueOnce((ids) => {
+      recovery = Promise.resolve().then(() => { ids.forEach((id) => restored.add(id)); });
+      return recovery;
+    });
+    const readDeviceCatalog = vi.fn(async (id: string) => {
+      await recovery;
+      if (!restored.has(id)) throw new Error('[REMOTE_AGENT_SHARE_REMOVED] share not found');
+      return [];
+    });
+    Object.assign(d, { directory: { ...d.directory, readDeviceCatalog } });
+    const result = await invokeRemoteCommand(d, async () => sharedView, request);
+    expect(result).toEqual(sharedView);
+    expect(readDeviceCatalog).toHaveBeenCalledExactlyOnceWith(SHARED.agentDeviceId);
   });
 
   it('keeps candidates and share management results unchanged, and accepts a deleted group without probing members', async () => {

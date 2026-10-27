@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   read: undefined as undefined | ((at: number) => void),
   params: { botId: 'bot-1', sessionId: 'session-1' } as Record<string, string | undefined>,
   demoted: [] as string[],
+  cached: [] as unknown[],
 }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.cached, getBotProfiles: () => mocks.cached }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: mocks.demoted }) }));
 vi.mock('../CompanionShadowBanner', () => ({ CompanionShadowBanner: ({ botId }: { botId: string }) => <div data-testid="shadow-banner">{botId}</div> }));
 
@@ -81,6 +83,7 @@ beforeEach(() => {
   setBotReadStateOwner('owner-1');
   mocks.params = { botId: 'bot-1', sessionId: 'session-1' };
   mocks.demoted = [];
+  mocks.cached = [];
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(10_000);
   installElectronApi(readyBot);
@@ -93,6 +96,19 @@ afterEach(() => {
 });
 
 describe('Bot conversation read position', () => {
+  // Reopening must render the existing local chat before delayed metadata returns.
+  // Existing tests only observed the final resolved gate. Unit: a cached binding + pending IPC.
+  it('shows the cached chat read-only during validation and removes it on a revoked binding', async () => {
+    mocks.cached = [readyBot];
+    let resolve!: (value: unknown) => void;
+    vi.mocked(window.electronAPI.localDb.bots.get).mockImplementation(() => new Promise(r => { resolve = r; }) as any);
+    const view = render(<BotSessionView />);
+    expect(view.getByTestId('chat').dataset.readonly).toBe('yes');
+    expect(mocks.read).toBeUndefined();
+    await act(async () => resolve({ ...readyBot, status: 'deleted' }));
+    expect(view.queryByTestId('chat')).toBeNull();
+  });
+
   it('waits for a rendered reply rather than marking a mounted chat read to wall-clock time', async () => {
     const view = render(<BotSessionView />);
     await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());

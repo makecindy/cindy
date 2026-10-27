@@ -8,6 +8,7 @@ import type { NewSessionCreationTask } from '@/session/newSessionCreation';
 import type { MainWindowAction } from '@/components/MobilePrimitives';
 
 const state = vi.hoisted(() => ({
+  cachedCompanion: false,
   sessions: [] as Array<{ id: string; source?: string; deviceLinkDeviceId?: string }>,
   listeners: new Set<() => void>(),
   maker: { getSession: vi.fn() },
@@ -23,6 +24,8 @@ const state = vi.hoisted(() => ({
   task: null as NewSessionCreationTask | null,
   router: { canGoBack: vi.fn(() => true), back: vi.fn(), replace: vi.fn() },
 }));
+vi.mock('@/session/useCachedCompanionSession', () => ({ useCachedCompanionSession: () => state.cachedCompanion ? { ref: { id: 'bot-a' } } : null }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ forgetRemoteResource: vi.fn() }));
 vi.mock('@/session/newSessionCreation', () => ({
   useNewSessionCreationTask: () => state.task,
 }));
@@ -78,7 +81,7 @@ let originalActEnvironment: boolean | undefined;
 beforeEach(() => {
   originalActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT;
   reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
-  state.sessions = [];
+  state.sessions = []; state.cachedCompanion = false;
   state.maker.getSession.mockReset().mockResolvedValue(null);
   state.openLink.mockReset().mockResolvedValue(undefined);
   state.unsubscribe.mockReset().mockResolvedValue(undefined);
@@ -125,6 +128,27 @@ describe('mobile Cindy Make links', () => {
   // Cold notification regression: the gate used to read before relay startup and
   // permanently fail on a transient peer/metadata error. Existing tests only
   // covered a ready relay and retries after a new connection epoch. Unit tier.
+  // Cached notification entry must paint history before its computer reconnects; unit tier.
+  it.each(['missing', 'ACCESS_REVOKED'])('mounts a saved companion chat during startup, then removes it on %s', async rejection => {
+    state.cachedCompanion = true;
+    state.status = 'stopped';
+    await renderGate();
+    expect(container.textContent).toBe('Composer');
+    expect(state.maker.getSession).not.toHaveBeenCalled();
+    state.status = 'online';
+    if (rejection === 'missing') state.maker.getSession.mockResolvedValue(null);
+    else state.maker.getSession.mockRejectedValue(Object.assign(new Error('revoked'), { code: rejection }));
+    await renderGate();
+    expect(container.textContent).toContain('session.entry.missing');
+    expect(container.textContent).not.toContain('Composer');
+  });
+
+  it('does not use a saved companion to open file routes before source verification', async () => {
+    state.cachedCompanion = true; state.status = 'stopped';
+    await act(async () => root.render(<CindyMakeSessionGate sessionId="new-task" deviceId="device-a"><Content /></CindyMakeSessionGate>));
+    expect(container.textContent).toContain('session.entry.loading');
+  });
+
   it('waits for cold startup and recovers a transient metadata read in the same connection', async () => {
     vi.useFakeTimers();
     state.status = 'stopped';
@@ -228,7 +252,7 @@ describe('mobile Cindy Make links', () => {
     state.openLink.mockRejectedValue(Object.assign(new Error(code), { code }));
     await renderGate();
     await act(async () => vi.advanceTimersByTimeAsync(SESSION_ENTRY_LOOKUP_TIMEOUT_MS));
-    expect(container.textContent).toContain('session.entry.failed');
+    expect(container.textContent).toContain(code === 'ACCESS_REVOKED' ? 'session.entry.missing' : 'session.entry.failed');
     expect(state.openLink).toHaveBeenCalledOnce();
     expect(state.maker.getSession).not.toHaveBeenCalled();
   });
@@ -352,7 +376,7 @@ describe('mobile Cindy Make links', () => {
     expect(state.maker.getSession).not.toHaveBeenCalled();
     const input = container.querySelector('input')!;
     input.value = 'draft edited before reconnect';
-    state.sessions = [];
+    state.sessions = []; state.cachedCompanion = false;
     state.connectionEpoch += 1;
     if (result === 'missing') state.maker.getSession.mockResolvedValue(null);
     else if (result === 'failed') state.maker.getSession.mockRejectedValue(new Error('offline'));
@@ -368,7 +392,7 @@ describe('mobile Cindy Make links', () => {
     state.sessions = [{ id: 'new-task', deviceLinkDeviceId: 'device-a', source: 'desktop' }];
     await renderGate();
     expect(container.textContent).toBe('Composer');
-    state.sessions = [];
+    state.sessions = []; state.cachedCompanion = false;
     if (changed === 'account') state.accountGeneration += 1;
     state.maker.getSession.mockReturnValue(new Promise(() => {}));
     await act(async () => root.render(
@@ -388,7 +412,7 @@ describe('mobile Cindy Make links', () => {
     state.sessions = [{ id: 'new-task', deviceLinkDeviceId: 'device-a', source: 'cindy-make' }];
     await renderGate();
     expect(container.textContent).toBe('redirect:/');
-    state.sessions = [];
+    state.sessions = []; state.cachedCompanion = false;
     state.connectionEpoch += 1;
     state.maker.getSession.mockReturnValue(new Promise(() => {}));
     await renderGate();

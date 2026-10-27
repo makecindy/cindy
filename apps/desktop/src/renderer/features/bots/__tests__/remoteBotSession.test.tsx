@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   requestedSessionId: undefined as string | undefined,
   online: true,
   listed: true,
+  cached: false,
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
@@ -49,9 +50,9 @@ vi.mock('../useRemoteBots', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     pinSessionOrigin: h.pin,
-    getSessionDeviceId: () => undefined,
+    getSessionDeviceId: (id: string) => h.cached && id === 'old-canonical' ? 'home' : undefined,
     mergeDeviceSessions: h.merge,
-    getDeviceSessions: () => [],
+    getDeviceSessions: () => h.cached ? [{ id: 'old-canonical', source: 'bot', status: 'active' }] : [],
     captureSessionRead: () => Object.assign(() => true, { mergeActivity: <T,>(detail: T) => detail }),
   },
 }));
@@ -68,6 +69,7 @@ beforeEach(() => {
   h.requestedSessionId = undefined;
   h.online = true;
   h.listed = true;
+  h.cached = false;
   h.lastReplyAt = 0;
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
@@ -220,4 +222,22 @@ it('reads "control off" from the live device list, so a stale snapshot neither h
   h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: false }];
   rerender(<RemoteBotSessionView />);
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
+});
+
+// Unit: saved host identity opens its existing history before an unresolved RPC;
+// a later definitive removal must still close it. Covers the former two-RPC entry gate.
+it.each(['missing', 'ACCESS_REVOKED'])('mounts the cached remote task read-only and closes it on %s', async rejection => {
+  h.cached = true;
+  let finish!: (value: unknown) => void;
+  let fail!: (error: Error) => void;
+  h.invoke.mockImplementation(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  render(<RemoteBotSessionView />);
+  expect(screen.getByText('remote-conversation')).toBeTruthy();
+  expect(h.view).toHaveBeenLastCalledWith(expect.objectContaining({ sessionIdProp: 'old-canonical', readOnly: true,
+    botIdentity: expect.objectContaining({ canonicalChat: false }) }));
+  await act(async () => {
+    if (rejection === 'missing') finish(null);
+    else fail(Object.assign(new Error('revoked'), { code: rejection }));
+  });
+  expect(screen.queryByText('remote-conversation')).toBeNull();
 });

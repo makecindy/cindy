@@ -63,7 +63,8 @@ export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[],
     const bots = orderedTeammates(items, query, i18n.language).map((row) => ({ kind: 'bot' as const, row }));
     if (!groups) return bots;
     const chats = orderedBotGroups(groups, query, i18n.language).map((row) => ({ kind: 'group' as const, row }));
-    return [...bots, ...chats].sort((a, b) => (b.row.item.display.timestamp ?? 0) - (a.row.item.display.timestamp ?? 0));
+    return [...bots, ...chats].sort((a, b) => (b.row.item.display.timestamp ?? 0) - (a.row.item.display.timestamp ?? 0)
+      || a.row.key.localeCompare(b.row.key));
   }, [groups, items, query, i18n.language]);
 }
 

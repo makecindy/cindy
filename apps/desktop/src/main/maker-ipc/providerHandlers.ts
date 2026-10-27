@@ -106,6 +106,10 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import type {
+  ProviderAccountUsageRequest,
+  ProviderAccountUsageResult,
+} from '../../shared/providerAccountUsage.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -331,6 +335,8 @@ export interface ProviderHandlerDeps {
   getModelCatalog(): Pick<Catalog, 'modelRegistry' | 'presets'>;
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
   testConnection(input: ProviderTestInput, signal?: AbortSignal): Promise<ProviderTestResult>;
+  /** 账户余额查询（生产 = readProviderAccountUsage；单测注入 stub 不联网）。 */
+  accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
@@ -484,6 +490,25 @@ export interface ModelContextLimitView {
   mixed?: boolean;
   limit: number | null;
   isCustomized: boolean;
+}
+
+/** 校验 PROVIDER_ACCOUNT_USAGE 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
+function parseAccountUsageInput(input: unknown): ProviderAccountUsageRequest | null {
+  if (!input || typeof input !== 'object') return null;
+  const i = input as Record<string, unknown>;
+  if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
+  if (i.forceRefresh !== undefined && typeof i.forceRefresh !== 'boolean') return null;
+  if (
+    i.agent !== undefined
+    && (typeof i.agent !== 'string' || !(VALID_AGENTS as readonly string[]).includes(i.agent))
+  ) {
+    return null;
+  }
+  return {
+    providerId: i.providerId,
+    forceRefresh: i.forceRefresh ?? undefined,
+    agent: i.agent as AgentKind | undefined,
+  };
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
@@ -2362,6 +2387,13 @@ export function registerProviderHandlers(
     MAKER_INVOKE.PROVIDER_PRESETS_LIST,
     async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
   );
+
+  // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (_event, input: unknown) => {
+    const parsed = parseAccountUsageInput(input);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
+    return deps.accountUsage(parsed);
+  });
 
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。
   // 入参非法 / saved 解析失败（供应商不存在等）仍走 throwIpcError。

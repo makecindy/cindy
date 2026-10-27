@@ -75,7 +75,7 @@ export function toBotGroupAttachmentInputs(files: readonly AttachedFile[]): BotG
  */
 export function botGroupAttachmentSignature(files: readonly AttachedFile[]): string {
   return JSON.stringify(
-    files.map((file) => [file.id, file.url ?? file.path, file.annotationStrokes ?? null]),
+    files.map((file) => [file.id, file.url ?? file.base64 ?? file.path, file.annotationStrokes ?? null]),
   );
 }
 

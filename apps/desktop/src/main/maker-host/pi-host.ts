@@ -5,7 +5,7 @@ import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
-import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -1437,9 +1437,14 @@ export function buildPiNativeProvidersFromConfigs(
         // bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
         // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
+        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
+        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        const nativeGoogleBaseUrl =
+          modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
+            ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
         const modelBaseUrl =
           m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),

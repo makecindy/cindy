@@ -5,6 +5,11 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ ownerGeneration: 1 }),
 }));
 import { PluginTargetSlot, type PluginTargetAdapter, type PluginTargetReceipt, type PluginTargetStore } from '../pluginTargetSlot.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+
+const loadPipe = createGhostProductionCallbacks<{
+  send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
+}>({ callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
 
 const receipts = new Map<string, PluginTargetReceipt>();
 const key = (pluginId: string, requestKey: string) => JSON.stringify([pluginId, requestKey]);
@@ -55,9 +60,51 @@ describe('plugin target queries and delivery', () => {
       requestKey: 'send', text: 'context' };
     return { slot, call, request, send, create, withdraw, candidates, guard, approvalRevision };
   }
+  // Unit regression: execute the real public IPC callback with the real target slot.
+  // Slot-only tests miss the outer error mapping; an invalid parent must not look retryable.
+  it.each([
+    ['INVALID_INVOCATION', 'INVALID_INVOCATION'],
+    ['TASK_BUSY', 'TASK_BUSY'],
+    ['private adapter failure', 'HOST_NOT_READY'],
+  ])('preserves the public target error boundary for %s', async (cause, expected) => {
+    const f = fixture();
+    f.slot.adapter!.prepareInvocation = () => { throw Object.assign(new Error(cause), { code: cause }); };
+    const { send } = loadPipe({
+      ghostIdForLogicWebContents: () => 'plugin',
+      requireGhostAvailableForActiveSession: () => {},
+      getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      findGhostForInstanceId: () => ({ manifest: { agent: { targets: true } } }),
+      handlePluginTaskRequest: async () => ({ ok: true }),
+      pluginTaskHandler: null,
+      requestPluginTaskApproval: async () => true,
+      pluginTargetAuthorizationRevision: f.approvalRevision,
+      pluginTargetSlot: f.slot,
+    });
+    const result = await send({ sender: { id: 1, isDestroyed: () => false } }, {
+      ...f.request, type: 'targets-request', invocationId: 'invalid-parent',
+    });
+    expect(result).toEqual({
+      ok: false, error: { code: expected, message: expected, retryable: expected === 'TASK_BUSY' },
+    });
+    expect(f.send).not.toHaveBeenCalled();
+    expect(receipts.size).toBe(0);
+  });
   // Production entry: PluginTargetSlot.handle, called by the authorized logic-page pipe.
   // Contract: query/resolve without UI, explicit target delivery, durable deduplication and cancellation.
   // In-memory unit tier; storage and runner adapters are mocked, not the public entry.
+  it('records accepted target input once and preserves the Host parent across receipt replay', async () => {
+    const f = fixture();
+    const accepted: string[] = [];
+    f.slot.adapter!.prepareInvocation = (_pluginId, _id, parent) => parent ?? 'host-root';
+    f.slot.adapter!.acceptInvocation = (_pluginId, id) => { accepted.push(id); };
+    const request = { ...f.request, invocationId: 'tool-parent' };
+    await f.call(request);
+    await f.call(request);
+    expect(accepted).toEqual(['tool-parent']);
+    expect([...receipts.values()][0]?.invocationId).toBe('tool-parent');
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+
   it.each(['project', 'task', 'bot'])('queries and resolves %s metadata without changing delivery state', async (kind) => {
     const f = fixture();
     const target = { kind, id: 'chosen' };

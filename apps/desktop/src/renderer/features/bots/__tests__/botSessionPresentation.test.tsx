@@ -20,6 +20,7 @@ vi.mock('../companionCloudStore', async (importOriginal) => {
 vi.mock('../botStore', async () => {
   const { useSyncExternalStore } = await import('react');
   return {
+    getBotProfiles: () => h.profiles,
     useBotProfiles: () => useSyncExternalStore((listener) => {
       h.profileListeners.add(listener);
       return () => h.profileListeners.delete(listener);

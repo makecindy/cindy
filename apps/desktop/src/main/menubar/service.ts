@@ -207,8 +207,7 @@ export class MenubarService {
   private controlState(gate?: MenubarGate): Pick<MenubarView, 'remotelyControlled' | 'remoteControllerNames'> {
     const controllers = gate ? [] : getActiveControllers();
     return {
-      // Keep the indicator visible in dev for tuning without inventing a connected device.
-      remotelyControlled: !app.isPackaged || controllers.length > 0,
+      remotelyControlled: controllers.length > 0,
       remoteControllerNames: controllers.map(controller => controller.name),
     };
   }

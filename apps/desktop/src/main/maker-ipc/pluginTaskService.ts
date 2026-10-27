@@ -190,6 +190,9 @@ export interface PluginTaskServiceDeps {
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
+  /** Host bookkeeping only; plugins cannot mint or increment usage identities. */
+  prepareInvocation?(pluginId: string, id: string, parentId?: string, operation?: string, sessionId?: string): string;
+  acceptInvocation?(pluginId: string, id: string): void;
 }
 
 /** Uses native input/terminal facts. Never infers completion from idle or the latest assistant. */
@@ -487,13 +490,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; attachments?: PluginMessageAttachment[] },
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; attachments?: PluginMessageAttachment[]; invocationId?: string },
     ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async images => {
       const prepared = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
-        const fingerprint = hash(images.length
+        const contentIdentity = images.length
           ? [request.text, request.expectedRevision, images.map(({ hash, name }) => [hash, name])]
-          : [request.text, request.expectedRevision]);
+          : [request.text, request.expectedRevision];
+        const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
           fingerprint,
@@ -509,12 +513,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await deps.resolveRoute(pluginId, view.resolvedConfig);
         await assertDispatch(pluginId, view.taskId, assertPlanCurrent);
         const runId = id();
+        const invocationId = deps.prepareInvocation?.(pluginId, runId, request.invocationId, 'tasks.send', view.taskId);
         const run: PluginTaskRun = {
           runId,
           taskId: view.taskId,
           inputMessageId: `plugin-task:${runId}`,
           status: 'queued',
           acceptedAt: now(),
+          ...(invocationId ? { invocationId } : {}),
           acceptedConfig: view.resolvedConfig,
           usage: { status: 'unavailable', reason: 'Per-input usage has not been reconciled.' },
         };
@@ -542,6 +548,10 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           images,
         );
         if (!outcome.ok) failure = 'failed';
+        else if (prepared.run.invocationId) {
+          // Usage persistence must never turn an accepted input into a retry.
+          try { deps.acceptInvocation?.(pluginId, prepared.run.invocationId); } catch { /* Best effort, as tool recording. */ }
+        }
       } catch {
         // Before entering dispatch, this input is known not to have reached the host.
         failure = dispatchStarted ? 'reconciling' : 'failed';
@@ -635,6 +645,9 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           run.execution = execution;
           run.status = 'running';
           await save(row, run);
+          if (run.invocationId) {
+            try { deps.acceptInvocation?.(row.pluginId, run.invocationId); } catch { /* Never change input acceptance. */ }
+          }
           await assertDispatch(row.pluginId, taskId, assertPlanCurrent);
           assertPlanCurrent();
         }
