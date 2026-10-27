@@ -710,6 +710,8 @@ interface DraftTargetRequest {
   deviceName: string | null;
   /** 目标工作区;null = 该设备上的「对话」(不绑项目)。 */
   workingDir: string | null;
+  /** Only explicit dialogue selections suppress the saved default for this draft. */
+  explicitNoProject?: boolean;
   /**
    * 已经 inline 拉到的被控端快照。只有「添加远程项目」那条路径有 —— 它为了验证设备可达,本来就
    * 直接 invoke 过 capabilities / providers / defaults,于是能立刻 seed,不必等 effect 再跑一轮隧道往返。
@@ -2504,6 +2506,7 @@ export function NewMakerDraftRoute() {
         deviceLinkDeviceId: req.deviceId,
         deviceLinkDeviceName: req.deviceName,
         workingDir: req.workingDir,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
         // device-link 与 SSH 互斥。
         remoteHostId: null,
         // 换设备 → 上一台的路径全失效;进「对话」→ 单次授权不该跨上下文延续。
@@ -2552,6 +2555,8 @@ export function NewMakerDraftRoute() {
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
         workingDir: defaultDir,
+        explicitNoProject:
+          (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue',
       });
     } else if (
       defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
@@ -3235,6 +3240,7 @@ export function NewMakerDraftRoute() {
         deviceId: draft.deviceLinkDeviceId,
         deviceName: draft.deviceLinkDeviceName,
         workingDir: dir,
+        explicitNoProject: dir === null,
       });
     },
     [applyDraftTarget, draft.deviceLinkDeviceId, draft.deviceLinkDeviceName],
@@ -3410,7 +3416,7 @@ export function NewMakerDraftRoute() {
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
-      applyDraftTarget({ deviceId, deviceName, workingDir: null });
+      applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });
     },
     [effectiveDeviceLinkDeviceId, applyDraftTarget],
   );

@@ -23,14 +23,15 @@ export function shouldPrefillDefaultNewTaskWorkingDir(
   state: unknown,
   draft: {
     workingDir: string | null;
+    explicitNoProject?: boolean;
     remoteHostId?: string | null;
     deviceLinkDeviceId?: string | null;
   },
 ): boolean {
   if (
-    state &&
-    typeof state === 'object' &&
-    (state as NewMakerRouteState).workspacePrompt === 'dialogue'
+    !state ||
+    typeof state !== 'object' ||
+    (state as NewMakerRouteState).workspacePrompt !== 'generic'
   ) {
     return false;
   }
@@ -38,6 +39,7 @@ export function shouldPrefillDefaultNewTaskWorkingDir(
   return (
     (!request || request.deviceId === null) &&
     !draft.workingDir &&
+    !draft.explicitNoProject &&
     !draft.remoteHostId &&
     !draft.deviceLinkDeviceId
   );
