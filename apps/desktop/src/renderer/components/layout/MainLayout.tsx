@@ -1856,7 +1856,12 @@ export function MainLayout() {
           {/* 面板稳态宽度由 LayoutRoot 输出 CSS 百分比/clamp，BrowserWindow live resize
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
-            <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
+            <LayoutRoot
+              suppressNonChatPanels={isSettingsRoute}
+              rightTabsCollapsed={
+                !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
+              }
+            />
           </TabGroupHostProvider>
         </BuiltinPanelBridgeProvider>
         {/* 拖面板换位(B3 转正;M3 起 mac 同步开闸——mac 顶栏全部保留窗口拖拽,

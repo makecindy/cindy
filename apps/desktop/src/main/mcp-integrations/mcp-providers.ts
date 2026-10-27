@@ -14,7 +14,7 @@ import { listProjects, renameProject, removeProject } from './projectManagement.
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { routineTools } from '../routines/service.js';
-import { join as pathJoin, extname } from 'node:path';
+import { join as pathJoin } from 'node:path';
 import { and, eq, inArray } from 'drizzle-orm';
 
 import {
@@ -23,7 +23,6 @@ import {
   setSessionPathAuthorizer,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
-  type PreparedOutboundImage,
   type LspServerPool,
   type XdtHelperMcpDeps,
   type SshHostSnapshotLike,
@@ -336,50 +335,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return result;
   };
 
-  const prepareOutboundImage = async (sourcePath: string, context: LiziMcpSessionContext): Promise<PreparedOutboundImage> => {
-    const owner = getActiveAppSession();
-    const scope = readChannelToolScope(context);
-    const { sessionId, sessionInstanceId, workingDir } = context;
-    // Keep the original permission/Plan generation across all preparation I/O.
-    const grant = sessionId && sessionInstanceId
-      ? deps.getLiveSessionGrantState?.(sessionId, sessionInstanceId) : null;
-    const { mimeForExt, resolveSafe } = await import('../cindy-media/blobStore.js');
-    const ext = extname(sourcePath).toLowerCase();
-    const supportedImage = mimeForExt(ext)?.startsWith('image/');
-    if (!supportedImage && ext !== '.bmp') return { path: sourcePath };
-    if (!sessionId || !sessionInstanceId || !workingDir || context.remoteHostId) {
-      return { path: sourcePath, errorCode: 'IMAGE_PREVIEW_UNAVAILABLE' };
-    }
-    const isCurrent = () => {
-      const current = getActiveAppSession();
-      return !isAppSessionBoundaryPending()
-        && current.dataOwnerId === owner.dataOwnerId && current.generation === owner.generation
-        && !!grant && grant.isCurrent?.() !== false
-        && (!scope || readChannelToolScope(context) === scope);
-    };
-    const assertCurrent = () => { if (!isCurrent()) throw new Error('SESSION_SCOPE_CHANGED'); };
-    if (!supportedImage) return { path: sourcePath, errorCode: 'IMAGE_PREVIEW_UNSUPPORTED', assertCurrent };
-    try {
-      const { publishImage } = await import('../cindy-media/publishImage.js');
-      const image = await publishImage(sourcePath, { sessionId, workingDir }, {
-        isCurrent,
-        authorize: (path) => authorizeDesktopSessionPath({
-          ...context, sessionId, sessionInstanceId, path, toolName: 'outbound_image', operation: 'read',
-        }, deps.getLiveSessionGrantState),
-      });
-      // Send the immutable snapshot, so later edits/deletion cannot change chat history.
-      return image.ok === true && typeof image.url === 'string'
-        ? { path: resolveSafe(image.url).absPath, url: image.url, assertCurrent }
-        : { path: sourcePath, errorCode: typeof image.errorCode === 'string' ? image.errorCode : 'IMAGE_PREVIEW_UNAVAILABLE', assertCurrent };
-    } catch {
-      return { path: sourcePath, errorCode: 'IMAGE_PREVIEW_UNAVAILABLE', assertCurrent };
-    }
-  };
-
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
-    prepareOutboundImage,
     android: getAndroidMcpDeps({
       isAndroidAutomationEnabled: (context) =>
         // Codex provider presence is the bridge-creation enablement snapshot.
@@ -1368,7 +1326,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       name: 'cindy_telegram_bot',
       instance: createTelegramBotMcpServer({
         getSessionContext: () => resolveLiziMcpSessionContext(ctx),
-        prepareOutboundImage: (path) => prepareOutboundImage(path, resolveLiziMcpSessionContext(ctx)),
       }),
     }),
   });

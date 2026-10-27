@@ -3904,13 +3904,6 @@ describe('extractToolResultMediaUrls 的兜底账本回落(xdt_media_produced)',
     expect(extractToolResultMediaUrls(text)).toEqual([IMG]);
   });
 
-  // Unit: image send tools now return visible media; hook collection must not
-  // send that image again. The existing render sentinel also hid it in chat.
-  it('does not forward an image already delivered by its sending tool', () => {
-    const text = JSON.stringify({ ok: true, xdt_image_urls: [IMG], _xdt_forward_media: false });
-    expect(extractToolResultMediaUrls(text)).toEqual([]);
-  });
-
   it('_xdt_render_image:false 哨兵优先,全部不外发', () => {
     const text = JSON.stringify({ ok: true, xdt_media_produced: [IMG], _xdt_render_image: false });
     expect(extractToolResultMediaUrls(text)).toEqual([]);

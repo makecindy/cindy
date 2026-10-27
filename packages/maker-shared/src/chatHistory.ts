@@ -108,6 +108,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       if (/^(message\.|reaction\.|pin\.)/.test(change.type)) {
         if (!message) return false;
         if (change.type === 'reaction.changed') {
+          if (state.snapshot.messages.some(m => m.id === message.id)) state.metadataDirty = true;
           for (const [key, ids] of Object.entries(state.pages)) if (ids.includes(message.id)) stale(state, key);
           staleLookup(state, message.id);
         }

@@ -277,23 +277,6 @@
 
 ## 多端与远程
 
-- 发图工具同时交付渠道与 Cindy 聊天（2026-10-27）：本地图片通过宿主的
-  `prepareOutboundImage` 复用 `publishImage` 入仓，渠道发送同一个不可变副本。成功结果返回
-  既有 `xdt_image_urls`，Desktop / Mobile 按现有工具产物入口在聊天流中直接展示；不要求
-  模型再调用导入工具或在最终回复补贴图片。外发成功的结果同时带 `_xdt_forward_media: false`，
-  个人 IM 与官方 hook 的工具媒体收集器跳过自动转发，该标记不影响聊天展示。
-  `sendFileWithImagePreview` 为具名发送工具提供共用适配；已接飞书／Lark 的 `send_file`、
-  `send_file_to_user`，微信 `send_file_to_user`，Telegram `send_media` 的本地 `photo`。
-  预览沿用媒体仓支持的 PNG / JPEG / GIF / WebP；渠道可发但媒体仓尚不支持的 BMP
-  仍按原渠道发送，并返回 `imagePreviewError: IMAGE_PREVIEW_UNSUPPORTED`，不静默当作普通文件。
-  权限／Plan 的当前性判据在首次异步操作前捕获，入仓与发送前均校验同一代次。
-  普通文件、Telegram URL / file_id 与任意底层 `call_api` 保持既有行为，不推测媒体字节。
-  新字段为可选返回字段，旧工具和未注入宿主回调的调用保持原样，旧客户端仍识别既有图片字段。
-  预览准备失败不把渠道发送成功改报失败：结果保留真实回执并附 `imagePreviewError`；渠道发送
-  失败不声明已交付图片。图片入仓后发送失败的任务引用沿用任务删除清理，不增加重发／恢复队列。
-  不回填旧记录、不重放渠道发送；模型另行在正文引用图片仍遵守既有 Markdown 出站规则。
-  回归见 `feishuBotLaneTools.test.ts`、`providersFeishuRouting.test.ts`、`wechatMcpServer.test.ts`、
-  `telegramBotMcpServer.test.ts`、`collabSendOutcome.test.ts` 与两个渠道 runner 的媒体收集测试。
 - 将已有截图或本地图片保存为持久受管附件时，Agent 使用 Core `media(action: "import_image", path)`：Host
   按当前任务文件权限读取，在当前媒体仓入库并登记任务引用，再返回 `xdt_image_urls`。
   工作目录外路径复用现有授权，SSH 任务不得回退读取控制端同名文件。返回成功仅表示
@@ -310,6 +293,14 @@
   Agent transcript 不改写，单张失败不阻塞正文或其它图片。IM 出站复用同一导入入口。
   官方渠道只对整轮内容导入一次，最终正文复用该次导入的地址替换表；正文与附件扫描
   指向同一副本，不因临时源文件在收口时删除或替换而再次读取出不同结果。
+  官方渠道的每张导入失败都要把原因（目录外、格式不支持、超限等）写入 main 日志；正文末尾的
+  未送达提示按界面语言点名未发出的附件。渠道出站与桌面聊天展示一致，接受本机任意路径的普通
+  图片，不限于工作目录与 scratchpad（2026-10-27 裁决：渠道发图与导入后再发本质相同，
+  不为此多走一步）；原则是 Cindy 聊天里能显示的图片就能发到 IM，群聊中由非主人触发的轮次同样适用，
+  个人微信 `send_file_to_user` 的图片同此规则（按内容识别），普通文件仍限工作目录。
+  网络／设备路径、非普通文件、超限与非图片仍拒绝，SVG 需 Agent 先转 PNG。
+  当前会话所在渠道一律用回复里的图片引用发图：文本渠道收集为附件，飞书、Telegram、Discord
+  卡片先改写为受管引用再原位上传；渠道发送工具只用于跨会话推送，不引导 Agent 在当前会话用它发图。
   SSH 官方渠道不导入或读取控制端文件，仍复用出站引用清理：本地图片地址（含远端
   Windows 路径）只保留说明，并提示附件发送不完整，不将不可用的媒体地址发到 IM。
   与图片共用目标的普通链接也指向保存后的同一图片；外发时这些本地链接降为显示文字，

@@ -10628,7 +10628,9 @@
       "suggestion2": "2. {{service}} オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
       "dismiss": "閉じる",
       "createOwnApp": "自分の App を作成 ↗"
-    }
+    },
+    "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "unnamedAttachment": "名前のない添付ファイル"
   },
   "markdown": {},
   "diffPanel": {
