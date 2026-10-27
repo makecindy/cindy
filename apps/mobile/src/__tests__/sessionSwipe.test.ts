@@ -370,14 +370,15 @@ describe('createPendingWriteTracker', () => {
 
 describe('writeGuardFields', () => {
   it('delete / archive(移行写)取代全部元数据字段(review P2:归档后在途重命名让位)', () => {
-    expect(writeGuardFields({ status: 'deleted' }).sort()).toEqual(['pinnedAt', 'status', 'title']);
+    expect(writeGuardFields({ status: 'deleted' }).sort()).toEqual(['pinnedAt', 'projectPinnedAt', 'status', 'title']);
     expect(writeGuardFields({ status: 'archived', pinnedAt: null } as { status: string }).sort())
-      .toEqual(['pinnedAt', 'status', 'title']);
+      .toEqual(['pinnedAt', 'projectPinnedAt', 'status', 'title']);
   });
 
   it('restore / 置顶 / 重命名(不移行)按 patch 自身字段', () => {
     expect(writeGuardFields({ status: 'active' })).toEqual(['status']);
     expect(writeGuardFields({ pinnedAt: null })).toEqual(['pinnedAt']);
+    expect(writeGuardFields({ projectPinnedAt: null })).toEqual(['projectPinnedAt']);
     expect(writeGuardFields({ title: 'x' })).toEqual(['title']);
   });
 });
