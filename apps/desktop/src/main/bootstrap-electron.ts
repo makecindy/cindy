@@ -978,6 +978,7 @@ import {
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
+import { startBinaryBackgroundUpdates } from './agent-binaries/background-update.js';
 import { registerCrossAgentConvertIpc } from './cross-agent-convert/ipc.js';
 import { registerFileBrowserIpc } from './file-browser/index.js';
 import { disposeHtmlPreviews } from './file-browser/html-preview-ipc.js';
@@ -6681,6 +6682,7 @@ const registerIpcHandlers = () => {
 
     // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
     await registerMakerIpcsAfterSplash();
+    startBinaryBackgroundUpdates();
 
     return {
       claudeCode: { status: 'passed' as const, path: claudeRes.path },

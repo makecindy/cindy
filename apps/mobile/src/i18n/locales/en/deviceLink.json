@@ -24,7 +24,7 @@
   },
   "connectStep1": "Install and open {{appName}} on your computer",
   "connectStep2": "Sign in with the same account as your phone",
-  "connectStep3": "Under Settings → Remote Access, turn on \"Allow same-account devices to control this computer\"",
+  "connectStep3": "Under Settings → Remote Connection, turn on \"Allow same-account devices to control this computer\"",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} in the Cloud, Coming Soon",
   "cloudTeaserCopy": "Once it launches, the mobile app works on its own, no computer needed.",

@@ -24,8 +24,9 @@ import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
 import { createRecipeFileBroker } from './browser-backend/rsb-webview-upload-policy.js';
 import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
-import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
+import { loadUserBrowserRecipes, userRecipesDir, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
+import { browserExperienceStore } from '../browser-recipes/experience.js';
 import {
   BrowserBackendController,
   BrowserBackendHealthService,
@@ -66,6 +67,7 @@ import {
   readCopiedLoginsCdpPort,
   wrapRuntimeWithRealProfile,
   wrapRuntimeWithProfileLifecycleQueue,
+  activeManagedProfileName,
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
@@ -445,7 +447,9 @@ async function applyBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
 }
 
 export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
-  return browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled));
+  return backendController.runLifecycle(() =>
+    browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled)),
+  );
 }
 
 /**
@@ -461,7 +465,10 @@ function browserRecipeSecretId(key: string): string {
 }
 
 export function getBrowserMcpDeps(): {
+  experienceStore: NonNullable<BrowserMcpDeps['experienceStore']>;
   getRuntime(): BrowserControlRuntime;
+  resolveProfile: NonNullable<BrowserMcpDeps['resolveProfile']>;
+  getBackendScope: NonNullable<BrowserMcpDeps['getBackendScope']>;
   resolveScreenshot: NonNullable<BrowserMcpDeps['resolveScreenshot']>;
   compressInlineImage: NonNullable<BrowserMcpDeps['compressInlineImage']>;
   setBackend(kind: BackendKind): Promise<BackendKind>;
@@ -475,6 +482,7 @@ export function getBrowserMcpDeps(): {
   pageReadsRestricted(target: { profile?: string; targetId?: string }): Promise<boolean>;
 } {
   return {
+    experienceStore: browserExperienceStore(userRecipesDir()),
     recipeFiles: async (sessionId) => {
       const sessionRoots = sessionId ? await resolveSessionUploadRoots(sessionId) : [];
       const roots = sessionId ? [
@@ -503,6 +511,9 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    resolveProfile: (profile) => backendController.kind === 'rsb-webview'
+      ? 'rsb' : profile || activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
+    getBackendScope: () => backendController.getBackendScope(),
     resolveScreenshot: (result) =>
       resolveBrowserScreenshot(result, {
         runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,

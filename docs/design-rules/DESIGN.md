@@ -678,10 +678,13 @@ all states use semantic colors in both Light and Dark.
 Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
 the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
 disabled unless strictly newer), check again, and the last successful check time. A later failed
-online check keeps that last version in the menu but disables Update: restart re-checks the
-manifest and cannot install from a stale result. There is no upstream source, restore or
-release-notes entry. Updating keeps the existing confirm → busy warning → restart flow; the
-download happens in the normal startup Splash, not in the row.
+online check keeps that last version in the menu but disables Update. There is no upstream
+source, restore or release-notes entry. Updating first prepares the selected version in the
+shared background cache, showing download status in the row, then follows the existing
+confirm → busy warning → restart flow. Startup installs only a complete cache matching the
+current manifest; if that target has changed or the cache is unavailable, it keeps a usable
+old runtime and retries in the background. First-install and repair downloads retain their
+existing startup fallback.
 
 
 ### User-attached long images

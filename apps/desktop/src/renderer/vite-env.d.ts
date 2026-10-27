@@ -4006,8 +4006,10 @@ interface ElectronAPI {
   }>;
   /** 用户主动重启,让 beta 通道切换在下次冷启动前生效。 */
   relaunchForChannelChange: () => Promise<void>;
-  /** 用户确认后重启，下一次启动只更新所确认的受管 Harness（Pi 由内核管理单独处理）。 */
-  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex') => Promise<{ accepted: true }>;
+  /** 下载并校验指定版本；完成前不重启、不切换当前引擎。 */
+  prepareHarnessUpdate: (kind: 'claude-code' | 'codex', version: string) => Promise<{ ready: true }>;
+  /** 已准备的目标只消费缓存；省略版本保留旧入口的指定引擎修复（Pi 单独管理）。 */
+  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex', preparedVersion?: string) => Promise<{ accepted: true }>;
   /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
   probeBetaChannel: () => Promise<{ available: boolean }>;
   onUpdateChannelSettings: (

@@ -979,7 +979,8 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('最终报告'));
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
 
-    // The mark ends with that turn: the next desktop-typed turn stays in the app.
+    // The mark ends with that turn: a desktop-origin wake stays in the app too.
+    runner.noteChannelTurnSource(h.session, 'provider-wake-local');
     h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await new Promise((resolve) => setTimeout(resolve, 10));

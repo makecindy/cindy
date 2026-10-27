@@ -45,6 +45,11 @@ export class BrowserBackendController implements BrowserBackend {
     return this.router.getCurrentBackendKind();
   }
 
+  /** Reuse existing lifecycle references; no second generation counter or queue. */
+  getBackendScope(): { lifecycle: object; backend: object } {
+    return { lifecycle: this.transition, backend: this.router.getBackendIdentity() };
+  }
+
   probeActiveControl(options?: { ensureHost?: boolean }): Promise<void> {
     return this.router.probeActiveControl(options);
   }
@@ -53,7 +58,7 @@ export class BrowserBackendController implements BrowserBackend {
     kind: BackendKind,
     persistKind: ((kind: BackendKind) => void | Promise<void>) | undefined = this.opts.persistKind,
   ): Promise<boolean> {
-    return this.enqueue(async () => {
+    return this.runLifecycle(async () => {
       const changed = this.router.getCurrentBackendKind() !== kind;
       const next = changed ? this.createBackend(kind) : undefined;
       // Save before activation: a disk failure must leave the old backend live.
@@ -67,7 +72,7 @@ export class BrowserBackendController implements BrowserBackend {
 
   /** Replace the active embedded backend even though its kind is unchanged. */
   restartEmbedded(): Promise<boolean> {
-    return this.enqueue(async () => {
+    return this.runLifecycle(async () => {
       if (this.router.getCurrentBackendKind() !== 'rsb-webview') return false;
       await this.router.restartBackend(this.createBackend('rsb-webview'));
       return true;
@@ -75,7 +80,7 @@ export class BrowserBackendController implements BrowserBackend {
   }
 
   dispose(): Promise<void> {
-    return this.enqueue(() => this.router.dispose());
+    return this.runLifecycle(() => this.router.dispose());
   }
 
   private createBackend(kind: BackendKind): BrowserBackend {
@@ -86,12 +91,23 @@ export class BrowserBackendController implements BrowserBackend {
     return backend;
   }
 
-  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+  /**
+   * One owner for backend and copied-login identity changes. Callers that also
+   * need the profile queue acquire it inside this operation, matching reset.
+   * Ordinary page calls bypass this lifecycle queue.
+   */
+  runLifecycle<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.transition.then(operation, operation);
-    this.transition = result.then(
+    const settled = result.then(
       () => undefined,
       () => undefined,
     );
-    return result;
+    this.transition = settled;
+    return result.finally(() => {
+      // Evidence produced during a same-kind change must expire on settlement,
+      // including when another change is still queued. Preserve that entire
+      // queue in the new tail instead of resetting it to an already-done promise.
+      this.transition = this.transition.then(() => undefined);
+    });
   }
 }

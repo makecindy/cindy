@@ -648,7 +648,13 @@ export interface ResolvedBrowserScreenshot {
 
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
+  /** Local structural observations only; no URLs, scripts, selectors or input values. */
+  experienceStore?: import('./browser/experience.js').BrowserExperienceStore;
   getRuntime(): BrowserControlRuntime;
+  /** Resolve the actual host profile before validation, discovery and execution. */
+  resolveProfile?(profile?: string): string;
+  /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
+  getBackendScope?(): { lifecycle: object; backend: object };
   /**
    * Resolve a successful screenshot runtime result into verified image bytes.
    * The host owns file-system access so this package never receives a generic

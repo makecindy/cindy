@@ -199,11 +199,22 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 
 ### 配方按使用维护与等待条件（2026-10-23）
 
-- `recipe` 支持 `site + recipeDraft` 内存试跑；`saveRecipe` 仅接受同一 MCP 会话已通过验证的相同内容。正常检查不请求模型，不定时后台刷新；失败交给当前任务模型观察、同 id 一轮修订，失败回普通操作。修复预算为会话内状态，MCP 会话重建后重新计数；暂停状态写进配方，跨重启保留。
+- `recipe` 支持 `site + recipeDraft` 内存试跑；`saveRecipe` 通常接受同一 MCP 会话已通过验证的相同内容与 profile。声明 read 且仅含 navigate、无 fn 的 wait、extract、requests、responseBody 的新流程可用 `deferValidation:true` 保存 candidate（不能覆盖已有 id）。下一次真实执行且 guard/expect 全部通过后仅返回 verified、保留会话内凭证；沿用显式 saveRecipe 启用，不重复试跑。候选执行成功或失败都不回写旧定义，避免覆盖其它任务的新修订；失败只暂停本任务，下个任务仍须验证。不新增锁或版本更新协议。交互、任意脚本和 adapter 须当次真实操作验证，不能只信 access 标签。保存、发现、执行旧 candidate 共用 `deferredRecipeIssue` 判据；不承诺远端 GET 没有业务副作用，现有逐次审批仍适用。状态写入失败保留本次执行成功，不能重放。active 不证明未测参数组合。正常检查不请求模型，不定时后台刷新；失败交给当前任务模型观察、同 id 一轮修订，失败回普通操作。修复预算为会话内状态，MCP 会话重建后重新计数；已启用或旧配方沿用原有持久暂停，跨重启保留。
 - 新保存配方的交互/读取步骤须有完整 URL 和可选唯一可见 CSS 元素/文本 `guard`；末步 `expect` 检查数量、必需顶层字段与业务值。extract 将 guard 与读取合成同一次 evaluate；写动作前独立 guard，不能把它当事务或幂等保证。工具不重放步骤，后置失败须先核对写入是否已成功。
 - 本地每站 `recipes/<id 的 SHA-256>.json` 支持多个流程，原子替换复用 Desktop 工具；loader 兼容 `recipe.json`、新文件优先。旧配方保留执行兼容，实际失败后暂停；新建/修订必须经过新验证。失败不把候选覆盖到正式配方。跨任务并发修改同一配方仍是最后写入优先，不新增锁/版本管理系统。
 - `wait.fn` 补丁在 `sync.mjs`：host 只编译函数，页面执行；传真实 function 给 `waitForFunction`，避免函数源码被当 truthy、重复 eval 被 Trusted Types 拦截。timeout 放第三参数。异步 predicate 明确拒绝，避免 Promise 假成功；evaluate 仍支持 async。
 - 验证入口：`recipe-runner.test.ts`、`browserMcpServer.test.ts`、Desktop browser-recipes tests、`interaction-proxy-policy.test.ts`；真实只读对照 `scripts/browser-live-recipe-compare.mjs` 的 `guarded` 模式与 `--maintenance-checks=true`。宿主运行版不会因源码修改自动更新。
+
+### 经验缓存与按需学习（2026-10-27）
+
+- Desktop `resolveProfile` 先把省略值解析为实际 `Cindy` / `Cindy-real` 或嵌入端唯一 `rsb`；发现、试跑、保存、执行与补读检查共用该值，不能把空字符串当实际身份。显式 profile 和解析后的默认 profile 等价，旧配方不新增隐式身份限定。
+- `getBackendScope` 只读复用 controller 的既有 transition Promise 与 router 的当前后端引用，不新增计数器、锁或队列。`setKind`、reset、恢复、dispose 和登录复用 setter 共用 `runLifecycle`，按 controller → profile 的顺序复用既有队列；每次受理和 resolve/reject 后更换 Promise 引用，结算时保留整条后续队列，不让同名 profile 关闭/重开或排队期间生成的证据复活。普通页面调用不走生命周期入口。scope 变化使会话原文、发现缓存、未完成观察与试跑凭证失效；异步预检后和结果返回时再次核对。动作已成功时保留成功，身份变化后的失败不误标配方过时，不重放。
+- `open/navigate` 随结果返回最多三条站点配方候选，可用 `intent` 进行本地词匹配；匹配仅建议，不执行。域名按边界匹配，profile 不匹配或 suspended 不建议；同任务同站点/意图/目录版本不重复提示。目录内容变化后重新发现。`siteguide(site,intent)` 支持主动窄查询，旧完整目录接口保留。
+- `list_tools` 仅加载通用工作流，`recipeHelp` 才提供完整编写手册。当前 Agent 结合已完成步骤整理，不另起后台模型、不扫描完整聊天。重复形状观察仅留动作枚举和站点，第二次才提示考虑学习；这不是业务成功证明，不能自动猜参数或自动执行配方。
+- 流程由成功导航开始，按 tab/profile 分开，第一次成功 extract/evaluate 结束；错误、敏感页、配方执行和后端切换清除未完成观察。只作为廉价学习线索，不完整覆盖含多次读取或跨站导航的业务流程。持久结构观察与现有配方共用站点目录，具体边界见 credentials-and-local-storage.md。
+- 大结果超过 16 Ki 字符时给确定性结构样例，完整 JSON 保留当前会话最近四份（单份最多 200 万字符），通过 `readResult` 分段读；超上限沿用明确截断。摘要不授权猜测省略的事实或 ref。原文引用沿用来源页的代输入保护，过期必须只读补取，不能重放写操作。输出重复、空字段、HTML 只给 advisory。
+- 内置配方仍走现有随应用分发的 L1 目录，个人 L2 覆盖保留；不自动上传个人经验。`itch-search` 是公开网页人工验证后加入的通用例子。
+- 实现：L2 `experience.ts` / `result-cache.ts` / `tools.ts`，Desktop `browser-recipes/experience.ts`；回归使用真实 MCP 入口与既有 writer 测试。模型用量须与工具文本计量分开，不能把执行器没有新增模型调用说成整个任务零 token。
 
 ## 10. 相关文档
 

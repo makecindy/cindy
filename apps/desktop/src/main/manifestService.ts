@@ -114,6 +114,13 @@ let cachedChannel: UpdateChannel | null = null;
  * 不写缓存、返回 null,让调用方(agent prepare / 更新轮询)下次按新渠道重新 fetch。
  */
 let manifestEpoch = 0;
+const manifestListeners = new Set<(manifest: Manifest) => void>();
+
+/** Observers cannot delay or fail application update checks. */
+export function onManifestFetched(listener: (manifest: Manifest) => void): () => void {
+  manifestListeners.add(listener);
+  return () => { manifestListeners.delete(listener); };
+}
 
 function currentUpdateChannel(): UpdateChannel {
   return resolveUpdateChannel(canaryFlagStore.read(), isBetaChannelEnabled());
@@ -243,6 +250,9 @@ export async function fetchManifest(
             cachedChannel = channel;
             log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
             finish(json);
+            for (const listener of manifestListeners) {
+              try { listener(json); } catch { /* an optional observer cannot fail the update */ }
+            }
           } catch (err) {
             log.error('JSON parse failed:', err);
             finish(null);

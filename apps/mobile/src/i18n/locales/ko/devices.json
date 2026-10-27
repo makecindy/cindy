@@ -62,7 +62,7 @@
       "filterMeta": "{{available}}대 접속 가능",
       "filterMetaWithUnavailable": "{{available}}대 접속 가능 · {{unavailable}}대 확인 필요",
       "showUnavailableReason": "기기를 펼치면 사용할 수 없는 이유가 표시됩니다",
-      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 설정의 원격 제어에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
+      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 '설정 → 원격 연결'에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
       "emptyTitle": "표시할 컴퓨터가 아직 없습니다",
       "hideUnavailableA11y": "사용할 수 없는 컴퓨터 숨기기",
       "showUnavailableA11y": "사용할 수 없는 컴퓨터 표시",

@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 台可进入",
       "filterMetaWithUnavailable": "{{available}} 台可进入 · {{unavailable}} 台需处理",
       "showUnavailableReason": "展开的设备会显示不可用原因",
-      "emptyCopy": "在电脑端登录同一账号，并在设置里的远程控制打开“允许同账号设备控制本机”。",
+      "emptyCopy": "在电脑端登录同一账号，并在「设置 → 远程连接」中打开“允许同账号设备控制本机”。",
       "emptyTitle": "还没有可显示的电脑",
       "hideUnavailableA11y": "隐藏不可用电脑",
       "showUnavailableA11y": "显示不可用电脑",

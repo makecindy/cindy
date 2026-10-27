@@ -72,7 +72,7 @@ const registry = new Map<string, ImOrchestrator>();
 // routing from the saved channel identity, without creating/resuming a session.
 onChannelTurn(async (session, phase, source) => {
   if (phase !== 'starting') return;
-  if (source === 'provider-wake') {
+  if (source === 'provider-wake' || source === 'provider-wake-local') {
     // No send precedes a harness wake-up: its first event fans out right after this synchronous
     // call. Only output already wired for a channel can be marked in time; a cold route restored
     // after the row query would relay from mid-turn, so it is not attempted. Same admission as
