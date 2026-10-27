@@ -4,7 +4,7 @@ import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
-import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
+import { notificationConversationIsReading, notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,
   isPushSupported,
@@ -51,11 +51,8 @@ export function PushNotificationsBridge() {
 
   useEffect(() => {
     if (!isPushSupported()) return;
-    configureForegroundNotificationBehavior(route => {
-      const [path, query] = route.split('?');
-      const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
-      return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
-    });
+    configureForegroundNotificationBehavior(route =>
+      notificationConversationIsReading(route, visibleChat.current, AppState.currentState));
   }, []);
 
   // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)

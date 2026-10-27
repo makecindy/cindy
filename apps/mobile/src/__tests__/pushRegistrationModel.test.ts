@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPushTokenRegistrationBody,
   notificationRecoveryRoute,
+  notificationConversationIsReading,
   parseNotificationDeepLink,
   parseNotificationResponseDeepLink,
   resolvePushAppVariant,
@@ -144,5 +145,21 @@ describe('parseNotificationResponseDeepLink', () => {
 
   it('非对象响应返回 null', () => {
     expect(parseNotificationResponseDeepLink(null)).toBeNull();
+  });
+});
+
+// Unit: the real bridge uses this predicate at delivery time, not when it mounts.
+// bot-group-chat.md §10 suppresses only an actively read conversation. Existing
+// deep-link tests never covered a retained route after AppState becomes background.
+// Minimal failure: matching group/thread + background, while native dispatch still uses foreground.
+describe('notificationConversationIsReading', () => {
+  const path = '/companions/groups/30000000-0000-4000-8000-000000000003';
+  it.each([['active', true], ['background', false], ['inactive', false], [null, false]] as const)(
+    'suppresses a matching visible route only with active AppState (%s)', (state, expected) => {
+      expect(notificationConversationIsReading(path, { pathname: path }, state)).toBe(expected);
+    });
+  it('keeps another group or another thread eligible while active', () => {
+    expect(notificationConversationIsReading(`${path}?threadRootId=50000000-0000-4000-8000-000000000005`, { pathname: path }, 'active')).toBe(false);
+    expect(notificationConversationIsReading(path, { pathname: '/companions' }, 'active')).toBe(false);
   });
 });

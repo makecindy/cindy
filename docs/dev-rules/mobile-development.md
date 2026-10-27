@@ -472,6 +472,8 @@ FCM data 消息与显式开启的前台服务都通过同一通知入口，按�
 `RemoteNotificationContent.isDataOnly`。可见 `chat-message` 经 `ChatMessagingDelegate` 包为
 `ChatNotificationContent`，委托原内容全部字段并实现独立 Parcel 往返，保留原 trigger、频道和点击数据，
 使现有 JS 当前群／话题抑制规则真正运行；不伪造 FCM notification 字段，不把普通静默数据改成提醒。
+阅读判定在收到通知时同时核对 `AppState.currentState === active` 与当前群／话题，后台保留的导航路径
+不能当作正在阅读，即使原生此刻仍按前台分发。回归见 `pushRegistrationModel.test.ts`。
 原生集成回归入口为 Android 生成工程的 `:cindy-chat-notifications:testReleaseUnitTest`，
 `ChatDeliveryTest` 穿过真实 Expo receiver／handler，覆盖前台、后台、预览、去重、收件人和点击数据的
 Parcel 往返；使用 Robolectric 的 SDK/JVM 初始化，属于原生 integration，不能用 JS mock 单测替代，

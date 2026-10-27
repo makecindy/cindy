@@ -156,3 +156,11 @@ export function parseNotificationResponseDeepLink(response: unknown): string | n
   if (!trigger || typeof trigger !== 'object') return null;
   return parseNotificationPayloadDeepLink((trigger as Record<string, unknown>).payload);
 }
+
+/** A retained navigation path in the background is not an actively read conversation. */
+export function notificationConversationIsReading(route: string, visible: { pathname: string; threadRootId?: string }, appState: string | null): boolean {
+  if (appState !== 'active') return false;
+  const [path, query] = route.split('?');
+  const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
+  return visible.pathname === path && visible.threadRootId === thread;
+}
