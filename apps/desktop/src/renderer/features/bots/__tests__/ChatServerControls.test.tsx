@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
-import { botGroupThreadDraftKey } from '../botGroupAttachments';
-import { clearDraft } from '@/lib/composerDraftStore';
+import { botGroupDraftText, botGroupThreadDraftKey } from '../botGroupAttachments';
+import { clearDraft, discardDraftScope, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
 import type { BotGroupDetail, BotGroupMessageView } from '../../../../shared/botGroupChat';
@@ -17,6 +17,7 @@ import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareC
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
+  owner: { dataOwnerId: 'test-owner', generation: 1 }, otherOwner: { dataOwnerId: 'other-owner', generation: 1 },
 }));
 // Partial: the 话题 reply box shares the group composer, whose attachment pieces pull in the app i18n instance.
 vi.mock('react-i18next', async (original) => ({
@@ -26,19 +27,21 @@ vi.mock('react-i18next', async (original) => ({
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => null }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
-vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.ownerCurrent, isDataOwnerPushCurrent: () => true,
+  getDataOwnerGeneration: () => mocks.ownerCurrent ? mocks.owner : mocks.otherOwner,
+  isDataOwnerGenerationCurrent: (owner: { dataOwnerId: string; generation: number }) => mocks.ownerCurrent && owner.dataOwnerId === mocks.owner.dataOwnerId && owner.generation === mocks.owner.generation,
+  isDataOwnerPushCurrent: () => true,
 }));
 const k = (name: string) => `bots.groupChat.server.${name}`;
 const message = { id: 'root', kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Human', content: 'Root message', reactions: [{ emoji: '👍', count: 2, me: true }], attachments: [] } as unknown as BotGroupMessageView;
 const group = { id: 'room', members: [], messages: [message] } as unknown as BotGroupDetail;
 const render = (ui: ReactNode) => renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.ownerCurrent = true;
+  vi.clearAllMocks(); mocks.ownerCurrent = true; mocks.owner = { dataOwnerId: 'test-owner', generation: 1 };
   shareSelectionStore.reset();
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
-  clearDraft(botGroupThreadDraftKey(group.id, 'root'));
+  discardDraftScope(botGroupThreadDraftKey(group.id, 'root'));
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
   mocks.react.mockResolvedValue({ ok: true });
@@ -610,6 +613,301 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // #6920, unit: the real panel/composer must expose file selection, preserve
+  // failed attachments and key retries by the batch. Previous coverage sent text only.
+  it('selects an attachment-only reply, restores a failed batch and reuses its operation id', async () => {
+    Object.assign(window.electronAPI, {
+      getFilePath: (file: File) => `/test/${file.name}`,
+      cacheImageFromPath: vi.fn(async () => ({ url: 'cindy-media://blobs/thread.png' })),
+      getFileThumbnail: vi.fn(async () => null),
+    });
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValue({ ok: true, messageId: 'file-reply' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    await screen.findByText('Root message');
+    const more = screen.getByRole('button', { name: 'bots.groupChat.composer.more' });
+    fireEvent.keyDown(more, { key: 'Enter' });
+    expect(await screen.findByRole('menuitem', { name: 'extraDirs.addFiles' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    const picker = document.querySelector('input[type="file"]')!;
+    fireEvent.change(picker, { target: { files: [new File(['bitmap'], 'photo.png', { type: 'image/png' }), new File(['diagnostic log'], 'log.txt', { type: 'text/plain' })] } });
+    await screen.findByText('log.txt');
+    const send = screen.getByRole('button', { name: k('sendReply') });
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    await screen.findByRole('alert');
+    expect(mocks.reply.mock.calls[0][0]).toMatchObject({ rootId: 'root', text: '', attachments: [{ name: 'photo.png', url: 'cindy-media://blobs/thread.png' }, { name: 'log.txt', path: '/test/log.txt' }] });
+    expect(window.electronAPI.cacheImageFromPath).toHaveBeenCalledWith(expect.objectContaining({ sessionId: botGroupThreadDraftKey(group.id, 'root') }));
+    expect(screen.getByText('log.txt')).toBeTruthy();
+    fireEvent.click(send);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1][0]).toEqual(mocks.reply.mock.calls[0][0]);
+    await waitFor(() => expect(within(screen.getByRole('textbox').parentElement!).queryByText('log.txt')).toBeNull());
+    expect(mocks.shareToMain).not.toHaveBeenCalled();
+  });
+
+  it('recovers a late attachment failure only in its original thread and keeps its retry id after reopening', async () => {
+    Object.assign(window.electronAPI, { getFilePath: (file: File) => `/test/${file.name}`, getFileThumbnail: vi.fn(async () => null) });
+    let settle!: (value: { ok: false; errorCode: string }) => void;
+    mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; })).mockResolvedValue({ ok: true, messageId: 'recovered-file' });
+    const view = render(<ChatThreadPanel key="root" group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['log'], 'late.txt', { type: 'text/plain' })] } });
+    await screen.findByText('late.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    const original = mocks.reply.mock.calls[0][0];
+    view.rerender(<Tooltip.Provider><ChatThreadPanel key="other" group={group} rootId="other" onClose={vi.fn()} /></Tooltip.Provider>);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Other thread draft' } });
+    await act(async () => settle({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Other thread draft');
+    expect(screen.queryByText('late.txt')).toBeNull();
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments[0].name).toBe('late.txt');
+    view.rerender(<Tooltip.Provider><ChatThreadPanel key="root" group={group} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+    await screen.findByText('late.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1][0]).toEqual(original);
+    clearDraft(botGroupThreadDraftKey(group.id, 'other'));
+  });
+
+  // Review #6930: reopen BEFORE the old request fails. A file-only test missed
+  // text restored in the store but never applied to the new composer instance.
+  it.each(['', 'New unsent text'])('keeps late recovery visible after reopening, preserving newer text %j', async newerText => {
+    Object.assign(window.electronAPI, { getFilePath: (file: File) => `/test/${file.name}`, getFileThumbnail: vi.fn(async () => null) });
+    let settle!: (value: { ok: false; errorCode: string }) => void;
+    mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; })).mockResolvedValue({ ok: true, messageId: 'recovered-file' });
+    const panel = (id: string) => <Tooltip.Provider><ChatThreadPanel key={id} group={group} rootId={id} onClose={vi.fn()} /></Tooltip.Provider>;
+    const view = render(panel('root'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Original text with file' } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['log'], 'reopened.txt', { type: 'text/plain' })] } });
+    await screen.findByText('reopened.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    const original = mocks.reply.mock.calls[0][0];
+    view.rerender(panel('other'));
+    view.rerender(panel('root'));
+    if (newerText) fireEvent.change(screen.getByRole('textbox'), { target: { value: newerText } });
+    await act(async () => settle({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(newerText || original.text);
+    expect(screen.getByText('reopened.txt')).toBeTruthy();
+    view.rerender(panel('other'));
+    expect(botGroupDraftText(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.text)).toBe(newerText || original.text);
+    if (newerText) expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments).toEqual([]);
+    view.rerender(panel('root'));
+    fireEvent.click(screen.getByRole('button', { name: newerText ? 'bots.retry' : k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1][0]).toEqual(original);
+    if (newerText) expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(newerText);
+    clearDraft(botGroupThreadDraftKey(group.id, 'other'));
+  });
+
+  // #6930 review, unit: one real panel send plus a newer text/file batch.
+  // Earlier recovery tests never added B's own file while A was in flight.
+  it('keeps failed A separate from B files and retries A unchanged after reopening', async () => {
+    Object.assign(window.electronAPI, { getFilePath: (file: File) => '/test/' + file.name, getFileThumbnail: vi.fn(async () => null) });
+    let settle!: (value: unknown) => void;
+    mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; })).mockResolvedValue({ ok: true, messageId: 'ok' });
+    const panel = () => <ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />;
+    let view = render(panel());
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'A text' } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['a'], 'A.txt')] } });
+    await screen.findByText('A.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    const original = mocks.reply.mock.calls[0][0];
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'B text' } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['b'], 'B.txt')] } });
+    await screen.findByText('B.txt');
+    await act(async () => settle({ ok: false, errorCode: 'INVALID_ATTACHMENT' }));
+    view.unmount();
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments.map(file => file.name)).toEqual(['B.txt']);
+    view = render(panel());
+    expect(screen.getByRole('alert').textContent).toContain(chatErrorKey('INVALID_ATTACHMENT'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.retry' }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1][0]).toEqual(original);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('B text');
+    const sendB = screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement;
+    // The IPC call starts before the panel finishes refreshing its accepted reply.
+    await waitFor(() => expect(sendB.disabled).toBe(false));
+    fireEvent.click(sendB);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(3));
+    expect(mocks.reply.mock.calls[2][0]).toMatchObject({ text: 'B text', attachments: [{ name: 'B.txt' }] });
+    expect(mocks.reply.mock.calls[2][0].attachments).toHaveLength(1);
+  });
+
+  // #6930 review, unit: prepared bytes must appear in the production recycler
+  // input, not only in the retry map. Previous tests checked cleanup calls only.
+  it.each(['success', 'repair', 'edit', 'discard', 'owner'])('protects prepared retry media until %s', async ending => {
+    const key = botGroupThreadDraftKey(group.id, 'root');
+    saveDraft(key, { text: null, attachments: [{ id: 'shared', name: 'shared.png', path: 'clipboard://shared', ext: '.png', size: 3, category: 'image', mimeType: 'image/png', url: 'cindy-media://blobs/source.png', cacheUrlShared: true }] });
+    Object.assign(window.electronAPI, { cacheMediaForSession: vi.fn(async () => ({ name: 'private.png', ext: '.png', size: 3, mimeType: 'image/png', url: 'cindy-media://blobs/retry-private.png' })), cleanupCachedImages: vi.fn(async () => undefined) });
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValue({ ok: true, messageId: 'ok' });
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    expect(getAllDraftAttachmentUrls()).toContain('cindy-media://blobs/retry-private.png');
+    if (ending === 'repair') {
+      mocks.owner = { ...mocks.owner, generation: 2 };
+      view.rerender(<Tooltip.Provider><ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+      expect(getAllDraftAttachmentUrls()).toContain('cindy-media://blobs/retry-private.png');
+    }
+    if (ending === 'success' || ending === 'repair') {
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+      expect(mocks.reply.mock.calls[1][0]).toEqual(mocks.reply.mock.calls[0][0]);
+    } else if (ending === 'owner') act(() => { mocks.ownerCurrent = false; });
+    else if (ending === 'edit') fireEvent.change(screen.getByRole('textbox'), { target: { value: 'new attempt' } });
+    else act(() => discardDraftScope('bot-group:' + group.id));
+    await waitFor(() => expect(getAllDraftAttachmentUrls()).not.toContain('cindy-media://blobs/retry-private.png'));
+    expect(window.electronAPI.cleanupCachedImages).not.toHaveBeenCalled();
+  });
+
+  // #6930 review, unit: real clipboard fallback, with transient/continuing cache
+  // failures. This also covers a cache completion after the panel unmounts.
+  it.each(['send', 'fail', 'close'])('retains pasted bitmap bytes on cache %s', async scenario => {
+    let finish!: (value: { url: string }) => void;
+    const cache = vi.fn().mockRejectedValueOnce(new Error('disk busy'));
+    if (scenario === 'fail') cache.mockRejectedValue(new Error('disk busy'));
+    else if (scenario === 'close') cache.mockReset().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    else cache.mockResolvedValue({ url: 'cindy-media://blobs/pasted.png' });
+    Object.assign(window.electronAPI, { cacheImageFromBuffer: cache, getFilePath: () => '', cleanupCachedImages: vi.fn(async () => undefined) });
+    mocks.reply.mockResolvedValue({ ok: true, messageId: 'pasted' });
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const bitmap = new File(['bitmap'], 'paste.png', { type: 'image/png' });
+    Object.defineProperty(bitmap, 'arrayBuffer', { value: async () => new TextEncoder().encode('bitmap').buffer });
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => bitmap }] } });
+    await waitFor(() => expect(cache).toHaveBeenCalledOnce());
+    if (scenario === 'close') {
+      view.unmount();
+      await act(async () => finish({ url: 'cindy-media://blobs/pasted.png' }));
+      expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments[0]?.url).toBe('cindy-media://blobs/pasted.png');
+      return;
+    }
+    await waitFor(() => expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    if (scenario === 'fail') {
+      await screen.findByRole('alert');
+      expect(mocks.reply).not.toHaveBeenCalled();
+      view.unmount();
+      expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments[0]?.base64).toBe(btoa('bitmap'));
+    } else {
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(Array.from(cache.mock.calls[1][0].buffer)).toEqual(Array.from(new TextEncoder().encode('bitmap')));
+      expect(mocks.reply.mock.calls[0][0].attachments[0].url).toBe('cindy-media://blobs/pasted.png');
+    }
+  });
+
+  // #6930 review, unit: a two-bitmap batch exposes a partial preparation
+  // window. A single-image happy path cannot prove retained bytes on retry.
+  it('keeps partially cached bitmap bytes live and finishes only the missing bitmap on retry', async () => {
+    const key = botGroupThreadDraftKey(group.id, 'root');
+    saveDraft(key, { text: null, attachments: ['one', 'two'].map(id => ({ id, name: id + '.png', path: 'clipboard://' + id,
+      ext: '.png', size: 3, category: 'image' as const, mimeType: 'image/png', base64: btoa(id) })) });
+    const cache = vi.fn().mockResolvedValueOnce({ url: 'cindy-media://blobs/one.png' })
+      .mockRejectedValueOnce(new Error('disk busy')).mockResolvedValueOnce({ url: 'cindy-media://blobs/two.png' });
+    Object.assign(window.electronAPI, { cacheImageFromBuffer: cache, cleanupCachedImages: vi.fn(async () => undefined),
+      cindyMediaStorage: { reportDraftUrls: vi.fn() } });
+    mocks.reply.mockResolvedValue({ ok: true, messageId: 'both' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    expect(mocks.reply).not.toHaveBeenCalled();
+    expect(getAllDraftAttachmentUrls()).toContain('cindy-media://blobs/one.png');
+    expect(window.electronAPI.cindyMediaStorage.reportDraftUrls).toHaveBeenCalledWith(expect.arrayContaining(['cindy-media://blobs/one.png']));
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    expect(cache).toHaveBeenCalledTimes(3);
+    expect(mocks.reply.mock.calls[0][0].attachments.map((file: { url: string }) => file.url)).toEqual(['cindy-media://blobs/one.png', 'cindy-media://blobs/two.png']);
+    expect(getAllDraftAttachmentUrls()).not.toContain('cindy-media://blobs/one.png');
+    expect(window.electronAPI.cleanupCachedImages).not.toHaveBeenCalled();
+  });
+
+  // #6930 review, unit: real panel drop must feed its own composer, and parent
+  // discard while a reply is pending must fence late recovery (not covered by reopen tests).
+  it.each(['drop', 'picker'])('attaches a Thread file via %s and does not resurrect it after discarding the group', async entry => {
+    Object.assign(window.electronAPI, { getFilePath: (file: File) => '/test/' + file.name, getFileThumbnail: vi.fn(async () => null) });
+    let settle!: (value: { ok: false; errorCode: string }) => void;
+    mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; }));
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const panel = (await screen.findByText('Root message')).closest('aside')!;
+    const file = new File(['log'], 'dropped.txt', { type: 'text/plain' });
+    const dataTransfer = { getData: () => '', types: ['Files'], files: [file], items: [{ kind: 'file', getAsFile: () => file }] };
+    if (entry === 'drop') {
+      fireEvent.dragEnter(panel, { dataTransfer });
+      fireEvent.drop(panel, { dataTransfer });
+    } else fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await screen.findByText('dropped.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    expect(mocks.reply.mock.calls[0][0]).toMatchObject({ groupId: group.id, rootId: 'root', text: '', attachments: [{ name: 'dropped.txt' }] });
+    act(() => discardDraftScope('bot-group:' + group.id));
+    view.unmount();
+    await act(async () => settle({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))).toBeUndefined();
+  });
+
+  // #6930 ownership review, unit: the real drop/composer entry points must fence
+  // in-flight media work. Existing reopen tests only waited inside the reply IPC.
+  // Minimal inputs: one pending Ghost resolve/cache or shared-image materialization.
+  it.each(['resolve-owner', 'resolve-discard', 'cache-owner', 'cache-discard'])('does not revive a Thread draft after Ghost %s invalidation', async scenario => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const resolved = { kind: 'image', url: 'cindy-media://blobs/source.png' };
+    const meta = { name: 'ghost.png', ext: '.png', size: 42, mimeType: 'image/png', url: 'cindy-media://blobs/copied.png' };
+    const resolvePanelMedia = vi.fn(() => scenario.startsWith('resolve') ? pending : Promise.resolve(resolved));
+    const cacheMediaForSession = vi.fn(() => pending);
+    const cleanupCachedImages = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electronAPI, { ghosts: { resolvePanelMedia }, cacheMediaForSession, cleanupCachedImages });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const panel = (await screen.findByText('Root message')).closest('aside')!;
+    fireEvent.drop(panel, { dataTransfer: { types: ['text/uri-list'], getData: (type: string) => type === 'text/uri-list' ? 'cindy-ghost://helper/media/image.png' : '' } });
+    await waitFor(() => expect(scenario.startsWith('resolve') ? resolvePanelMedia : cacheMediaForSession).toHaveBeenCalledOnce());
+    act(() => { if (scenario.endsWith('owner')) mocks.ownerCurrent = false; else discardDraftScope('bot-group:' + group.id); });
+    await act(async () => finish(scenario.startsWith('resolve') ? resolved : meta));
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments ?? []).toEqual([]);
+    expect(screen.queryByText('ghost.png')).toBeNull();
+    if (scenario.startsWith('resolve')) expect(cacheMediaForSession).not.toHaveBeenCalled();
+    else expect(cleanupCachedImages).toHaveBeenCalledExactlyOnceWith([meta.url]);
+  });
+
+  it.each(['materialize-discard', 'materialize-owner', 'materialize-reject', 'reply-failure', 'reply-success'])('releases only unsent owned Thread media on %s', async scenario => {
+    const room = { ...group, id: 'cleanup-' + scenario };
+    const key = botGroupThreadDraftKey(room.id, 'root');
+    const files = [
+      { id: 'image', name: 'shared.png', path: 'clipboard://shared', ext: '.png', size: 42, mimeType: 'image/png', category: 'image' as const, url: 'cindy-media://blobs/shared.png', cacheUrlShared: true },
+      { id: 'file', name: 'log.txt', path: '/cache/owned.bin', ext: '.txt', size: 3, mimeType: 'text/plain', category: 'file' as const },
+      { id: 'shared-file', name: 'history.txt', path: '/cache/shared.bin', ext: '.txt', size: 3, mimeType: 'text/plain', category: 'file' as const, stagedPathShared: true },
+    ];
+    saveDraft(key, { text: null, attachments: files });
+    let finish!: (value?: unknown) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise((resolve, fail) => { finish = resolve; reject = fail; });
+    const meta = { name: 'private.png', ext: '.png', size: 42, mimeType: 'image/png', url: 'cindy-media://blobs/private.png' };
+    const cacheMediaForSession = vi.fn(() => scenario.startsWith('materialize') ? pending : Promise.resolve(meta));
+    const cleanupCachedImages = vi.fn().mockResolvedValue(undefined);
+    const cleanupStagedChatAttachments = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electronAPI, { cacheMediaForSession, cleanupCachedImages, cleanupStagedChatAttachments, getFileThumbnail: vi.fn(async () => null) });
+    mocks.reply.mockReturnValue(pending);
+    render(<ChatThreadPanel group={room} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(scenario.startsWith('materialize') ? cacheMediaForSession : mocks.reply).toHaveBeenCalledOnce());
+    act(() => { if (scenario.endsWith('owner')) mocks.ownerCurrent = false; else discardDraftScope('bot-group:' + room.id); });
+    await act(async () => {
+      if (scenario.endsWith('reject')) reject(new Error('cache failed'));
+      else finish(scenario.startsWith('materialize') ? meta : { ok: scenario === 'reply-success', messageId: 'sent', errorCode: 'REQUEST_TIMEOUT' });
+    });
+    expect(getDraft(key)?.attachments ?? []).toEqual([]);
+    if (scenario.startsWith('materialize')) expect(mocks.reply).not.toHaveBeenCalled();
+    if (scenario === 'reply-success') {
+      expect(cleanupCachedImages).not.toHaveBeenCalled();
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+    } else {
+      expect(cleanupStagedChatAttachments).toHaveBeenCalledExactlyOnceWith(['/cache/owned.bin']);
+      if (!scenario.endsWith('reject')) expect(cleanupCachedImages).toHaveBeenCalledExactlyOnceWith([meta.url]);
+      expect(cleanupCachedImages.mock.calls.flat(2)).not.toContain(files[0].url);
+    }
+  });
+
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {
     mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValueOnce({ ok: true, messageId: 'reply' });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
@@ -666,6 +964,31 @@ describe('chat interaction controls', () => {
       await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
       expect(mocks.reply.mock.calls[0]![0]).toMatchObject({ groupId: 'room', rootId: 'root', text: '@Ann 看一下', mentions: { all: false, botIds: ['ann-dana'] } });
       await waitFor(() => expect(input.value).toBe(''));
+    });
+
+    // #6930 review, unit: a picked namesake must survive a late failure and
+    // reopening, not be re-resolved from ambiguous rendered text alone.
+    it('recovers the selected namesake and failure reason after closing', async () => {
+      let settle!: (value: unknown) => void;
+      mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; })).mockResolvedValue({ ok: true, messageId: 'ok' });
+      const panel = () => <ChatThreadPanel group={{ ...group, members: namesakes } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />;
+      const view = render(panel());
+      const input = screen.getByRole('textbox') as HTMLTextAreaElement;
+      fireEvent.focus(input);
+      type(input, '@an');
+      fireEvent.click(screen.getAllByRole('option')[1]!);
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      const original = mocks.reply.mock.calls[0][0];
+      view.unmount();
+      await act(async () => settle({ ok: false, errorCode: 'MENTION_UNAVAILABLE' }));
+      render(panel());
+      await screen.findByRole('alert');
+      expect(screen.getByRole('alert').textContent).toContain(chatErrorKey('MENTION_UNAVAILABLE'));
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+      expect(mocks.reply.mock.calls[1][0]).toEqual(original);
+      expect(original.mentions.botIds).toHaveLength(1);
     });
 
     it('picks by mouse in the middle of a draft, supports several @ and Everyone', async () => {

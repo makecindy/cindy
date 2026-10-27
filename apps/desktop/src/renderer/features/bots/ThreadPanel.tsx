@@ -1,4 +1,4 @@
-import { useId, type ReactNode, type Ref } from 'react';
+import { useId, type HTMLAttributes, type ReactNode, type Ref } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -6,17 +6,18 @@ import { Tip } from '@/components/ui/tooltip';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 
 /** Shared chrome for group and private topics. Each keeps its existing reply runtime. */
-export function ThreadPanel({ children, actions, onClose, panelRef, resize, rootClientId }: {
+export function ThreadPanel({ children, actions, onClose, panelRef, resize, rootClientId, dragHandlers }: {
   children: ReactNode;
   actions?: ReactNode;
   onClose: () => void;
   panelRef?: Ref<HTMLElement>;
   resize?: ThreadPanelResize;
   rootClientId?: string;
+  dragHandlers?: Pick<HTMLAttributes<HTMLElement>, 'onDragEnter' | 'onDragOver' | 'onDragLeave' | 'onDrop'>;
 }) {
   const { t } = useTranslation();
   const titleId = useId();
-  return <aside ref={panelRef} aria-labelledby={titleId} data-dm-thread-panel={rootClientId}
+  return <aside {...dragHandlers} ref={panelRef} aria-labelledby={titleId} data-dm-thread-panel={rootClientId}
     style={resize?.width === undefined ? undefined : { width: resize.width, maxWidth: 'none' }}
     className="relative flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">

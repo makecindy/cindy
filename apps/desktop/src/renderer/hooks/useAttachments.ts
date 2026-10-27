@@ -187,6 +187,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const { t } = useTranslation();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const attachmentsRef = useRef<AttachedFile[]>(attachments);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // The persistence layer is keyed by draftKey when provided, else sessionId.
   const storageKey = draftKey ?? sessionId;
@@ -263,7 +268,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         cleanupStagedChatAttachmentFiles(items);
         return;
       }
-      if (isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope)) {
+      if (mountedRef.current && isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope)) {
         appendAttachments(items);
         return;
       }
@@ -283,7 +288,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
           ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
           ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
-        { silent: true },
+        { silent: false },
       );
     },
     [appendAttachments],

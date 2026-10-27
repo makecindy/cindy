@@ -2753,23 +2753,34 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
     }),
     reply: input => result(async () => {
-      const i = z.object({ groupId: id, rootId: id, text: z.string().trim().min(1).max(8000), clientId: operationId,
-        mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()).max(100) }) }).parse(input);
+      const i = z.object({ groupId: id, rootId: id, text: z.string().trim().max(8000), clientId: operationId,
+        mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()).max(100) }),
+        attachments: z.array(z.unknown()).max(BOT_GROUP_ATTACHMENTS_MAX).optional() }).parse(input);
+      if (!i.text && !i.attachments?.length) throw new Error('INVALID_INPUT');
       i.groupId = await groupRoom(i.groupId);
       // Include the caller's intent: editing a failed send must not reuse old recipients.
       const key = JSON.stringify(i);
       const recipients = postedThreadRecipients.get(key) ?? await mentionIds(i.groupId, i.mentions, i.rootId);
-      postedThreadRecipients.set(key, recipients);
-      if (postedThreadRecipients.size > 128) postedThreadRecipients.delete(postedThreadRecipients.keys().next().value!);
+      const prepared = i.attachments?.length
+        ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments }) : undefined;
+      if (i.attachments?.length && (!prepared || !prepared.ok))
+        throw new Error(prepared && !prepared.ok && prepared.errorCode !== 'INVALID_PARAMS' ? prepared.errorCode : 'INVALID_ATTACHMENT');
       let posted: { id: string };
       try {
+        const uploaded = prepared?.ok ? await media.upload(i.groupId, i.clientId, prepared.attachments, selfId) : [];
+        // Freeze recipients only once a POST can have committed. Preparation/upload
+        // failures must re-resolve the current roster on retry.
+        postedThreadRecipients.set(key, recipients);
+        if (postedThreadRecipients.size > 128) postedThreadRecipients.delete(postedThreadRecipients.keys().next().value!);
         posted = await api<{ id: string }>(`/conversations/${i.groupId}/messages`, 'POST', {
-          operationId: i.clientId, threadRootId: i.rootId, content: [{ type: 'text', text: i.text }], mentions: recipients,
+          operationId: i.clientId, threadRootId: i.rootId, content: [...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded], mentions: recipients,
         });
       } catch (error) {
+        if (prepared?.ok) await prepared.discard();
         if (error instanceof ChatResponseError && error.status >= 400 && error.status < 500 && error.status !== 408) postedThreadRecipients.delete(key);
         throw error;
       }
+      if (prepared?.ok) prepared.commit();
       changed(i.groupId); return { messageId: posted.id };
     }),
     react: input => result(async () => {

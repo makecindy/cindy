@@ -10,6 +10,7 @@ import {
   clearDraft,
   clearDraftAndNotify,
   discardDraft,
+  discardDraftScope,
   draftHasContent,
   getAllDraftAttachmentUrls,
   getDraft,
@@ -1020,4 +1021,30 @@ describe('quickStartTextToTiptapDoc', () => {
       expect(tn.marks).toEqual(expect.arrayContaining([{ type: 'quickStartPill' }]));
     }
   });
+});
+
+// #6930 review, unit: deleting a group must remove saved topic drafts and fence
+// empty in-flight topics, while similarly named groups and other owners survive.
+it('discards only the current owner group scope including empty in-flight topics', () => {
+  setComposerDraftOwner('scope-a');
+  const root = 'bot-group:scope';
+  const child = root + ':thread:one';
+  saveDraft(child, { text: textDoc, attachments: [] });
+  saveDraft(root + '-other:thread:one', { text: textDoc, attachments: [] });
+  const pending = captureDraftDiscardToken(root + ':thread:pending');
+  setComposerDraftOwner('scope-b');
+  saveDraft(child, { text: textDoc, attachments: [] });
+  const otherOwner = captureDraftDiscardToken(child);
+  setComposerDraftOwner('scope-a');
+  discardDraftScope(root);
+  expect(getDraft(child)).toBeUndefined();
+  expect(isDraftDiscardTokenCurrent(pending)).toBe(false);
+  expect(getDraft(root + '-other:thread:one')?.text).toEqual(textDoc);
+  expect(isDraftDiscardTokenCurrent(otherOwner)).toBe(true);
+  setComposerDraftOwner('scope-b');
+  expect(getDraft(child)?.text).toEqual(textDoc);
+  clearDraft(child);
+  setComposerDraftOwner('scope-a');
+  clearDraft(root + '-other:thread:one');
+  setComposerDraftOwner(null);
 });

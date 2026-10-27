@@ -10,6 +10,12 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
+import type { DragEvent } from 'react';
+import { attachGhostMediaToSession, getGhostMediaHandoverFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
+import { classifyUnclassifiedDroppedItems, getDroppedFileItems, type DroppedFileItems } from '@/lib/fileDrop';
+import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import { captureDraftDiscardToken, isDraftDiscardTokenCurrent } from '@/lib/composerDraftStore';
+import { useAttachments } from '@/hooks/useAttachments';
 import { cn } from '@/lib/utils';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
 import { Button } from '@/components/ui/button';
@@ -179,6 +185,36 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
+  const attachmentScope = botGroupThreadDraftKey(group.id, rootId);
+  const attachmentState = useAttachments(attachmentScope, attachmentScope);
+  const [dragOver, setDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+  const isAttachmentDrag = (event: DragEvent) => !readOnly &&
+    Array.from(event.dataTransfer.types).some(type => type === 'Files' || type === 'text/uri-list');
+  const dropAttachments = (event: DragEvent) => {
+    if (isGlobalDropIntercepted(event.nativeEvent)) return;
+    const token = captureDraftDiscardToken(attachmentScope);
+    const owner = getDataOwnerGeneration();
+    const isCurrent = () => isDataOwnerGenerationCurrent(owner) && isDraftDiscardTokenCurrent(token);
+    const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(event.dataTransfer);
+    if (ghostMediaUri) {
+      void attachGhostMediaToSession(ghostMediaUri, attachmentScope, t, isCurrent);
+      return;
+    }
+    const attach = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
+      if (!aliveRef.current || !isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(token)) return;
+      if (items.directories.length > 0) toast.warning(t('bots.groupChat.composer.folderNotSupported'));
+      if (items.files.length > 0) void attachmentState.addFiles(items.files);
+    };
+    const dropped = getDroppedFileItems(event.dataTransfer);
+    attach(dropped);
+    if (dropped.unclassified.length > 0) {
+      void classifyUnclassifiedDroppedItems(dropped.unclassified, {
+        getFilePath: file => window.electronAPI.getFilePath(file),
+        classifyPath: path => window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+      }).then(attach);
+    }
+  };
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -527,7 +563,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revealShare = (shareId: string) => {
     if (!onRevealShare?.(shareId)) toast.info(t(key('thread.shareNotLoaded')));
   };
-  const sendReply = async (input: { text: string; clientId: string; mentions: BotGroupMessageView['mentions'] }) => {
+  const sendReply: NonNullable<Parameters<typeof BotGroupComposer>[0]['sendReply']> = async input => {
     const owner = getDataOwnerGeneration();
     const toMain = alsoSend;
     const result = await api().reply({ groupId: group.id, rootId, ...input });
@@ -597,7 +633,33 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
   const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
 
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} dragHandlers={{
+        onDragEnter: event => {
+          if (!isAttachmentDrag(event)) return;
+          event.preventDefault();
+          dragCounterRef.current += 1;
+          setDragOver(true);
+        },
+        onDragOver: event => {
+          if (!isAttachmentDrag(event)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        },
+        onDragLeave: event => {
+          if (!isAttachmentDrag(event)) return;
+          event.preventDefault();
+          dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+          if (!dragCounterRef.current) setDragOver(false);
+        },
+        onDrop: event => {
+          if (!isAttachmentDrag(event)) return;
+          event.preventDefault();
+          dragCounterRef.current = 0;
+          setDragOver(false);
+          dropAttachments(event);
+        },
+        }} actions={<>
+
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -649,6 +711,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               mode="thread"
               groupId={group.id}
               draftKey={botGroupThreadDraftKey(group.id, rootId)}
+              attachmentScope={attachmentScope}
+              attachments={attachmentState}
+              dragOver={dragOver}
               members={members}
               running={false}
               disabled={readOnly}

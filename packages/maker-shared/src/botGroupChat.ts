@@ -853,7 +853,7 @@ export interface ChatServerApi {
    * the server saved. Only the reader's own choice ever follows a Thread.
    */
   followThread(input: { groupId: string; rootId: string; following: boolean }): Promise<ChatServerResult<{ following: boolean }>>;
-  reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
+  reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention; attachments?: BotGroupAttachmentInput[] }): Promise<ChatServerResult<{ messageId: string }>>;
   /**
    * Re-post a thread reply to the main chat as the current user. Repeating it for the same
    * reply returns the existing share (`alreadyShared`); it never starts a companion round.

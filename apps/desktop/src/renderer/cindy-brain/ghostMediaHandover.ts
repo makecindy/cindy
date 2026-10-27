@@ -77,6 +77,7 @@ export async function attachGhostMediaToSession(
   source: string | GhostMediaHandover,
   sessionId: string,
   t: TFunction,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   try {
     // main 过闸:归属/形状/mime 任一不过统一 NOT_FOUND。
@@ -84,6 +85,7 @@ export async function attachGhostMediaToSession(
     const resolved = sourceToken === undefined
       ? await window.electronAPI.ghosts.resolvePanelMedia(uri)
       : await window.electronAPI.ghosts.resolvePanelMedia(uri, 'attach', undefined, sourceToken);
+    if (!isCurrent()) return;
     if (resolved.kind === 'video') {
       // 视频:不复制字节,直接以指纹仓磁盘路径落 file 类别附件(与从系统
       // 拖 .mp4 进聊天完全同款——发送时路径透传给 agent)。托盘移除 file
@@ -103,6 +105,10 @@ export async function attachGhostMediaToSession(
     // 图片:与 ImageLightbox「发送到对话」同一条链路——复制进会话私有缓存
     // (托盘移除附件会删缓存文件,绝不直接引用总仓 blob)。
     const meta = await window.electronAPI.cacheMediaForSession({ url: resolved.url, sessionId });
+    if (!isCurrent()) {
+      await window.electronAPI.cleanupCachedImages([meta.url]);
+      return;
+    }
     appendDraftAttachment(sessionId, {
       id: crypto.randomUUID(),
       name: meta.name,
@@ -117,7 +123,7 @@ export async function attachGhostMediaToSession(
     });
     toast.success(t('chat.media.sentToChat'));
   } catch (err) {
-    toast.error(extractIpcError(err)?.message ?? t('chat.media.sendToChatFailed'));
+    if (isCurrent()) toast.error(extractIpcError(err)?.message ?? t('chat.media.sendToChatFailed'));
   }
 }
 

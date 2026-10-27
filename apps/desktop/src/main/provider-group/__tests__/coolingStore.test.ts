@@ -7,13 +7,29 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PROVIDER_GROUP_STORAGE_MEMBER_CAP } from '../../../shared/providerGroup.js';
 import { PROVIDER_GROUP_COOLING_SCOPE_CAP } from '../cooling.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-group-cooling-store-test-'));
 let caseDir = tmpDir;
+const writes = vi.hoisted(() => ({ pending: [] as Promise<unknown>[] }));
+// #6930 Windows CI: observe completion of the real production lock/write, not
+// a 1-second polling window. Both writes still start concurrently; rejection
+// must fail the test instead of being hidden by the fire-and-forget API logger.
+vi.mock('../../device-link/crossProcessLock.js', async original => {
+  const actual = await original<typeof import('../../device-link/crossProcessLock.js')>();
+  return { ...actual, withCrossProcessLock: (...args: Parameters<typeof actual.withCrossProcessLock>) => {
+    const write = actual.withCrossProcessLock(...args);
+    writes.pending.push(write);
+    return write;
+  } };
+});
+async function settleWrites(): Promise<void> {
+  const results = await Promise.allSettled(writes.pending.splice(0));
+  for (const result of results) if (result.status === 'rejected') throw result.reason;
+}
 
 vi.mock('electron', () => ({ app: { getPath: () => caseDir } }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
@@ -25,6 +41,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 
 const coolingStore = await import('../coolingStore.js');
+afterEach(settleWrites);
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('冷却记录的成员边界', () => {
@@ -118,9 +135,8 @@ describe('writeProviderGroupCooling (real file)', () => {
     ]));
     coolingStore.writeProviderGroupCooling({ [providerId]: members });
     const file = path.join(caseDir, 'provider-group-cooling.json');
-    await vi.waitFor(() => {
-      expect(JSON.parse(fs.readFileSync(file, 'utf8')).cooling[providerId]).toEqual(members);
-    });
+    await settleWrites();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).cooling[providerId]).toEqual(members);
     expect(fs.statSync(file).size).toBeGreaterThan(1024 * 1024);
     // 新实例没有旧 store 的缓存，直接从实际文件恢复。
     // reset-modules: verify persisted cooldowns survive a fresh store instance.
@@ -137,9 +153,8 @@ describe('writeProviderGroupCooling (real file)', () => {
     const miniUntil = now + 60_000;
     coolingStore.writeProviderGroupCooling({ anthropic: { 'device:studio:a': { '': studioUntil } } });
     coolingStore.writeProviderGroupCooling({ anthropic: { 'device:mini:a': { '': miniUntil } } });
-    await vi.waitFor(() => {
-      expect(coolingStore.readProviderGroupCooling().anthropic).toEqual({ 'device:studio:a': { '': studioUntil }, 'device:mini:a': { '': miniUntil } });
-    });
+    await settleWrites();
+    expect(coolingStore.readProviderGroupCooling().anthropic).toEqual({ 'device:studio:a': { '': studioUntil }, 'device:mini:a': { '': miniUntil } });
   });
 
   it('旧文件的 512 个已过期成员释放容量，新成员冷却写盘并在重启后保留', async () => {
@@ -151,9 +166,8 @@ describe('writeProviderGroupCooling (real file)', () => {
     fs.writeFileSync(file, JSON.stringify({ cooling: { ...current, openai: expired } }));
     const next = { 'device:new:openai': { '': now + 60_000 } };
     coolingStore.writeProviderGroupCooling({ openai: next });
-    await vi.waitFor(() => {
-      expect(JSON.parse(fs.readFileSync(file, 'utf8')).cooling.openai).toEqual(next);
-    });
+    await settleWrites();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).cooling.openai).toEqual(next);
     // reset-modules: verify persisted cooldowns survive a fresh store instance.
     vi.resetModules();
     const restarted = await import('../coolingStore.js');

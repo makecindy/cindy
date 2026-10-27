@@ -383,10 +383,10 @@ export function getDraft(sessionId: string): ComposerDraft | undefined {
 /** Capture the current process-local discard generation for async draft work. */
 export function captureDraftDiscardToken(sessionId: string): ComposerDraftDiscardToken {
   const ownerScopedKey = draftKey(sessionId);
-  return {
-    ownerScopedKey,
-    generation: draftDiscardGenerations.get(ownerScopedKey) ?? 0,
-  };
+  const generation = draftDiscardGenerations.get(ownerScopedKey) ?? 0;
+  // Register empty in-flight drafts too, so deleting their parent scope fences them.
+  draftDiscardGenerations.set(ownerScopedKey, generation);
+  return { ownerScopedKey, generation };
 }
 
 /** Whether a captured draft scope has not been explicitly discarded. */
@@ -515,6 +515,18 @@ export function discardDraft(sessionId: string): void {
   // recreate the discarded draft, while late async files are fenced by the
   // generation above and recycled by their owner.
   clearDraftAndNotify(sessionId);
+}
+
+/** Discard a parent composer and its colon-delimited child scopes for this owner. */
+export function discardDraftScope(sessionId: string): void {
+  const key = draftKey(sessionId);
+  const keys = new Set([...drafts.keys(), ...draftDiscardGenerations.keys(), ...listeners.keys()]);
+  keys.add(key);
+  for (const candidate of keys) {
+    if (candidate === key || candidate.startsWith(key + ':')) {
+      discardDraft(candidate.slice(ownerPrefix().length));
+    }
+  }
 }
 
 /**
@@ -781,8 +793,18 @@ export function restoreRemoteOptimisticDraft(
  * 带给 main，回收器把它们当活引用豁免。宁可多报(混着老 xdt-image 地址也
  * 没关系，main 侧只抽 cindy-media 指纹)。
  */
+// Renderer-only holders (for example a reply's prepared retry bytes) contribute
+// to the same recycler/reporting contract as persisted composer drafts.
+const draftAttachmentUrlSources = new Set<() => readonly string[]>();
+export function registerDraftAttachmentUrlSource(source: () => readonly string[]): () => void {
+  draftAttachmentUrlSources.add(source);
+  return () => { draftAttachmentUrlSources.delete(source); syncDraftUrlsToMain(); };
+}
+export function refreshDraftAttachmentUrls(): void { syncDraftUrlsToMain(); }
+
 export function getAllDraftAttachmentUrls(): string[] {
   const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls]);
+  for (const source of draftAttachmentUrlSources) for (const url of source()) urls.add(url);
   // Owner switches retain each owner's draft so switching back can restore it.
   // Protect every retained namespace as well; reporting only the active owner
   // would leave an old owner's still-restorable attachment eligible for sweep.
