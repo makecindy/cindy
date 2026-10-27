@@ -762,6 +762,17 @@ interface SessionInputState {
    * 放行;而用户显式 Stop 出来的暂停必须保持,不许新输入静默释放旧队列。
    */
   queuePausedByRestore: boolean;
+  /**
+   * 当前 queuePaused 是否来自崩溃快照恢复这一种来源。
+   *
+   * 「重启伙伴」与崩溃恢复共用 queuePausedByRestore(都认用户的下一次显式输入),
+   * 但两者对**外部投递**的态度不同:崩溃恢复出来的队列允许外部 Bot 私聊投递放行
+   * (#7209:该会话跨重启永久假忙);「重启伙伴」的排队请求按产品规则保留但不自动
+   * 重放,只有主人自己的下一条消息才启动新运行
+   * (docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。故另立此标记,
+   * 外部放行只认它。
+   */
+  queuePausedByCrashRestore: boolean;
   queueExpanded: boolean;
   queueInteractionLocks: string[];
   /** Interaction locks that must survive a later user Stop. */
@@ -903,6 +914,7 @@ function createInitialInputState(
     directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
+    queuePausedByCrashRestore: false,
     queueExpanded: false,
     queueInteractionLocks: [],
     interactionLocksPreservedOnStop: [],
@@ -1724,6 +1736,7 @@ export class AgentInputCoordinator {
     if (wasQuiet) {
       state.queuePaused = true;
       state.queuePausedByRestore = true;
+      state.queuePausedByCrashRestore = true;
     }
     log.info('restored queued input from crash snapshot', {
       sessionId,
@@ -1867,6 +1880,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     state.queuePaused = state.pendingQueue.length > 0 || state.pendingCompacts.length > 0;
     state.queuePausedByRestore = false;
+    state.queuePausedByCrashRestore = false;
     this.emit(sessionId);
     return this.getProjection(sessionId);
   }
@@ -1907,6 +1921,13 @@ export class AgentInputCoordinator {
       wasFirst?: boolean;
       sendAtMs?: number;
       resumeRestorePausedQueue?: boolean;
+      /**
+       * 放行**崩溃恢复**暂停的队列(外部 Bot 私聊投递,#7209)。与
+       * resumeRestorePausedQueue 的差别:后者是主人的显式输入,可放行「重启
+       * 伙伴」的暂停;本 flag 只放行崩溃快照恢复的暂停,不放行用户显式 Stop
+       * 或「重启伙伴」的暂停。
+       */
+      resumeCrashRestoredPausedQueue?: boolean;
       onDuplicate?: () => void;
     },
   ): AgentInputProjection {
@@ -1976,13 +1997,31 @@ export class AgentInputCoordinator {
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
     // 派发不出去,会话直到重启都处于"全部排队"死锁。用户显式 Stop 的暂停
     // (queuePausedByRestore=false)不受影响;Orca 等 main 侧自动投递不带本 flag。
-    if (opts?.resumeRestorePausedQueue && state.queuePaused && state.queuePausedByRestore) {
+    //
+    // 外部 Bot 私聊投递(#7209)走另一个 flag:它只能放行**崩溃恢复**这一种暂停
+    // (queuePausedByCrashRestore)。该会话跨重启恢复出的队列若不放行,就永久卡在
+    // 暂停态——队列不出队 → shouldQueueNewTurn 恒为真 → 会话永久假忙。而
+    // 「重启伙伴」的排队请求按产品规则保留但不自动重放,外部投递不得放行它
+    // (docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。
+    const releasesRestorePause = Boolean(
+      opts?.resumeRestorePausedQueue && state.queuePaused && state.queuePausedByRestore,
+    );
+    const releasesCrashRestorePause = Boolean(
+      opts?.resumeCrashRestoredPausedQueue && state.queuePaused && state.queuePausedByCrashRestore,
+    );
+    if (releasesRestorePause || releasesCrashRestorePause) {
       state.queuePaused = false;
       state.queuePausedByRestore = false;
-      log.info('crash-restored paused queue released by explicit user input', {
-        sessionId,
-        clientId: item.clientId,
-      });
+      state.queuePausedByCrashRestore = false;
+      log.info(
+        releasesCrashRestorePause && !releasesRestorePause
+          ? 'crash-restored paused queue released by an external Bot DM delivery'
+          : 'crash-restored paused queue released by explicit user input',
+        {
+          sessionId,
+          clientId: item.clientId,
+        },
+      );
     }
     if (!schedulerOrigin) {
       this.abandonActiveTurnRecoveryForUserAction(state);
@@ -2806,6 +2845,7 @@ export class AgentInputCoordinator {
           latest.recovery = { kind: 'queue-head', clientId: item.clientId };
           latest.queuePaused = false;
           latest.queuePausedByRestore = false;
+          latest.queuePausedByCrashRestore = false;
         }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"
@@ -2817,6 +2857,7 @@ export class AgentInputCoordinator {
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
           latest.queuePausedByRestore = false;
+          latest.queuePausedByCrashRestore = false;
         }
       } else if (
         isSteerDeliveryUncertainError(err) &&
@@ -2834,6 +2875,7 @@ export class AgentInputCoordinator {
         latest.queuePaused = true;
         // 同上:不确定投递的保护性暂停,不许新输入静默放行。
         latest.queuePausedByRestore = false;
+        latest.queuePausedByCrashRestore = false;
         log.warn('steer delivery uncertain after stop/close; materialized into paused queue', {
           sessionId,
           clientId: item.clientId,
@@ -3110,6 +3152,9 @@ export class AgentInputCoordinator {
     // Ordinary Stop remains explicit. Restart, like crash recovery, may be
     // released by the next deliberate user input, never by background enqueue.
     state.queuePausedByRestore = shouldPause && opts?.resumeOnUserInput === true;
+    // 显式 Stop 不是崩溃恢复:外部投递(Bot 私聊)不得放行它,也不得放行
+    // 「重启伙伴」的暂停(它只认主人的下一次显式输入)。
+    state.queuePausedByCrashRestore = false;
     state.queueAbortPending = shouldPause && this.isDispatchBoundaryBusy(sessionId, state);
     const abortBoundaryToken = Symbol('agent-input-abort-boundary');
     const abortBoundaryGeneration = state.generation;
@@ -3167,6 +3212,7 @@ export class AgentInputCoordinator {
         : null;
     state.queuePaused = false;
     state.queuePausedByRestore = false;
+    state.queuePausedByCrashRestore = false;
     if (pausedQueueHeadRecoveryClientId !== null) {
       state.error = null;
       clearErrorProjectionSignals(state);

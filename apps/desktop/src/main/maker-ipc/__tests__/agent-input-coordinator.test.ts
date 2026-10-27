@@ -3,7 +3,6 @@ import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
@@ -50,7 +49,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON, isAutomaticInputOriginKind } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import { buildRemoteWorkerQueuedMessage, createOrcaRemoteWorkerRuntime, type RemoteWorkerTurnEnd } from '../orcaRemoteWorkerRuntime.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
@@ -67,6 +66,11 @@ import {
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from '../makerSendTransaction.js';
+
+// register.ts 的生产源码片段在本文件的多处 guard 用例里被执行(转译后跑真实闭包),
+// 不是对其文本做字面量断言。全文件只读一次,避免同一份源码被反复读取。
+const registerSourceText = readFileSync(new URL('../register.ts', import.meta.url), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -178,7 +182,7 @@ describe('task action dispatch authorization', () => {
 // coordinator edit/dispatch path. The old immutable body discarded owner edits.
 // Guard tier wiring is exercised here alongside the existing coordinator cases.
 describe('trusted owner queue edits', () => {
-  const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+  const registerSource = registerSourceText;
   const start = registerSource.indexOf('  function stampQueuedEditProvenance(');
   const end = registerSource.indexOf('  ipcMain.handle(', start);
   const loadFinalizer = new Function('inputCoordinator', 'getDeviceLinkInvokeContext',
@@ -656,6 +660,112 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
     expect(h.coordinator.getProjection('restored-worker').queuePaused).toBe(true);
     expect(h.sendToAgent).toHaveBeenCalledOnce();
     expect(h.sendToAgent.mock.calls[0]?.[0]).toBe('other-task');
+  });
+});
+
+// #7209:Bot 私聊投递走 send_to_session 的入队通路,不经 INPUT_ENQUEUE,因此拿不到
+// 解挂崩溃恢复暂停的 flag。恢复暂停的队列永不出队 → shouldQueueNewTurn 恒为真 →
+// 该会话跨重启永久假忙,日志持续打「send_to_session queued while target busy」。
+// 这里执行生产入队函数本身(与上面 INPUT_ENQUEUE 用例同一手法),断言 Bot 私聊车道
+// 能解挂并推进队列,其它来源仍保持暂停。
+describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
+  const source = registerSourceText;
+  const start = source.indexOf('  async function enqueueSendToSessionMessage(params: {');
+  const end = source.indexOf('  async function buildSessionControlInputItem(params: {', start);
+  const compiled = transpileModule(
+    `${source.slice(start, end)}\nreturn enqueueSendToSessionMessage;`,
+    { compilerOptions: { target: ScriptTarget.ES2022 } },
+  ).outputText;
+
+  function botDmEnqueue(h: ReturnType<typeof createHarness>) {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const noop = () => undefined;
+    const bindings = {
+      inputCoordinator: h.coordinator,
+      buildSessionControlInputItem: async (params: { clientId: string; message: string }) =>
+        makeItem(params.clientId, params.message),
+      orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: noop },
+      assertTaskActionCurrent: async () => undefined,
+      commitBotAuthorizationInput: async (_guard: unknown, run: () => void) => run(),
+      log: { info: noop, warn: noop, debug: noop, error: noop },
+    };
+    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
+      (params: {
+        targetSessionId: string;
+        clientId: string;
+        message: string;
+        persistedContent: string;
+      }) => Promise<void>;
+  }
+
+  it('releases the restored pause and dispatches the queue when a Bot DM arrives', async () => {
+    const h = createHarness();
+    const sid = 'bot-dm-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await botDmEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'bot-dm:thread-1:delivery-1',
+      message: 'ping',
+      persistedContent: 'ping',
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    // 恢复出来的队首先派发,Bot 私聊这条接在后面(队列仍是 FIFO)。
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'restored draft' });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['bot-dm:thread-1:delivery-1']);
+  });
+
+  it('keeps the restored pause for deliveries outside the Bot DM lane', async () => {
+    const h = createHarness();
+    const sid = 'plugin-task-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await botDmEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'plugin-task:run-1',
+      message: 'ping',
+      persistedContent: 'ping',
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['restored', 'plugin-task:run-1']);
+  });
+
+  it('does not let a Bot DM release the pause left by restarting a companion', async () => {
+    // 「重启伙伴」的排队请求保留但不自动重放,只有主人的下一条消息启动新运行
+    // (docs/product-rules/cindy-bots-runtime.md)。它与崩溃恢复共用
+    // queuePausedByRestore,但外部投递不得放行它。
+    const h = createHarness();
+    const sid = 'restarted-companion';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('kept', 'kept request'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+    h.setRunning(false);
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await botDmEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'bot-dm:thread-2:delivery-2',
+      message: 'ping',
+      persistedContent: 'ping',
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'bot-dm:thread-2:delivery-2']);
   });
 });
 
@@ -7234,7 +7344,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
     h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
     h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
-    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+    const source = registerSourceText;
     const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
     const end = source.indexOf('    getQueueSnapshot:', start);
     expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
@@ -15794,7 +15904,7 @@ describe('provider group computer switch hold', () => {
 
 
 describe('Goal input boundary', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const source = registerSourceText;
   const boundary = source.slice(source.indexOf('export function isGoalInputBlocked'), source.indexOf('export function isSessionInTurn'));
   const compiled = transpileModule(boundary.replace(/export /g, '') + '\nreturn { isGoalInputBlocked, ensureGoalInputReady };', {
     compilerOptions: { target: ScriptTarget.ES2022 },
