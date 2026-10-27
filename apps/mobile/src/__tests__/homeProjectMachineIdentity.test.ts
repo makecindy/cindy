@@ -1,3 +1,4 @@
+import i18n from '@/i18n';
 import { describe, expect, it } from 'vitest';
 import type { MobileHomeDeviceFilterItem, MobileHomeProjectGroup } from '@/session/mobileHome';
 import { buildHomeProjectMachineIdentities } from '@/session/homeProjectMachineIdentity';
@@ -41,8 +42,8 @@ describe('project machine identity parity with Desktop', () => {
       projects: [project('a', 'one', 'MacBook'), project('b', 'two', 'macbook')],
       deviceFilters, selectedDeviceId: null,
     }, connected);
-    expect(result.get('a')?.displayLabel).toBe('MacBook · one');
-    expect(result.get('b')?.displayLabel).toBe('macbook · two');
+    expect(result.get('a')?.displayLabel).toBe('MacBook (1)');
+    expect(result.get('b')?.displayLabel).toBe('macbook (2)');
     const onlyOneVisible = buildHomeProjectMachineIdentities({
       projects: [project('a', 'one', 'MacBook')], deviceFilters, selectedDeviceId: null,
     }, connected);
@@ -104,13 +105,13 @@ describe('project machine identity parity with Desktop', () => {
     expect([...buildHomeProjectMachineIdentities(home, evidence).values()].map(row => row.disconnected)).toEqual([false, false]);
   });
 
-  it('uses the current device name, falls back to ID for empty names, and skips unowned folders', () => {
+  it('uses the current device name, uses a readable fallback for empty names, and skips unowned folders', () => {
     const result = buildHomeProjectMachineIdentities({
       projects: [project('a', 'mac', 'Old name'), project('b', 'win', ''), project('c', null, '')],
       deviceFilters: [device('mac', 'Renamed Mac'), device('win', '  ')], selectedDeviceId: null,
     }, connected);
     expect(result.get('a')?.displayLabel).toBe('Renamed Mac');
-    expect(result.get('b')?.displayLabel).toBe('win');
+    expect(result.get('b')?.displayLabel).toBe(i18n.t('devices.cloudCompanion.unknownDevice'));
     expect(result.has('c')).toBe(false);
   });
 });

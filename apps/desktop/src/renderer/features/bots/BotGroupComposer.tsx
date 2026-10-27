@@ -252,7 +252,7 @@ export function BotGroupComposer({
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
   quoteRef.current = quote?.view ?? null;
-  const quotedMessageId = quote?.view.messageId ?? null;
+  const quoteView = quote?.view ?? null;
   const focusInputOnMenuCloseRef = useRef(false);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
@@ -278,10 +278,11 @@ export function BotGroupComposer({
   const showStop = !thread && running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
-  // Picking 引用回复 brings the caret here, ready to type the reply.
+  // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
+  // again (after clicking elsewhere) does too, since each pick is a new quote.
   useEffect(() => {
-    if (quotedMessageId) textareaRef.current?.focus();
-  }, [quotedMessageId]);
+    if (quoteView) textareaRef.current?.focus();
+  }, [quoteView]);
 
   // Keep the unsent text with the group (or 话题), like a task's composer draft.
   const discardTokenRef = useRef(captureDraftDiscardToken(draftKey));

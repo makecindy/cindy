@@ -1,5 +1,5 @@
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
-import { buildUiMockRows, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
+import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
@@ -779,6 +779,8 @@ function visualMockScheduleTemplates(): ReturnType<MobileMakerTransport['schedul
 
 function handleVisualMockFileBrowser(input: unknown): unknown {
   const op = input && typeof input === 'object' && 'op' in input ? String(input.op) : '';
+  const shared = sharedUiMockFiles(input);
+  if (shared !== undefined) return shared;
   if (op === 'caps') return { ok: true, gzip: true } satisfies FileBrowserCapsResult;
   if (op === 'listDir') return visualMockFileBrowserEntries();
   if (op === 'listAllFiles') {
@@ -812,6 +814,51 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
     } satisfies FileBrowserThumbnailResult;
   }
   return visualMockFileBrowserEntries();
+}
+
+/** Serve only the showcase project files Desktop seeds, without touching a real filesystem. */
+function sharedUiMockFiles(input: unknown): unknown {
+  if (!input || typeof input !== 'object') return undefined;
+  const request = input as Record<string, unknown>;
+  const workdir = String(request.workdir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+  const project = UI_MOCK_SHOWCASE_PROJECTS.find(item => workdir === `/Users/demo/Projects/${item.name}`);
+  if (!project) return undefined; // Keep the existing media/Markdown regression fixtures.
+  const relPath = String(request.relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const paths = Object.keys(project.files).sort();
+  if (request.op === 'caps') return { ok: true, completeDirectoryListing: true } satisfies FileBrowserCapsResult;
+  if (request.op === 'listAllFiles') {
+    const cap = typeof request.cap === 'number' && request.cap > 0 ? request.cap : paths.length;
+    return { files: paths.slice(0, cap), truncated: paths.length > cap, elapsedMs: 0 } satisfies FileBrowserListAllFilesResult;
+  }
+  if (request.op === 'listDir') {
+    const prefix = relPath ? `${relPath}/` : '';
+    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number }>();
+    for (const path of paths) {
+      if (!path.startsWith(prefix)) continue;
+      const remainder = path.slice(prefix.length);
+      const name = remainder.split('/')[0];
+      const directory = remainder.includes('/');
+      entries.set(name, { type: directory ? 'directory' : 'file', name, relPath: `${prefix}${name}`, size: directory ? 0 : new TextEncoder().encode(project.files[path]).byteLength, mtimeMs: NOW });
+    }
+    return [...entries.values()].sort((a, b) => Number(b.type === 'directory') - Number(a.type === 'directory') || a.name.localeCompare(b.name));
+  }
+  if (request.op === 'readFile') {
+    if (!Object.hasOwn(project.files, relPath)) return { ok: false, code: 'READ_FAILED', message: 'File not found in the demo project.' } satisfies FileBrowserReadFileResult;
+    const content = project.files[relPath];
+    return { ok: true, data: { relPath, content, size: new TextEncoder().encode(content).byteLength, mtimeMs: NOW } } satisfies FileBrowserReadFileResult;
+  }
+  if (request.op === 'searchCollect') {
+    const normalize = (value: string) => request.caseSensitive === true ? value : value.toLowerCase();
+    const query = normalize(String(request.query ?? ''));
+    const found = query ? paths.flatMap(path => project.files[path].split('\n').flatMap((line, index) =>
+      normalize(line).includes(query) ? [{ relPath: path, lineNumber: index + 1, lineText: line }] : [],
+    )) : [];
+    const cap = typeof request.maxMatches === 'number' && request.maxMatches > 0 ? Math.min(500, request.maxMatches) : 500;
+    const matches = found.slice(0, cap);
+    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map(item => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
+  }
+  if (request.op === 'thumbnail') return { ok: false, code: 'THUMB_UNSUPPORTED' } satisfies FileBrowserThumbnailResult;
+  return { ok: false, message: 'Unsupported demo file operation.' };
 }
 
 function visualMockDirectory(): RemoteDirectoryListResult {

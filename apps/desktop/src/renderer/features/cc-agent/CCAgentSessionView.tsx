@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { voiceTaskFailure } from '../bots/voice/VoiceReplyTracker';
@@ -82,7 +83,6 @@ import {
 
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import { Collapse } from '@/components/ui/collapse';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
@@ -561,6 +561,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
+  focusComposerOnOpen?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -844,6 +846,7 @@ function CCAgentSessionContent({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  focusComposerOnOpen = false,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -5595,6 +5598,7 @@ function CCAgentSessionContent({
               className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
               style={{ width: inputWidth }}
             >
+              {!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
                   sessionKey={sessionId ?? null}
@@ -5639,6 +5643,7 @@ function CCAgentSessionContent({
                   }
                   className="col-start-1 row-start-1"
                 />
+              ) : null}
               <div
                 data-composer-center-group="true"
                 className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
@@ -6073,6 +6078,8 @@ function CCAgentSessionContent({
                     <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
                       getMessage={getQuoteMessage} names={botQuoteNames} />
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  // Picking 「回复」 brings the caret here, ready to type the reply.
+                  focusRequest={pendingReplyQuote}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
@@ -6136,7 +6143,7 @@ function CCAgentSessionContent({
                       : botChatIdentity
                       ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
-                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
+                          device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
@@ -6167,8 +6174,8 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail || disableAutofocus}
-                  focusOnStorageKeyChange={ownsRoute}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
                   // (worker 自己不能再开协同)。
@@ -6811,22 +6818,22 @@ function RunningStatusBar({
         !backgroundTasksRunning &&
         usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // Retain the outgoing row while its occupied height closes. Returning null
-  // after the opacity fade removed the whole row in one frame.
-  const rowVisible = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));
+  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
+  // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
   //   claude tool 进度会拼成 `mcp__x__y running...` 长串,窄宽时左段靠 span truncate;
   // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出。
   return (
-    <Collapse
-      open={rowVisible}
-      animateResize
-      className={cn('mx-auto', className)}
+    <div
+      className={cn(
+        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]',
+        className,
+      )}
       style={{ width: inputWidth }}
     >
-    <div className="grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]">
       <div
         // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
         // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
@@ -6878,7 +6885,7 @@ function RunningStatusBar({
         {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
-            className="flex min-w-0 items-center gap-[6px] whitespace-nowrap tabular-nums"
+            className="flex min-w-0 items-center gap-[6px]"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >
@@ -6945,7 +6952,6 @@ function RunningStatusBar({
         )}
       </div>
     </div>
-    </Collapse>
   );
 }
 

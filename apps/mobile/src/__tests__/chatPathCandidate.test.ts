@@ -17,7 +17,7 @@ const pathContext = React.createContext<any>(null);
 const verdictListeners = new Set<(key: string) => void>();
 const verifyPath = vi.fn(async () => undefined);
 const pathBindings = {
-  React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo,
+  React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
   useRecyclingState: React.useState, ChatFilePathContext: pathContext,
   resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference,
   StyleSheet: { flatten: flattenStyle },

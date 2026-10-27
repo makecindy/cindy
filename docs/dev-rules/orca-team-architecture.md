@@ -390,7 +390,11 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    Host 为插件 Worker 的首次输入传入调用内来源复核时，直发与排队后的 accepted 均沿现有回调检查；任务接收的异步生命周期更新前后都要复核。就绪消息也使用同一来源复核并以 `AcceptedCallbackDispatchCancelled` 拒绝派发，不能让普通 callback 错误被吞后继续执行。直接拒绝后再由 lifecycle 清理本次新 Worker，不在 send／transition 锁内关闭 Session；排队后迟到的拒绝只取消该输入和本次 provisional 状态，保留 Worker。普通发送错误仍沿原有返回语义。此回调不是跨重启或跨工具执行的权限事务。
 
 4. **worker 主动回报会结清自动回报态（状态：不变量）**<br>
-   worker 主动 `send_to_lead` 一旦入队或 accepted，就必须清掉该 worker 的 auto-bridge pending，防止 Lead 同时收到手动回报和 auto-bridge 双份结果。实现指针：`orca-bridge-mcp.ts` 的 `send_to_lead` tool handler，以及 `orcaTeamService.ts` 的 `clearAutoBridgeState` / `clearRuntimeState`。
+   本机持有 Session 的 Worker（含 SSH Worker）主动 `send_to_lead` 被直发接收、入队或同轮插话接收后，只把本轮 auto-bridge 的 `pending` 置为 false，**不写 done**。回报身份保留到产品终态；真正结束才写 done / error，手动停止仍为 idle。已回报的轮次不再自动补报，失败投递仍欠回报；同轮多次显式回报各自送达，结清幂等。末步回报后的终态沿原事件即时收口，不加轮询或延时。实现指针：`orca-bridge-mcp.ts` 的 `send_to_lead` 与 `orcaTeamService.ts` 的 `captureLocalWorkerReport` / `handleWorkerTerminalTurn`。
+
+   回报在投递前捕获本轮身份，迟到的 queued accepted 不再结算；B 派发临时接管期间，A 的回报只能结清捕获的 previous pending，B 回滚不能复活 A 的欠账，B 提交不能被 A 清掉。产品终态与回报结算经同一 Worker transition 锁串行修改；等待投递、回报或 provisional settlement 必须在锁外，自动回报完成后再核对对象身份，不能删掉新一轮。无 Lead 派单的用户直接轮次不建立欠回报账。自动续跑 / host continuation 会推进 vendor generation，不能用派活时的 generation 拒绝同产品轮次的回报；只有未被 suppress、未被恢复接管的产品终态才同步记录 Session 实例与 generation（先于终态处理的异步等待）。此后直发 B 的回报照常送达，但不能结清 A 的欠账；终态前已开始投递的 A 回报仍可结算，末步回报无需延时。所有本地终态写状态前均按 main Session 实例 / generation 隔离；用户直发新轮不替换旧回报身份时，旧终态仍结清自己的欠回报（捕获时已手动停止则静默移除，否则未回报才自动代报），但只移除同一旧对象，不写新轮状态、不清新轮的手动停止或 provisional 状态。运行设备 Worker 的 `settleReportedWorker` 与 remote commit 仍沿原有持久结算语义，本地规则不扩展到运行设备代理。
+
+   `hasPendingWorkerReports` 只统计仍欠回报的 Worker，不代表仍在运行的 Worker。最后一份回报被接收时，沿已有 `onLeadWorkerReportsSettled` 通知灵动岛；Lead 自身忙碌或有队列时仍由其现有完成规则处理。相较旧实现等 Worker 终态再清 pending，这可能更早解除 Lead 的完成暂缓；不另增加「Worker 仍在工作」条件。
 
 5. **手动中断不 auto-bridge（状态：不变量）**<br>
    用户手动 stop / abort worker 后，terminal turn 不应把最后消息 auto-bridge 给 Lead。实现指针：`register.ts` 的 stop / abort IPC handlers，以及 `orcaTeamService.ts` 的 `handleWorkerTerminalTurn`。

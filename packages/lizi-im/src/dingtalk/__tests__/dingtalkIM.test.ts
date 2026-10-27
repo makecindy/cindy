@@ -85,6 +85,103 @@ function validCredentialFetcher() {
   );
 }
 
+describe('DingTalk connection recovery', () => {
+  it('backs off repeated failures and cancels retries when credentials are cleared', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { host } = makeHost();
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'));
+    const im = new DingTalkIM(host, { fetcher });
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(800);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_599);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      await im.clearCredentials();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(im.getStatus().kind).toBe('idle');
+    } finally {
+      await im.dispose();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers a dropped stream without enabling the SDK retry loop', async () => {
+    vi.useFakeTimers();
+    const { host } = makeHost();
+    const clients: FakeClient[] = [];
+    const im = new DingTalkIM(host, {
+      fetcher: validCredentialFetcher(),
+      clientFactory: () => { const client = new FakeClient(); clients.push(client); return client; },
+    });
+    const received = vi.fn();
+    im.onMessage(received);
+    try {
+      await im.init();
+      expect(clients[0].config.autoReconnect).toBe(false);
+      clients[0].emit(directMessage());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledOnce();
+      clients[0].connected = false;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(clients).toHaveLength(2);
+      expect(im.getStatus().kind).toBe('connected');
+      clients[1].emit(directMessage());
+      clients[0].emit(directMessage({ msgId: 'stale-client' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledOnce();
+      clients[1].emit(directMessage({ msgId: 'new-message' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledTimes(2);
+      await im.dispose();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(clients).toHaveLength(2);
+    } finally { await im.dispose(); vi.useRealTimers(); }
+  });
+
+  it('does not open a socket when disposed during credential validation', async () => {
+    const { host } = makeHost();
+    let resolve!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise((done) => { resolve = done; }));
+    const clientFactory = vi.fn(() => new FakeClient());
+    const im = new DingTalkIM(host, { fetcher, clientFactory });
+    const starting = im.init();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    await im.dispose();
+    resolve(new Response(JSON.stringify({ accessToken: 'token', expireIn: 7200 })));
+    await starting;
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(im.getStatus().kind).toBe('idle');
+  });
+
+  it.each(['recover', 'dispose', 'auth'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    const { host } = makeHost();
+    const fetcher = validCredentialFetcher();
+    if (outcome === 'auth') {
+      fetcher.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    } else {
+      fetcher.mockRejectedValueOnce(new Error('network down'));
+    }
+    const im = new DingTalkIM(host, { fetcher, clientFactory: () => new FakeClient() });
+    try {
+      await im.init();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fetcher).toHaveBeenCalledTimes(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 function outboundImageFetcher() {
   return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);

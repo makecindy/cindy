@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   REMOTE_RESOURCE_GET_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
@@ -88,7 +89,7 @@ export function remoteResourceDiscoveryTargets(
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+    .map((device) => ({ deviceId: device.deviceId, deviceName: deviceDisplayName(device.deviceId, device.name, devices),
       ...(!device.canOpen ? { offline: true } : {}),
     }));
 }
@@ -538,7 +539,7 @@ export function parseRemoteResourceTargets(value: unknown): RemoteResourceHostTa
       ) {
         return [];
       }
-      return [{ deviceId, deviceName: deviceName || deviceId }];
+      return [{ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }];
     });
   } catch {
     return [];

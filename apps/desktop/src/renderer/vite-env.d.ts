@@ -1665,6 +1665,7 @@ interface ElectronAPI {
   pluginMarket: {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
@@ -2302,6 +2303,7 @@ interface ElectronAPI {
 
   // ── Discord Bot (Settings → IM Bot tab) ──
   discordBot: {
+    reconnect: () => Promise<{ status: DiscordBotTransportStatus; ownerUserId: string | null }>;
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
@@ -3071,6 +3073,7 @@ interface ElectronAPI {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
+        | { type: 'plugin'; pluginId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
@@ -3092,6 +3095,7 @@ interface ElectronAPI {
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
+    | { type: 'plugin'; pluginId: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
     | null
   >;

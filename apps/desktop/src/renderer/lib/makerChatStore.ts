@@ -6805,7 +6805,7 @@ export function handleStreamEvent(
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
@@ -6829,7 +6829,9 @@ export function handleStreamEvent(
                     askUserReply,
                     askUserAnswers: answers,
                   }
-                : { ...m, askUserStatus: 'expired' as const }
+                : m.askUserStatus === 'pending'
+                  ? { ...m, askUserStatus: 'expired' as const }
+                  : m
               : m,
           ),
         };

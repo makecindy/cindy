@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -263,9 +264,10 @@ export function TelegramBotSection({
                   {validationError}
                 </p>
               ) : status.kind === 'error' ? (
-                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {describeTelegramStatusFailure(status, t)}
-                </p>
+                <ImConnectionError
+                  message={describeTelegramStatusFailure(status, t)}
+                  details={status.reason}
+                />
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">
                   {t('settings.telegramBot.formHint')}
@@ -288,6 +290,14 @@ export function TelegramBotSection({
               </button>
             )}
           </div>
+
+          {hasSavedCreds && ownerUserId && (
+            <ImSavedConnectionRecovery
+              loading={isTogglingOnline}
+              disabled={isSaving || isDisconnecting}
+              onReconnect={() => setOnline(true)}
+            />
+          )}
 
           <Button
             variant="cta"
@@ -413,9 +423,7 @@ function ConnectedCard(props: {
       <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
         <div className="flex justify-between gap-4">
           <span>{t('settings.telegramBot.connected.botLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {props.botLabel}
-          </span>
+          <span className="font-medium text-[var(--settings-section-title)]">{props.botLabel}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span>{t('settings.telegramBot.connected.ownerLabel')}</span>

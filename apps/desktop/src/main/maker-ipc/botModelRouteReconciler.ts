@@ -1,4 +1,6 @@
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
+import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
@@ -56,6 +58,26 @@ function savedRuntimeRoute(state: BotRouteState): RuntimeRoute | null {
 function sameRoute(a: RuntimeRoute, b: RuntimeRoute): boolean {
   return a.agentKind === b.agentKind && a.model === b.model && a.providerId === b.providerId
     && a.effort === b.effort && a.fastMode === b.fastMode && (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null);
+}
+
+/** Apply through both runtime switch paths before retiring recovery state. */
+export function createBotModelRouteApplier(deps: {
+  stage(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
+  isIdle(sessionId: string): boolean;
+  applyPendingSwitch(sessionId: string): Promise<void>;
+  hasPendingSwitch(sessionId: string): boolean;
+  onApplied(sessionId: string): Promise<void>;
+}) {
+  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void> => {
+    await deps.stage(sessionId, route, current);
+    if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
+    // Same-Harness choices wait in runtime control, not the Harness registry.
+    // Staging alone must not retire the durable recovery marker.
+    if (deps.hasPendingSwitch(sessionId) || getSessionRuntimeControlSnapshot(sessionId).pending) {
+      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+    }
+    await deps.onApplied(sessionId);
+  };
 }
 
 /** Apply the permanent profile through ordinary Session model/switch controls.

@@ -848,7 +848,8 @@ import {
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
-import { readImDefaultSettingsFingerprint } from './im/defaultSessionSettings.js';
+import { readImDefaultSettingsFingerprint, projectImDefaultSettings } from './im/defaultSessionSettings.js';
+import { usesAutomaticImModel } from '../shared/imAutomaticModel.js';
 import { fingerprintImDefaultSettings } from './im/shared/channelDefaultRoute.js';
 import { IM_DEFAULT_SETTINGS } from '../shared/imDefaultSettings.js';
 import { assertOwnerScopeSettledForWrite } from './im/ownerScopedStorage.js';
@@ -7529,7 +7530,7 @@ const registerIpcHandlers = () => {
     'fs:resolve-path',
     async (
       _event: Electron.IpcMainInvokeEvent,
-      params: { href: string; workingDir: string },
+      params: { href: string; workingDir: string; refresh?: boolean },
     ): Promise<{
       status: 'unique' | 'multiple' | 'none';
       candidates: string[];
@@ -7538,6 +7539,7 @@ const registerIpcHandlers = () => {
       try {
         return await resolveWorkspacePathCached(params.href, params.workingDir, {
           isPathAllowed,
+          refresh: params.refresh === true,
         });
       } catch (err) {
         console.error('[fs:resolve-path] failed:', err);
@@ -10480,10 +10482,17 @@ function memorySettingsWire() {
   };
 }
 
-function imDefaultSettingsWire(channel?: ImDefaultSettingsChannel) {
+async function imDefaultSettingsWire(channel?: ImDefaultSettingsChannel) {
+  const ownerGeneration = getActiveAppSession().generation;
   const state = readImDefaultSettingsState(channel);
+  const automaticModel = usesAutomaticImModel(state.value);
+  const value = await projectImDefaultSettings(state.value, channel);
+  if (isAppSessionBoundaryPending() || getActiveAppSession().generation !== ownerGeneration) {
+    throwIpcError('INTERNAL', 'IM settings owner changed; retry loading settings');
+  }
   return {
-    ...state.value,
+    ...value,
+    automaticModel,
     isCustomized: state.isCustomized,
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,

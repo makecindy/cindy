@@ -211,6 +211,21 @@ beforeEach(() => {
 });
 
 describe('syncUnderLock', () => {
+  it('rechecks an automatic default after catalog changes without replacing manual task choices', async () => {
+    mocks.fingerprint.mockReturnValue('automatic-intent');
+    await insertTask('following', OLD, { record: buildImDefaultRouteRecord('resolved-old', OLD) });
+    await insertTask('manual', NEW, { record: buildImDefaultRouteRecord('resolved-old', OLD) });
+    mocks.resolveDefaults.mockResolvedValue({ ...OLD, fingerprint: 'resolved-old' });
+    await sync().syncUnderLock('following');
+    expect(mocks.applyRoute).not.toHaveBeenCalled();
+    mocks.resolveDefaults.mockResolvedValue({ ...NEW, fingerprint: 'resolved-new' });
+    await sync().syncUnderLock('following');
+    expect((await rowOf('following')).model).toBe(NEW.model);
+    expect(mocks.applyRoute).toHaveBeenCalledTimes(1);
+    await sync().syncUnderLock('manual');
+    expect(mocks.applyRoute).toHaveBeenCalledTimes(1);
+    expect((await rowOf('manual')).model).toBe(NEW.model);
+  });
   it('Auto 被服务端挪到另一家 Cindy 来源、任务已跟过去时，仍算在跟随渠道默认', async () => {
     const auto = 'auto/group-1';
     const view = (id: string, source: string, models: string[]) => ({

@@ -1148,7 +1148,7 @@ function contentRefName(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   for (const key of ['name', 'originalName', 'fileName', 'path', 'url']) {
     const item = record[key];
-    if (typeof item === 'string' && item.trim()) return item.trim().split('/').pop() ?? item.trim();
+    if (typeof item === 'string' && item.trim()) return item.trim().split(/[\\/]/).pop() ?? item.trim();
   }
   return null;
 }

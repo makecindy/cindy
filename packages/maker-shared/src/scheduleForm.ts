@@ -734,7 +734,7 @@ function intervalMinutesToCronExpr(minutes: number): string | null {
 }
 
 function intervalMsToSupportedMinutes(intervalMs: number | undefined): string {
-  if (!Number.isFinite(intervalMs) || !intervalMs) return '';
-  const minutes = Math.round(intervalMs / 60_000);
+  if (typeof intervalMs !== 'number' || !Number.isFinite(intervalMs) || intervalMs % 60_000 !== 0) return '';
+  const minutes = intervalMs / 60_000;
   return intervalMinutesToCronExpr(minutes) ? String(minutes) : '';
 }

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   reconcileNewSessionCatalogDraft,
   reconcileNewSessionSubmitDraft,
@@ -514,7 +515,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     creationError?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
-  const routeDeviceName = String(params.deviceName ?? routeDeviceId);
+  const routeDeviceName = deviceDisplayName(routeDeviceId, typeof params.deviceName === 'string' ? params.deviceName : undefined);
   const initialWorkingDir = readRouteString(params.workingDir);
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';
   // The home action lands in the compact pill; only a user's tap opens the card and keyboard.
@@ -550,7 +551,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const deviceLinkStatusRef = useRef(deviceLinkStatus);
   deviceLinkStatusRef.current = deviceLinkStatus;
   const routeDeviceFallback = useMemo<NewSessionDeviceOption | null>(
-    () => routeDeviceId ? { deviceId: routeDeviceId, name: routeDeviceName || routeDeviceId } : null,
+    () => routeDeviceId ? { deviceId: routeDeviceId, name: deviceDisplayName(routeDeviceId, routeDeviceName) } : null,
     [routeDeviceId, routeDeviceName],
   );
   const deviceOptions = useMemo(
@@ -580,7 +581,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     () => deviceOptions.find((option) => option.deviceId === selectedDeviceId) ?? routeDeviceFallback,
     [deviceOptions, routeDeviceFallback, selectedDeviceId],
   );
-  const selectedDeviceLabel = selectedDeviceOption?.name || selectedDeviceName || selectedDeviceId || t('session.new.selectDevice');
+  const selectedDeviceLabel = selectedDeviceId ? deviceDisplayName(selectedDeviceId, selectedDeviceOption?.name || selectedDeviceName, deviceOptions) : t('session.new.selectDevice');
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const projectAliases = useRemoteProjectAliases([selectedDeviceId]);
@@ -1817,11 +1818,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     const previousDeviceId = selectedDeviceIdRef.current;
     selectedDeviceIdRef.current = option.deviceId;
     setSelectedDeviceId(option.deviceId);
-    setSelectedDeviceName(option.name || option.deviceId);
+    setSelectedDeviceName(deviceDisplayName(option.deviceId, option.name));
     void saveNewSessionPreferences({
       device: {
         deviceId: option.deviceId,
-        name: option.name || option.deviceId,
+        name: deviceDisplayName(option.deviceId, option.name),
       },
     });
     setDevicePickerOpen(false);
@@ -3986,7 +3987,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         workspaceKind: effectiveDraft.workspaceKind,
         device: {
           deviceId: selectedDeviceId,
-          name: selectedDeviceName || selectedDeviceId,
+          name: deviceDisplayName(selectedDeviceId, selectedDeviceName),
         },
       });
       const creatingWorktree = worktreeIntent.applicable
@@ -4558,7 +4559,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         workspaceKind: draft.workspaceKind,
         device: {
           deviceId: selectedDeviceId,
-          name: selectedDeviceName || selectedDeviceId,
+          name: deviceDisplayName(selectedDeviceId, selectedDeviceName),
         },
       });
       // 提交点联合终检(同 create(),代际安全版独立 review P1-1/P1-2):唯一数据源 =
@@ -5126,7 +5127,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                     const selected = option.deviceId === selectedDeviceId;
                     return (
                       <Pressable
-                        accessibilityLabel={t('session.new.selectDeviceNamed', { name: option.name || option.deviceId })}
+                        accessibilityLabel={t('session.new.selectDeviceNamed', { name: deviceDisplayName(option.deviceId, option.name, deviceOptions) })}
                         accessibilityRole="button"
                         key={option.deviceId}
                         onPress={() => selectDevice(option)}
@@ -5139,7 +5140,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                           strokeWidth={iconStroke.thin}
                         />
                         <Text style={styles.deviceOptionText} numberOfLines={1}>
-                          {option.name || option.deviceId}
+                          {deviceDisplayName(option.deviceId, option.name, deviceOptions)}
                         </Text>
                         {selected ? (
                           <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />

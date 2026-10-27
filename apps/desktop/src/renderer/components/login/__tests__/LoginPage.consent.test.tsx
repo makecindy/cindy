@@ -47,8 +47,8 @@ import { LoginPage } from '../LoginPage';
 import { parseLegalSegments } from '../LoginControls';
 import { LEGAL_LINKS } from '../../../../shared/legalLinks';
 
-const CN_TERMS_URL = 'https://protocol.xd.cn/cindy/agreement.html';
-const CN_PRIVACY_URL = 'https://protocol.xd.cn/cindy/privacy-1.0.html';
+const CN_TERMS_URL = 'https://cindy.cn/terms';
+const CN_PRIVACY_URL = 'https://cindy.cn/privacy';
 
 async function identifierState(scenario: string): Promise<AuthFlowState> {
   const client = new CindyAuthClient({

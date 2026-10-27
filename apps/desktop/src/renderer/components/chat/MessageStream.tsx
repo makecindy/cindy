@@ -3,8 +3,6 @@ import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
-import { useMessageEntrance } from './useMessageEntrance';
-import { useSmoothMessageFollow } from './useSmoothMessageFollow';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -3095,7 +3093,6 @@ export function MessageStream({
   const contentRef = useRef<HTMLDivElement>(null);
   /** 渲染 item 的内层 flex 容器；按 data-render-item-key 定位，异步卡片可不占 DOM。 */
   const itemsRef = useRef<HTMLDivElement>(null);
-  const followMessageBottom = useSmoothMessageFollow(scrollRef, itemsRef);
 
   // ── 切会话恢复浏览位置(默认常开) ──
   // 父组件用 key={sessionId} 重挂载本组件,所以这里在 mount 时一次性读取快照即可:
@@ -3399,12 +3396,6 @@ export function MessageStream({
     workGroupProjection,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
-  const entranceSignature = allRenderItems.flatMap(item => item.type === 'message'
-    && (item.message.role === 'user' || item.message.role === 'assistant') && !item.message.systemCardType
-    && (item.message.content.trim().length > 0 || item.message.images?.length || item.message.files?.length)
-    ? [item.key] : []).join('\0');
-  const entranceKeys = useMemo(() => entranceSignature ? entranceSignature.split('\0') : [], [entranceSignature]);
-  const enterMessage = useMessageEntrance(entranceKeys, !isLoadingMore && (!historySnapshot || historySnapshot.ready));
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -5084,7 +5075,7 @@ export function MessageStream({
     if (scrollbarDragStartTopRef.current != null) return;
     const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
-    followMessageBottom();
+    el.scrollTop = el.scrollHeight;
     // Layout effects already flush their state updates before paint. Observer
     // and input callbacks need an explicit commit before the next scroll event.
     if (fromLayout) reconcileMessageViewport();
@@ -5097,7 +5088,7 @@ export function MessageStream({
         refreshViewportAnchor();
       }
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport, followMessageBottom]);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport]);
   pinToBottomRef.current = pinToBottom;
 
   // Composer send is an explicit "show me the result" intent. Don't wait for
@@ -6475,8 +6466,6 @@ export function MessageStream({
                 className="relative mx-auto w-full pt-7"
                 style={{
                   paddingBottom: resolvedBottomPadding,
-                  // The visual follow transform must not enlarge the native scroll range.
-                  overflow: 'clip',
                   // Match the input overlay's width so chat content + input box
                   // share the same horizontal bounds. Falls back to 880 only if
                   // the parent forgot to pass contentWidth.
@@ -6771,7 +6760,6 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          ref={node => enterMessage(node, item.key)}
                           className={cn('scroll-mt-20 transition-colors', highlightClass)}
                         >
                           {startsUnread ? (
@@ -6813,7 +6801,6 @@ export function MessageStream({
                         key={item.key}
                         data-render-item-key={item.key}
                         data-message-client-id={msg.clientId}
-                        ref={node => enterMessage(node, item.key)}
                         {...shareAttributes}
                         className={cn(
                           'scroll-mt-20 transition-colors',

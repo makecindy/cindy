@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import type { BotProfile } from './botStore';
 import { isRemoteBotUnread, type RemoteBot } from './remoteBotRoster';
 
@@ -35,14 +36,7 @@ export function cindyDeviceOptions(
 ): CindyDeviceOption[] {
   const self = devices.find((device) => device.isSelf);
   const remoteCindys = remoteBots.filter(isCindyDeviceBot);
-  const peersByName = new Map<string, string[]>();
-  for (const bot of remoteCindys) {
-    const name = bot.deviceName.trim().toLocaleLowerCase();
-    const peers = peersByName.get(name) ?? [];
-    if (!peers.includes(bot.deviceId)) peers.push(bot.deviceId);
-    peersByName.set(name, peers);
-  }
-  for (const peers of peersByName.values()) peers.sort();
+  const peers = remoteCindys.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName }));
   const local = bots
     .filter(
       (bot) =>
@@ -63,12 +57,11 @@ export function cindyDeviceOptions(
     }));
   const remote = remoteCindys
     .map((bot) => {
-      const name = bot.deviceName.trim() || bot.deviceId;
-      const peers = peersByName.get(bot.deviceName.trim().toLocaleLowerCase())!;
+      const name = deviceDisplayName(bot.deviceId, bot.deviceName, peers);
       return {
         key: cindyDeviceKey(bot),
         bot,
-        label: peers.length > 1 ? `${name} (${peers.indexOf(bot.deviceId) + 1})` : name,
+        label: name,
         deviceName: name,
         online: bot.online,
         unread: isRemoteBotUnread(bot),

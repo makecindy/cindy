@@ -22,6 +22,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
+export const chatCacheRooms = sqliteTable('chat_cache_rooms', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  state: text('state').notNull(),
+  version: integer('version').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId] }) }));
+
+export const chatCacheMessages = sqliteTable('chat_cache_messages', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  messageId: text('message_id').notNull(),
+  payload: text('payload').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId, t.messageId] }) }));
+
 const speedSetting = customType<{ data: FastMode; driverData: number }>({
   dataType: () => 'integer',
   toDriver: fastModeToStorage,

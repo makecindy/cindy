@@ -23,6 +23,7 @@ import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
+import { createWireNoteMemory } from '../wireNoteMemory.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -180,6 +181,7 @@ function botTaskDispatchHarness(
     isCindyMakeWorktreePath: () => false,
     app: { getPath: () => '/fixture' },
     agentHandoffPending: { peek: asyncNoop },
+    wireNoteMemory: createWireNoteMemory(),
     shouldPrependMobileClientPromptNote: () => false,
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,

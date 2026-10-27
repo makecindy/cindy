@@ -17,8 +17,8 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  * F-MSG-1: assistant message styling (left-aligned, no bubble)
  * F-MSG-2: Markdown rendering
  * message-actions V1.2: hover-revealed bar below the markdown body, left-aligned,
- *   order [copy][fork][more][time][cost]. Streaming messages reserve the bar's height,
- *   without mounting its actions; 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
+ *   order [copy][fork][more][time][cost]. Streaming messages do NOT mount the bar (per spec
+ *   "流式期间不挂载"); 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
  *   时才挂载 —— 任务执行过程中的中间句没有操作行。The bar
  *   owns its own fade lifecycle (see MessageActionBar) so this component
  *   only tracks raw hover state.
@@ -48,7 +48,6 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  */
 
 import { CHAT_BODY_CLASS } from './chatChrome';
-import { Collapse } from '@/components/ui/collapse';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
@@ -503,13 +502,10 @@ export const AssistantMessage = memo(function AssistantMessage({
             data={{ ...card }} sessionId={currentSessionId} attached />)}
         </div>
       ) : null}
-      {/* Reserve the completed toolbar's space while streaming, without showing premature actions.
-          Companion hover tools are outside flow and need no footer reservation. */}
-      {!botBubble ? <div className="-mt-1.5">
-        <Collapse open={isStreaming || showActionBar}>
-          <div className="pt-1.5"><div className="min-h-6">{actionBar}</div></div>
-        </Collapse>
-      </div> : null}
+      {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
+          非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑。
+          伙伴私聊的气泡把操作栏挂在气泡右侧(BubbleHoverToolbar),这里不再另起一行。 */}
+      {!botBubble && actionBar}
     </div>
   );
 });

@@ -2088,7 +2088,10 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     );
     await flush();
 
-    expect(h.resolveSessionReferences).toHaveBeenCalledWith([{ sessionId: 'foreign-session' }]);
+    expect(h.resolveSessionReferences).toHaveBeenCalledWith(
+      [{ sessionId: 'foreign-session' }],
+      { inlineMessageKeys: new Set() },
+    );
     expect(h.sendToAgent).toHaveBeenCalledWith(
       'target-session',
       { type: 'user', content: text },

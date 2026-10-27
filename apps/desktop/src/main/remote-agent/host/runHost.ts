@@ -1,4 +1,5 @@
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
+import { remoteAgentStartupTiming } from '../startupTiming';
 import { parseProviderSharePeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
 /**
@@ -262,6 +263,7 @@ export interface RemoteAgentHostDeps {
   runsRoot: string;
   now?: () => number;
   log?: {
+    debug?(message: string, meta?: Record<string, unknown>): void;
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
@@ -1206,77 +1208,110 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
     run.imageDeliveryEpoch = payload.imageDeliveryEpoch;
+    const timing = remoteAgentStartupTiming(deps.log, {
+      side: 'host',
+      kind: run.kind,
+      sessionId: payload.sessionId,
+      runId: run.id,
+    });
+    let status: 'ok' | 'failed' = 'failed';
+    let startupComplete = false;
+    const execServerStats = {
+      shortcutEnabled: false,
+      ancestorLevels: payload.ancestorMarkers?.levels.length ?? 0,
+      connections: 0,
+      answered: 0,
+      forwarded: 0,
+    };
     try {
       // 中转过来的任务按(控制端, relay)派生：不同受邀者即使任务 id 相同也不会共用本机侧任务。
       const hostSessionId = hostSessionIdFor(guestScopeOf(run.controller, run.relayKey), payload.sessionId);
       run.hostSessionId = hostSessionId;
-      run.forkWorkspaceIds = await forkWorkspacesFor(guestScopeOf(run.controller, run.relayKey), payload.options.resumeSessionId);
+      run.forkWorkspaceIds = await timing.measure('resume-workspaces', () =>
+        forkWorkspacesFor(guestScopeOf(run.controller, run.relayKey), payload.options.resumeSessionId),
+      );
       const previousMirrorRoots = run.forkWorkspaceIds.map((id) => path.join(shadowSessionRoot(run.controller, id), 'fs'));
       let guestHome: string | undefined;
       if (run.trust === 'guest') {
         // 先登记再启动：启动中途失败时，受邀者目录与会话记录也能在分享删除时被找到并清理。
-        await recordGuestSession(run.controller, run.relayKey, hostSessionId, []);
+        await timing.measure('guest-registration', () =>
+          recordGuestSession(run.controller, run.relayKey, hostSessionId, []),
+        );
         guestHome = guestHomeFor(guestScopeOf(run.controller, run.relayKey));
         await fsp.mkdir(guestHome, { recursive: true, mode: 0o700 });
       }
-      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText } = await withShadowLock(hostSessionId, async () => {
-        // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
-        // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
-        for (const other of runs.values()) {
-          if (other !== run && other.controller === run.controller && other.hostSessionId === hostSessionId && !other.closing) {
-            await finishRun(other, 'superseded', 'navigation');
+      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText } = await timing.measure('shadow-workspace', () =>
+        withShadowLock(hostSessionId, async () => {
+          // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
+          // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
+          for (const other of runs.values()) {
+            if (other !== run && other.controller === run.controller && other.hostSessionId === hostSessionId && !other.closing) {
+              await finishRun(other, 'superseded', 'navigation');
+            }
           }
-        }
-        return prepareShadow(run.controller, payload, hostSessionId, run.trust);
-      });
+          return prepareShadow(run.controller, payload, hostSessionId, run.trust);
+        }),
+      );
       run.workspaceDir = sessionRoot;
       run.virtualRoot = payload.virtualWorkspace ? mirrorRoot : undefined;
       // 虚拟工作区里注定不存在的路径查询由本机直接回答，不再逐条跨设备往返(见 execServerShortcut)。
       const shortcut = payload.virtualWorkspace ? createExecServerShortcut(shortcutLayout) : null;
+      execServerStats.shortcutEnabled = shortcut !== null;
       const execConns = new Set<string>();
-      const tunnel = await createRunTunnel({
-        http: async (request, signal) => {
-          // Pi API-key providers keep their native transports. Their adapter
-          // checks this authenticated, run-local endpoint before opening a stream.
-          if (request.path === '/cindy/model-access') {
-            let model: unknown;
-            let providerId: unknown;
-            try { ({ model, providerId } = JSON.parse(request.body?.toString('utf8') ?? '{}')); } catch { /* deny */ }
-            const current = () => !run.closing && !signal.aborted && deps.isOwnerCurrent(run.owner)
-              && deps.isControllerAuthorized(run.controller);
-            let allowed = false;
-            try {
-              if (request.method === 'POST' && current() && typeof model === 'string' && model && model.length <= 512) {
-                allowed = run.trust === 'guest'
-                  ? (providerId === undefined || providerId === run.providerId) && await run.guestRoute?.allowsModel?.(model) === true
-                  : typeof providerId === 'string' && !!providerId && providerId.length <= 512 && !!run.ownerRoute
-                    && deps.ownerModelAllowed?.(hostSessionId, providerId, run.kind, model) === true;
-                allowed = allowed && current();
+      const tunnel = await timing.measure('tunnel-prepare', () =>
+        createRunTunnel({
+          http: async (request, signal) => {
+            // Pi API-key providers keep their native transports. Their adapter
+            // checks this authenticated, run-local endpoint before opening a stream.
+            if (request.path === '/cindy/model-access') {
+              let model: unknown;
+              let providerId: unknown;
+              try { ({ model, providerId } = JSON.parse(request.body?.toString('utf8') ?? '{}')); } catch {
+                /* deny */
               }
-            } catch { /* Failed authorization must never open a native stream. */ }
-            return { status: 200, headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify({ allowed })) };
-          }
-          return reverseHttp(run, request, signal);
-        },
-        wsOpen: (connId, wsPath) => {
-          (run.localWs ??= new Set()).add(connId);
-          if (wsPath.split('?')[0] === EXEC_SERVER_WS_PATH) execConns.add(connId);
-          append(run, { t: 'ws', connId, kind: 'open', path: wsPath });
-        },
-        wsMessage: (connId, data) => {
-          const local = shortcut && execConns.has(connId) ? shortcut(data) : null;
-          if (local !== null) {
-            run.tunnel?.sendWs(connId, local);
-            return;
-          }
-          append(run, { t: 'ws', connId, kind: 'message', data });
-        },
-        wsClose: (connId) => {
-          run.localWs?.delete(connId);
-          execConns.delete(connId);
-          append(run, { t: 'ws', connId, kind: 'close' });
-        },
-      });
+              const current = () => !run.closing && !signal.aborted && deps.isOwnerCurrent(run.owner)
+                && deps.isControllerAuthorized(run.controller);
+              let allowed = false;
+              try {
+                if (request.method === 'POST' && current() && typeof model === 'string' && model && model.length <= 512) {
+                  allowed = run.trust === 'guest'
+                    ? (providerId === undefined || providerId === run.providerId) && await run.guestRoute?.allowsModel?.(model) === true
+                    : typeof providerId === 'string' && !!providerId && providerId.length <= 512 && !!run.ownerRoute
+                      && deps.ownerModelAllowed?.(hostSessionId, providerId, run.kind, model) === true;
+                  allowed = allowed && current();
+                }
+              } catch {
+                /* Failed authorization must never open a native stream. */
+              }
+              return { status: 200, headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify({ allowed })) };
+            }
+            return reverseHttp(run, request, signal);
+          },
+          wsOpen: (connId, wsPath) => {
+            (run.localWs ??= new Set()).add(connId);
+            if (wsPath.split('?')[0] === EXEC_SERVER_WS_PATH) {
+              execConns.add(connId);
+              if (!startupComplete) execServerStats.connections += 1;
+            }
+            append(run, { t: 'ws', connId, kind: 'open', path: wsPath });
+          },
+          wsMessage: (connId, data) => {
+            const local = shortcut && execConns.has(connId) ? shortcut(data) : null;
+            if (local !== null) {
+              if (!startupComplete) execServerStats.answered += 1;
+              run.tunnel?.sendWs(connId, local);
+              return;
+            }
+            if (!startupComplete && execConns.has(connId)) execServerStats.forwarded += 1;
+            append(run, { t: 'ws', connId, kind: 'message', data });
+          },
+          wsClose: (connId) => {
+            run.localWs?.delete(connId);
+            execConns.delete(connId);
+            append(run, { t: 'ws', connId, kind: 'close' });
+          },
+        }),
+      );
       run.tunnel = tunnel;
       if (run.closing) return;
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
@@ -1297,14 +1332,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (!Array.isArray(models) || !models.every(model => typeof model === 'string')) failProviderNotAllowed();
           relayModelAccess = { models, allows: async model => await checkRelayModel(model) === true };
         }
-        const binding = await deps.bindGuestProviderRoute({
-          kind: run.kind,
-          hostSessionId,
-          providerId: run.providerId,
-          controller: run.controller,
-          isCurrent: () => !run.closing,
-          ...(relayModelAccess ? { relayModelAccess } : {}),
-        });
+        const binding = await timing.measure('provider-route', () =>
+          deps.bindGuestProviderRoute!({
+            kind: run.kind,
+            hostSessionId,
+            providerId: run.providerId!,
+            controller: run.controller,
+            isCurrent: () => !run.closing,
+            ...(relayModelAccess ? { relayModelAccess } : {}),
+          }),
+        );
         if (!binding) {
           if (!run.closing) failProviderNotAllowed();
           return;
@@ -1321,41 +1358,45 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             && deps.providerAccess!.isAllowed(providerId, run.controller, model)
           : undefined);
       }
-      const handle = await deps.startHosted({
-        ...(run.groupProviderId ? { groupProviderId: run.groupProviderId } : {}),
-        kind: run.kind,
-        hostSessionId,
-        shadowDir,
-        mirrorRoot,
-        extraDirs,
-        writableDirs,
-        virtualWorkspace: payload.virtualWorkspace === true,
-        ...(payload.personal.instructions ? { personalInstructions: projectText(payload.personal.instructions) } : {}),
-        // 恢复标识属于提供方；Pi 的标识即使是文件路径，也不能按控制端路径投影。
-        options: Object.fromEntries(Object.entries(payload.options).map(([key, value]) => [
-          key,
-          typeof value === 'string' && key !== 'resumeSessionId' ? projectText(value) : value,
-        ])) as unknown as RemoteAgentWireStartOptions,
-        workspace: payload.workspace,
-        tunnel: { url: tunnel.url, token: tunnel.token, linkActivity: () => tunnel.linkActivity() },
-        mcpServers: payload.mcpServers,
-        ...(run.trust === 'guest' ? { guest: true, ...(guestHome ? { guestHome } : {}), ...(guestProvider ? { guestProvider } : {}) } : {}),
-        ...(payload.options.invalidResumeCallback
-          ? {
-              onInvalidResumeSession: async (expected: string) => {
-                const reply = await reverse(run, { type: 'callback', name: 'onInvalidResumeSession', args: [expected] });
-                return reply.type === 'callback' && reply.value === true;
-              },
-            }
-          : {}),
-      });
+      const handle = await timing.measure('agent-session', () =>
+        deps.startHosted({
+          ...(run.groupProviderId ? { groupProviderId: run.groupProviderId } : {}),
+          kind: run.kind,
+          hostSessionId,
+          shadowDir,
+          mirrorRoot,
+          extraDirs,
+          writableDirs,
+          virtualWorkspace: payload.virtualWorkspace === true,
+          ...(payload.personal.instructions ? { personalInstructions: projectText(payload.personal.instructions) } : {}),
+          // 恢复标识属于提供方；Pi 的标识即使是文件路径，也不能按控制端路径投影。
+          options: Object.fromEntries(Object.entries(payload.options).map(([key, value]) => [
+            key,
+            typeof value === 'string' && key !== 'resumeSessionId' ? projectText(value) : value,
+          ])) as unknown as RemoteAgentWireStartOptions,
+          workspace: payload.workspace,
+          tunnel: { url: tunnel.url, token: tunnel.token, linkActivity: () => tunnel.linkActivity() },
+          mcpServers: payload.mcpServers,
+          ...(run.trust === 'guest' ? { guest: true, ...(guestHome ? { guestHome } : {}), ...(guestProvider ? { guestProvider } : {}) } : {}),
+          ...(payload.options.invalidResumeCallback
+            ? {
+                onInvalidResumeSession: async (expected: string) => {
+                  const reply = await reverse(run, { type: 'callback', name: 'onInvalidResumeSession', args: [expected] });
+                  return reply.type === 'callback' && reply.value === true;
+                },
+              }
+            : {}),
+        }),
+      );
       if (run.closing) {
         await handle.close({ reason: 'navigation' }).catch(() => undefined);
         return;
       }
       run.handle = handle;
       if (run.trust === 'guest' || run.forkWorkspaceIds.length) {
-        await recordGuestSession(run.controller, run.relayKey, hostSessionId, [handle.id, handle.requestSessionId], undefined, run.forkWorkspaceIds);
+        await timing.measure('session-registration', () =>
+          recordGuestSession(run.controller, run.relayKey, hostSessionId, [handle.id, handle.requestSessionId], undefined, run.forkWorkspaceIds),
+        );
       }
       handle.setInteractionResolver(async (request: InteractionRequest) => {
         const reply = await reverse(run, { type: 'interaction', request });
@@ -1367,6 +1408,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       run.stateTimer = setInterval(() => emitState(run), STATE_INTERVAL_MS);
       (run.stateTimer as { unref?: () => void }).unref?.();
       void pumpEvents(run, handle);
+      status = 'ok';
     } catch (error) {
       if (await relayAfterLocalStartFailure(run, payload, error)) return;
       if (run.groupResumed && run.providerId) {
@@ -1374,6 +1416,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       append(run, { t: 'start-failed', error: remoteAgentErrorInfo(error) });
       await finishRun(run, 'start-failed', 'navigation', false);
+    } finally {
+      startupComplete = true;
+      timing.finish(status, execServerStats);
     }
   }
 

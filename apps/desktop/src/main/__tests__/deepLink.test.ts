@@ -719,3 +719,17 @@ describe('findOpenShareFileInArgv', () => {
     ).toBe('/tmp/team.cshare');
   });
 });
+
+
+describe('public plugin links are navigation only', () => {
+  const id = 'c123456789012345678901234';
+  it('opens exactly the referenced market resource', () => {
+    expect(parseDeepLink(`cindy://plugin/${id}`)).toEqual({ type: 'plugin', pluginId: id });
+  });
+  it.each(['?install=1', '?url=https://example.test/package', '/releases/release', '#auto', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin/${id}${suffix}`)).toBeNull();
+  });
+  it('does not accept ghost names as server resource IDs', () => {
+    expect(parseDeepLink('cindy://plugin/cindy-github')).toBeNull();
+  });
+});

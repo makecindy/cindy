@@ -25,12 +25,9 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).toContain('<InlineCodeWithTarget');
   });
 
-  it('only renders a chip for uniquely-resolved local files — everything else is plain text', () => {
-    // Design (chosen 2026-05-29 after follow-up review): the chip visual is
-    // ONLY a confirmation that the path resolved to a single existing file
-    // in workingDir. Unresolved / ambiguous / not-found / directory /
-    // unsupported-scheme cases render as plain <span> or vanilla <code>, not
-    // as a non-interactive chip. The chip is always interactive when shown.
+  it('only upgrades verified references to file chips, while authored links retain their action', () => {
+    // Auto-detected references need a uniquely resolved target. Explicit
+    // unresolved links keep an ordinary anchor, never a non-interactive chip.
     expect(markdownRenderer).toContain('FileTargetChip');
     expect(markdownRenderer).toContain("target.kind === 'resolved-local'");
     expect(markdownRenderer).toContain('shouldRenderCodeReferenceLabel');
@@ -42,10 +39,10 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).not.toContain('cursor-default');
     expect(markdownRenderer).not.toContain('interactive: boolean');
     expect(markdownRenderer).not.toContain('interactive={interactive}');
-    // Non-resolved local kinds fall through to plain text — assert MarkdownTargetLink
-    // explicitly handles code-reference / local-candidate as <span>.
+    // Auto-detected unresolved paths remain plain text; authored links retain
+    // their click action (the UI fixture covers missing-file feedback/retry).
     expect(markdownRenderer).toContain(
-      "if (target.kind === 'code-reference' || target.kind === 'local-candidate')",
+      "if (target.kind === 'code-reference' || (target.kind === 'local-candidate' && fromBarePath))",
     );
     // InlineCodeWithTarget only chips on resolved-local; everything else is a
     // vanilla <code>. The guard must use !== 'resolved-local'.
@@ -96,7 +93,13 @@ describe('Markdown target rendering contract', () => {
     // misses through the de-duped cached wrapper — not call the raw resolver.
     expect(markdownRenderer).toContain('peekResolveLocalPathSmart');
     expect(markdownRenderer).toContain('resolveLocalPathSmartCached');
-    expect(markdownRenderer).not.toContain('resolveLocalPathSmart(');
+    // Explicit clicks intentionally retry uncached resolution after a move or
+    // restoration; only render-time resolution must use the cache.
+    const hook = markdownRenderer.slice(
+      markdownRenderer.indexOf('function useResolvedMarkdownTarget('),
+      markdownRenderer.indexOf('async function activateResolvedLocalTarget('),
+    );
+    expect(hook).not.toContain('resolveLocalPathSmart(');
   });
 
   it('allows file:// through urlTransform so local file links can be classified safely', () => {

@@ -70,7 +70,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
   setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
-  await mobileDurableOutbox.activate(''); h.disk.clear(); setMobileAuthOwner('owner');
+  await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
   vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
   vi.stubGlobal('WebSocket', class { close() {} });
@@ -78,6 +78,7 @@ beforeEach(async () => {
     options.assertCurrent();
     if (path.startsWith('/v1/conversations?')) return [room];
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
+    if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
     if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
@@ -214,6 +215,43 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
   await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
   expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/read'))).toHaveLength(1);
 });
+// Unit: conversation head is unchanged by another device's personal read position.
+// The actual roster refresh must replace snapshot.reads even when message delta is empty.
+it.each(['refresh', 'read-event', 'reconnect'] as const)('refreshes personal read metadata with an unchanged room head on %s', async trigger => {
+  const sockets: Array<{ onmessage: ((event: { data: string }) => void) | null; send: ReturnType<typeof vi.fn> }> = [];
+  vi.stubGlobal('WebSocket', class {
+    readyState = 1; onmessage = null; onopen = null; onclose = null; onerror = null;
+    send = vi.fn(); close() {}
+    constructor() { sockets.push(this); }
+  });
+  const frame = async (value: unknown) => { await act(async () => { sockets.at(-1)!.onmessage!({ data: JSON.stringify(value) }); }); };
+  let readSeq = '0';
+  const reply = { id: self, seq: '5', authorId: id, author: { kind: 'human', name: 'Other' },
+    content: [{ type: 'text', text: 'reply' }], createdAt: '2026-10-09T10:00:00Z', deleted: false, threadRootId: id };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.startsWith('/v1/conversations?')) return [{ ...room, head: '5' }];
+    if (path.includes('/changes?')) return { head: '5', cursor: '5', changes: [], hasMore: false };
+    const value = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...value, messages: [reply], cursor: '5', reads: [
+      { thread_key: 'main', read_seq: '0' }, { thread_key: id, read_seq: readSeq, following: true },
+    ] } : value;
+  });
+  await render();
+  const unread = () => (roster.items[0].chatUnread?.threadCount ?? 0) > 0;
+  expect(unread()).toBe(true);
+  await frame({ type: 'ready', actorId: self });
+  expect(sockets[0].send.mock.calls.some(([body]) => JSON.parse(body).type === 'subscribe')).toBe(true);
+  readSeq = '5';
+  if (trigger === 'refresh') await act(async () => { await roster.refresh(); });
+  else if (trigger === 'read-event') await frame({ type: 'changes', scope: `actor:${self}`, cursor: '6',
+    changes: [{ type: 'read.changed', entityId: id, data: {} }] });
+  else {
+    await act(async () => { for (const listener of h.foreground) listener('active'); });
+    await frame({ type: 'ready', actorId: self });
+  }
+  expect(unread()).toBe(false);
+});
 it('resolves everyone using authorized members at send time instead of the displayed snapshot', async () => {
   const joined = '00000000-0000-4000-8000-000000000003';
   const invited = '00000000-0000-4000-8000-000000000004';
@@ -326,7 +364,7 @@ it('clears access on everyone member-read rejection and ignores an older authori
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/members')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
     const value = await original(path, options);
-    if (path.endsWith('/snapshot')) await new Promise<void>(resolve => { finish = resolve; });
+    if (path.startsWith('/v1/changes?')) await new Promise<void>(resolve => { finish = resolve; });
     return value;
   });
   await act(async () => { chat.reload(); });
@@ -452,7 +490,7 @@ it('exposes an actor-scope personal hide to the current screen and clears it aft
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { conversationListStateVersion: 1 } };
     if (path.startsWith('/v1/conversation-list-state?')) return [];
-    if (path.startsWith('/v1/changes?')) return { head: '10' };
+    if (path.startsWith('/v1/changes?scope=actor:')) return { head: '10' };
     return allowed(path, options);
   });
   showChat = true; await render();

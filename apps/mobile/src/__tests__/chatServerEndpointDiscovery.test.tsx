@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   history: new Map<string, string>(),
   sockets: [] as any[],
 }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-generation' }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => h.storage.get(key) ?? null,
@@ -76,7 +77,7 @@ beforeEach(() => {
     if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '1' };
     if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
     if (path.includes('/messages?')) return [];
-    if (path.includes('/changes?')) return { head: '1' };
+    if (path.includes('/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (options.method === 'POST') return { id: self };
     throw new Error('Unexpected fixture request');
   });

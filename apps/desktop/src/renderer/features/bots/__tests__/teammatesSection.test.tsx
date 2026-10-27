@@ -322,7 +322,7 @@ describe('teammate host labels', () => {
 
     mocks.remoteBots = mocks.remoteBots.map((bot) => ({ ...bot, online: false, deviceName: ' ' }));
     view.rerender(<TeammatesSection />);
-    expect(screen.getByText('bots.remote.offline · remote-device')).toBeTruthy();
+    expect(screen.getByText('bots.remote.offline · another computer')).toBeTruthy();
     expect(screen.queryByText('bots.remote.offline · bots.remote.thisDevice')).toBeNull();
   });
 
@@ -348,8 +348,8 @@ describe('teammate host labels', () => {
       activityAt: 1, sessionId: 'remote-session', online: true,
     }));
     const view = await renderSidebar();
-    expect(screen.getByText('Shared Mac (host-a)')).toBeTruthy();
-    expect(screen.getByText('Shared Mac (host-b)')).toBeTruthy();
+    expect(screen.getByText('Shared Mac (1)')).toBeTruthy();
+    expect(screen.getByText('Shared Mac (2)')).toBeTruthy();
     expect(view.container.innerHTML).not.toContain('local-device');
     mocks.remoteBots = mocks.remoteBots.map((entry) => ({ ...entry, deviceName: entry.deviceId === 'host-a' ? 'Studio' : 'Mini' }));
     view.rerender(<TeammatesSection />);

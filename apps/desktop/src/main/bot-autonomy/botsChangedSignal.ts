@@ -4,12 +4,21 @@
  * 归档伙伴不必等 60 秒的定时重读。本文件不 import 任何模块，发送方不因此加载观察层依赖。
  */
 let listener: (() => void) | null = null;
+const subscribers = new Set<() => void>();
+
+export function subscribeBotProfilesChanged(next: () => void): () => void {
+  subscribers.add(next);
+  return () => { subscribers.delete(next); };
+}
 
 export function setBotAutonomyBotsChangedListener(next: (() => void) | null): void {
   listener = next;
 }
 
 export function signalBotAutonomyBotsChanged(): void {
+  for (const next of subscribers) {
+    try { next(); } catch { /* A reader cannot block a committed profile change. */ }
+  }
   try {
     listener?.();
   } catch {
