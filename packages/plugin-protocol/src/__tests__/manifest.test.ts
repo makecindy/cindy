@@ -1958,3 +1958,21 @@ it('validates independent target access without dropping the tasks dependency', 
   const disabled = validateGhostManifest({ ...base, agent: { tasks: true, targets: false } });
   expect(disabled.ok && disabled.manifest.agent).toEqual({ tasks: true });
 });
+
+describe('package release notes', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
+  it('keeps old packages without notes installable', () => {
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest).not.toHaveProperty('releaseNotes');
+  });
+  it('retains the complete package text without turning it into manifest summary', () => {
+    const releaseNotes = 'First change\nSecond change\n' + 'More changes '.repeat(500);
+    const result = validateGhostManifest({ ...base, releaseNotes });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest.releaseNotes).toBe(releaseNotes);
+  });
+  it('rejects a non-text package releaseNotes', () => {
+    expect(validateGhostManifest({ ...base, releaseNotes: { version: '1' } }).ok).toBe(false);
+  });
+});

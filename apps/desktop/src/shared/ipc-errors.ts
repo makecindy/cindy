@@ -1,3 +1,4 @@
+import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
 /** main / preload / renderer 共用的 IPC 错误类型。 */
@@ -70,6 +71,7 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
   | 'INVALID_PARAMS'
@@ -77,6 +79,7 @@ export type IpcErrorCode =
   | 'INTERNAL'
   | 'ALREADY_EXISTS'
   | 'PRECONDITION_FAILED'
+  | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
   | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
   | 'PROVIDER_GROUP_CHANGED' // 编辑期间组设置已变化，拒绝覆盖，需重新读取
   | 'SHARE_NOT_CONFIGURED'
@@ -340,12 +343,14 @@ export interface IpcError {
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
   'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
+  'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
   'PROVIDER_GROUP_CHANGED',
   'SHARE_NOT_CONFIGURED',

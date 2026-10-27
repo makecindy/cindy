@@ -1206,9 +1206,11 @@ export function useVoiceInput(
 
   // Microphone keep-alive is deliberately a separate effect: unlike the prewarm
   // above it opens a real capture device and turns on the OS privacy indicator,
-  // so it must not re-run for settings unrelated to the microphone. Language and
-  // refinement changes used to re-assert keep-alive intent here, which kept the
-  // device warm for reasons the user never asked for.
+  // so it must not re-run for settings unrelated to the microphone. It only
+  // opens the device while the user is inside the use window, so a remount
+  // cannot relight the indicator on its own (see WebMicAudioEngine). Language
+  // and refinement changes used to re-assert keep-alive intent here, which kept
+  // the device warm for reasons the user never asked for.
   useEffect(() => {
     if (disabledRef.current) return;
     if (!voiceInputSettings.fastActivationEnabled) {

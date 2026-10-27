@@ -118,6 +118,17 @@ export interface BotGroupNode {
   latestActivityAt: string;
 }
 
+/** Filtering/sorting must not discard grouping's structural reuse when the
+ * actual rows and their order are unchanged. Compare objects, never just IDs:
+ * fresh titles/status and same-ID tasks on other devices must still propagate.
+ */
+export function withProjectSessions(project: ProjectNode, sessions: Session[]): ProjectNode {
+  return sessions.length === project.sessions.length &&
+    sessions.every((session, index) => session === project.sessions[index])
+    ? project
+    : { ...project, sessions };
+}
+
 /** 分组时用来认伙伴的最小信息。渲染层从 botStore 的会话投影现拼。 */
 export interface BotSessionOwner {
   botId: string;

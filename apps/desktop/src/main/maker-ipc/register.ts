@@ -4858,6 +4858,11 @@ export function getTaskActionInputState(sessionId: string) {
   };
 }
 
+/** Runtime-only account boundary for personal author tools; never grants external-write permission. */
+export function isActiveInputAccountScoped(sessionId: string): boolean {
+  return agentInputCoordinatorHolder?.isActiveInputAccountScoped(sessionId) ?? false;
+}
+
 /** Live permission authority for Host task actions; never reconstructed from DB defaults. */
 export function getTaskActionSession(sessionId: string) {
   return getMakerIfReady()?.getSession(sessionId);

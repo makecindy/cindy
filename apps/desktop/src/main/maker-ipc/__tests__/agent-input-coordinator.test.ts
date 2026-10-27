@@ -2227,11 +2227,13 @@ describe('AgentInputCoordinator send transaction', () => {
       await new Promise<void>(resolve => { acknowledge = resolve; });
       return sendSuccess();
     });
-    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate', { sourcePlugin: { pluginId: 'p' } }));
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
     acknowledge(); await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
   });
 
   it.each([
@@ -2284,6 +2286,26 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(expected);
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  // Unit regression for #6669: plugin-target input must not borrow the publishing
+  // account, including before native ACK or while human steering is unaccepted.
+  // The existing account matrix covered guests but omitted sourcePlugin.
+  it.each([
+    ['the owner', {}, true],
+    ['an ordinary scheduled task', { origin: { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'n' } }, true],
+    ['an ordinary Worker', { origin: { kind: 'orca' as const, senderLabel: 'Lead' } }, true],
+    ['a plugin message in an ordinary task', { sourcePlugin: { pluginId: 'p' } }, false],
+    ['a shared-task guest', { sharedTaskAuthor: { sharedTaskId: 't', sessionId: 'account-input', memberId: 'm', accountId: 'guest', displayName: 'G' } }, false],
+  ])('keeps account tools scoped to %s throughout the active turn', async (_label, patch, expected) => {
+    const h = createHarness(), sid = 'account-input';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+    h.coordinator.enqueue(sid, { ...makeItem('input', 'Check my plugins'), ...patch } as AgentInputQueuedMessage);
+    await flush();
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(expected);
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
   });
 
   // unit: a real same-account quote-bearing input lost owner attribution before
@@ -2350,20 +2372,24 @@ describe('AgentInputCoordinator send transaction', () => {
   it('keeps accepted plugin authority through pending and rejected human steering', async () => {
     const h = createHarness(), sid = 'accepted-plugin-authority';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
-    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate', { sourcePlugin: { pluginId: 'p' } }));
     await flush();
     let reject!: (error: Error) => void;
     h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
     const steering = h.coordinator.steer(sid, makeItem('human-pending', 'New direction'));
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
     reject(new Error('not accepted')); await steering;
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
     await h.coordinator.steer(sid, makeItem('human-accepted', 'New direction'));
     expect(h.coordinator.getActiveInputClientIds(sid)).toContain('plugin-task:run');
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human-accepted');
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(true);
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toBeNull();
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
   });
 
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {

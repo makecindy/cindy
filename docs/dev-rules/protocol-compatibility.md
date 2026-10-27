@@ -3508,6 +3508,35 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 不发送，新接收端按未核实处理。同账号鉴权、行动回执与共享访客限制不变。产品语义见
 [伙伴代表谁](../product-rules/teammate-authority.md)。
 
+## 普通个人的社区插件贡献
+
+已安装清单可选追加只读 `publishingSource`，由 Host 既有实例记录、批准回执与安装台账重建。
+它仅用于个人提审入口的来源准入，不改变列表的来源展示、安装来源、自动更新或发布权限。
+缺失或无法核实来源时不开放提审；本地安装和公开安装都不会因提审或过审自动转换来源，不新增持久化关联记录。
+
+新增独立 `/api/plugin-contributions` 和精确 `plugin-contributions:*` IPC，不改企业发布、
+旧公开市场 DTO 或 device-link allowlist。两仓分别维护等价
+[HTTP / DTO 契约](../plugin-community-contribution-contract.md)。客户端使用当前个人 Access Token，
+以可信 auth discovery 的 issuer 与 token sub 核对所有作者响应主体；`cn/global` 只用于选择 Host 配置，
+不能当作 issuer。服务器仍做验签和 public 提交 ACL，包内作者声明不授予提交权。
+
+prepare / PUT / commit 复用同一固定包和持久幂等键；202 仅表示处理。结果不明先查原操作；
+不换包、不换键自动新建发布操作。receipt 的 uploadedPackage SHA 与实际 releaseRevision SHA 分开，
+`outcome`、修订审核与市场 `available` 分开。处理历史以独立 eventId 分页，旧修订不套用当前修订结果。
+Host 持久操作按账号隔离、异步结果按 owner generation 拦截；审核结果通过用户打开、刷新、前台恢复及前台定时读取同步。
+本地 `review-updates` / `mark-review-read` IPC 仅供可信桌面 Renderer，不加入 device-link 白名单。
+提示点复用现有作者列表和精确修订的审核记录，Main 只额外保存按账号隔离的本机已读标记；
+不新增服务端通知/已读 API，不改变审核事实，不因列表查询或 AI 查询而清除提示。
+旧服务器未实现接口时如实显示读取/发布失败，不试探企业或 Platform 身份，也不伪造空列表或成功。
+存量插件安装、批准记录、启用状态、包格式和市场来源枚举均保持原契约；本能力需要两端更新。
+
+## 社区版本提审 v2（2026-10-16）
+
+manifest 可选字符串 `releaseNotes`；旧包缺字段仍可安装。首次上架可不填写，曾上架插件的后续提审须提供完整非空更新说明。
+个人只读 preflight 查询版本、待审与提交权限；SubmissionView 追加真实时间及允许取消动作。
+审核状态增加 cancelled；Main/preload 新增精确 cancelReview，AI 对应 ghost_cancel_plugin_review。
+旧 journal 字段可选只为读取/原操作恢复，不允许新客户端静默绕过新版预检。
+个人投稿复用原审核请求及上架流程，不增加启用开关、审核令牌或历史比较包门槛。取消仅针对本人仍有提交授权的精确待审修订，已通过或驳回时按真实状态返回。
 
 ## 伙伴跟进邀请（2026-10-21）
 

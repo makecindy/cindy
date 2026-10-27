@@ -157,6 +157,7 @@ import {
   projectIdentityKeyForSession,
   pinnedSessionIdsInDisplayOrder,
   persistentProjectMatchesVendor,
+  withProjectSessions,
   type PersistentLocalProject,
   type ProjectNode,
 } from './lib/projectGrouping';
@@ -1814,7 +1815,9 @@ function ExpandedView({
   );
 
   const provisionalProjectTaskId = useProvisionalDraftProjectTaskId();
-  const restorableProjectKeys = useMemo(
+  // Only a restore operation needs this catalogue. Read current inputs after
+  // the awaited IPC instead of grouping twice on every sidebar update.
+  const getRestorableProjectKeys = useCallback(
     () =>
       collectRestorableProjectKeys({
         sessions: scopedSidebarSessions,
@@ -1835,8 +1838,8 @@ function ExpandedView({
       visiblePersistentLocalProjects,
     ],
   );
-  const restorableProjectKeysRef = useRef(restorableProjectKeys);
-  restorableProjectKeysRef.current = restorableProjectKeys;
+  const restorableProjectKeysRef = useRef(getRestorableProjectKeys);
+  restorableProjectKeysRef.current = getRestorableProjectKeys;
   const hiddenProjectComparisonKeys = useMemo(
     () => buildProjectKeyComparisonSet(hiddenProjectKeys, localPlatform),
     [hiddenProjectKeys, localPlatform],
@@ -2075,10 +2078,7 @@ function ExpandedView({
       )
         return [];
       return [
-        {
-          ...project,
-          sessions: matchingSessions.filter((session) => session.pinnedAt == null),
-        },
+        withProjectSessions(project, matchingSessions.filter((session) => session.pinnedAt == null)),
       ];
     });
     return sortProjectsForSidebar(
@@ -2776,7 +2776,7 @@ function ExpandedView({
             localPlatform,
           ),
           setProjectHidden,
-          getCurrentProjectKeys: () => restorableProjectKeysRef.current,
+          getCurrentProjectKeys: () => restorableProjectKeysRef.current(),
           ensureProjectIncluded: filter.ensureProjectIncluded,
           localPlatform,
         });
@@ -2959,7 +2959,7 @@ function ExpandedView({
         throw err;
       }
     },
-    [projectAliases, t],
+    [projectAliases.updateAlias, t],
   );
 
   const handleRemoveProjectFromSidebar = useCallback(
@@ -3047,7 +3047,7 @@ function ExpandedView({
         toast.error(t('ccAgent.sidebar.pinFailed'));
       }
     },
-    [filter, t],
+    [filter.removePin, filter.promotePin, t],
   );
 
   // Event-only state: metadata updates recreate the collapsed Set even when

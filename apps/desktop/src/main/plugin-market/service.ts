@@ -2870,7 +2870,11 @@ export class PluginMarketService {
     plugin: VisiblePluginSummary,
     local = this.localInstallSnapshot(),
   ): PluginMarketItem {
-    const { target, ghost, matchesUpdateRoute, installState } = this.serverMarketBinding(plugin, local);
+    const { target, ghost, record, matchesUpdateRoute, installState } = this.serverMarketBinding(plugin, local);
+    const evidence = plugin.scope === 'public' && matchesUpdateRoute && ghost?.approval.state === 'approved'
+      ? getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost))
+      : null;
+    const author = plugin.displayAuthor === undefined ? plugin.author : plugin.displayAuthor;
     return {
       ...(plugin.usageStatistics ? { usageStatistics: plugin.usageStatistics } : {}),
       ...(plugin.downloadStatistics ? { downloadStatistics: plugin.downloadStatistics } : {}),
@@ -2879,7 +2883,12 @@ export class PluginMarketService {
       ...deliveryNamespaceFields(target),
       name: plugin.name,
       description: plugin.description,
-      author: plugin.author,
+      author,
+      ...(plugin.scope === 'public' && plugin.publisherKind !== undefined ? { publisherKind: plugin.publisherKind } : {}),
+      ...(evidence?.packageSha256 && evidence.packageSha256 === record?.sha256
+        ? { installedAuthor: record.releaseId === plugin.currentRelease.id
+          && record.sha256 === plugin.currentRelease.sha256 ? author : null }
+        : {}),
       scope: plugin.scope,
       organizationId: plugin.organizationId,
       defaultInstall: plugin.defaultInstall,

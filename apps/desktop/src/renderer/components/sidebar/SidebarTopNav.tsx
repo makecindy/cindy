@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
@@ -126,6 +127,7 @@ function useSidebarNavigationActions(
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
   const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
+  const reviewUnread = usePluginReviewUpdates().updates.filter(item => item.unread);
   return {
     automations: {
       label: t('ccAgent.layout.automations'),
@@ -139,8 +141,8 @@ function useSidebarNavigationActions(
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
       active: activeKey === 'plugins',
-      showDot: hasGhostUnread,
-      dotTone: hasRetirementUnread ? 'awaiting' : 'done',
+      showDot: hasGhostUnread || reviewUnread.length > 0,
+      dotTone: reviewUnread.some(item => item.status === 'rejected') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
     search: {
       label: t('sidebar.navigation.items.search'),

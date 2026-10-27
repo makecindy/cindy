@@ -53,6 +53,64 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  // Unit, #7469: a two-row snapshot changing one task must not invalidate the
+  // other sidebar row's memo. Existing tests cover whole-snapshot no-ops, not
+  // per-row UI identity or its separation from in-flight detail-read fences.
+  it('reuses unchanged visible rows without reusing authoritative snapshot identities', () => {
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [mk('same'), mk('changed')]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [mk('same')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    const rawBefore = remoteProjectsStore.getDeviceSessions('host');
+    const read = remoteProjectsStore.captureSessionRead('host', 'same');
+
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      mk('changed', { title: 'Updated title' }), mk('same'),
+    ]);
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.map(row => [row.deviceLinkDeviceId, row.id, row.title])).toEqual([
+      ['host', 'changed', 'Updated title'], ['host', 'same', 'same'], ['other', 'same', 'same'],
+    ]);
+    expect(visible[0]).not.toBe(before[1]);
+    expect(visible[1]).toBe(before[0]);
+    expect(visible[2]).toBe(before[2]);
+    expect(remoteProjectsStore.getDeviceSessions('host')[1]).not.toBe(rawBefore[0]);
+    expect(read()).toBe(false);
+    const freshRead = remoteProjectsStore.captureSessionRead('host', 'same');
+    expect(freshRead()).toBe(true);
+    remoteProjectsStore.applyPatch('host', 'same', { lastActivityAt: '2026-01-02T00:00:00.000Z' });
+    expect(freshRead()).toBe(true);
+    expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  // Unit, #7469: structural sharing must compare nested payloads too, and must
+  // not resurrect removed rows or hide connection changes behind a UI cache.
+  it('updates nested visible data and retires rows on disconnect, deletion and clear', () => {
+    const row = { ...mk('a'), extraDirs: ['/first'] };
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row, mk('b')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      { ...row, extraDirs: ['/second'] }, mk('b'),
+    ]);
+    const changed = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(changed[0]?.extraDirs).toEqual(['/second']);
+    expect(changed[0]).not.toBe(before[0]);
+    expect(changed[1]).toBe(before[1]);
+    remoteProjectsStore.markDeviceDisconnected('host');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions().map(s => s.deviceLinkConnectionStatus))
+      .toEqual(['disconnected', 'disconnected']);
+    remoteProjectsStore.setDeviceSessions('host', 'Renamed host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toMatchObject([
+      { id: 'a', deviceLinkDeviceName: 'Renamed host', deviceLinkConnectionStatus: 'connected' },
+    ]);
+    remoteProjectsStore.applyPatch('host', 'a', { status: 'deleted' });
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()[0]).not.toBe(before[0]);
+    remoteProjectsStore.clear();
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+  });
+
   it('preserves an activity push while accepting an in-flight detail read', () => {
     const session = mk('handoff');
     remoteProjectsStore.setDeviceSessions('host', 'Host', [session]);

@@ -899,6 +899,8 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /** 本版本相对上一实际发布包的完整更新说明；旧包可省略。纯文本。 */
+  releaseNotes?: string;
   /**
    * 安装此 Release 所需的最低 Cindy 客户端版本。缺省表示不限制客户端版本；
    * 声明时必须是合法 SemVer，客户端与 Plugin Server 使用同一比较语义。
@@ -1199,6 +1201,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'id',
   'name',
   'version',
+  'releaseNotes',
   'minCindyVersion',
   'author',
   'locales',
@@ -1414,6 +1417,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     raw.version.length > 32
   ) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
+  }
+  if (raw.releaseNotes !== undefined && typeof raw.releaseNotes !== 'string') {
+    return { ok: false, reason: 'releaseNotes 必须是纯文本字符串' };
   }
   if (
     raw.minCindyVersion !== undefined &&
@@ -3865,6 +3871,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.releaseNotes !== undefined ? { releaseNotes: raw.releaseNotes as string } : {}),
       ...(raw.minCindyVersion !== undefined
         ? { minCindyVersion: raw.minCindyVersion as string }
         : {}),

@@ -23,17 +23,24 @@ interface BotRouteState {
   next?: RuntimeRoute;
 }
 
+function configuredKey(state: BotRouteState, chain = state.chain): string {
+  // Restore defaults is a configuration change even when its routes are equal.
+  return JSON.stringify([chain, state.followsCindyDefault === true]);
+}
+
 function configuredRoute(
   state: BotRouteState,
   previous: string | undefined,
   chain = state.chain,
 ): RuntimeRoute | null {
-  const key = JSON.stringify(chain);
-  const isDraftChange = key !== JSON.stringify(state.chain);
+  const key = configuredKey(state, chain);
+  const isDraftChange = JSON.stringify(chain) !== JSON.stringify(state.chain);
   // An automation owns its temporary route until ordinary input restores it.
   // This also applies to companions following Cindy defaults and after restart.
   if (!isDraftChange && parseScheduledModelBaseline(state.scheduledModelBaseline) && (previous === undefined || previous === key)) return null;
-  if (!state.followsCindyDefault && !isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
+  // Following defaults must not undo a working fallback on every send. Only a
+  // changed chain or an explicit save should supersede the accepted route.
+  if (!isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
   const primary = chain[0];
   if (!primary) return null;
   return {
@@ -117,16 +124,15 @@ export function createBotModelRouteReconciler(deps: {
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!state) {
-          // Paused profiles are absent from the apply reader. Keep an explicit
-          // save pending until resume can accept it and invalidate the scope.
-          if (configured.get(sessionId) !== '') configured.delete(sessionId);
+          // Paused profiles are absent from the apply reader. Retain the last
+          // known chain (or explicit-save marker) so resume can detect changes.
           return;
         }
         if (!state.chain.length) {
-          configured.delete(sessionId);
+          // A temporary loss of model visibility must not erase that baseline.
           throwIpcError('PRECONDITION_FAILED', '请先选择已开启的伙伴模型');
         }
-        const key = JSON.stringify(state.chain);
+        const key = configuredKey(state);
         const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
           ? '' : configured.get(sessionId);
         const route = configuredRoute(state, previous);

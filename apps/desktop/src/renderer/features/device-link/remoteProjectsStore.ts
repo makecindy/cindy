@@ -480,11 +480,24 @@ function recompute(): void {
   const nextVisible = CINDY_MAKE_ENABLED
     ? mergedSnapshot
     : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
+  // Share only the UI projection. Authoritative rows must keep their new content
+  // identities so captureSessionRead still rejects details predating a snapshot.
+  // Compare the complete JSON payload (including nested metadata), not a field
+  // whitelist that could leave a newly added sidebar field stale. Same-id tasks
+  // on different computers are distinct; only the last visible set is retained.
+  const visibleKey = (session: Session) => JSON.stringify([session.deviceLinkDeviceId, session.id]);
+  const previousVisible = new Map(visibleMergedSnapshot.map((session) => [visibleKey(session), session]));
+  const sharedVisible = nextVisible.map((session) => {
+    const previous = previousVisible.get(visibleKey(session));
+    return previous && (previous === session || JSON.stringify(previous) === JSON.stringify(session))
+      ? previous
+      : session;
+  });
   if (
-    visibleMergedSnapshot.length !== nextVisible.length ||
-    visibleMergedSnapshot.some((session, index) => session !== nextVisible[index])
+    visibleMergedSnapshot.length !== sharedVisible.length ||
+    visibleMergedSnapshot.some((session, index) => session !== sharedVisible[index])
   ) {
-    visibleMergedSnapshot = nextVisible;
+    visibleMergedSnapshot = sharedVisible;
   }
   // 设备列表快照:按 deviceName(再 deviceId 兜底)稳定排序,避免 Map 插入序在设备增删时
   // 抖动导致切换栏 chip 乱跳;内容不变时保持旧引用(防 useRemoteDevices 无谓重渲染)。

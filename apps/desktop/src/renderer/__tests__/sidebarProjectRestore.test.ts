@@ -340,7 +340,12 @@ describe('restoreHiddenProjectIfPresent', () => {
   });
 
   it('reads the latest project catalogue after awaiting the main-process update', async () => {
-    const projectKeys = new Set([PROJECT_KEY]);
+    // #7469, unit: lazy restore must not evaluate an old catalogue before IPC
+    // finishes. Exercise actual grouping as the task moves during the await.
+    let sessions = [projectSession()];
+    const getCurrentProjectKeys = vi.fn(() => collectRestorableProjectKeys({
+      sessions, lastActivityCutoff: null, pinnedProjectKeys: new Set(), vendorPredicate: null,
+    }));
     const ensureProjectIncluded = vi.fn();
     let resolveHidden!: (changed: boolean) => void;
     const hiddenUpdate = new Promise<boolean>((resolve) => {
@@ -351,14 +356,16 @@ describe('restoreHiddenProjectIfPresent', () => {
       projectKey: PROJECT_KEY,
       wasHiddenAtPickerOpen: true,
       setProjectHidden: () => hiddenUpdate,
-      getCurrentProjectKeys: () => projectKeys,
+      getCurrentProjectKeys,
       ensureProjectIncluded,
       localPlatform: 'linux',
     });
-    projectKeys.delete(PROJECT_KEY);
+    expect(getCurrentProjectKeys).not.toHaveBeenCalled();
+    sessions = [{ ...sessions[0], workingDir: '/moved' }];
     resolveHidden(true);
 
     await expect(result).resolves.toBe(false);
+    expect(getCurrentProjectKeys).toHaveBeenCalledOnce();
     expect(ensureProjectIncluded).not.toHaveBeenCalled();
   });
 });

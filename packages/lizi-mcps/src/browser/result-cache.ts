@@ -64,7 +64,10 @@ export class BrowserResultCache {
         message: 'offset 超出原文长度',
         chars: text.length,
       };
-    const end = Math.min(text.length, offset + maxChars);
+    let end = Math.min(text.length, offset + maxChars);
+    // 不把 UTF-16 代理对切到两页：退回到代理对之前；页内只剩高位代理时整对带上，保证分页前进。
+    if (end < text.length && isHighSurrogate(text.charCodeAt(end - 1)) && isLowSurrogate(text.charCodeAt(end)))
+      end += end - 1 > offset ? -1 : 1;
     return {
       ok: true,
       action: 'readResult',
@@ -75,6 +78,14 @@ export class BrowserResultCache {
       nextOffset: end < text.length ? end : null,
     };
   }
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 /** Deterministic structural samples; counts make omissions explicit. */

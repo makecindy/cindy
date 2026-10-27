@@ -16,7 +16,7 @@ import {
   type RemoteCollectionItem,
   type PluginConfigurationSummary,
 } from '@cindy/device-link';
-import { ghostContentKeys, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { ghostContentKeys, ghostFallbackDisplayAuthor, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
 import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
 import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -707,18 +707,19 @@ export class MobilePluginPages {
               .filter(Boolean)
               .join('\n\n'),
           }));
+        const author = ghostFallbackDisplayAuthor(ghost);
         const detailFacts = [
           {
             key: 'version',
             title: t('settings.ghosts.detail.infoVersion', locale),
             value: 'v' + ghost.manifest.version,
           },
-          ...(ghost.manifest.author
+          ...(author
             ? [
                 {
                   key: 'author',
                   title: t('settings.ghosts.detail.infoAuthor', locale),
-                  value: ghost.manifest.author,
+                  value: author,
                 },
               ]
             : []),

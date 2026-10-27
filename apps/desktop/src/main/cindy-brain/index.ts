@@ -12,6 +12,7 @@ import type { Session as MakerSession } from '@cindy/maker-core';
 import { GhostHarnessSlot } from './harnessSlot.js';
 import { redactToolInputForUntrustedBoundary } from '../messagePersistBroadcaster.js';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
+import { projectPluginPublishingSource } from './pluginPublishingSource.js';
 import { readMobilePreview } from './mobilePreview.js';
 import { createMailReader, mailReaderRemoteProvider } from './mailReader.js';
 import { resolveForgeInstallTarget, ghostInstallTargetContext } from './ghostInstallTarget.js';
@@ -1926,6 +1927,17 @@ export function getGhostManager(): GhostManager {
         } catch {
           return () => null;
         }
+      },
+      sourcesForInstance: (record, receipt) => {
+        let lookup: ReturnType<ReturnType<typeof getPluginMarketLedger>['lookupInstallationForAuthorization']>;
+        try {
+          lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: record.ghostId, namespace: record.namespace });
+        } catch {
+          lookup = { kind: 'invalid' };
+        }
+        return {
+          publishingSource: projectPluginPublishingSource(record, receipt, lookup),
+        };
       },
       canResumePendingResidentOffline: (ghostId) => getNamespaceMigrationHost().canResumePendingResidentOffline(ghostId),
       onResumePendingResidentOffline: (ghost) => {
@@ -8745,6 +8757,12 @@ export function registerGhostIpc(): void {
     // The migration body has its own committed-owner gate, so signed-out runs
     // the common activation phase without touching legacy account data.
     const activationOutcome = activateGhostsAndMigrateLegacyAccounts();
+    if (
+      activeOwnerScopeKey() !== scope.scopeKey ||
+      getActiveAppSession().dataOwnerId !== scope.dataOwnerId
+    ) {
+      return 'deferred';
+    }
     return outcome === 'failed'
       ? 'failed'
       : outcome === 'retry-pending' || activationOutcome === 'retry-pending'

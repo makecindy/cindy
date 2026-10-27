@@ -13,6 +13,7 @@ import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
 import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
@@ -438,6 +439,7 @@ export function App() {
             <ConfirmDialogProvider>
               <EnvCheckProvider>
                 <AuthProvider>
+                  <PluginReviewUpdatesProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>
                       <PrRefsProvider>
@@ -477,6 +479,7 @@ export function App() {
                       </PrRefsProvider>
                     </WorktreeProvider>
                   </AppShellCoverProvider>
+                  </PluginReviewUpdatesProvider>
                 </AuthProvider>
               </EnvCheckProvider>
             </ConfirmDialogProvider>

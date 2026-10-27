@@ -562,4 +562,9 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   expect(JSON.stringify(signed)).not.toContain('not-a-display-field');
   h.ghost.manifest.panel = {html: 'panel.html', position: 'tab'};
   expect((await read()).find(fact => fact.key === 'panel')?.value).toBe('Panel');
+  h.ghost.publishingSource = { kind: 'public-market', pluginId: 'public-practice' };
+  expect(toGhostPluginDetail(h.ghost).author).toBeNull();
+  expect((await read()).some(fact => fact.key === 'author')).toBe(false);
+  h.ghost.publishingSource = { kind: 'local', source: 'manual' };
+  expect((await read()).find(fact => fact.key === 'author')?.value).toBe('Cindy');
 });

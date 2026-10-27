@@ -24,6 +24,7 @@
  */
 
 import type { Session } from '@/lib/ccAgent.types';
+import { withProjectSessions } from './projectGrouping';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import {
@@ -432,7 +433,7 @@ export function buildMainListEntries({
   for (const project of projects) {
     entries.push({
       kind: 'project',
-      project: { ...project, sessions: sortSessionsForMainList(project.sessions, sortBy, ctx) },
+      project: withProjectSessions(project, sortSessionsForMainList(project.sessions, sortBy, ctx)),
     });
   }
 

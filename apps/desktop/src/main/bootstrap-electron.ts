@@ -1155,6 +1155,7 @@ import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteract
 import { registerPluginMarketIpc, syncDefaultMarketPlugins, refreshForegroundMarketPlugins } from './plugin-market/registerIpc.js';
 import { getPluginMarketService } from './plugin-market/service.js';
 import { StableOwnerPostCommitStep } from './stableOwnerPostCommit.js';
+import { registerPluginContributionsIpc } from './plugin-contributions/registerIpc.js';
 import { registerPluginPublisherIpc } from './plugin-publisher/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
@@ -2559,6 +2560,7 @@ setRemotePluginManagementServices({
 registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
+registerPluginContributionsIpc();
 setAppSessionCommitBoundaryHook(() => {
   cancelLocalAgentConfirmations();
   // 进行中的 Claude Code 登录属于旧 owner:结束 CLI 子进程,不让它在新 owner 下完成。

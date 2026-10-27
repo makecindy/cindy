@@ -1661,6 +1661,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     gitPreflight: (): Promise<{ ok: boolean; version: string | null }> =>
       ipcRenderer.invoke('plugin-market:git-preflight'),
   },
+  pluginContributions: {
+    reviewUpdates: () => ipcRenderer.invoke('plugin-contributions:review-updates'),
+    markReviewRead: (pluginId: string, key: string) => ipcRenderer.invoke('plugin-contributions:mark-review-read', { pluginId, key }),
+    prepare: (instanceId: string, expected?: import('../shared/pluginContributions').ContributionInstallationBinding) => ipcRenderer.invoke('plugin-contributions:prepare', { instanceId, expected }),
+    submit: (preparedId: string) => ipcRenderer.invoke('plugin-contributions:submit', preparedId),
+    status: (localId: string) => ipcRenderer.invoke('plugin-contributions:status', localId),
+    cancel: (localId: string) => ipcRenderer.invoke('plugin-contributions:cancel', localId),
+    cancelReview: (pluginId: string, release: { releaseId: string; sha256: string; revision: string }) => ipcRenderer.invoke('plugin-contributions:cancel-review', { pluginId, release }),
+    setAnonymity: (pluginId: string, anonymous: boolean) => ipcRenderer.invoke('plugin-contributions:set-anonymity', { pluginId, anonymous }),
+    discard: (preparedId: string) => ipcRenderer.invoke('plugin-contributions:discard', preparedId),
+    list: (input: { query: string; filter: import('../shared/pluginContributions').MyPluginFilter; cursor?: string }) => ipcRenderer.invoke('plugin-contributions:list', input),
+    submission: (pluginId: string, submissionId: string) => ipcRenderer.invoke('plugin-contributions:submission', { pluginId, submissionId }),
+    releases: (pluginId: string, cursor?: string) => ipcRenderer.invoke('plugin-contributions:releases', { pluginId, ...(cursor ? { cursor } : {}) }),
+    detail: (pluginId: string, cursor?: string) => ipcRenderer.invoke('plugin-contributions:detail', { pluginId, ...(cursor ? { cursor } : {}) }),
+  } satisfies import('../shared/pluginContributions').PluginContributionsApi,
   pluginPublisher: {
     start: (filePath: string): Promise<{ transferId: string; uploadId: string | null }> =>
       ipcRenderer.invoke('plugin-publisher:start', filePath),

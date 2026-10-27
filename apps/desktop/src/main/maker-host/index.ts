@@ -1,5 +1,6 @@
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
+import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
@@ -125,6 +126,7 @@ import {
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
+  isActiveInputAccountScoped,
   isSessionInTurn,
   wireSessionToIpc,
   releaseSessionBindingsForOwnerBoundary,
@@ -1134,7 +1136,22 @@ export function getMaker(): Maker {
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return null;
         const snapshot = resolveGhostFsSessionSnapshot((id) => _maker?.getSession(id), sessionId, sessionInstanceId);
+        const acceptedInput = getSessionInputProvenance(sessionId);
+        const accountInput = isActiveInputAccountScoped(sessionId);
         return {
+          contributionAccountAllowed: async (acceptedOperation = false) => {
+            const current = () => !isAppSessionBoundaryPending() && _maker?.getSession(sessionId) === session
+              && (acceptedOperation ? accountInput : isActiveInputAccountScoped(sessionId));
+            if (!current()) return false;
+            const db = getCurrentDbClientSnapshot();
+            if (!db) return false;
+            // An authorized upload outlives the input that started it. Keep that
+            // input's identity; recheck task, owner, helper surface and permissions.
+            const surface = await resolveHelperSurface(db.client, sessionId,
+              acceptedOperation ? () => acceptedInput : getSessionInputProvenance);
+            return surface !== 'restricted' && db === getCurrentDbClientSnapshot()
+              && current();
+          },
           permissionMode: session.stablePermissionModeState?.mode ?? null,
           remoteHostId: session.remoteHostId,
           isCurrent: () => !!snapshot && !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan'

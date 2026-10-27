@@ -1,5 +1,7 @@
 import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
+import { PluginVersionUpdates } from './PluginVersionUpdates';
+import { ToolsSection } from './GhostPluginDetailView';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -111,14 +113,17 @@ export function MarketPluginDetailView({
               </Button>
             ) : null}
           </div>
-          <p
-            id={replacementDescription ? replacementDescriptionId : undefined}
-            className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
-          >
-            {replacementDescription ?? (detail.description || detail.ghostId)}
+          <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
+            {detail.description || detail.ghostId}
           </p>
+          {replacementDescription ? (
+            <p id={replacementDescriptionId} className="mt-3 text-13 leading-5 text-[var(--text-secondary)]">
+              {replacementDescription}
+            </p>
+          ) : null}
         </header>
 
+        {detail.manifest.tools?.length ? <ToolsSection tools={detail.manifest.tools} /> : null}
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2
             id="market-security-title"
@@ -171,6 +176,18 @@ export function MarketPluginDetailView({
             )}
           </div>
         </section>
+        {detail.manifest.releaseNotes?.trim() ? (
+          <PluginVersionUpdates key={detail.pluginId}>
+            <section className="space-y-3" aria-label={t('settings.ghosts.contribution.releaseNotes')}>
+              <h2 className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]">
+                {t('settings.ghosts.contribution.releaseNotes')} · {detail.version}
+              </h2>
+              <p className="whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">
+                {detail.manifest.releaseNotes}
+              </p>
+            </section>
+          </PluginVersionUpdates>
+        ) : null}
       </article>
     </main>
   );
