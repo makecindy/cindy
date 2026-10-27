@@ -200,6 +200,7 @@ async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
     baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
     timeoutMs: MEDIA_MODEL_REQUEST_TIMEOUT_MS,
     logLabel: MEDIA_MODELS_PATH,
+    headers: { 'X-Cindy-Model-Capabilities': 'display_pricing' },
   });
   if (
     typeof payload !== 'object' ||

@@ -548,6 +548,8 @@ export function retainWorkerProjection(leadSessionId: string | undefined): () =>
       entry.queuedRefresh.resolve(failedWorkersResult(leadSessionId, entry));
       entry.queuedRefresh = null;
     }
+    // 无人持有后快照不再刷新;按持有范围派生的整表视图(listRetainedWorkerProjections)要随之收敛。
+    emitGlobal();
   };
 }
 
@@ -621,6 +623,19 @@ export function subscribeAllWorkerProjections(listener: () => void): () => void 
 
 export function getAllWorkerProjectionVersion(): number {
   return globalVersion;
+}
+
+/**
+ * 当前有人持有的 Lead 投影。无人持有的条目不再订阅 Worker 变化(如协同已结束、Lead 已
+ * 不在任何列表里),快照可能过期,不能作为跨 Lead 派生的依据。变化随
+ * subscribeAllWorkerProjections / getAllWorkerProjectionVersion 广播。
+ */
+export function listRetainedWorkerProjections(): Array<readonly [string, WorkersSnapshot]> {
+  const result: Array<readonly [string, WorkersSnapshot]> = [];
+  for (const [leadSessionId, entry] of entries) {
+    if (entry.ownerCount > 0) result.push([leadSessionId, entry.snapshot]);
+  }
+  return result;
 }
 
 export function useWorkerProjectionVersion(): number {

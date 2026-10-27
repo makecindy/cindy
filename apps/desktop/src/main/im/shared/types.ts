@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
+import type { ChannelToolScope } from './channelToolScope';
 import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
@@ -135,9 +136,25 @@ export interface ImSessionNamespace {
 }
 
 /**
+ * 连接交给伙伴后, 一个入站 userId 落在伙伴的哪条任务上:
+ *   - owner-dm: 已验证的主人私聊 → 伙伴主任务(canonical);
+ *   - group: 群 / 话题 → 伙伴的 `channel` 专线(按 chat + topic 一条);
+ *   - guest-dm: 获准的非主人私聊 → 伙伴的 `channel` 专线(按 userId 一条)。
+ */
+export type ImCompanionLane =
+  | { kind: 'owner-dm' }
+  | { kind: 'group'; chatId: string; threadId: string }
+  | { kind: 'guest-dm'; userId: string };
+
+/**
  * 渠道适配器 — 编排层所有渠道差异的唯一注入点。
  */
 export interface ImChannelAdapter {
+  /**
+   * 连接交给伙伴时的落点解析(见 ImCompanionLane)。只有支持「交给伙伴」的渠道
+   * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
+   */
+  companionLane?: (userId: string) => ImCompanionLane;
   /** Resolve an authenticated private notification topic before any default-session or command routing. */
   resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
   notificationReplyText?: { unavailable: string; commands: string };
@@ -149,6 +166,8 @@ export interface ImChannelAdapter {
   im: TextChannelIM;
   /** Stable inbound contextId when connected status.appId is only a display label. */
   getBotContextId?(): string;
+  /** 已连接 bot 的展示名，用于失败时定位当前入口。 */
+  getBotDisplayName?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
   config: ImOrchestratorConfig;
@@ -232,6 +251,13 @@ export interface ImChannelAdapter {
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
    * 正在于此: 触发消息附件照常走 attachments 落库。
    */
+  /**
+   * 全响应·自主判断(event.ambient)消息的前置判定: 返回 'skip' 则本条既不落库也不起
+   * 轮次(群窗口游标也不推进, 消息留在窗口里当下次的背景)。在 ack / 提前落库之前
+   * 调用。钩子抛错或判不出来按 'proceed' 走原路径(主模型仍可用 NO_REPLY 沉默)。
+   * 只对 ambient 消息调用; 被召唤的消息从不经过这里。
+   */
+  ambientTurnGate?(event: IMMessageEvent): Promise<'proceed' | 'skip'>;
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
     contextSnapshot?: ImContextSnapshot;
@@ -263,6 +289,11 @@ export interface ImChannelAdapter {
   ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
+  /**
+   * 本轮渠道工具(`cindy_telegram_bot`)的作用域：当前 chat、触发者身份与出站 transport。
+   * provider 开始前登记、终态释放(channelToolScope.ts)；不实现即本轮没有渠道工具。
+   */
+  channelToolScopeFor?(event: IMMessageEvent): ChannelToolScope | undefined;
   /**
    * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
    * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的
@@ -305,9 +336,26 @@ export interface ImUiTextPack {
       effort: string;
       permission: string;
     }) => string;
+    /**
+     * 连接已交给伙伴时的 /settings: 同样五项, 但读的是伙伴那条任务(主任务 / 本群专线)
+     * 实际在用的配置, 尾注指向伙伴设置而不是 /model /permission。缺省回落 `settings`。
+     */
+    settingsCompanion?: (info: {
+      workspace: string;
+      agent: string;
+      model: string;
+      effort: string;
+      permission: string;
+    }) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;
+    /** 连接已交给伙伴时, 主人私聊里 `/new` 的提示(伙伴主任务不轮换)。缺省回 `new`。 */
+    companionDmNew?: string;
+    /** 连接已交给伙伴时, 群 / 话题里 `/new` 换了一条新专线后的提示。缺省回 `new`。 */
+    companionLaneNew?: string;
+    /** 连接已交给伙伴时, 改模型 / 权限 / 项目这类命令的提示(这些归伙伴设置管)。 */
+    companionManagedCommand?: string;
   };
   agent: {
     completedNoText: string;
@@ -335,6 +383,8 @@ export interface ImUiTextPack {
     scheduledTaskHeader: (name: string | null) => string;
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
+    /** 伙伴当前不能接消息(暂停 / 归档等)时的渠道提示。缺省用 runtimeError 包一层。 */
+    companionUnavailable?: (reason: string) => string;
   };
   /**
    * 派发前失败文案。agentUnsupported 用于「所选 Agent 无法提供渠道所需的

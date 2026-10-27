@@ -1,0 +1,79 @@
+{
+  "asOf": "2026-10-15",
+  "quietFloor": {
+    "clicks": 100,
+    "conversions": 5,
+    "spend": 50
+  },
+  "thresholds": [
+    {
+      "id": "t-daily-spend",
+      "scope": "campaign",
+      "metric": "spend",
+      "direction": "above",
+      "limit": 200,
+      "window": "today",
+      "severity": "urgent"
+    },
+    {
+      "id": "t-cpa-week",
+      "scope": "campaign",
+      "metric": "cpa",
+      "direction": "above",
+      "limit": 25,
+      "window": "last7",
+      "severity": "watch"
+    },
+    {
+      "id": "t-roas-month",
+      "scope": "account",
+      "metric": "roas",
+      "direction": "below",
+      "limit": 2,
+      "window": "month",
+      "severity": "note"
+    }
+  ],
+  "rows": [
+    {
+      "id": "r1",
+      "date": "2026-10-15",
+      "campaign": "合成-拉新",
+      "spend": 260,
+      "clicks": 300,
+      "impressions": 9000,
+      "conversions": 8,
+      "revenue": 400
+    },
+    {
+      "id": "r2",
+      "date": "2026-10-14",
+      "campaign": "合成-拉新",
+      "spend": 180,
+      "clicks": 250,
+      "impressions": 8000,
+      "conversions": 12,
+      "revenue": 700
+    },
+    {
+      "id": "r3",
+      "date": "2026-10-15",
+      "campaign": "合成-品牌词",
+      "spend": 40,
+      "clicks": 60,
+      "impressions": 1200,
+      "conversions": 3,
+      "revenue": 150
+    },
+    {
+      "id": "r4",
+      "date": "2026-10-13",
+      "campaign": "合成-品牌词",
+      "spend": 35,
+      "clicks": 55,
+      "impressions": 1100,
+      "conversions": null,
+      "revenue": null
+    }
+  ]
+}

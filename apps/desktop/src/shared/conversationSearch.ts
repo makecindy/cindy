@@ -62,6 +62,13 @@ export interface ConversationSearchSessionSummary {
   source?: SessionSource;
   orcaRole?: ConversationSearchOrcaRole | null;
   parentSessionId?: string | null;
+  /** Host-verified companion transcript; channel results are local-only and read-only. */
+  companion?: {
+    id: string;
+    name: string;
+    role: 'canonical' | 'history' | 'channel';
+    readOnly: boolean;
+  };
   userSendAt: string | null;
   updatedAt: string;
   createdAt: string;

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { NativeErrorNotice } from '@/components/NativeErrorNotice.ios';
 import {
   Button,
   HStack,
@@ -160,9 +161,7 @@ export function PluginTaskPickerView(p: PluginTaskPickerViewProps) {
         />
       ) : p.error ? (
         <>
-          <Text modifiers={[foregroundStyle(colors.textSecondary)]}>
-            {t("plugins.loadFailed")}
-          </Text>
+          <NativeErrorNotice message={t('plugins.loadFailed')} />
           <ComposerNativeRow
             title={t("plugins.retry")}
             onPress={p.onRetry}

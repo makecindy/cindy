@@ -32,7 +32,7 @@ export function ChipMetricsSection() {
         )}
       >
         <p
-          className="px-5 pt-5 pb-2 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70"
+          className="px-5 pt-5 pb-2 text-12 leading-[1.4] text-[var(--text-secondary)]"
         >
           {t('settings.chipMetrics.description')}
         </p>
@@ -52,7 +52,7 @@ export function ChipMetricsSection() {
               >
                 {t(`settings.chipMetrics.metrics.${key}.label`)}
               </p>
-              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                 {t(`settings.chipMetrics.metrics.${key}.hint`)}
               </p>
             </div>

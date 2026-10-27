@@ -1,7 +1,11 @@
 import { localizeGhostRecommendation, type GhostRecommendation } from '@cindy/plugin-protocol';
 import type { HomePluginRecommendationsSnapshot } from '../../../shared/homePluginRecommendations';
 import { hasDeliveryNamespace } from '../../../shared/pluginIdentity';
-import { formatGhostCommandInsertion } from '../../cindy-brain/ghostCommand';
+import { formatGhostCommandInsertion, formatGhostCommandToken } from '../../cindy-brain/ghostCommand';
+import {
+  ghostQualifierDisplay,
+  type GhostSourceLabels,
+} from '../../components/new-chat/GhostCommandDecoration';
 import {
   HOME_SUGGESTION_CATALOG,
   homeSuggestionLabelKey,
@@ -170,9 +174,10 @@ export function nextHomeTaskBatch(
 }
 
 /**
- * Composer text for a plugin suggestion whose plugin is usable here. Hover preview and click
- * fill share this so the preview always shows exactly what lands in the composer; `$command`
- * stays as typed text and ChatInput expands it on send.
+ * Composer text for a plugin suggestion whose plugin is usable here: what the click fill
+ * inserts. `$command` stays as typed text and ChatInput expands it on send. The hover preview
+ * and description use `pluginSuggestionDisplayText`, which differs only by hiding a same-name
+ * qualifier the way the composer pill does.
  */
 export function pluginSuggestionComposerText(
   prompt: string,
@@ -188,4 +193,28 @@ export function pluginSuggestionComposerText(
           ? ghost.manifest.id + ' namespace:' + ghost.namespace
           : ghost.manifest.id,
       })}`;
+}
+
+/**
+ * What the hover preview and the screen-reader description show for a suggestion. The
+ * inserted text may carry a `/slug` or `/@root` qualifier for send-time disambiguation;
+ * like the composer pill, these plain-text surfaces hide it whenever the pill would
+ * (same `ghostQualifierDisplay` rule). `withTag` appends 团队共享 for an organization
+ * sibling so screen readers can still tell same-name plugins apart.
+ */
+export function pluginSuggestionDisplayText(
+  prompt: string,
+  ghost: { manifest: { id: string; name: string; command?: string }; dir?: string; namespace?: string | null },
+  t: (key: string, options?: Record<string, unknown>) => string,
+  roster: readonly { manifest: { command?: string }; namespace?: string | null }[],
+  sourceLabels: GhostSourceLabels,
+  withTag: boolean,
+): string {
+  const command = ghost.manifest.command;
+  if (!command) return pluginSuggestionComposerText(prompt, ghost, t, roster);
+  const token = formatGhostCommandToken(ghost, roster) ?? command;
+  const display = ghostQualifierDisplay(ghost, token !== command, sourceLabels, roster);
+  if (!display) return `$${token} ${prompt}`;
+  const tag = withTag && display.label ? ` ${display.label}` : '';
+  return `$${command}${tag} ${prompt}`;
 }

@@ -1,0 +1,37 @@
+{
+  "items": [
+    {
+      "id": "k1",
+      "text": "第一次养猫 怎么买猫粮",
+      "source": "合成用户清单",
+      "metrics": null
+    },
+    {
+      "id": "k2",
+      "text": "第一次养猫，怎么买猫粮？",
+      "source": "合成用户清单",
+      "metrics": null
+    },
+    {
+      "id": "k3",
+      "text": "Best cat food for kittens",
+      "source": "合成用户清单",
+      "metrics": {
+        "volume": 1000,
+        "difficulty": null,
+        "position": null,
+        "clicks": null
+      }
+    },
+    {
+      "id": "k4",
+      "text": "幼猫猫粮价格",
+      "source": "合成用户清单",
+      "metrics": null
+    }
+  ],
+  "existingTitles": [
+    "幼猫猫粮价格对比表",
+    "新手养猫清单"
+  ]
+}

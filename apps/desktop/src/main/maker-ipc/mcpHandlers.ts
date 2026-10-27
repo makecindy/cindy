@@ -61,10 +61,11 @@ const listContextSchema = z.object({
   botSessionId: z.string().min(1).optional(),
   modelChain: z.array(z.object({
     harness: z.enum(['claude', 'codex', 'pi']),
+    agentDeviceId: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/).nullable().optional(),
     model: z.string().trim().min(1),
     providerId: z.string().nullable(),
     effort: z.string(),
-    fastMode: z.boolean(),
+    fastMode: z.union([z.boolean(), z.literal('ultrafast')]),
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 

@@ -6,6 +6,7 @@
  */
 import type { SessionStatus } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
@@ -14,6 +15,8 @@ import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/p
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
 import { shouldPreserveWaitingContinuationOnlyAutoResume } from '../../maker-ipc/interruptedTurnAutoResume';
 import { createSessionBindingLifecycle, runSessionCloseCleanup } from '../../maker-ipc/sessionBindingLifecycle';
+import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry';
+import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler';
 import type { ProviderGroupBinding } from '../bindings';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter } from '../router';
@@ -78,6 +81,37 @@ function item(clientId: string, text: string): AgentInputQueuedMessage {
   } as AgentInputQueuedMessage;
 }
 
+/**
+ * register.ts 里「全部停止」注册处的 noteSessionReset：逐行(去掉缩进与注释)与这份期望原文完全一致，
+ * 下面的「全部停止」用例按同一份原文接线(resetAutomaticRecoveryForExplicitStop 用 spy 代替)。
+ */
+const REGISTER_SOURCE = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const STOP_ALL_NOTE_SESSION_RESET = [
+  'noteSessionReset: (sessionId) => {',
+  'resetAutomaticRecoveryForExplicitStop(sessionId);',
+  'providerGroupService?.noteUserAction(sessionId);',
+  '},',
+];
+function stopAllRegistration(): string {
+  const start = REGISTER_SOURCE.indexOf('registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {');
+  const end = REGISTER_SOURCE.indexOf('\n  });', start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  return REGISTER_SOURCE.slice(start, end);
+}
+function stopAllNoteSessionResetLines(): string[] {
+  const registration = stopAllRegistration();
+  const start = registration.indexOf('    noteSessionReset:');
+  const end = registration.indexOf('\n    notifyGoalStop:', start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  return registration
+    .slice(start, end)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('//'));
+}
+
 async function flush() {
   for (let i = 0; i < 200; i++) await Promise.resolve();
 }
@@ -90,7 +124,7 @@ function gate() {
 
 interface FakeSession {
   id: string;
-  closeReason: 'unexpected' | 'agent-switch';
+  closeReason: 'unexpected' | 'agent-switch' | 'requested';
   listeners: Set<(status: SessionStatus) => void>;
   onStatusChange(listener: (status: SessionStatus) => void): () => void;
   setInteractionListener(listener: unknown): void;
@@ -229,6 +263,7 @@ function setup(options: { bComesBack?: boolean } = {}) {
   });
   let readRowGate: { opened: Promise<void>; open: () => void } | null = null;
   let probeGate: { opened: Promise<void>; open: () => void } | null = null;
+  let writeBindingGate: { opened: Promise<void>; open: () => void } | null = null;
   let held: (() => void) | null = null;
   const leaseResults: Array<object | null> = [];
   const deps = {
@@ -237,6 +272,9 @@ function setup(options: { bComesBack?: boolean } = {}) {
     readGroup: (id: string) => (id === 'anthropic' ? config : null),
     readBinding: (id: string) => bindings.get(id) ?? null,
     writeBinding: vi.fn(async (id: string, binding: { providerId: string; memberKey: string } | null) => {
+      const pending = writeBindingGate;
+      writeBindingGate = null;
+      if (pending) await pending.opened;
       if (binding) bindings.set(id, { ...binding, at: 2 });
       else bindings.delete(id);
     }),
@@ -309,11 +347,30 @@ function setup(options: { bComesBack?: boolean } = {}) {
   }
 
   const markTried = vi.spyOn(router, 'markTried');
+  // 「全部停止」的真实 IPC handler；noteSessionReset 按 register 里的原文接线(STOP_ALL_NOTE_SESSION_RESET，
+  // 由下面的接线用例逐行核对)，resetAutomaticRecoveryForExplicitStop(撤中断自愈 / silent-stop / 退避簿记，
+  // 不碰输入协调器与供应商组)用 spy 代替；closeSession 接 maker.closeSession(requested)。
+  const noteSessionReset = vi.fn((_sessionId: string) => {});
+  const resetAutomaticRecoveryForExplicitStop = noteSessionReset;
+  const providerGroupService: { noteUserAction(sessionId: string): void } | null = service;
+  let stopAllHandler: IpcHandler | null = null;
+  registerStopSessionBackgroundTasksHandler({ handle: (_channel, handler) => { stopAllHandler = handler; } }, {
+    closeSession: async () => closeSession(live, 'requested'),
+    clearBackgroundActivity: () => {},
+    noteSessionReset: (sessionId) => {
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      providerGroupService?.noteUserAction(sessionId);
+    },
+    notifyGoalStop: () => {},
+  });
   return {
     coordinator,
     service,
     router,
     markTried,
+    noteSessionReset,
+    /** 用户点「全部停止」。 */
+    stopAll: () => stopAllHandler!({}, SID),
     deps,
     hooks,
     row,
@@ -326,9 +383,19 @@ function setup(options: { bComesBack?: boolean } = {}) {
       readRowGate = gate();
       held = readRowGate.open;
     },
+    /** 暂停下一次写绑定(换电脑已选好目标、正要交接)。 */
+    pauseNextWriteBinding: () => {
+      writeBindingGate = gate();
+      held = writeBindingGate.open;
+    },
     pauseNextProbe: () => {
       probeGate = gate();
       held = probeGate.open;
+    },
+    /** 只放行暂停的那一步(不等终态错误的处理)。 */
+    release() {
+      held?.();
+      held = null;
     },
     /** 放行暂停的那一步，等这次错误处理走完。 */
     async releaseAndSettle() {
@@ -454,7 +521,7 @@ describe('provider group failover vs. the terminal-error drain close (#5880)', (
     const h = setup();
     await h.failOnB(B_LIMITED);
     await h.releaseAndSettle();
-    expect(h.router.coolingUntil('anthropic', MAC_B.key)).not.toBeNull();
+    expect(h.router.coolingUntil('anthropic', MAC_B.key, MODEL)).not.toBeNull();
     expect(h.markTried).toHaveBeenCalledWith(SID, MAC_B.key);
     expectSwitchedToLocalAndContinued(h);
   });
@@ -485,5 +552,92 @@ describe('provider group failover vs. the terminal-error drain close (#5880)', (
     await h.releaseAndSettle();
     expectNothingDoneFor(h);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  // 「全部停止」(stopSessionBackgroundTasksHandler) 只关闭会话、撤自动续跑簿记，不走协调器的 Stop：
+  // 换电脑这一趟也必须停下，不换、不续跑、不交回(provider-groups.md §6.1「用户停止」)。
+  function expectStoppedByStopAll(h: ReturnType<typeof setup>) {
+    expect(h.noteSessionReset).toHaveBeenCalledWith(SID);
+    expect(h.closeContexts.at(-1)).toEqual({ closeReason: 'requested', preserveAutoResumeIntent: false });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  }
+
+  it('stop all while the checks are pending stops the switch', async () => {
+    const h = setup();
+    h.pauseNextReadSessionRow();
+    await h.failOnB();
+    await flush();
+    await h.stopAll();
+    await h.releaseAndSettle();
+    expectStoppedByStopAll(h);
+  });
+
+  it('stop all while waiting for B to come back stops the switch', async () => {
+    const h = setup();
+    h.pauseNextProbe();
+    await h.failOnB();
+    await flush();
+    expect(h.leaseResults).toEqual([expect.any(Object)]);
+    await h.stopAll();
+    await h.releaseAndSettle();
+    expectStoppedByStopAll(h);
+  });
+
+  it('register wires stop all to the provider group without changing the shared explicit-stop reset', () => {
+    expect(stopAllNoteSessionResetLines()).toEqual(STOP_ALL_NOTE_SESSION_RESET);
+    // 只接在「全部停止」：其他停止入口共用的 resetAutomaticRecoveryForExplicitStop 本身不碰供应商组。
+    const start = REGISTER_SOURCE.indexOf('function resetAutomaticRecoveryForExplicitStop(');
+    const end = REGISTER_SOURCE.indexOf('\n}\n', start);
+    expect(start).toBeGreaterThan(0);
+    expect(REGISTER_SOURCE.slice(start, end)).not.toContain('providerGroupService');
+  });
+
+  // 发送前换电脑(beforeSend)：已选好目标、正在写绑定 / 交接时用户停止，交接在改动之前停下，任务留在原电脑
+  // (provider-groups.md §6.1 发送前：「用户停止这次发送时立刻停下：不再等、不再换」)。
+  async function relocateBeforeSend(h: ReturnType<typeof setup>, signal?: AbortSignal) {
+    const moving = h.service.beforeSend(SID, signal ? { signal } : undefined);
+    await flush();
+    return moving;
+  }
+
+  it('control: before sending, a task on an offline B moves to this computer', async () => {
+    const h = setup();
+    await relocateBeforeSend(h);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.row.agentDeviceId).toBeNull();
+    expect(h.bindings.get(SID)?.memberKey).toBe(LOCAL.key);
+  });
+
+  it('stop all while the task is being moved before sending keeps it on B', async () => {
+    const h = setup();
+    h.pauseNextWriteBinding();
+    const moving = relocateBeforeSend(h);
+    await flush();
+    expect(h.deps.writeBinding).toHaveBeenCalledTimes(1);
+    await h.stopAll();
+    h.release();
+    await moving;
+    await flush();
+    expect(h.row.agentDeviceId).toBe(MAC_B.agentDeviceId);
+    expect(h.bindings.get(SID)?.memberKey).toBe(MAC_B.key);
+    expect(h.markTried.mock.calls.map(([, key]) => key)).toEqual([MAC_B.key]);
+  });
+
+  it('stopping the send while the task is being moved before sending keeps it on B', async () => {
+    const h = setup();
+    const controller = new AbortController();
+    h.pauseNextWriteBinding();
+    const moving = relocateBeforeSend(h, controller.signal);
+    await flush();
+    expect(h.deps.writeBinding).toHaveBeenCalledTimes(1);
+    controller.abort();
+    h.release();
+    await moving;
+    await flush();
+    expect(h.row.agentDeviceId).toBe(MAC_B.agentDeviceId);
+    expect(h.bindings.get(SID)?.memberKey).toBe(MAC_B.key);
   });
 });

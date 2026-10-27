@@ -111,6 +111,28 @@ function waitForSessionEvent(session: Session, type: AgentEvent['type']): Promis
 }
 
 describe('Session graceful-stop control state', () => {
+  // #7259: pre-dispatch snapshots need the reservation's cancellation signal.
+  // Unit tier; a suspended acceptance hook exposes the missing cancellation.
+  it('aborts acceptance preparation and never dispatches after Stop', async () => {
+    const stub = createHandle();
+    const sendSpy = vi.spyOn(stub.handle, 'send');
+    const session = createSession(stub);
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let preparationSignal: AbortSignal | undefined;
+    const send = session.send('prepare snapshot', {
+      onAccepted: async (signal) => {
+        preparationSignal = signal;
+        entered();
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    });
+    await started;
+    await session.abort();
+    expect(preparationSignal?.aborted).toBe(true);
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
   it('cancels and joins a pre-acceptance send reservation before reporting stop requested', async () => {
     const stub = createHandle();
     let running = false;
@@ -568,6 +590,7 @@ describe('Session current-generation terminal observation', () => {
         reason: 'empty-response',
         sdkError: 'server_error',
         errorStatus: 529,
+        codexErrorInfo: 'badRequest',
       },
     });
     await secondError;
@@ -578,6 +601,7 @@ describe('Session current-generation terminal observation', () => {
       reason: 'empty-response',
       sdkError: 'server_error',
       errorStatus: 529,
+      codexErrorInfo: 'badRequest',
     });
     stub.push({ type: 'done', data: {} });
     await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
@@ -588,6 +612,7 @@ describe('Session current-generation terminal observation', () => {
       reason: 'empty-response',
       sdkError: 'server_error',
       errorStatus: 529,
+      codexErrorInfo: 'badRequest',
     });
   });
 

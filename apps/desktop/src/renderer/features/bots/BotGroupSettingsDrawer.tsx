@@ -13,6 +13,7 @@ import { Folder, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { FormField } from '@/components/ui/form-field';
@@ -79,6 +80,9 @@ export function BotGroupSettingsDrawer() {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
             }}
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
+            // The header shares the window title strip; without no-drag the page's drag
+            // regions underneath swallow the close button's clicks (see windowDrag.tsx).
+            style={WINDOW_NO_DRAG_STYLE}
           >
             <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
               <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">

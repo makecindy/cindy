@@ -2295,23 +2295,34 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('retries durable Subagent approval delivery without asking the user twice', async () => {
     const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
-    mockRunDiscovery().mockResolvedValue([run]);
+    // Detached supervisors from earlier cases may still poll their own roots.
+    // Offer this request only to this handle, after its resolver is attached.
+    const discovery = deferSubagentDiscovery(run);
+    const ownRunRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1');
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns')
       .mockRejectedValueOnce(new Error('mailbox unavailable'))
       .mockResolvedValue(1);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     handle.setInteractionResolver(resolver);
+    discovery.publish();
 
-    await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 2_500 });
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(control).toHaveBeenLastCalledWith(
-      expect.any(String),
-      run.taskId,
-      'approval',
-      expect.objectContaining({ confirmed: true }),
-    );
-    await handle.close();
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 2_500 });
+      expect(resolver).toHaveBeenCalledOnce();
+      for (const attempt of [1, 2]) {
+        expect(control).toHaveBeenNthCalledWith(
+          attempt,
+          ownRunRoot,
+          run.taskId,
+          'approval',
+          expect.objectContaining({ confirmed: true }),
+        );
+      }
+    } finally {
+      discovery.clear();
+      await handle.close();
+    }
   });
 
   it('routes model resume through the same retained-session helper and returns its generation id', async () => {

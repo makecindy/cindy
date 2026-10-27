@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +25,9 @@ import {
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
+import { useWallpaperAsset } from './useWallpaperAsset';
+import { useWallpaperBackground } from './useWallpaperBackground';
+import { useReducedMotion } from './useReducedMotion';
 
 export interface WallpaperSettings {
   wallpaperId: WallpaperId;
@@ -38,6 +40,10 @@ export interface WallpaperSettings {
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  downloadPending: boolean;
+  downloadFailed: boolean;
+  downloadProgress: number;
+  retryDownload: () => void;
   visibility: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
@@ -84,39 +90,44 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
   const visibility = getWallpaperVisibility(settings, isDark);
-  // Document-level surface also covers settings, split panes, portals and detached
-  // app windows, without changing the layout tree or stacking order of its panes.
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
-    const background =
-      settings.wallpaperId === 'custom'
-        ? customUrl
-          ? isCustomWallpaperVideo(customUrl)
-            ? 'none'
-            : `url("${customUrl}")`
-          : undefined
+  const reducedMotion = useReducedMotion();
+  const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
+  const videoAsset = useWallpaperAsset(
+    settings.wallpaperId,
+    'video',
+    visibility > 0 && settings.wallpaperMotion === 'dynamic' && !reducedMotion,
+  );
+  const downloadPending = imageAsset.loading || videoAsset.loading;
+  const downloadFailed = imageAsset.failed || videoAsset.failed;
+  const downloadBytes = imageAsset.total + videoAsset.total;
+  const downloadProgress =
+    downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const retryDownload = useCallback(() => {
+    imageAsset.retry();
+    videoAsset.retry();
+  }, [imageAsset.retry, videoAsset.retry]);
+  const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
+  const background =
+    settings.wallpaperId === 'custom'
+      ? customUrl
+        ? isCustomWallpaperVideo(customUrl)
+          ? 'none'
+          : `url("${customUrl}")`
+        : undefined
+      : imageAsset.url
+        ? `url("${imageAsset.url}")`
         : getBuiltinWallpaperBackground(settings.wallpaperId);
-    const active = Boolean(background);
-    if (active) {
-      root.dataset.wallpaperActive = 'true';
-      root.style.setProperty('--app-wallpaper-image', background!);
-      // One cover-fitted canvas; theme-derived veil keeps messages readable.
-      const veil = 100 - visibility * 100;
-      root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
-      const blur = blurPreview ?? settings.wallpaperBlur ?? 0;
-      if (blur > 0 && visibility > 0) {
-        root.dataset.wallpaperBlur = 'true';
-        root.style.setProperty('--app-wallpaper-blur', `${blur}px`);
-      }
-    }
-    return () => {
-      delete root.dataset.wallpaperActive;
-      delete root.dataset.wallpaperBlur;
-      for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
-        root.style.removeProperty(name);
-    };
-  }, [settings, visibility, blurPreview]);
+  useWallpaperBackground({
+    background,
+    pending: imageAsset.loading || imageAsset.failed,
+    visibility,
+    blur: blurPreview ?? settings.wallpaperBlur ?? 0,
+    reducedMotion,
+    decodeUrl:
+      settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
+        ? customUrl || undefined
+        : undefined,
+  });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -237,6 +248,10 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
       setWallpaper,
       setVisibility,
       setBlur,
@@ -255,6 +270,10 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       settings,
       failedUrl,
       visibility,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
     ],
   );
 
@@ -265,6 +284,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
           wallpaperId={settings.wallpaperId}
           motion={settings.wallpaperMotion}
           customWallpaperUrl={settings.customWallpaperUrl}
+          officialVideoUrl={videoAsset.url}
           onFailure={onPlaybackFailure}
           onReady={onPlaybackReady}
         />

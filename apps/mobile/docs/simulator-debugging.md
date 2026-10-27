@@ -27,6 +27,30 @@ separately from a launch request, and exits nonzero if launch is blocked, includ
 when Metro is absent. `--build-only` does not require Metro. A successful launch
 request still requires fresh bundle logs and visible page verification.
 
+### Which iOS Simulator
+
+The repository does not pin a simulator; each developer chooses locally. By default
+(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` first use a booted device in
+Cindy's own simulator — the official Baguette plugin's private device set at
+`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall
+back to the system (Xcode) simulator when Cindy's has no booted device, is not installed, or
+its plugin setting has paused running. `--udid` uses whichever of those sets holds that
+device. Keep a personal choice outside the repository, e.g. in your shell profile:
+
+| `CINDY_MOBILE_SIMULATOR` | Effect |
+|---|---|
+| `auto` (default) | Cindy first, then system |
+| `cindy` | Only Cindy's simulator; error when unavailable |
+| `system` | Only the system simulator |
+| absolute path | Only that CoreSimulator device set |
+
+Devices outside the system set have no external window: `mobile:sim:open` refuses them and
+`whoami --viewer` reports the viewer as unavailable; view Cindy's devices in its sidebar.
+`rebuild` builds those with the generic Simulator destination (xcodebuild only sees the system
+set) and installs with `simctl --set`. Cindy's simulator shuts devices down after its idle
+setting (15 minutes by default; plugin input renews it, scripts do not). Native E2E (Maestro)
+still uses the system simulator.
+
 For the macOS external viewer, use `pnpm mobile:sim:open -- --udid <booted-udid>`.
 It resolves the app inside the selected Xcode toolchain (including `DEVELOPER_DIR`),
 opens Device Hub or Simulator by its absolute path, and exits nonzero on failure.
@@ -310,6 +334,15 @@ Release 也可在设置 → 调试 / 开发者打开 Debug 日志，复现后导
 详细日志最多保留 7 天、8 MiB；每 2 秒及前后台切换时落盘，突然杀进程可能丢失最后一批。
 配置日志服务的构建还可手动上传筛选后的运行摘要（最近 7 天最多 500 条），成功自动复制编号。
 上传摘要不包含详细 Debug 文件，需要详细现场时用导出或开发设备容器读取。
+
+滚动几何在交互状态不变时最多每 250 ms 记录一次；拖动结束、拖动/惯性/读历史/贴底
+状态变化仍立即记录。键盘日志只记录实际几何或显隐变化，关闭且已退出的弹层、不需要
+键盘避让的弹层不注册键盘监听。日志条数不能直接当作原生事件次数或监听器数量。
+`content recovery state` 的 `elapsedMs` / `foregroundElapsedMs` 只累计该任务页聚焦且
+App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离开页面的总时长。
+旧版本仅有 `elapsedMs`，其中可能包含后台时间，不能直接解读成用户等待或界面卡死。
+实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
+及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
 
 ### 从开发版 iPhone 读取历史 Debug 文件
 

@@ -18,8 +18,7 @@
  *   S3  测量镜像与收起态渲染共用 collapseMeasureBody(同一份投影,判定与呈现一致)。
  *   S4  previewTitle 在四种界面语言里都有,标题不复用随消息落库的 display。
  *
- * 组件级契约走静态源码扫描,与 textLightbox.test.ts / imageLightboxCloseAnywhere.test.ts
- * 同一约定:把测试留在 node 环境,不为这几条接线检查拖进 jsdom + react-dom。
+ * 组件级契约走静态源码扫描,把测试留在 node 环境,不为这几条接线检查拖进 jsdom + react-dom。
  */
 
 import { describe, it, expect } from 'vitest';

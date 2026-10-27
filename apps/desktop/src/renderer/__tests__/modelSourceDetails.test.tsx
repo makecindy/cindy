@@ -15,6 +15,7 @@ import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 
 const reads = vi.hoisted(() => ({
   pendingLabel: '',
+  realRemoteClaude: false,
   codex: vi.fn(),
   web: vi.fn(),
   claude: vi.fn(),
@@ -36,9 +37,13 @@ vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
   useRemoteCodexAccountUsage: reads.remoteCodex,
   useRemoteXaiSubscriptionUsage: reads.remoteXai,
 }));
-vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
-  useRemoteClaudeSubscriptionUsage: reads.remoteClaude,
-}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useRemoteClaudeSubscriptionUsage')>();
+  return {
+    useRemoteClaudeSubscriptionUsage: (...args: Parameters<typeof actual.useRemoteClaudeSubscriptionUsage>) =>
+      reads.realRemoteClaude ? actual.useRemoteClaudeSubscriptionUsage(...args) : reads.remoteClaude(...args),
+  };
+});
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({ useClaudeSubscriptionUsage: reads.claude }));
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({ useXaiSubscriptionUsage: reads.xai }));
 vi.mock('react-i18next', () => ({
@@ -94,6 +99,7 @@ function details(id = 'account-a', modelId = 'gpt-5.6') {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(now);
+  reads.realRemoteClaude = false;
   reads.pendingLabel = zhCN.quotaCard.resetPending;
   reads.accounts = { 'account-a': snapshot(22), 'account-b': snapshot(88) };
   reads.webSnapshot = null;
@@ -118,6 +124,22 @@ afterEach(() => {
 });
 
 describe('model source second line', () => {
+  // §7.5: model rows do not read shared subscription quota. E2E found this
+  // forbidden IPC after selecting a share; exercise the real Claude mirror (unit).
+  it('does not invoke device usage when browsing a shared directory', async () => {
+    reads.realRemoteClaude = true;
+    const invoke = vi.fn().mockResolvedValue(null);
+    Object.assign(window, { electronAPI: { deviceLink: { invoke, onRemotePush: () => () => {} } } });
+    const view = render(
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: 'share:shared-directory' }}>
+        {details('anthropic', 'claude-sonnet')}
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    expect(view.container.textContent).toContain('anthropic');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('shares one reader per account across duplicate model and favorite rows', () => {
     const { container } = render(
       <ModelSourceUsageProvider

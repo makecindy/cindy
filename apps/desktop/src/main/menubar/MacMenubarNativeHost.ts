@@ -27,7 +27,13 @@ const log = createLogger('menubar:native');
 const HELPER_NAME = 'xdt-macos-menubar-helper';
 const HELPER_RESOURCE = path.join('tools', 'menubar', HELPER_NAME);
 const HELPER_SOURCE_RELATIVE = path.join('native', 'menubar', 'macos-menubar-helper.swift');
-const HELPER_ASSETS = ['wordmark-light.png', 'wordmark-dark.png'] as const;
+const HELPER_ASSETS = [
+  'wordmark-light.png',
+  'wordmark-dark.png',
+  'BarlowCondensed-Light.ttf',
+  'BarlowCondensed-Medium.ttf',
+  'BarlowCondensed-SemiBold.ttf',
+] as const;
 const HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const HELPER_START_TIMEOUT_MS = 2_500;
 const HELPER_RESTART_MAX_ATTEMPTS = 3;
@@ -343,6 +349,7 @@ export function parseHelperMessage(input: unknown): MenubarHelperMessage | null 
     case 'refresh':
     case 'open-app':
     case 'open-provider-settings':
+    case 'open-remote-control-settings':
       return { type: value.type };
     case 'error':
       return { type: 'error', message: typeof value.message === 'string' ? value.message.slice(0, 500) : '' };

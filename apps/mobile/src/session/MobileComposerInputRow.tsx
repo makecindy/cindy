@@ -15,7 +15,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { TextInput } from '@/components/AppText';
-import Reanimated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import type { NativeGesture, PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -80,6 +80,10 @@ export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIG
  * 语音听写期间「点输入区停止听写」的命中层用它撑起 inputFrame(见 inputFrameMinHeight)。
  */
 export const MOBILE_COMPOSER_MIN_TOUCH_TARGET = 44;
+/** 聚焦卡片的顶部留白:iOS 原生卡片 / 其它平台。拖拽热区高度与它相等。 */
+const COMPOSER_CARD_PADDING_TOP_IOS = spacing.md;
+const COMPOSER_CARD_PADDING_TOP = 26;
+const RESIZE_GRABBER_HIT_HEIGHT = Platform.OS === 'ios' ? COMPOSER_CARD_PADDING_TOP_IOS : COMPOSER_CARD_PADDING_TOP;
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -395,8 +399,8 @@ export function MobileComposerInputRow({
         <GestureDetector gesture={bodyScrollGesture}>
           <ScrollView
             ref={bodyScrollRef}
-            style={styles.bodyScroll}
-            contentContainerStyle={styles.bodyScrollContent}
+            style={[styles.bodyScroll, geometricSingleLine && styles.bodyScrollCollapsed]}
+            contentContainerStyle={[styles.bodyScrollContent, geometricSingleLine && styles.bodyScrollCollapsed]}
             keyboardShouldPersistTaps="handled"
             bounces={false}
             scrollEnabled={cardLayout && bodyScrollEnabled}
@@ -490,22 +494,17 @@ export interface ComposerResizeGrabberProps {
   gesture: PanGesture;
   /** 不可见时淡出且不响应触摸，布局位置保持不变（避免出现/消失跳变）。 */
   visible: boolean;
+  /** 「聊天记录拖进输入框」在 UI 线程测量顶边位置用（composerPullThrough）。 */
+  measureRef?: AnimatedRef<View>;
   testID?: string;
 }
 
-/**
- * Composer 顶部居中的拖拽调高 grabber。
- *
- * absolute 贴在 capsule 顶部内侧，不参与布局，因此显示 / 隐藏只有透明度变化、
- * 不会引起输入行高度跳变。触摸命中区是顶部居中的一段窄条，比可见的横条大得多，
- * 行两端保持穿透，不与左右按钮抢触摸。
- */
 function ComposerFoldingSection({ progress, children }: { progress?: SharedValue<number>; children: ReactNode }) {
   const measuredHeight = useSharedValue(0);
   const style = useAnimatedStyle(() => {
     const amount = progress?.value ?? 0;
     return {
-      height: measuredHeight.value > 0 ? measuredHeight.value * (1 - amount) : 'auto' as const,
+      height: amount > 0 ? measuredHeight.value * (1 - amount) : 'auto' as const,
       opacity: 1 - amount,
       overflow: 'hidden' as const,
       flexShrink: 0,
@@ -515,7 +514,7 @@ function ComposerFoldingSection({ progress, children }: { progress?: SharedValue
     <View style={{ flexShrink: 0 }} onLayout={event => {
       // Never feed an animated/constrained measurement back into its own height.
       // Keep the natural expanded size until the gesture has fully reversed.
-      if ((progress?.value ?? 0) === 0 && event.nativeEvent.layout.height > 0) {
+      if ((progress?.value ?? 0) === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
       }
     }}>
@@ -524,7 +523,15 @@ function ComposerFoldingSection({ progress, children }: { progress?: SharedValue
   </Reanimated.View>;
 }
 
-export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible, testID }: ComposerResizeGrabberProps) {
+/**
+ * Composer 顶部居中的拖拽调高 grabber。
+ *
+ * absolute 贴在卡片顶部内侧，不参与布局，因此显示 / 隐藏只有透明度变化、
+ * 不会引起输入行高度跳变。触摸命中区横跨整条卡片顶边（不只是可见横条附近）；
+ * 只在聚焦卡片态渲染，此时顶边没有其它按钮；高度不超过卡片顶部留白，
+ * 不覆盖下面的附件或文字。
+ */
+export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible, measureRef, testID }: ComposerResizeGrabberProps) {
   const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
@@ -553,7 +560,8 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
       style={[styles.resizeGrabberTouch, { opacity }]}
     >
       <GestureDetector gesture={gesture}>
-      <View
+      <Reanimated.View
+        ref={measureRef}
         collapsable={false}
         accessibilityActions={[
           { label: t('composer.input.resize.increaseHeight'), name: 'increment' },
@@ -570,7 +578,7 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
         {...panHandlers}
       >
         <View style={[styles.resizeGrabberBar, mode === 'dark' && { backgroundColor: colors.sheetGrabber, opacity: 0.62 }]} />
-      </View>
+      </Reanimated.View>
       </GestureDetector>
     </Animated.View>
   );
@@ -702,10 +710,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   rowCard: {
     borderRadius: radius.control,
     paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
-    paddingTop: 26,
+    paddingTop: COMPOSER_CARD_PADDING_TOP,
   },
   // iOS composer uses the existing 30pt multiline geometry with a native glass surface.
-  rowNativeCard: { borderRadius: 30, paddingTop: spacing.md },
+  rowNativeCard: { borderRadius: 30, paddingTop: COMPOSER_CARD_PADDING_TOP_IOS },
   // 水平输入行：简洁态装 [输入][发送]，card 态只剩全宽输入区；
   // 语音按钮不在流内（absolute 锚点），简洁态无发送时给它留出右侧空间。
   mainRow: {
@@ -743,8 +751,13 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexDirection: 'row',
     minWidth: 0,
   },
-  bodyScroll: { flexShrink: 1 },
-  bodyScrollContent: { flexGrow: 1 },
+  // Size the viewport to its current children. ScrollView's default flexGrow=1
+  // otherwise keeps the old attachment height and absorbs input resize changes.
+  bodyScroll: { flexGrow: 0, flexShrink: 1 },
+  bodyScrollContent: { flexGrow: 0 },
+  // 收起态胶囊(collapsedHeight)比 44pt 输入行高;viewport 与内容都要铺满胶囊,
+  // mainRow 才能在胶囊里垂直居中,否则 + 与停止钮贴顶、比浮动语音钮偏上。
+  bodyScrollCollapsed: { flexGrow: 1 },
   toolbarRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -794,11 +807,12 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
     textAlignVertical: 'center',
   },
-  // 外层 box-none 穿透；只有把手附近接管拖动。iOS 输入区从 16pt 开始，
-  // 热区不得向下覆盖首行，否则会抢走编辑器的点击和系统粘贴长按。
+  // 整条卡片顶边都接管拖动，高度恰好等于卡片顶部留白：留白之下是附件托盘或
+  // 输入框，热区越界就会抢走缩略图预览 / 移除按钮，或编辑器的点击、选中与系统
+  // 粘贴长按。
   resizeGrabberTouch: {
-    alignItems: 'center',
-    height: 16,
+    alignItems: 'stretch',
+    height: RESIZE_GRABBER_HIT_HEIGHT,
     left: 0,
     position: 'absolute',
     right: 0,
@@ -807,9 +821,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   resizeGrabberHit: {
     alignItems: 'center',
-    // 触摸热区比可见把手宽 50%，高度保持与把手附近的顶部区域一致。
-    width: 60,
-    height: 16,
+    height: RESIZE_GRABBER_HIT_HEIGHT,
   },
   resizeGrabberBar: {
     backgroundColor: colors.borderTranslucent,

@@ -13,12 +13,14 @@ import { InlineReferenceChip } from './InlineReferenceChip';
 interface QuoteChipProps {
   quote: ChatQuote;
   selected?: boolean;
+  className?: string;
 }
 
 /** 渲染紧凑、不可选中的引用摘要；完整内容仅在 tooltip 中展开。 */
 export function QuoteChip({
   quote,
   selected = false,
+  className,
 }: QuoteChipProps) {
   const sourceLabel = quoteSourceDisplayLabel(quote);
   const compactText = quote.text.replace(/\s+/g, ' ').trim();
@@ -48,6 +50,7 @@ export function QuoteChip({
       tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-normal"
       ariaLabel={quote.text}
       selected={selected}
+      className={className}
       // 刻意的例外:chip 上是把换行折叠成单行的**摘要**,不是引用原文。让它进
       // 剪贴板等于把压扁过的文本混进复制结果,原文本身就在被引用的那条消息里。
       // 其余消息内 chip(文件名、会话、项目)展示的是完整实体名,默认可复制。

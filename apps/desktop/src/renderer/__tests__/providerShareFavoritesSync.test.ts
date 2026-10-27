@@ -6,9 +6,17 @@ import type { ProviderShareCommand } from '../../shared/providerShare';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { __resetForTest, addModelFavorite, listModelFavorites, setModelFavoritesOwner } from '@/state/modelFavorites';
 import { providerShareFavoriteSource } from '@/state/providerShareFavorites';
-import { ensureProviderShareReceivedStarted, resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
+import {
+  ensureProviderShareReceivedStarted,
+  requestProviderShareFavoriteRegions,
+  resetProviderShareStoreForTests,
+} from '@/features/provider-share/providerShareStore';
 
-vi.mock('@/hooks/useDeviceProviders', () => ({ getCachedDeviceProviders: () => null }));
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  getCachedDeviceProviders: () => null,
+  // This favorites fixture has no cached subscription catalog to refresh.
+  isSubscriptionShareCatalogStale: () => false,
+}));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => {}) }));
 const share: ProviderShareReceived = {
   shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic', hostDeviceId: 'host',
@@ -137,6 +145,37 @@ it('cleans favorites without opening a picker, only after Main confirms the last
   push([]);
   await tick();
   expect(listModelFavorites()).toEqual([]);
+});
+
+it('recovers regions hinted by the remote task device favorites, once per account', async () => {
+  snapshot = { ...snapshot, confirmedRegions: ['global'], received: [share] };
+  ensureProviderShareReceivedStarted();
+  await tick();
+  await tick();
+  expect(commands.map((item) => item.action)).toEqual(['received', 'received-snapshot']);
+  commands = [];
+  snapshot = { ...snapshot, confirmedRegions: ['global', 'cn'] };
+  requestProviderShareFavoriteRegions(['cn']);
+  await tick();
+  expect(commands).toEqual([{ action: 'received-snapshot', favoriteRecovery: {
+    ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 }, regions: ['global', 'cn'],
+  } }]);
+  requestProviderShareFavoriteRegions(['cn']);
+  requestProviderShareFavoriteRegions([]);
+  await tick();
+  expect(commands).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(commands).toHaveLength(1);
+  // 换账号后旧账号的线索作废，不能替新账号去拉对方区域。
+  setDataOwnerGeneration('other', 2);
+  setModelFavoritesOwner('other');
+  commands = [];
+  snapshot = { ownerStamp: { dataOwnerId: 'other', ownerGeneration: 2 }, confirmedRegions: ['global'], received: [] };
+  push([]);
+  await tick();
+  expect(commands).toContainEqual({ action: 'received-snapshot', favoriteRecovery: {
+    ownerStamp: { dataOwnerId: 'other', ownerGeneration: 2 }, regions: [],
+  } });
 });
 
 it('does not apply a superseded membership reply or an earlier account response', async () => {

@@ -5,7 +5,7 @@ import { summarizeCodexRateLimitReset } from '@cindy/maker-shared/session-contro
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-import { formatQuotaResetAt } from '@/components/status/usageCardModel';
+import { formatQuotaResetAt, quotaWindowLabel } from '@/components/status/usageCardModel';
 import { extractIpcError } from '@/utils/ipcError';
 
 /** Manual reset only. Main owns credit selection, account binding and retry idempotency. */
@@ -46,14 +46,21 @@ export function useCodexRateLimitReset(
     try {
       const account = [snapshot.account.email, snapshot.account.accountId]
         .filter(Boolean).join(' · ') || t('codexResets.currentAccount');
+      const quota = [snapshot.rateLimits.primary, snapshot.rateLimits.secondary]
+        .filter(window => window && Number.isFinite(window.usedPercent)
+          && (window.resetsAt == null || window.resetsAt * 1000 > Date.now()))
+        .map(window => `${quotaWindowLabel(window!.windowMinutes, t)} · ${t('quotaCard.remainingPercent', {
+          percent: Number(Math.max(0, Math.min(100, 100 - window!.usedPercent)).toFixed(1)),
+        })}`).join('\n');
+      const description = retry ? t('codexResets.confirmRetryBody', { account }) : credit ? t('codexResets.confirmSelectedBody', {
+        account, title: credit.title || t('codexResets.fullReset'),
+        expiry: formatQuotaResetAt(credit.expiresAt, Date.now(), i18n?.resolvedLanguage ?? i18n?.language)
+          || t('codexResets.expiryUnknown'),
+      }) : t('codexResets.confirmBody', { account });
       const accepted = await confirm({
         presentation: 'standard',
         title: t(retry ? 'codexResets.confirmRetryTitle' : 'codexResets.confirmTitle'),
-        description: retry ? t('codexResets.confirmRetryBody', { account }) : credit ? t('codexResets.confirmSelectedBody', {
-          account, title: credit.title || t('codexResets.fullReset'),
-          expiry: formatQuotaResetAt(credit.expiresAt, Date.now(), i18n?.resolvedLanguage ?? i18n?.language)
-            || t('codexResets.expiryUnknown'),
-        }) : t('codexResets.confirmBody', { account }),
+        description: quota ? `${description}\n\n${quota}` : description,
         confirmText: t(retry ? 'codexResets.retryReset' : 'codexResets.consumeOnce'),
       });
       const currentSnapshot = current.current.snapshot;

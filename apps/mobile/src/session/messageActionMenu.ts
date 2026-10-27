@@ -7,7 +7,7 @@
  */
 import { i18n } from '@/i18n';
 
-export type MobileMessageMenuActionId = 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
+export type MobileMessageMenuActionId = 'side-chat' | 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
 
 export interface MobileMessageMenuItem {
   id: MobileMessageMenuActionId;
@@ -19,12 +19,16 @@ export interface MobileMessageMenuItem {
 }
 
 export function buildMobileMessageMenu(input: {
+  canSideChat?: boolean;
   canAddToChat: boolean;
   canCopyLink: boolean;
   canDelete: boolean;
   canRewind: boolean;
 }): MobileMessageMenuItem[] {
   const items: MobileMessageMenuItem[] = [];
+  if (input.canSideChat) {
+    items.push({ id: 'side-chat', label: i18n.t('session.sideChat.ask'), image: 'cindy-message-square-plus' });
+  }
   // 语义与 desktop 的 chat.messageActionBar.* 一一对应:fork 产出的是一条新任务;
   // fork 已与复制同级外显;copy-link 复制的是带 messageClientId 的消息深链;
   // delete 删的是单条消息。

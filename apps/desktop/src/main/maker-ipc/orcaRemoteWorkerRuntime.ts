@@ -19,6 +19,7 @@ import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import type {
   AgentInputCreateOpts,
+  AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
 import type { HistoryCursor, HistoryMessage, HistoryPage } from '../localDb/chatHistoryReader.js';
@@ -43,7 +44,12 @@ export interface RemoteWorkerTurnEnd {
 }
 
 export type RemoteWorkerDispatchResult =
-  | { ok: true; mode: 'dispatched' | 'queued' }
+  | {
+      ok: true;
+      mode: 'dispatched' | 'queued';
+      /** Accepted input's Agent; queued deliveries retain the pre-enqueue Agent. */
+      agentKind: AgentInputCreateOpts['agentKind'];
+    }
   | {
       ok: false;
       code: 'DEVICE_UNREACHABLE' | 'SESSION_NOT_FOUND' | 'SEND_FAILED';
@@ -58,6 +64,7 @@ export interface OrcaRemoteWorkerRuntimeDeps {
     workerId: string,
     pending: OrcaRemotePendingReport | null,
     messageId?: string,
+    markWorkerDone?: boolean,
   ): Promise<void>;
   isOwnerCurrent?(): boolean;
   onTurnStarted(proxySessionId: string): Promise<void>;
@@ -103,6 +110,7 @@ interface AwaitingReport {
   clientIds: string[];
   baselineMessageId: string | null;
   startedNotified: boolean;
+  turnStartPromise?: Promise<void>;
   missingReplyPolls: number;
   terminalHandler: ((turn: RemoteWorkerTurnEnd) => Promise<boolean>) | null;
   /** 宿主 accepted 回调失败时恢复上一代原对象；确认成功后释放。 */
@@ -189,15 +197,16 @@ function createOptsFromRow(row: RemoteSessionRow): AgentInputCreateOpts {
     model: str(row.model) ?? '',
     ...(str(row.providerId) ? { providerId: str(row.providerId) } : {}),
     ...(str(row.effort) ? { effort: str(row.effort) } : {}),
-    ...(typeof row.fastMode === 'boolean' ? { fastMode: row.fastMode } : {}),
+    ...((typeof row.fastMode === 'boolean' || row.fastMode === 'ultrafast') ? { fastMode: row.fastMode } : {}),
     ...(str(row.permissionMode) ? { permissionMode: str(row.permissionMode) } : {}),
     ...(typeof row.planModeEnabled === 'boolean' ? { planMode: row.planModeEnabled } : {}),
     ...(str(row.sdkSessionId) ? { resumeSessionId: str(row.sdkSessionId) } : {}),
   };
 }
 
-/** 远端没有 Orca Worker 桥：只带来源标签，不附 worker_id 工具提示。 */
+/** Keep the real Lead-assigned identity in the model-facing message, as for local Workers. */
 export function buildRemoteWorkerQueuedMessage(params: {
+  workerId?: string;
   clientId: string;
   rawContent: string;
   createOpts: AgentInputCreateOpts;
@@ -207,7 +216,8 @@ export function buildRemoteWorkerQueuedMessage(params: {
   return {
     clientId: params.clientId,
     durableDelivery: true,
-    text: formatAgentMessage('lead', params.rawContent),
+    text: formatAgentMessage('lead', params.rawContent, params.workerId)
+      + (params.workerId ? '\n(Cross-device Worker: bridge availability depends on both devices; final replies are automatically reported to the Lead.)' : ''),
     persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',
@@ -336,16 +346,45 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     };
   }
 
-  async function deliveryStates(ref: RemoteWorkerRef, clientIds: string[]): Promise<string[]> {
+  async function readDelivery(ref: RemoteWorkerRef, clientIds: string[]): Promise<{
+    states: string[];
+    waitingForTurn: boolean;
+  }> {
     const projection = (await deps.invoke(ref.deviceId, 'maker:input:get-projection', [
       ref.remoteSessionId,
       { deliveryClientIds: clientIds },
-    ])) as { deliveryReceipts?: Array<{ clientId?: unknown; state?: unknown }> };
+    ])) as Partial<Pick<AgentInputProjection,
+      'turnInProgress' | 'autoResumePending' | 'usageLimitWait' | 'pendingQueue' | 'recovery'
+    >> & { deliveryReceipts?: Array<{ clientId?: unknown; state?: unknown }> };
     const receipts = Array.isArray(projection?.deliveryReceipts) ? projection.deliveryReceipts : [];
-    return clientIds.map((id) => {
+    const states = clientIds.map((id) => {
       const receipt = receipts.find((entry) => entry.clientId === id);
       return typeof receipt?.state === 'string' ? receipt.state : 'unknown';
     });
+    const ownsInput = (item: AgentInputQueuedMessage): boolean => {
+      const sourceId = item.retrySourceClientId ?? item.supersedesUserClientId ?? item.clientId;
+      return typeof sourceId !== 'string' || clientIds.includes(sourceId);
+    };
+    const pendingQueue = Array.isArray(projection?.pendingQueue) ? projection.pendingQueue : [];
+    // An unrelated phone input's recovery must not hold an older completed Lead reply.
+    const recovery = projection?.recovery;
+    let ownsRecovery = true;
+    if (recovery?.kind === 'active-turn') {
+      ownsRecovery = ownsInput(recovery.item);
+    } else if (recovery?.kind === 'queue-head') {
+      const queued = pendingQueue.find(item => item?.clientId === recovery.clientId);
+      ownsRecovery = queued ? ownsInput(queued) : clientIds.includes(recovery.clientId);
+    }
+    const pendingResume = pendingQueue.some(item => item?.autoResume === true && ownsInput(item));
+    return {
+      states,
+      // autoResumePending covers backoff and preparation; it is absent while the
+      // hidden continuation is queued. turnInProgress also fences a stale idle
+      // snapshot while the vendor/dispatch/terminal-persistence boundary is busy.
+      waitingForTurn: projection?.turnInProgress === true || pendingResume || (ownsRecovery && (
+        !!projection?.autoResumePending || !!projection?.usageLimitWait
+      )),
+    };
   }
 
   async function replyForInputs(
@@ -427,15 +466,25 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
   async function checkAwaiting(state: WorkerState, running: boolean): Promise<void> {
     const awaiting = state.awaiting;
     if (!awaiting?.terminalHandler) return;
+    const clientIds = awaiting.clientIds;
     if (running) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
       if (!awaiting.startedNotified) {
         awaiting.startedNotified = true;
-        await deps.onTurnStarted(state.ref.proxySessionId);
+        awaiting.turnStartPromise = deps.onTurnStarted(state.ref.proxySessionId);
+        await awaiting.turnStartPromise;
       }
       return;
     }
-    const states = await deliveryStates(state.ref, awaiting.clientIds);
-    if (!current(state) || state.awaiting !== awaiting) return;
+    const delivery = await readDelivery(state.ref, clientIds);
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (delivery.waitingForTurn) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
+      return;
+    }
+    const { states } = delivery;
     // 仍在运行设备的队列里(排在用户插话之后等)，继续等。
     if (states.some((value) => value === 'pending')) return;
     if (states.every((value) => value === 'removed')) {
@@ -461,11 +510,21 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       state.ref,
       // 崩溃可能发生在预写身份之后、enqueue 之前，也可能只是投递回执过期。
       // unknown 同样查历史，查不到时按有限轮数报告未确认执行，绝不盲目重发。
-      awaiting.clientIds.filter((_, index) => states[index] !== 'removed'),
+      clientIds.filter((_, index) => states[index] !== 'removed'),
       scan,
     );
     // 历史读取期间又派入新任务时保留新的 awaiting，下一轮按完整输入集合复核。
-    if (!current(state) || state.awaiting !== awaiting) return;
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    // A retry can start while a history page is in flight. Recheck before using
+    // its candidate, even for a partial scan, so a pre-recovery cursor/text
+    // cannot survive into the completed continuation and hide its final reply.
+    const latest = await readDelivery(state.ref, clientIds);
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (latest.waitingForTurn || latest.states.some((value, index) => value !== states[index])) {
+      awaiting.historyScan = null;
+      awaiting.missingReplyPolls = 0;
+      return;
+    }
     // 扫描预算不足不代表没有回复，保留当前游标与候选，下一轮继续。
     if (!last.complete) return;
     awaiting.historyScan = null;
@@ -656,10 +715,12 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         const baseline = state.awaiting?.baselineMessageId ?? (await lastAssistantMessage(ref)).id;
         if (!current(state)) throw new Error('remote worker owner changed');
+        const createOpts = createOptsFromRow(row);
         const item = buildRemoteWorkerQueuedMessage({
+          workerId: ref.workerId,
           clientId: params.clientId,
           rawContent: params.rawContent,
-          createOpts: createOptsFromRow(row),
+          createOpts,
           createdAt: new Date(deps.now()).toISOString(),
         });
         prepared = {
@@ -683,11 +744,31 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         if (!current(state) || state.awaiting !== prepared)
           throw new Error('remote worker owner or dispatch changed');
-        const accept = (): RemoteWorkerDispatchResult => {
+        const accept = async (): Promise<RemoteWorkerDispatchResult> => {
           setReachable(ref.deviceId, true);
-          const mode = state.inTurn ? 'queued' : 'dispatched';
           schedule();
-          return { ok: true, mode };
+          // Enqueue only acknowledges durable delivery. The send boundary can
+          // still be applying a harness switch; neither the earlier session row
+          // nor the last running-state poll identifies the accepting runtime.
+          // Read the engine stamped on this exact accepted input, even if the
+          // session has since switched again. Missing/old-peer evidence stays
+          // queued and must never turn an already delivered input into a retry.
+          try {
+            const rows = await deps.invoke(ref.deviceId, 'local-db:messages:around-client-id', [
+              ref.remoteSessionId, params.clientId, { radius: 0, contentCharLimit: 1 },
+            ]) as Array<{ clientId?: unknown; role?: unknown; agentKind?: unknown }>;
+            const accepted = Array.isArray(rows)
+              ? rows.find((entry) => entry.clientId === params.clientId && entry.role === 'user')
+              : undefined;
+            const kind = accepted?.agentKind;
+            if (kind === 'cc' || kind === 'claude-code' || kind === 'codex' || kind === 'pi') {
+              return { ok: true, mode: 'dispatched', agentKind: agentKindOf(kind === 'cc' ? 'claude-code' : kind) };
+            }
+          } catch {
+            // The input may still be queued, or this read may be unavailable.
+            // Existing polling owns recovery; do not re-enqueue or tear down the link.
+          }
+          return { ok: true, mode: 'queued', agentKind: createOpts.agentKind };
         };
         try {
           await deps.invoke(ref.deviceId, 'maker:input:enqueue', [ref.remoteSessionId, item]);
@@ -698,9 +779,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             errorCode(err) === 'INVOKE_TIMEOUT' ||
             (err as { inFlight?: unknown })?.inFlight === true
           ) {
-            const [delivered] = await deliveryStates(ref, [params.clientId]).catch(() => [
-              'unknown',
-            ]);
+            const delivery = await readDelivery(ref, [params.clientId]).catch(() => null);
+            const delivered = delivery?.states[0] ?? 'unknown';
             if (delivered === 'pending' || delivered === 'accepted') return accept();
             // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
             if (delivered === 'unknown') return accept();
@@ -747,6 +827,59 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       if (!awaiting || awaiting.clientIds.at(-1) !== clientId) return;
       awaiting.terminalHandler = deps.captureTurnEnded(proxySessionId);
       awaiting.previous = null;
+    },
+
+    /** Retire only inputs attested by the execution host, never the whole queued group. */
+    captureReportSettlement(
+      proxySessionId: string, reportedInputClientIds: readonly string[] = [],
+      settleTeam?: (commit: (markWorkerDone: boolean) => Promise<boolean>) => Promise<void>,
+    ): () => Promise<boolean> {
+      const state = workers.get(proxySessionId);
+      const awaiting = state?.awaiting;
+      const reported = new Set(reportedInputClientIds.filter(id => awaiting?.clientIds.includes(id)));
+      return async () => {
+        // Old peers without input evidence keep the automatic-report fallback.
+        if (!state || !awaiting || !reported.size || !current(state)) return false;
+        awaiting.startedNotified = true;
+        await awaiting.turnStartPromise;
+        const write = state.persistence.catch(() => undefined).then(async () => {
+          const pending = state.awaiting;
+          if (!current(state) || !pending || !pending.clientIds.some(id => reported.has(id))) return false;
+          const retire = async (markWorkerDone: boolean): Promise<boolean> => {
+            // Re-read after the Team lookup/transition wait, which can prepare a new B.
+            const latest = state.awaiting;
+            if (!current(state) || !latest || !latest.clientIds.some(id => reported.has(id))) return false;
+            const remaining = latest.clientIds.filter(id => !reported.has(id));
+            const next = remaining.length
+              ? { clientIds: remaining, baselineMessageId: latest.baselineMessageId } : null;
+            if (markWorkerDone) await deps.saveReport(state.ref.workerId, next, undefined, true);
+            else await deps.saveReport(state.ref.workerId, next);
+            if (!current(state)) return false;
+            // Prune rollback chains too, so a failed B cannot resurrect reported A.
+            const prune = (node: AwaitingReport | null): AwaitingReport | null => {
+              if (!node) return null;
+              node.previous = prune(node.previous);
+              const ids = node.clientIds.filter(id => !reported.has(id));
+              if (ids.length === 0) return null;
+              if (ids.length !== node.clientIds.length) {
+                node.clientIds = ids;
+                node.historyScan = null;
+                node.missingReplyPolls = 0;
+              }
+              return node;
+            };
+            state.awaiting = prune(state.awaiting);
+            return true;
+          };
+          if (pending.clientIds.every(id => reported.has(id)) && settleTeam) await settleTeam(retire);
+          else await retire(false);
+          return current(state) && state.awaiting === null;
+        });
+        // The caller observes the failure; the serialization tail must not create
+        // a second, unobserved rejection while waiting for the next poll.
+        state.persistence = write.then(() => undefined, () => undefined);
+        return write;
+      };
     },
 
     /** accepted 回调的原有异常继续上抛；这里只恢复 runtime 对应的旧回报代次。 */

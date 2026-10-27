@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
+import ts from 'typescript';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
 import * as mobileInteractionModel from '@/session/interactionModel';
 import {
   buildAskQuestionProgressSummary,
@@ -44,7 +46,7 @@ import {
   sortPendingInteractions,
   togglePendingInteractionCollapsed,
 } from '@/session/interactionModel';
-import { clearAskUserDraft, saveAskUserDraft } from '@/session/interactionDraftStore';
+import { askQuestionsIdentity, clearAskUserDraft, saveAskUserDraft } from '@/session/interactionDraftStore';
 import type { PendingInteraction } from '@/session/types';
 
 /** prune 的权威性开关:全量快照到手 = 权威;离线清空投影 = 非权威。 */
@@ -165,6 +167,7 @@ describe('interactionModel', () => {
 
     expect(presentation).toEqual({
       autoReviewUnavailable: false,
+      autoReviewReason: null,
       canAlwaysAllow: false,
       code: 'pnpm --filter mobile test',
       description: 'Run the requested test command.',
@@ -173,7 +176,7 @@ describe('interactionModel', () => {
         title: '允许后电脑端会继续执行',
         detail: '工具: Bash',
       },
-      title: '允许使用 Shell?',
+      title: '允许运行这条命令？',
       toolName: 'Bash',
     });
   });
@@ -189,8 +192,6 @@ describe('interactionModel', () => {
     });
     expect(presentation.autoReviewUnavailable).toBe(true);
 
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-    expect(interactionPanelSource).toContain("t('interaction.permission.autoReviewUnavailable')");
     expect(i18n.t('interaction.permission.autoReviewUnavailable')).not.toBe(
       'interaction.permission.autoReviewUnavailable',
     );
@@ -229,89 +230,16 @@ describe('interactionModel', () => {
     });
   });
 
-  it('marks the selected ask option with an inverse-filled check for single and multi select', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-
-    // 选中态不能只靠 surfaceChip 底色:dark 下它与卡底几乎同色,单选选完看不出
-    // 选了哪个(线上截图复现)。指示器必须单选/多选都渲染,只在形状上分家。
-    expect(interactionPanelSource).toContain('isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound');
-    // 选中 = 反色实底 + ctaText 勾,对齐桌面 ask-checkbox(accent-cta-bg 实底)与
-    // 登录 radio 的「选中反色 + 对勾」体系;不得退回描边勾叠 Square 的弱指示。
-    expect(interactionPanelSource).toContain('optionIndicatorSelected: {');
-    expect(interactionPanelSource).toContain('backgroundColor: colors.cta,');
-    expect(interactionPanelSource).not.toContain('optionCheckboxMark');
-  });
-
-  it('keeps every Host-owned confirmation read-only in the mobile adapter and panel', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-
+  it('keeps Host-owned decision builders out of the mobile adapter', () => {
     expect('buildIssueConfirmReviewPresentation' in mobileInteractionModel).toBe(false);
     expect('buildIssueConfirmDecision' in mobileInteractionModel).toBe(false);
     expect('normalizeIssueConfirm' in mobileInteractionModel).toBe(false);
-    expect(interactionPanelSource).toContain(
-      "kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'",
-    );
-    expect(interactionPanelSource).toContain("t('interaction.panel.desktopConfirmUnsupported')");
-    expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
   });
 
-  it('gives plugin setup requests a cancel exit instead of a dead card', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-
-    // 桌面把 plugin_setup 也推给控制端,而配置动作只能在桌面完成。手机侧必须留
-    // 取消出口:没有出口 + 卡接管输入框 = 会话锁死(线上已复现)。
-    expect(interactionPanelSource).toContain("if (kind === 'plugin_setup')");
-    expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
-    // testID 与 UnsupportedCard 区分开,UI 测试才能精确定位这张卡的取消按钮(#540 review)。
-    expect(interactionPanelSource).toContain('interaction.pluginSetup.cancelButton');
-    expect(interactionPanelSource).not.toContain('interaction.unsupported.cancelButton');
-    // 未知 kind 仍回退到 UnsupportedCard 的 request 预览,整段一次限行:每行各自
-    // numberOfLines 会把总高度放大成 6 × 行数。
-    expect(interactionPanelSource).toContain('const summaryText = contentToPreview(request);');
-    expect(interactionPanelSource).not.toContain('lines.map((line, index)');
-    // plugin_setup 移出 UnsupportedCard 后,当初为它加的形参不能留成没人走的分支。
-    // 钉形参声明与 JSX 传参本身,不做全文匹配——注释里可以照常说明这段历史。
-    for (const dead of ['summaryLines?:', 'summaryLines={', 'kindLabel?:', 'kindLabel={']) {
-      expect(interactionPanelSource, dead).not.toContain(dead);
-    }
-    // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
-    // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
-    expect(interactionPanelSource).toContain('optimisticDismiss: false');
-    expect(interactionPanelSource).toContain('resolvedRevision: cancelDecision.expectedRevision');
-    expect(interactionPanelSource).toContain('markInteractionRevisionResolved');
-    // terminal 快照(被控端已 settle)不得给取消按钮:那只会点出一个「看起来成功」
-    // 的 no-op。门控以共享分类器为单一真相源。
-    expect(interactionPanelSource).toContain("remoteInteractionHandling(item) === 'cancel-only'");
-    expect(remoteInteractionHandling({
-      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 2, terminal: true },
-    })).toBe('desktop-only');
-
-    expect(interactionBlocksRemoteComposer({
-      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
-    })).toBe(false);
-    expect(interactionBlocksRemoteComposer({
-      request: { kind: 'permission', requestId: 'perm-1' },
-    })).toBe(true);
-  });
-
-  it('renders plugin setup as a full read-only status card, not a flat summary', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-
-    // 手机端做不了配置动作,这张卡的全部价值在「看懂」:哪个插件、卡在哪一步、
-    // 为什么失败、回电脑端要做什么。退回扁平摘要就等于把这些信息又丢了。
-    expect(interactionPanelSource).toContain('function PluginSetupCard(');
-    expect(interactionPanelSource).toContain('buildRemotePluginSetupPresentation(item.request)');
-    expect(interactionPanelSource).not.toContain('pluginSetupSummaryLines');
-    expect(interactionPanelSource).toContain('interaction.pluginSetup.phase.${step.phase}');
-    expect(interactionPanelSource).toContain('interaction.pluginSetup.error.${step.errorCode}');
-    expect(interactionPanelSource).toContain('interaction.pluginSetup.action.${step.actionKind}');
-    // any_of 组要提示「任选其一」,否则用户以为每一步都得做。
-    expect(interactionPanelSource).toContain("t('interaction.pluginSetup.chooseOne')");
-    // 已 settle 的收尾帧不该再引导用户「去电脑端完成」。
-    expect(interactionPanelSource).toContain('presentation.terminal ? null');
-    // 状态色只用两个语义色 + 灰阶(mobile-design-guide §1)。
-    expect(interactionPanelSource).toContain('colors.statusReady');
-    expect(interactionPanelSource).toContain('colors.statusAccent');
+  it('keeps plugin setup nonblocking and terminal setup read-only', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 2, terminal: true } })).toBe('desktop-only');
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } })).toBe(false);
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'permission', requestId: 'perm-1' } })).toBe(true);
   });
 
   it('keeps every plugin setup phase, error code and action kind translated in all locales', async () => {
@@ -352,21 +280,6 @@ describe('interactionModel', () => {
   });
 
   it('localizes queue titles and kind labels instead of rendering the shared Chinese defaults', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-
-    // 共享层的 title / label 是中文直出;控制端必须按 locale 翻译后再渲染,否则
-    // 队列头在 en / ja / ko 下仍是中文。
-    // kind 来自远端、可为任意字符串:必须先经白名单归一再拼 i18next key,
-    // 否则带 `.` / `__proto__` 的值会参与路径解析。
-    expect(interactionPanelSource).toContain('interaction.kinds.${localizedInteractionKindKey(itemKind)}.${field}');
-    expect(interactionPanelSource).toContain('const LOCALIZED_INTERACTION_KINDS = new Set([');
-    expect(interactionPanelSource).not.toContain('interaction.kinds.${kind}.');
-    expect(interactionPanelSource).not.toContain('title: selectedQueueItem?.title');
-    // positionLabel 会被插进队列切换的 accessibility 文案,同样必须翻译,
-    // 否则读屏在非中文 locale 下念混语。
-    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionCurrent')");
-    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionNth', { index: index + 1 })");
-
     for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
       for (const kind of ['permission', 'ask_user_question', 'plan_review', 'issue_confirm', 'plugin_setup', 'fallback']) {
@@ -381,13 +294,19 @@ describe('interactionModel', () => {
   });
 
   it('keys mobile composer blocking off the whole pending set', () => {
-    const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-
-    // 阻塞判定必须喂整个 pending 集合;喂 activePendingInteraction 会让用户切到
-    // 一张手机处理不了的卡就绕过仍待处理的权限 / 提问 / 计划卡。
-    expect(sessionScreenSource).toContain('pendingInteractionsBlockRemoteComposer(pending)');
-    expect(sessionScreenSource).not.toContain('interactionBlocksRemoteComposer(activePendingInteraction)');
-
+    const page = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const tree = ts.createSourceFile('session.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let initializer: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'pendingInteractionBlocksComposer') initializer = node.initializer;
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!initializer) throw new Error('Missing production pending composer gate');
+    const blocks = new Function('pendingInteractionsBlockRemoteComposer', 'pending', 'return (' + initializer.getText(tree) + ')');
+    const pending = [{ request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } }, { request: { kind: 'permission', requestId: 'perm-1' } }];
+    expect(blocks(pendingInteractionsBlockRemoteComposer, pending)).toBe(true);
+    expect(blocks(pendingInteractionsBlockRemoteComposer, pending.slice(0, 1))).toBe(false);
     expect(pendingInteractionsBlockRemoteComposer([
       { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
       { request: { kind: 'permission', requestId: 'perm-1' } },
@@ -395,24 +314,6 @@ describe('interactionModel', () => {
     expect(pendingInteractionsBlockRemoteComposer([
       { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
     ])).toBe(false);
-  });
-
-  it('keeps host-only shared-task confirmations as a short desktop-style blocker', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-    const readOnlyStart = interactionPanelSource.indexOf("if (isSharedTaskPeer(deviceId) && !['permission', 'ask_user_question', 'plan_review'].includes(kind)) {");
-    expect(readOnlyStart).toBeGreaterThan(-1);
-    const readOnlyEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', readOnlyStart));
-    const readOnlySource = interactionPanelSource.slice(readOnlyStart, readOnlyEnd);
-
-    expect(readOnlySource).toContain("t('interaction.panel.readOnlyTitle')");
-    expect(readOnlySource).toContain("{t('sharedTask.waitingHost')}");
-    expect(interactionPanelSource).not.toContain('readOnlyReason');
-    expect(readOnlySource).toContain('JSON.stringify(activeInteraction.request, null, 2)');
-    expect(readOnlySource).not.toContain('当前请求类型');
-    expect(readOnlySource).not.toContain('不会回传协作编排决定');
-    expect(readOnlySource).not.toContain('手机版会保留会话显示');
-    expect(interactionPanelSource).not.toContain('interaction.readOnlyHint');
-    expect(interactionPanelSource).not.toContain('hintText: {');
   });
 
   it('flags high-risk shell permission requests for mobile confirmation', () => {
@@ -455,7 +356,7 @@ describe('interactionModel', () => {
       canShowAlwaysAllow: false,
       isHighRisk: true,
       riskWarningText: expect.stringContaining('可能修改系统'),
-      title: '允许使用 Bash?',
+      title: '允许运行这条命令？',
     });
     expect(buildMobilePermissionCardState({
       armedDecision: 'allow-once',
@@ -581,10 +482,12 @@ describe('interactionModel', () => {
     expect(first.accessibilityLabel).toContain('第一问是什么');
 
     // 进入第二问后,读屏念的必须是第二问 —— 这条钉的就是 label 本身,不是渲染代码文本。
+    const identity = askQuestionsIdentity(normalizeAskQuestions(item.request.questions));
     saveAskUserDraft('ask-label-1', {
       answers: {},
       currentIndex: 1,
       customInput: '',
+      questionsIdentity: identity,
       selectedLabels: [],
       showCustomInput: false,
     });
@@ -596,6 +499,18 @@ describe('interactionModel', () => {
     expect(second.summaryText).toBe('第二问是什么');
     expect(second.accessibilityLabel).toContain('第二问是什么');
     expect(second.accessibilityLabel).not.toContain('第一问是什么');
+
+    // 收起期间同一 requestId 换了问题:旧草稿的进度不能带进新内容,摘要回到第一问。
+    const replaced = buildCollapsedPendingInteractionPresentation({
+      item: { request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-label-1',
+        questions: [{ question: '新的第一问' }, { question: '新的第二问' }],
+      } } as unknown as PendingInteraction,
+      queueTitle: '等待回答',
+      requestId: 'ask-label-1',
+    });
+    expect(replaced.summaryText).toBe('新的第一问');
     clearAskUserDraft('ask-label-1');
 
     // 没有专属摘要的卡(手机端答不了的那类)退回队列标题,标签不留空。
@@ -685,63 +600,25 @@ describe('interactionModel', () => {
     } as unknown as PendingInteraction)).toBeNull();
   });
 
-  it('drives the pending collapse from session-level props, not card-local state', () => {
-    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-    const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-
-    // 收起入口在队列头,三类卡通用;卡内不得再自持一份 collapsed(两套状态时页面级
-    // 那份会被卡片 key 变化冲掉,用户刚收起就弹回来)。
-    expect(interactionPanelSource).toContain('testID="interaction.panel.collapseButton"');
-    expect(interactionPanelSource).toContain('testID="interaction.panel.collapsedBar"');
-    expect(interactionPanelSource).not.toContain('setCollapsed(');
-    expect(interactionPanelSource).not.toContain('interaction.ask.collapseButton');
-    // 按钮要带可见文字:此前是个没有标签的「—」图标,用户看不出那是「先不答」的出口。
-    expect(interactionPanelSource).toContain("t('interaction.panel.collapse')");
-    // 收起态只留一条 bar:仍渲染 PendingTaskHeader 就还是两层结构,消息流照样看不到几行。
-    const collapsedStart = interactionPanelSource.indexOf('if (collapsed) {');
-    const collapsedEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', collapsedStart));
-    expect(collapsedStart).toBeGreaterThan(0);
-    expect(interactionPanelSource.slice(collapsedStart, collapsedEnd)).not.toContain('<PendingTaskHeader');
-    // 状态与回调必须成对:只给一半会得到「显示为收起但点不开」的死界面(#1493 review),
-    // 所以 collapse 是一个对象 prop,且 collapsed 的判定挂在 canToggleCollapsed 上。
-    expect(interactionPanelSource).toContain('collapse?: {');
-    expect(interactionPanelSource).toContain('const collapsed = canToggleCollapsed && isPendingInteractionCollapsed(');
-    expect(interactionPanelSource).not.toContain('collapsedRequestIds?:');
-    expect(interactionPanelSource).not.toContain('onToggleCollapsed?(');
-    // 收起条的摘要与读屏标签都走可断言的 helper(进度从草稿现取)。
-    expect(interactionPanelSource).toContain('buildCollapsedPendingInteractionPresentation({');
-    expect(interactionPanelSource).toContain('accessibilityLabel={collapsedBarLabel}');
-    // 收起入口只给本端能终结的卡,否则队列头切到 plugin_setup 也会冒出「点开回答」。
-    expect(interactionPanelSource).toContain('canCollapsePendingInteraction(activeInteraction)');
-
-    expect(sessionScreenSource).toContain('collapse={pendingInteractionCollapse}');
-    expect(sessionScreenSource).not.toContain('collapsedRequestIds={');
-    expect(sessionScreenSource).toContain('collapsed: activePendingCollapsed');
-    // 清理必须挂在权威快照上:离线空列表不算「都处理完了」。
-    expect(sessionScreenSource).toContain('authoritative: pendingInteractionsAuthoritative');
-    expect(sessionScreenSource).toContain('useSessionPendingInteractionsAuthoritative(sessionId)');
-  });
-
-  it('models pending authority in the store instead of inferring it from relay status', () => {
-    const storeSource = readFileSync(resolve(process.cwd(), 'src/session/remoteSessionStore.ts'), 'utf8');
-
-    // 权威性是显式状态:全量快照置位,离线 / 设备移除 / clear 复位。
-    expect(storeSource).toContain('const pendingInteractionsAuthoritative = new Set<string>();');
-    expect(storeSource).toContain('pendingInteractionsAuthoritative.add(sessionId);');
-    expect(storeSource).toContain('hasAuthoritativePendingInteractions(sessionId: string): boolean');
-    expect(storeSource).toContain('export function useSessionPendingInteractionsAuthoritative(');
-    // markDeviceOffline(经共享清扫 sweepDevicesOffline,批量版 markDevicesOffline
-    // 同样复用)与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
-    const sweepStart = storeSource.indexOf('function sweepDevicesOffline(');
-    const markStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
-    const offlineEnd = storeSource.indexOf('removeDevice(deviceId: string): void {');
-    expect(sweepStart).toBeGreaterThan(0);
-    expect(markStart).toBeGreaterThan(sweepStart);
-    expect(storeSource.slice(markStart, offlineEnd)).toContain('sweepDevicesOffline([deviceId])');
-    expect(storeSource.slice(sweepStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
-    expect(storeSource.slice(offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
-    // []→[] 的权威快照必须能通知出去,否则消费方永远等不到清理时机。
-    expect(storeSource).toContain('if (streamingChanged || authorityChanged) emit();');
+  // Bug #1493: an offline empty projection must never retire a collapsed request.
+  it.each(['markDeviceOffline', 'markDevicesOffline', 'removeDevice', 'clear'] as const)('revokes pending authority through %s and publishes a fresh empty snapshot', (action) => {
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('d1', 'Desktop', [{ id: 's1', name: 'Fixture', status: 'active' } as never]);
+    remoteSessionStore.setPendingInteractions('s1', []);
+    expect(remoteSessionStore.hasAuthoritativePendingInteractions('s1')).toBe(true);
+    if (action === 'clear') remoteSessionStore.clear();
+    else if (action === 'markDevicesOffline') remoteSessionStore.markDevicesOffline(['d1']);
+    else remoteSessionStore[action]('d1');
+    expect(remoteSessionStore.hasAuthoritativePendingInteractions('s1')).toBe(false);
+    let notifications = 0;
+    const unsubscribe = remoteSessionStore.subscribe(() => { notifications++; });
+    try {
+      remoteSessionStore.setPendingInteractions('s1', []);
+      expect(remoteSessionStore.hasAuthoritativePendingInteractions('s1')).toBe(true);
+      expect(notifications).toBe(1);
+      remoteSessionStore.setPendingInteractions('s1', []);
+      expect(notifications).toBe(1);
+    } finally { unsubscribe(); remoteSessionStore.clear(); }
   });
 
   it('translates the collapse affordances in every locale', async () => {

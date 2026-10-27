@@ -44,8 +44,8 @@ vi.mock('../cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered: vi.f
 vi.mock('../components/layout/SidebarWindowLayout', () => ({
   SidebarWindowLayout: () => <div>sidebar host</div>,
 }));
-vi.mock('../components/layout/GhostPanelWindowLayout', () => ({
-  GhostPanelWindowLayout: () => <div>plugin host</div>,
+vi.mock('../components/layout/SidebarTabWindowLayout', () => ({
+  SidebarTabWindowLayout: () => <div>tab host</div>,
 }));
 
 afterEach(async () => {
@@ -64,13 +64,24 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each(['sidebar', 'plugin'] as const)(
+it.each(['sidebar'] as const)(
   'boots %s with a wallpaper using its read-only bridge and follows live changes',
   async (kind) => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    vi.stubGlobal(
+      'Image',
+      class {
+        src = '';
+        decode = vi.fn().mockResolvedValue(undefined);
+      },
+    );
+    const imageUrl = 'cindy-media://client-wallpaper/' + 'b'.repeat(64) + '.webp';
+    const videoUrl = 'cindy-media://client-wallpaper/' + 'c'.repeat(64) + '.mp4';
+    const ensureImage = vi.fn().mockResolvedValue(imageUrl);
+    const ensureVideo = vi.fn().mockResolvedValue(videoUrl);
     document.body.innerHTML = '<div id="root"></div>';
     let changed!: (settings: AppearanceSettings) => void;
     let hiddenChanged!: (hidden: boolean) => void;
@@ -85,6 +96,8 @@ it.each(['sidebar', 'plugin'] as const)(
         return () => {};
       },
       appearanceSettings: {
+        ensureWallpaperImage: ensureImage,
+        ensureWallpaperVideo: ensureVideo,
         getSync: () => ({
           ...DEFAULT_APPEARANCE_SETTINGS,
           wallpaperId: 'cindy-window',
@@ -97,14 +110,17 @@ it.each(['sidebar', 'plugin'] as const)(
       },
     });
     await act(async () => {
-      if (kind === 'sidebar') await import('../sidebar-window-entry');
-      else await import('../ghost-panel-window-entry');
+      await import('../sidebar-window-entry');
     });
-    expect(document.body.textContent).toContain(
-      kind === 'sidebar' ? 'sidebar host' : 'plugin host',
-    );
+    expect(document.body.textContent).toContain('sidebar host');
     expect(document.documentElement.dataset.wallpaperActive).toBe('true');
     expect(document.querySelectorAll('video')).toHaveLength(1);
+    expect(document.querySelector('video')?.getAttribute('src')).toBe(videoUrl);
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(
+      imageUrl,
+    );
+    expect(ensureImage).toHaveBeenCalledWith('cindy-window');
+    expect(ensureVideo).toHaveBeenCalledWith('cindy-window');
     if (kind === 'sidebar') {
       expect(play).not.toHaveBeenCalled();
       expect(pause).toHaveBeenCalled();

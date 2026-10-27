@@ -1,11 +1,12 @@
 import type {
+  CompanionImportBotPlatform,
   CompanionImportEntry,
   CompanionImportSourceKind,
 } from '@cindy/maker-shared/companion-import';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 
 export interface ImportSource {
-  kind: CompanionImportSourceKind;
+  kind: CompanionImportSourceKind | 'cindy';
   agentId: string;
   name: string;
   root: string;
@@ -60,6 +61,8 @@ export interface ImportItem {
   envDependencies?: { names: string[]; entries: string[] };
   mcp?: ImportedMcpServer;
   credential?: { format: string; value: unknown };
+  /** `bots` entries: where the source enables this bot, so the import can stop and restore it. */
+  bot?: { platform: CompanionImportBotPlatform; account: string; enabledPath: string[] };
   asset?: { name: string; bytes: Buffer; executable?: boolean };
   automation?: {
     sourceId: string;
@@ -72,6 +75,8 @@ export interface ImportItem {
 }
 
 export interface ImportSnapshot {
+  nativePackage?: import('../../shared/botMarket.js').BotPackageIdentity & { description: string; locale?: string;
+    opening?: import('../../shared/botMarket.js').BotPackageOpening };
   source: ImportSource;
   items: ImportItem[];
   avatarImageBase64?: string;

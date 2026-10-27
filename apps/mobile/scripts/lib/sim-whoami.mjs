@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   resolvePnpmInvocation,
   usablePnpmExecPath,
 } from "../../../../scripts/shared/pnpm-invocation.mjs";
-import { dirname, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mobileClientBundleEnv } from "../../../../scripts/shared/client-endpoint-build-env.mjs";
 import { withLocalMobileRegionConfig } from "./mobile-dev-region.mjs";
@@ -50,15 +51,91 @@ export function bootedSimulatorLinesForTarget(lines, simulatorUdid) {
   return booted.filter((line) => line.toUpperCase().includes(`(${exactUdid})`));
 }
 
+/** Cindy's own simulator (the official Baguette plugin) keeps a private CoreSimulator device set. */
+export const CINDY_SIMULATOR_ROOT = join(homedir(), "Library/Application Support/BaguetteCindy");
+
+/** Same rule as the plugin: a missing settings file is its default (allowed), an unreadable one is paused. */
+export function cindySimulatorEnabled({ root = CINDY_SIMULATOR_ROOT, readFile = readFileSync } = {}) {
+  try {
+    return JSON.parse(readFile(join(root, "runtime-settings.json"), "utf8")).enabled === true;
+  } catch (error) {
+    return error?.code === "ENOENT";
+  }
+}
+
+/**
+ * Device sets to search, in order. CINDY_MOBILE_SIMULATOR=auto (default) prefers Cindy's
+ * simulator when it is installed and allowed to run, then the system (Xcode) set;
+ * `cindy` / `system` pin one, and an absolute path pins that CoreSimulator device set.
+ */
+export function resolveSimulatorDeviceSets({
+  choice = process.env.CINDY_MOBILE_SIMULATOR || "auto",
+  root = CINDY_SIMULATOR_ROOT,
+  exists = existsSync,
+  readFile = readFileSync,
+} = {}) {
+  const cindy = { name: "cindy", path: join(root, "devices") };
+  const system = { name: "system", path: null };
+  if (choice === "auto")
+    return exists(cindy.path) && cindySimulatorEnabled({ root, readFile }) ? [cindy, system] : [system];
+  if (choice === "system") return [system];
+  if (choice === "cindy") {
+    if (!exists(cindy.path))
+      throw new Error("没有找到 Cindy 模拟器的设备目录；请先在 Cindy 安装并使用 Baguette 模拟器插件");
+    if (!cindySimulatorEnabled({ root, readFile }))
+      throw new Error("Cindy 模拟器在插件设置中关闭了运行；请先在 Cindy 打开");
+    return [cindy];
+  }
+  if (!isAbsolute(choice))
+    throw new Error("CINDY_MOBILE_SIMULATOR 只能是 auto、cindy、system 或设备目录的绝对路径");
+  return [{ name: choice, path: choice }];
+}
+
+/** simctl arguments scoped to one device set (`null` path = the system set). */
+export function simctlArgs(deviceSet, args) {
+  return deviceSet?.path ? ["simctl", "--set", deviceSet.path, ...args] : ["simctl", ...args];
+}
+
+/**
+ * Use the set holding the exact UDID, otherwise the first set with a booted device.
+ * An unreadable fallback candidate is skipped; a pinned (single) set still reports its error.
+ */
+export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
+  for (const deviceSet of deviceSets) {
+    let lines;
+    try {
+      lines = listBooted(deviceSet).split("\n");
+    } catch (error) {
+      if (deviceSets.length === 1) throw error;
+      continue;
+    }
+    const booted = bootedSimulatorLinesForTarget(lines, null);
+    const targetBooted = bootedSimulatorLinesForTarget(lines, simulatorUdid);
+    if (simulatorUdid ? targetBooted.length : booted.length) return { deviceSet, booted, targetBooted };
+  }
+  return { deviceSet: deviceSets[0], booted: [], targetBooted: [] };
+}
+
+/** Find the set that knows this UDID in any state (build-only runs need no booted device). */
+export function findSimulatorDeviceSet(deviceSets, listDevices, simulatorUdid) {
+  for (const deviceSet of deviceSets) {
+    try {
+      if (listDevices(deviceSet).toUpperCase().includes(`(${simulatorUdid.toUpperCase()})`)) return deviceSet;
+    } catch {
+      // An unreadable candidate cannot own the device; keep looking.
+    }
+  }
+  return null;
+}
+
 /** Probe app installation on the exact Host-owned Simulator without fallback. */
-export function getSimulatorAppContainer(run, simulatorUdid, bundleId) {
-  return run("xcrun", [
-    "simctl",
+export function getSimulatorAppContainer(run, simulatorUdid, bundleId, deviceSet = null) {
+  return run("xcrun", simctlArgs(deviceSet, [
     "get_app_container",
     simulatorUdid ?? "booted",
     bundleId,
     "app",
-  ]);
+  ]));
 }
 
 /** Parse the optional Metro port shared by sim:start and sim:whoami. */
@@ -211,7 +288,7 @@ export function resolveSimMetroHandoff({
           action: 'refuse',
           code: regionChanged ? 'target-region-stale' : 'target-env-stale',
           lines: [
-            `✗ 已补/改 apps/mobile/.env,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
+            `✗ apps/mobile/.env 或 --mock 模拟数据开关变了,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
             "  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。",
           ],
         };

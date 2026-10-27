@@ -20,6 +20,8 @@ export interface ProviderGroupHeldWorkerTerminalsDeps<T> {
 export interface ProviderGroupHeldWorkerTerminals<T> {
   /** 暂存这次终态；同一次登记期间重复的终态也算已暂存(只回报一次)。 */
   stash(sessionId: string, holdId: number, terminal: T): void;
+  /** Transfer the exact held terminal to another recovery owner. */
+  takeForRecovery(sessionId: string, holdId: number): T | null;
   /** 换成了：这次终态不再回报。 */
   discard(sessionId: string, holdId: number): void;
   /** 不再换了：回报这次终态。重复调用无副作用。 */
@@ -54,6 +56,11 @@ export function createProviderGroupHeldWorkerTerminals<T>(
       if (entries.has(holdId)) return;
       entries.set(holdId, { terminal, owner: deps.ownerKey() });
       held.set(sessionId, entries);
+    },
+
+    takeForRecovery(sessionId, holdId) {
+      const entry = take(sessionId, holdId);
+      return entry?.owner === deps.ownerKey() ? entry.terminal : null;
     },
 
     discard(sessionId, holdId) {

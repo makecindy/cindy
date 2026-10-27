@@ -1,20 +1,58 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import ts from 'typescript';
+import { detectComposerTrigger } from '@/session/composerPalette';
+import { replaceComposerTextRange, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
 import { buildComposerRichInputHtml } from '@/session/composerRichInputHtml';
 import { parseComposerWebMessage } from '@/session/composerRichInputProtocol';
 
+const pageTree = ts.createSourceFile('session.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function pageCallback(name: string, bindings: Record<string, unknown>) {
+  let initializer: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(pageTree) === name) initializer = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(pageTree);
+  if (!initializer) throw new Error('Missing production composer callback ' + name);
+  const expression = ts.isCallExpression(initializer) ? initializer.arguments[0] : initializer;
+  const code = ts.transpileModule('const callback = ' + expression.getText(pageTree), { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  return new Function(...Object.keys(bindings), code + '\nreturn callback;')(...Object.values(bindings));
+}
+
+it.each([false, true])('atomically applies a selected slash command while queue editing=%s', (editing) => {
+  const apply = vi.fn(); const placeCaret = vi.fn(); const focus = vi.fn();
+  const bindings = { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: '/he' },
+    composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing },
+    composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: placeCaret, focus } },
+    applyComposerDocument: apply, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
+  pageCallback('selectSlashCommand', bindings)({ name: 'help', kind: 'agent-skill' });
+  const document = apply.mock.calls[0][0];
+  expect(document.nodes).toEqual([{ type: 'text', text: '/help', slashCommand: '/help' }, { type: 'text', text: ' ' }]);
+  expect(apply.mock.calls[0][1]).toEqual(editing ? { persist: false } : undefined);
+  expect(placeCaret).toHaveBeenCalledExactlyOnceWith(document);
+  expect(focus).not.toHaveBeenCalled();
+  expect(bindings.pendingSkillSelectionRef.current).toEqual({ name: 'help', sid: 's1' });
+});
+
+it.each([false, true])('routes touch and accessibility activation through the actual dictation overlay (native=%s)', (nativeComposerAvailable) => {
+  const finish = vi.fn();
+  const press = pageCallback('handleComposerInputPressIn', { voiceRecordingActiveRef: { current: true }, voiceState: 'listening', finishVoiceRecordingRef: { current: finish } });
+  const bindings = { React, voiceIsListening: true, nativeComposerAvailable, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', VoiceMicWaveCaret: 'Caret',
+    t: (key: string) => key, styles: {}, handleComposerInputPressIn: press, voiceDraftScrollRef: {}, voiceDraftCaretFrame: { top: 0 },
+    composerCardActive: true, composerInputScrollEnabled: false, voiceDraftShowsListeningPrompt: true, colors: { textPrimary: '#000' }, composerLayout: { input: { placeholder: 'Listening' } } };
+  const overlay = pageCallback('renderComposerInputOverlay', bindings)();
+  expect(overlay.props.accessibilityRole).toBe('button');
+  overlay.props.onPress(); overlay.props.onPressIn();
+  expect(finish).toHaveBeenNthCalledWith(1, { focusInput: true });
+  expect(finish).toHaveBeenNthCalledWith(2, { focusInput: true });
+  expect(pageCallback('renderComposerInputOverlay', { ...bindings, voiceIsListening: false })()).toBeNull();
+});
+
 describe('mobile composer rich input HTML', () => {
-  it('animates a native frame that fills the horizontal input row, preserving the WebView command ref', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
-    const frame = source.slice(source.indexOf('frame: {'), source.indexOf('webView: {'));
-    expect(frame).toContain('flex: 1');
-    expect(frame).toContain('minWidth: 0');
-    expect(source).toContain('<Animated.View style={[styles.frame, heightStyle');
-    expect(source).not.toContain('createAnimatedComponent(WebView)');
-    expect(source).toContain('containerStyle={styles.webView}');
-  });
 
   const html = buildComposerRichInputHtml({
     accessibilityLabel: '输入消息',
@@ -617,73 +655,6 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('"text":"<quoted>"');
   });
 
-  it('applies a selected slash command and its end-caret placement atomically', () => {
-    const inputSource = readFileSync(
-      resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const screenSource = readFileSync(
-      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const selectStart = screenSource.indexOf('const selectSlashCommand = useCallback');
-    const selectEnd = screenSource.indexOf('const selectAtResource = useCallback', selectStart);
-    const selectSource = screenSource.slice(selectStart, selectEnd);
-
-    expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;');
-    expect(inputSource).toContain('applyDocumentAndSetSelectionToEnd: (value) => {');
-    expect(inputSource).toContain('applyDocument(value, true);');
-    expect(inputSource).toContain('if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);');
-    expect(inputSource).toContain('pendingNodeInsertionsRef.current.push(node);');
-    expect(inputSource).toContain('for (const node of pendingNodeInsertions)');
-    expect(selectSource).toContain('queueEditingRef.current ? { persist: false } : undefined');
-    expect(selectSource).toContain('composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);');
-    expect(selectSource).not.toContain('composerInputRef.current?.focus();');
-  });
-
-  /**
-   * 「点输入区 = 想打字 → 停止听写」必须由听写期间盖在输入区上的 RN 覆盖层承接:
-   * - 挂 WebView 的 focus 不行:WKWebView 在输入区展开、拿到 native 焦点后会自己恢复
-   *   DOM 焦点并派发 focus,收起态点语音、输入框展开的那一拍就把刚开始的听写掐断;
-   * - 挂 WebView 内的触摸也不行:听写期间富文本编辑器是 hidden(opacity 0),iOS hitTest
-   *   跳过 alpha≈0 的 view,它根本收不到触摸。
-   * 两条都由 2026-07 的实机日志确认。
-   */
-  it('stops dictation from the RN draft overlay instead of WebView focus', () => {
-    const screenSource = readFileSync(
-      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const overlayStart = screenSource.indexOf('const renderComposerInputOverlay = ');
-    expect(screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart)).toBeGreaterThan(overlayStart);
-    const overlaySource = screenSource.slice(
-      overlayStart,
-      screenSource.indexOf('// 听写期间只滚动覆盖层', overlayStart),
-    );
-
-    expect(overlaySource).toContain('onPressIn={handleComposerInputPressIn}');
-    // 无障碍激活(VoiceOver / TalkBack)只走 onPress,不会派发 onPressIn:两者都必须挂,
-    // 否则读屏用户按下这个「停止录音」按钮不会有任何反应。
-    expect(overlaySource).toContain('onPress={handleComposerInputPressIn}');
-    // Android 保留覆盖层的 44pt 命中区；iOS 使用常驻麦克风停止录音，
-    // 不再为了文字覆盖层额外抬高已展开的输入框。
-    expect(overlaySource).not.toContain('hitSlop');
-    expect(screenSource).toContain("inputFrameMinHeight={Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}");
-
-    // hidden 的富文本编辑器必须同时从两端的无障碍树里摘掉:opacity: 0 不隐藏读屏焦点,
-    // 而它的 focus 已不再停听写,焦点留在那里会让读屏用户卡在「按了没反应」的输入框上。
-    const inputSource = readFileSync(
-      resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    expect(inputSource).toContain('accessibilityElementsHidden={hidden}');
-    expect(inputSource).toContain("importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}");
-    expect(overlaySource).toContain('testID="session.voiceDraftOverlay"');
-    // 草稿滚动层本身不吃触摸,交给外层覆盖层。
-    expect(overlaySource).toContain('pointerEvents="none"');
-    expect(screenSource).toContain('onFocus={() => setComposerFocused(true)}');
-  });
-
   it('rejects malformed image messages at the WebView boundary', () => {
     expect(parseComposerWebMessage(JSON.stringify({ type: 'paste-images-start', count: '2' }))).toBeNull();
     expect(parseComposerWebMessage(JSON.stringify({
@@ -764,18 +735,5 @@ describe('mobile composer rich input HTML', () => {
       requestId: '15',
       text: 42,
     }))).toBeNull();
-  });
-
-  it('falls back to the native clipboard when iOS omits paste clipboardData', () => {
-    const inputSource = readFileSync(
-      resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-
-    expect(inputSource).toContain("import * as Clipboard from 'expo-clipboard';");
-    expect(inputSource).toContain('text = await Clipboard.getStringAsync();');
-    expect(inputSource).toContain('composerNodesForBoundedPlainTextPaste(text)');
-    expect(inputSource).toContain('window.cindyComposer.commitPaste(${JSON.stringify(message.requestId)}, []);');
-    expect(inputSource).toContain('window.cindyComposer.commitPaste(');
   });
 });

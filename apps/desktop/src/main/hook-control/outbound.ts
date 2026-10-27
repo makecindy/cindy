@@ -22,6 +22,11 @@
  */
 
 import path from 'node:path';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import { visit } from 'unist-util-visit';
+import type { Definition, PhrasingContent } from 'mdast';
 import { promises as fsp } from 'node:fs';
 import { localTaskImagePath, taskImageReferences, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 
@@ -68,6 +73,9 @@ export function buildHookPromptNote(im: string | undefined): string {
   if (im === 'x') {
     return (
       `${attachmentNote}\n` +
+      'X 附件只支持最多四张图片,或一个 GIF/视频,不能混发;不支持普通文件。' +
+      '视频写 `[说明](工具返回的 cindy-media:// 地址)` 或 `[说明](xdt-file:///工作目录内视频路径)`;' +
+      '图片每张至多 5MiB,GIF 至多 15MiB,MP4/MOV 视频至多 10MiB。\n' +
       // session-runner 会先用 observer.finalText() 按桌面消息流规则拼出正式正文,
       // 再由服务端 X 发送层收口成一条回复。不要退回旧的“只取最后一条消息”描述。
       // 标题、列表、表格等结构仍参与正式正文判定,发布时才转换为纯文本。
@@ -147,6 +155,8 @@ function isPathWithin(base: string, target: string): boolean {
 }
 
 export interface OutboundDeps {
+  /** X supports managed video links and uses the existing file-size transport limit. */
+  provider?: string;
   /** xdt-image:// URL -> absPath(生产: imageCacheStore.resolveSafe; 失败抛错)。 */
   resolveImageUrl: (url: string) => { absPath: string };
   /** xdt-file:// 允许读取的根目录; 未提供时 fail-closed, 不读取任何本地文件。 */
@@ -193,6 +203,36 @@ export function hasOutboundRefs(text: string): boolean {
   );
 }
 
+const mediaLinkParser = unified().use(remarkParse).use(remarkGfm);
+
+function visibleLabelText(node: PhrasingContent): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value;
+  if (node.type === 'image' || node.type === 'imageReference') return node.alt ?? '';
+  if (node.type === 'break') return '\n';
+  return 'children' in node ? node.children.map(visibleLabelText).join('') : '';
+}
+
+/** Managed media links, excluding code examples; never interpret them as file paths. */
+function managedMediaLinks(text: string): Array<{ url: string; start: number; end: number; label: string }> {
+  if (!text.includes('cindy-media://')) return [];
+  const tree = mediaLinkParser.parse(text);
+  const definitions = new Map<string, Definition>();
+  visit(tree, 'definition', (node) => {
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
+  });
+  const refs: Array<{ url: string; start: number; end: number; label: string }> = [];
+  visit(tree, (node) => {
+    if (node.type !== 'link' && node.type !== 'linkReference') return;
+    const target = node.type === 'link' ? node : definitions.get(node.identifier);
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (!target?.url.startsWith('cindy-media://') || start === undefined || end === undefined) return;
+    const label = node.children.map(visibleLabelText).join('');
+    refs.push({ url: target.url, start, end, label });
+  });
+  return refs;
+}
+
 /**
  * 收集出站附件并变换正文。收集失败(单个文件读不到/超限)只跳过该项,
  * 绝不抛错 —— 附件是回帖的增强, 不能因它失败拖垮 turn.end。
@@ -206,6 +246,11 @@ export async function collectOutboundAttachments(
   const realpath = deps.realpath ?? ((p: string) => fsp.realpath(p));
   const attachments: TaskAttachment[] = [];
   const sentFileAbsPaths = new Set<string>();
+  const sentMediaPaths = new Set<string>();
+  const mediaLimit = (p: string): number => deps.provider === 'x'
+    ? guessMime(p) === 'image/gif' ? 15 * 1024 * 1024
+      : guessMime(p).startsWith('video/') ? MAX_OUT_FILE_BYTES : MAX_OUT_IMAGE_BYTES
+    : MAX_OUT_IMAGE_BYTES;
   const fileAbsPathByUrl = new Map<string, string | null>();
   let totalBytes = 0;
   let skipped = 0;
@@ -242,6 +287,13 @@ export async function collectOutboundAttachments(
     maxBytes: number,
     mimeOverride?: string,
   ): Promise<boolean> => {
+    if (deps.provider === 'x' && sentMediaPaths.has(absPath)) return true;
+    if (deps.provider === 'x' && ![
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime',
+    ].includes(mimeOverride ?? guessMime(absPath))) {
+      skipped += 1;
+      return false;
+    }
     if (attachments.length >= MAX_OUT_ATTACHMENTS) {
       skipped += 1;
       return false;
@@ -266,6 +318,7 @@ export async function collectOutboundAttachments(
       return false;
     }
     totalBytes += bytes.length;
+    sentMediaPaths.add(absPath);
     attachments.push({
       name: path.basename(absPath),
       mimeType: mimeOverride ?? guessMime(absPath),
@@ -309,7 +362,22 @@ export async function collectOutboundAttachments(
     }
   }
   for (const absPath of imageAbsPaths) {
-    await push(absPath, MAX_OUT_IMAGE_BYTES);
+    await push(absPath, mediaLimit(absPath));
+  }
+
+  if (deps.provider === 'x') {
+    const seenLinks = new Set<string>();
+    for (const ref of managedMediaLinks(refScanText)) {
+      if (seenLinks.has(ref.url)) continue;
+      seenLinks.add(ref.url);
+      try {
+        const { absPath } = deps.resolveImageUrl(ref.url);
+        await push(absPath, mediaLimit(absPath));
+      } catch {
+        skipped += 1;
+        deps.log.warn('outbound managed media link could not be read');
+      }
+    }
   }
 
   // 2. 文件引用(去重同上)
@@ -333,14 +401,32 @@ export async function collectOutboundAttachments(
       skipped += 1;
       continue;
     }
-    if (await push(absPath, MAX_OUT_FILE_BYTES)) sentFileAbsPaths.add(absPath);
+    if (await push(absPath, deps.provider === 'x' ? mediaLimit(absPath) : MAX_OUT_FILE_BYTES)) sentFileAbsPaths.add(absPath);
   }
 
   // Collection is not a delivery receipt. Keep captions without claiming the channel sent them.
   const imageUrls = new Map([...visitedImageUrls].map((url) => [url, url]));
-  const captionText = rewriteTaskImageReferences(finalText, imageUrls, (ref) =>
+  let deliveryText = finalText;
+  if (deps.provider === 'x') {
+    for (const ref of managedMediaLinks(finalText).reverse()) {
+      deliveryText = deliveryText.slice(0, ref.start) + ref.label + deliveryText.slice(ref.end);
+    }
+  }
+  let captionText = rewriteTaskImageReferences(deliveryText, imageUrls, (ref) =>
     ref.alt ? `🖼️ _${ref.alt.replace(/[*_\[\]\\]/g, '\\$&')}_` : '',
   );
+  if (deps.provider === 'x') {
+    // Links have become captions; remove their now-unused private definitions too.
+    const definitions: Definition[] = [];
+    visit(mediaLinkParser.parse(captionText), 'definition', (node) => {
+      if (node.url.startsWith('cindy-media://')) definitions.push(node);
+    });
+    for (const node of definitions.reverse()) {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) captionText = captionText.slice(0, start) + captionText.slice(end);
+    }
+  }
   const transformed = transformXdtRefs(captionText, {
     file: ({ alt, url }) => {
       const absPath = fileAbsPathByUrl.get(url);

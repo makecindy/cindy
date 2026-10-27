@@ -36,7 +36,8 @@ export function registerSessionSearchTool(
     description:
       'FTS5 全文检索当前身份可访问的本地历史对话。普通任务按现有全局历史权限检索；' +
       'Cindy Bot 只检索同一 Bot 关联的主任务、通道任务和归档任务。返回按相关度排序的 message ' +
-      '命中 (sessionId / messageId / role / snippet 高亮 / ts)。' +
+      '命中 (sessionId / sessionUrl / messageId / role / snippet 高亮 / ts)。' +
+      ' 需要引用原对话时，可使用返回的 sessionUrl。' +
       ' 跟 memory_search 区别: memory_search 搜提炼后的 memory 分片, session_search 搜原始对话。' +
       ' 用于 "上次怎么解决这个 bug" / "用户提到过 X 在哪轮" 类场景。',
     inputShape: {

@@ -119,7 +119,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   )["image"].naturalHeight = 1080;
   Object.assign(elements.image, { complete: true });
   const intervals: Array<() => void> = [];
-  const frames = new Map<number, () => void>();
+  const frames = new Map<number, (time: number) => void>();
   const videoFrames = new Map<number, () => void>();
   let id = 0;
   const video = Object.assign(elements.video, {
@@ -189,7 +189,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     clearInterval() {},
     setTimeout: () => 1,
     clearTimeout() {},
-    requestAnimationFrame: (fn: () => void) => {
+    requestAnimationFrame: (fn: (time: number) => void) => {
       frames.set(++id, fn);
       return id;
     },
@@ -222,7 +222,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       now += elapsed;
       const pending = [...frames.values()];
       frames.clear();
-      pending.forEach((fn) => fn());
+      pending.forEach((fn) => fn(now));
     },
     pointer: (type: string, pointerId: number, x: number, y: number) =>
       listeners[`stage:${type}`]({
@@ -352,6 +352,72 @@ describe("native media overlay", () => {
 });
 
 describe("remote desktop viewport", () => {
+  // Unit: Duo folded-pad jitter (2026-10-23). Existing nativeTouchpad coverage
+  // sends no host cursor feedback. Interleave delayed native cursor packets with
+  // a held lower-screen gesture, including its first cursor packet and a pause.
+  it.each(['touch', 'pointer'])('keeps folded-pad motion local across delayed host feedback in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const hostCursor = (x: number) => v.send({ type: 'nativeCursor', epoch: 'fold', cursor: {
+      x, y: 0.5, visible: true, width: 16, height: 16, hotX: 0, hotY: 0, png: 'iVBORw0KGgo=',
+    } });
+    const moves = () => v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move');
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.7, y: 0.5 });
+    // A resting finger still owns the gesture beyond the 200ms echo grace.
+    v.frame(1000); hostCursor(0.3);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.8), y: 0.5 });
+    // Lifting after a long pause gets a fresh echo grace, not the last move's.
+    v.frame(1000);
+    v.send({ type: 'nativeTouchpad', phase: 'end' });
+    v.frame(199);
+    hostCursor(0.3);
+    expect(parseFloat(v.elements.cursor.style.left)).toBeCloseTo(640);
+    v.frame(2); hostCursor(0.4);
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.5, y: 0.5 });
+    v.send({ type: 'releaseInput' }); v.ack();
+    v.frame(201); hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.3), y: 0.5 });
+  });
+  // Unit: PR #6902 edge drift. Existing motion tests stay in the viewport center;
+  // a second contact at the desktop edge must apply only its relative delta.
+  it.each(['touch', 'pointer'])('keeps repeated folded-pad strokes at the desktop edge in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const move = (dx: number) => {
+      v.send({ type: 'nativeTouchpad', phase: 'start' });
+      v.send({ type: 'nativeTouchpad', dx, dy: 0 });
+      v.flush(); v.ack();
+      v.send({ type: 'nativeTouchpad', phase: 'end' });
+      return v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move').at(-1);
+    };
+    expect(move(-400)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(-1)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(800)).toMatchObject({ x: 1, y: 0.5 });
+    expect(move(1)).toMatchObject({ x: 1, y: 0.5 });
+  });
   it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
     const v = viewer();
     v.elements.stage.clientWidth = 800;
@@ -1266,6 +1332,27 @@ describe("remote desktop viewport", () => {
     expect(
       v.messages.at(-1)?.events?.every((event) => event.kind === "scroll"),
     ).toBe(true);
+  });
+  it("lets a light zoom rest well past the desktop edge to clear overlaid chrome", () => {
+    const v = viewer();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 350, 300);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 350, 300);
+    for (let i = 0; i < 30; i++) v.frame();
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(600);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 1200, 1300);
+    v.pointer("pointerup", 1, 1200, 1300);
+    for (let i = 0; i < 30; i++) v.frame();
+    // 1.5x already allows the full reach: 40% of the 400pt width, and the
+    // 240pt cap beyond the vertically centered 337.5pt-high picture.
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(160);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(131.25 + 240);
   });
 });
 

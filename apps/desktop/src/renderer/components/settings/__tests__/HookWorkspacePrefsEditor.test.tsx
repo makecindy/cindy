@@ -4,6 +4,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderPrefsView, SlackHookView } from '../../../../shared/hookControlIpc';
+import { IM_DEFAULT_SETTINGS } from '../../../../shared/imDefaultSettings';
+
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -156,6 +160,45 @@ describe('useHookWorkspacePrefs provider isolation', () => {
         imDefaultSettingsGet: vi.fn(async () => ({ agentKind: 'codex', agents: {} })),
       },
     };
+  });
+
+  it.each(['slack', 'telegram', 'x'] as const)('%s inherits the default provider and execution location as one route', async (channel) => {
+    vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'codex',
+      agents: { ...IM_DEFAULT_SETTINGS.agents, codex: {
+        providerId: 'owner-provider', agentDeviceId: 'share:owner', model: 'owner-model', effort: 'high',
+      } },
+      defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
+    });
+    const hook = channel === 'telegram' ? TELEGRAM_CONFIRMED : channel === 'x' ? X_CONFIRMED : BASE_HOOK;
+    const { result } = renderHook(() => useHookWorkspacePrefs(hook, channel));
+    await waitFor(() => expect(result.current.agentDeviceFor('inherited')).toBe('share:owner'));
+    expect(result.current.providerSourceFor('inherited')).toBe('owner-provider');
+    expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalledWith(channel === 'slack' ? 'slack' : undefined);
+  });
+
+  it('keeps explicit local sources local and inherits the defaults of an explicitly selected engine', async () => {
+    vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
+      ...IM_DEFAULT_SETTINGS,
+      agents: { ...IM_DEFAULT_SETTINGS.agents,
+        'claude-code': { providerId: 'claude-owner', agentDeviceId: 'share:claude', model: 'claude-model', effort: 'high' },
+        codex: { providerId: 'codex-owner', agentDeviceId: 'share:codex', model: 'codex-model', effort: 'high' },
+      },
+      defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
+    });
+    getWorkspacePrefs.mockResolvedValueOnce({ prefs: { bound: true, prefs: [
+      { workspace: 'codex', agentKind: 'codex', model: null, effort: null, permissionMode: null },
+    ] } });
+    vi.mocked(window.electronAPI.hookControl.getWorkspaceProviderSources).mockResolvedValue({ entries: [
+      { channel: 'slack', teamId: null, workspace: 'local', providerId: 'local-provider' },
+    ] });
+    const { result } = renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
+    await waitFor(() => expect(result.current.agentDeviceFor('codex')).toBe('share:codex'));
+    expect(result.current.providerSourceFor('codex')).toBe('codex-owner');
+    expect(result.current.agentDeviceFor('inherited')).toBe('share:claude');
+    expect(result.current.agentDeviceFor('local')).toBeNull();
+    expect(result.current.providerSourceFor('local')).toBe('local-provider');
   });
 
   it('Telegram 未连接时不发起 provider prefs 请求，绑定确认后沿 ready 边沿首次拉取', async () => {

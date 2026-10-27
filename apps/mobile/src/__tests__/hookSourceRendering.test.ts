@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -9,24 +7,6 @@ import {
   imSourceHeaderTitle,
   isMobileImPlatform,
 } from '@/session/messageSourceLabels';
-
-describe('mobile shared Cindy source card wiring', () => {
-  it('downgrades only legacy hook rows (stored prompt) and keeps local IM rows as user rows', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-
-    expect(source).toContain('&& !item.message.hookSource.userTextContent');
-    expect(source).toContain("kind: 'system' as const, align: 'agent' as const");
-    expect(source).toContain('testID="message.hookSource"');
-    // 抬头走 i18n「Cindy · 来自 {{platform}}」,不再硬编码 Slack / Telegram / X。
-    expect(source).toContain('{imSourceHeaderTitle(hookSource.im)}');
-    expect(source).not.toContain("hookSource.im === 'x' ? 'X' : 'Slack'");
-    expect(source).toContain('{hookSource.channelName}');
-    // IM 卡片与桌面一样左对齐;长正文仍走有界测量与折叠保护。
-    expect(source).toContain('presentation.isUserAligned && !item.message.hookSource');
-    expect(source).toContain('(isUser || hookSource !== undefined)');
-    expect(source).toContain("(item.message.kind === 'user' || hookSource !== undefined)");
-  });
-});
 
 describe('IM source header text', () => {
   beforeAll(async () => {

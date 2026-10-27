@@ -13,6 +13,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import type { ImDefaultSettings } from '../../../shared/imDefaultSettings.js';
 
 export interface ImDefaultRoute {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   providerId: string | null;
@@ -54,7 +55,8 @@ export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
     raw.agentKind,
     AGENT_KINDS.map((agent) => {
       const settings = raw.agents[agent];
-      return settings ? [settings.providerId ?? null, settings.model, settings.effort] : null;
+      return settings ? [settings.providerId ?? null, settings.model, settings.effort,
+        ...(settings.agentDeviceId ? [settings.agentDeviceId] : [])] : null;
     }),
   ]);
 }
@@ -66,7 +68,9 @@ function parseRoute(value: unknown): ImDefaultRoute | null {
   if (typeof r.model !== 'string' || !r.model) return null;
   if (r.providerId !== null && typeof r.providerId !== 'string') return null;
   if (r.effort !== null && typeof r.effort !== 'string') return null;
+  if (r.agentDeviceId != null && typeof r.agentDeviceId !== 'string') return null;
   return {
+    ...(r.agentDeviceId ? { agentDeviceId: r.agentDeviceId as string } : {}),
     agentKind: r.agentKind as AgentKind,
     model: r.model,
     providerId: (r.providerId as string | null) || null,
@@ -146,6 +150,7 @@ export function sameImDefaultRoute(
 ): boolean {
   return (
     a.agentKind === b.agentKind &&
+    (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null) &&
     a.model === b.model &&
     (a.effort ?? null) === (b.effort ?? null) &&
     normalizeProvider(a) === normalizeProvider(b)

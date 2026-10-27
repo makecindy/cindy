@@ -672,6 +672,84 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     }
   });
 
+  it('revokes private owner links without waiting for an unrelated shared-root writer', async () => {
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    const privateLink = path.join(sharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, privateLink, 'junction');
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const foreignLink = path.join(legacySharedDir(), 'other-instance');
+    await fs.promises.symlink(homeDir, foreignLink, 'junction');
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    const result = await removeGhostSkillLinksForRoots(
+      [brainRoot, approvalStateRoot], homeDir, [sharedDir()], busyLock,
+    );
+
+    expect(result).toEqual({ changed: true, warnings: [], blockers: [] });
+    expect(busyLock).not.toHaveBeenCalled();
+    expect(fs.existsSync(privateLink)).toBe(false);
+    expect(fs.existsSync(foreignLink)).toBe(true);
+    expect(fs.existsSync(brainRoot)).toBe(true);
+  });
+
+  it('still requires the shared lock for a dangling legacy owner link', async () => {
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const legacyLink = path.join(legacySharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, legacyLink, 'junction');
+    await fs.promises.rmdir(brainRoot);
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    await expect(removeGhostSkillLinksForRoots(
+      [brainRoot], homeDir, [], busyLock,
+    )).rejects.toThrow('shared roots busy');
+    expect(busyLock).toHaveBeenCalledOnce();
+    expect((await fs.promises.lstat(legacyLink)).isSymbolicLink()).toBe(true);
+
+    const heldLock = vi.fn();
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], async (task) => {
+      heldLock();
+      return task();
+    });
+    expect(heldLock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ changed: true, warnings: [], blockers: [] });
+    await expect(fs.promises.lstat(legacyLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rechecks legacy link ownership after waiting for the shared lock', async () => {
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const legacyLink = path.join(legacySharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, legacyLink, 'junction');
+    const delayedLock = vi.fn();
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], async (task) => {
+      delayedLock();
+      await fs.promises.unlink(legacyLink);
+      await fs.promises.symlink(homeDir, legacyLink, 'junction');
+      return task();
+    });
+
+    expect(delayedLock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ changed: false, warnings: [], blockers: [] });
+    expect(await fs.promises.realpath(legacyLink)).toBe(await fs.promises.realpath(homeDir));
+  });
+
+  it('does not treat an unreadable legacy root as an empty sweep', async () => {
+    const readdir = fs.promises.readdir;
+    vi.spyOn(fs.promises, 'readdir').mockImplementation(async (...args) => {
+      if (String(args[0]) === legacySharedDir()) {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return readdir(...args);
+    });
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], busyLock);
+
+    expect(result.changed).toBe(false);
+    expect(result.blockers).toHaveLength(1);
+    expect(result.blockers[0]).toContain(legacySharedDir());
+    expect(busyLock).not.toHaveBeenCalled();
+  });
+
   it('账号边界删除已识别的旧 owner 投影失败:记 blocker,不能静默跨账号保留', async () => {
     const ownerRoot = path.join(workDir, 'owners', 'bbb', 'cindy-brain');
     const managedTarget = path.join(ownerRoot, 'other-ghost', 'skills', 'foo');

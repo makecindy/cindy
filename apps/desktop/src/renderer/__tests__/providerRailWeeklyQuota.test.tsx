@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareInsights } from '../../shared/providerShareInsights';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+
+// Account generations are driven explicitly below; no full auth host is needed.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
+const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
+vi.mock('@/features/provider-share/providerShareStore', () => ({
+  useProviderShareReceived: () => ({ received: sharing.received, loaded: true }),
+}));
 
 const reads = vi.hoisted(() => ({
   codex: vi.fn(),
@@ -25,8 +37,16 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, args?: { percent?: number }) =>
-      key === 'quotaCard.remainingPercent' ? `剩余 ${args?.percent}%` : key,
+    t: (key: string, args?: { percent?: number; duration?: string }) =>
+      key === 'quotaCard.remainingPercent'
+        ? `剩余 ${args?.percent}%`
+        : key === 'quotaCard.resetIn'
+          ? `${args?.duration} 后重置`
+          : key === 'quotaCard.weeklyLabel'
+            ? '每周'
+            : key === 'todaySpend.unit.hour'
+              ? '小时'
+              : key,
     i18n: { language: 'en' },
   }),
 }));
@@ -334,5 +354,411 @@ describe('provider rail weekly remaining bars', () => {
     );
     expect(reads.codex).not.toHaveBeenCalled();
     expect(reads.remoteCodex).not.toHaveBeenCalled();
+  });
+
+  it.each(['openai', 'anthropic', 'xai', 'account-b'])(
+    'keeps %s quotas with the task host while browsing another device and switching hosts',
+    (id) => {
+      const usedOn = (deviceId: string | null) =>
+        deviceId === 'host' ? 25 : deviceId === 'other' ? 80 : 10;
+      const claude = (used: number) => ({ sevenDay: { utilization: used } });
+      const xai = (used: number) => ({
+        creditUsagePercent: used,
+        updatedAt: Date.now(),
+        resetsAt: Date.now() / 1000 + 3600,
+      });
+      reads.codex.mockImplementation((enabled) => ({ snapshot: enabled ? snapshot(10) : null }));
+      reads.claude.mockImplementation((enabled) => (enabled ? claude(10) : null));
+      reads.xai.mockImplementation((enabled) => (enabled ? xai(10) : null));
+      reads.remoteCodex.mockImplementation((deviceId) =>
+        deviceId ? { secondary: { usedPercent: usedOn(deviceId), windowMinutes: 10080 } } : null,
+      );
+      reads.remoteClaude.mockImplementation((deviceId) =>
+        deviceId ? claude(usedOn(deviceId)) : null,
+      );
+      reads.remoteXai.mockImplementation((deviceId) => (deviceId ? xai(usedOn(deviceId)) : null));
+      const providers = [
+        provider(
+          id,
+          id === 'account-b' ? { source: 'user', auth: { method: 'oauth', native: 'codex' } } : {},
+        ),
+      ];
+      const props = {
+        items: [
+          { kind: 'provider' as const, providerId: id },
+          { kind: 'remote-provider' as const, deviceId: 'other', providerId: id },
+        ],
+        active: { kind: 'remote-provider' as const, deviceId: 'other', providerId: id },
+        providers,
+        providerLabel: () => 'Browsing other',
+        providerUsage: { deviceId: 'other' },
+        onSelect: vi.fn(),
+        remoteSources: {
+          localProviders: providers,
+          localUsageDeviceId: 'host' as string | null,
+          localProviderLabel: () => 'Task host',
+          providersOf: () => providers,
+          labelOf: () => 'Other device',
+        },
+      };
+      const { rerender } = render(<UnifiedModelRail {...props} />);
+      const remaining = (name: string) =>
+        screen
+          .getByRole('button', { name })
+          .querySelector('[data-weekly-remaining]')
+          ?.getAttribute('data-weekly-remaining');
+      expect(remaining('Task host')).toBe('75');
+      expect(remaining('Other device')).toBe('20');
+      for (const read of [reads.codex, reads.claude, reads.xai])
+        expect(read.mock.calls.some(([enabled]) => enabled)).toBe(false);
+
+      rerender(
+        <UnifiedModelRail
+          {...props}
+          remoteSources={{ ...props.remoteSources, localUsageDeviceId: null }}
+        />,
+      );
+      expect(remaining('Task host')).toBe('90');
+      expect(remaining('Other device')).toBe('20');
+    },
+  );
+});
+
+// 测试价值：通过真实 UnifiedModelRail 检查 §7.5（2026-10-22）的单账号条、只读请求与生命周期。
+// 原覆盖只有本机/同账号镜像；最小输入为 share:shared 的格位 + 一个授权周窗口。
+// unit：IPC 使用内存 fake，轮询用假时钟；不需要真实设备或历史账本。
+describe('shared provider rail weekly quota', () => {
+  const command = vi.fn();
+  const listeners = new Set<(shares: ProviderShareReceived[]) => void>();
+  const share: ProviderShareReceived = {
+    shareId: 'shared',
+    memberId: 'member',
+    providerId: 'openai',
+    providerLabel: 'OpenAI',
+    hostDeviceId: 'host',
+    deviceName: 'Private host',
+    owner: { displayName: 'Alice', avatarUrl: null, region: 'global' },
+    status: 'active',
+    hostOnline: true,
+    hostCapable: true,
+  };
+  const insight = (): ProviderShareInsights => ({
+    version: 1,
+    capabilities: { quota: true, usage: true },
+    status: { quota: 'ready', usage: 'not-requested' },
+    usage: null,
+    quota: {
+      group: false,
+      partial: false,
+      accounts: [
+        {
+          state: 'ready',
+          updatedAt: Date.now(),
+          balance: null,
+          windows: [
+            {
+              kind: 'week',
+              label: null,
+              remainingPercent: 21,
+              resetsAt: Date.now() + 3_600_000,
+              windowMinutes: null,
+            },
+          ],
+        },
+      ],
+    },
+  });
+  function Rail({ open = true }: { open?: boolean }) {
+    return (
+      <ProviderShareQuotaViewingContext.Provider value={open}>
+        <UnifiedModelRail
+          items={[
+            { kind: 'all' },
+            { kind: 'remote-provider', deviceId: 'share:shared', providerId: 'openai' },
+          ]}
+          active={{ kind: 'all' }}
+          providers={[]}
+          providerLabel={(id) => id}
+          providerUsage={{ deviceId: null }}
+          onSelect={() => {}}
+          remoteSources={{
+            localProviders: [],
+            localProviderLabel: (id) => id,
+            providersOf: () => [provider('openai')],
+            labelOf: () => 'OpenAI · 来自 Alice 的分享',
+          }}
+        />
+      </ProviderShareQuotaViewingContext.Provider>
+    );
+  }
+  const bar = () => document.querySelector('[data-weekly-remaining]');
+  const tick = async () => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+  };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-22T00:00:00Z'));
+    setDataOwnerGeneration('owner-a');
+    sharing.received = [share];
+    listeners.clear();
+    command.mockReset().mockResolvedValue(insight());
+    Object.assign(window, {
+      electronAPI: {
+        providerShare: {
+          command,
+          onReceivedChanged: (listener: (shares: ProviderShareReceived[]) => void) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        },
+      },
+    });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setDataOwnerGeneration(null);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  });
+
+  it('shows remaining and reset tooltip, using only quota insights instead of device mirrors', async () => {
+    await act(async () => {
+      render(<Rail />);
+    });
+    expect(bar()?.getAttribute('data-weekly-remaining')).toBe('21');
+    expect(bar()?.firstElementChild?.getAttribute('style')).toBe('width: 21%;');
+    const button = screen.getByRole('button', { name: 'OpenAI · 来自 Alice 的分享' });
+    expect(button.getAttribute('aria-description')).toBe('每周 · 剩余 21%');
+    fireEvent.focus(button);
+    expect(screen.getByRole('tooltip').textContent).toContain('1小时 后重置');
+    expect(command).toHaveBeenCalledExactlyOnceWith({
+      action: 'insights',
+      shareId: 'shared',
+      includeUsage: false,
+    });
+    for (const read of Object.values(reads)) expect(read).not.toHaveBeenCalled();
+
+    const next = insight();
+    next.quota!.accounts[0].windows.unshift({
+      kind: 'scoped',
+      label: 'Fable',
+      remainingPercent: 0,
+      resetsAt: null,
+      windowMinutes: 10_080,
+    });
+    command.mockResolvedValue(next);
+    await tick();
+    expect(bar()?.getAttribute('data-weekly-remaining')).toBe('21');
+    next.quota!.accounts[0].windows[1].remainingPercent = 0;
+    await tick();
+    expect(bar()?.getAttribute('data-weekly-remaining')).toBe('0');
+    expect(bar()?.firstElementChild?.getAttribute('style')).toBe('width: 0%;');
+    next.quota!.accounts[0].windows.pop();
+    await tick();
+    expect(bar()).toBeNull();
+  });
+
+  it('hides revoked, grouped, multiple, unavailable, balance-only and non-weekly quotas', async () => {
+    await act(async () => {
+      render(<Rail />);
+    });
+    expect(bar()).not.toBeNull();
+    const cases: Array<(view: ProviderShareInsights) => void> = [
+      (view) => {
+        view.capabilities.quota = false;
+      },
+      (view) => {
+        view.quota!.group = true;
+      },
+      (view) => {
+        view.quota!.accounts.push(view.quota!.accounts[0]);
+      },
+      (view) => {
+        view.status.quota = 'unavailable';
+      },
+      (view) => {
+        view.quota!.accounts[0].state = 'unsupported';
+      },
+      (view) => {
+        view.quota!.accounts[0].windows = [];
+        view.quota!.accounts[0].balance = {
+          remaining: 10,
+          total: 20,
+          currency: 'USD',
+          resetsAt: null,
+          pools: [],
+        };
+      },
+      (view) => {
+        view.quota!.accounts[0].windows[0].kind = 'session';
+      },
+      (view) => {
+        view.quota!.accounts[0].windows[0].resetsAt = Date.now() - 1;
+      },
+    ];
+    for (const change of cases) {
+      const view = insight();
+      change(view);
+      command.mockResolvedValue(view);
+      await tick();
+      expect(bar()).toBeNull();
+    }
+    expect(command.mock.calls.every(([cmd]) => cmd.includeUsage === false)).toBe(true);
+  });
+
+  // E2E: changing directory remounted the rail 1.2s after its last read.
+  it('reuses quota across directory remounts and shares in-flight reads', async () => {
+    let finishFirst!: (value: ProviderShareInsights) => void;
+    command.mockImplementationOnce(() => new Promise<ProviderShareInsights>((done) => { finishFirst = done; }));
+    const first = render(<Rail />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+      finishFirst(insight());
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    first.unmount();
+    const second = render(<Rail />);
+    expect(bar()?.getAttribute('data-weekly-remaining')).toBe('21');
+    await act(async () => {});
+    expect(command).toHaveBeenCalledTimes(1);
+    let resolve!: (value: ProviderShareInsights) => void;
+    command.mockImplementation(() => new Promise<ProviderShareInsights>((done) => { resolve = done; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(command).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2800); });
+    expect(command).toHaveBeenCalledTimes(2);
+    second.unmount();
+    render(<><Rail /><Rail /></>);
+    await act(async () => {});
+    expect(command).toHaveBeenCalledTimes(2);
+    await act(async () => { resolve(insight()); });
+    expect(document.querySelectorAll('[data-weekly-remaining="21"]')).toHaveLength(2);
+  });
+
+  it('clears the shared result when the picker closes without retaining its rail', async () => {
+    function Picker({ open }: { open: boolean }) {
+      useProviderShareQuotaViewing(open);
+      return open ? <Rail /> : null;
+    }
+    const view = render(<Picker open />);
+    await act(async () => {});
+    expect(bar()).not.toBeNull();
+    view.rerender(<Picker open={false} />);
+    await act(async () => {});
+    view.rerender(<Picker open />);
+    expect(bar()).toBeNull();
+    expect(command).toHaveBeenCalledTimes(1);
+    await tick();
+    expect(bar()?.getAttribute('data-weekly-remaining')).toBe('21');
+    expect(command).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not query closed lists and discards late reads after closing or hiding', async () => {
+    const view = render(<Rail open={false} />);
+    await tick();
+    expect(command).not.toHaveBeenCalled();
+    await act(async () => {
+      view.rerender(<Rail />);
+    });
+    expect(bar()).not.toBeNull();
+    let resolve!: (value: ProviderShareInsights) => void;
+    command.mockImplementation(
+      () =>
+        new Promise<ProviderShareInsights>((done) => {
+          resolve = done;
+        }),
+    );
+    await tick();
+    view.rerender(<Rail open={false} />);
+    expect(bar()).toBeNull();
+    await act(async () => {
+      resolve(insight());
+    });
+    await tick();
+    expect(bar()).toBeNull();
+    expect(command).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      view.rerender(<Rail />);
+    });
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => {
+      resolve(insight());
+    });
+    await tick();
+    expect(command).toHaveBeenCalledTimes(3);
+    expect(bar()).toBeNull();
+    command.mockResolvedValue(insight());
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(bar()).not.toBeNull();
+    view.unmount();
+    await tick();
+    expect(command).toHaveBeenCalledTimes(4);
+    expect(listeners.size).toBe(0);
+  });
+
+  it('clears on membership and owner changes, rejecting stale replies and inactive shares', async () => {
+    const view = render(<Rail />);
+    await act(async () => {});
+    expect(bar()).not.toBeNull();
+    for (const patch of [
+      { status: 'paused' as const },
+      { hostOnline: false },
+      { hostCapable: false },
+    ]) {
+      const calls = command.mock.calls.length;
+      sharing.received = [{ ...share, ...patch }];
+      act(() => {
+        for (const listener of listeners) listener(sharing.received);
+      });
+      view.rerender(<Rail />);
+      await tick();
+      expect(bar()).toBeNull();
+      expect(command).toHaveBeenCalledTimes(calls);
+    }
+    sharing.received = [share];
+    await act(async () => {
+      view.rerender(<Rail />);
+    });
+    expect(bar()).not.toBeNull();
+    let resolve!: (value: ProviderShareInsights) => void;
+    command.mockImplementation(
+      () =>
+        new Promise<ProviderShareInsights>((done) => {
+          resolve = done;
+        }),
+    );
+    await tick();
+    act(() => {
+      for (const listener of listeners) listener([{ ...share, memberId: 'replacement' }]);
+    });
+    expect(bar()).toBeNull();
+    await act(async () => {
+      resolve(insight());
+    });
+    expect(bar()).toBeNull();
+    await tick();
+    act(() => {
+      for (const listener of listeners) listener([share]);
+    });
+    const resolvePreviousOwner = resolve;
+    const calls = command.mock.calls.length;
+    setDataOwnerGeneration('owner-b');
+    sharing.received = [];
+    view.rerender(<Rail />);
+    await act(async () => {
+      resolvePreviousOwner(insight());
+    });
+    await tick();
+    expect(bar()).toBeNull();
+    expect(command).toHaveBeenCalledTimes(calls);
   });
 });

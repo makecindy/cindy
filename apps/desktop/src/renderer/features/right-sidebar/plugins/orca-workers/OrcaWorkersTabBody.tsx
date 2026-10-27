@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -15,12 +15,14 @@ import { mergeSessionSources } from '@/features/cc-agent/lib/mergeSessionSources
 import { useDocumentVisible, useWindowVisible } from '@/hooks/useWindowVisible';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { createLogger } from '@/lib/logger';
+import { mergeSidebarWindowBack } from '../../lib/mergeSidebarWindowBack';
 import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import type { TabKindBodyProps } from '../../types';
 import {
   clearOrcaWorkersSelectionIntent,
   consumeOrcaWorkersFocusHint,
   consumeOrcaWorkersSearchJump,
+  writeOrcaWorkersFocusIntent,
   type OrcaWorkersState,
 } from './actions';
 import { getOrcaWorkersCloseDecision } from './closeDecision';
@@ -80,13 +82,38 @@ export function OrcaWorkersTabBody({
     void revalidateActiveWorkerSettings(ctx.sessionId);
   }, [active, ctx.sessionId, shellVisible, windowVisible]);
 
+  // 分离窗合并回主窗期间，本窗不消费刚写入的 Worker 意图：消费会把意图清掉并落库，
+  // 主窗重新水合时就读不到要选中的 Worker 了。
+  const mergingBackRef = useRef(false);
   const handleFocusWorkerSessionIdConsumed = useCallback(
     (revision: number) => {
+      if (mergingBackRef.current) return;
       void consumeOrcaWorkersFocusHint(ctx.sessionId, ctx.tabId, revision).catch((err) => {
         log.warn('consume focus worker hint failed', err);
       });
     },
     [ctx],
+  );
+  const handleViewWorkerInMainWindow = useCallback(
+    (workerSessionId: string) => {
+      if (mergingBackRef.current) return;
+      mergingBackRef.current = true;
+      void (async () => {
+        let revision: number | null = null;
+        try {
+          // 先等意图写完(可持久化会话落库)，再交接；主窗收回后据此选中该 Worker。
+          revision = await writeOrcaWorkersFocusIntent(ctx.sessionId, ctx.tabId, workerSessionId);
+          await mergeSidebarWindowBack(ctx.sessionId);
+        } catch (err) {
+          mergingBackRef.current = false;
+          log.warn('view worker in main window failed', err);
+          // 本窗的选择 hook 对同一 revision 只回调一次消费，合并期间那次被跳过了；
+          // 合并失败时补消费，免得这条意图留在 tab 状态里，下次挂载又被重放。
+          if (revision !== null) handleFocusWorkerSessionIdConsumed(revision);
+        }
+      })();
+    },
+    [ctx, handleFocusWorkerSessionIdConsumed],
   );
   const handleSearchJumpConsumed = useCallback(() => {
     void consumeOrcaWorkersSearchJump(
@@ -125,7 +152,10 @@ export function OrcaWorkersTabBody({
     <SidebarHostSessionProvider sessionId={ctx.sessionId}>
       {isSidebarWindow() ? (
         <MemoryRouter initialEntries={[`/cc-agent/${ctx.sessionId}`]}>
-          <OrcaWorkerPanel {...workerPanelProps} />
+          <OrcaWorkerPanel
+            {...workerPanelProps}
+            onViewWorkerInMainWindow={handleViewWorkerInMainWindow}
+          />
         </MemoryRouter>
       ) : (
         <RoutedOrcaWorkerPanel {...workerPanelProps} />

@@ -18,14 +18,16 @@ import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 export function ConnectProviderBanner({
   className,
   style,
+  remote,
 }: {
   className?: string;
   style?: CSSProperties;
+  remote?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
-  const onboarding = useProviderOnboarding();
+  const onboarding = useProviderOnboarding({ remote });
 
   if (!onboarding.visible) return null;
 

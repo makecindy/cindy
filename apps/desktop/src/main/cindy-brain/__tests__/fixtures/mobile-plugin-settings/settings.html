@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QA original plugin settings</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 16px; font: 16px/1.5 system-ui, sans-serif; color: var(--text-primary, CanvasText); background: var(--surface, Canvas); }
+      main { width: 100%; max-width: 40rem; margin: auto; }
+      h1, h2 { font-size: 18px; line-height: 1.4; }
+      fieldset { min-width: 0; margin: 16px 0; padding: 12px; border: 1px solid var(--border-default, GrayText); }
+      label { display: block; margin: 12px 0; }
+      input:not([type="checkbox"]), select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px; font: inherit; color: inherit; background: var(--surface-elevated, Field); border: 1px solid var(--border-default, GrayText); }
+      button { min-height: 44px; max-width: 100%; padding: 8px 12px; margin: 4px 0; font: inherit; white-space: normal; color: inherit; background: var(--surface-elevated, ButtonFace); border: 1px solid var(--border-default, GrayText); }
+      output, li { overflow-wrap: anywhere; }
+      :focus-visible { outline: 2px solid var(--focus-ring, Highlight); outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>QA original plugin settings</h1>
+      <p>TEST DATA ONLY · original HTML fixture · no file import</p>
+      <output id="status" role="status" aria-live="polite">Reading target Host…</output>
+      <form id="preferences">
+        <fieldset>
+          <legend>Ordinary settings on the target Host</legend>
+          <label>Display label <input id="displayLabel" name="displayLabel" required maxlength="80"></label>
+          <label><input id="notifications" name="notifications" type="checkbox"> Notifications</label>
+          <label>Language <select id="language" name="language"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+          <button type="submit">Save ordinary settings</button>
+          <button id="reload" type="button">Read target again</button>
+        </fieldset>
+      </form>
+      <fieldset>
+        <legend>Write-only synthetic secret</legend>
+        <output id="secretState">Status unknown</output>
+        <label>Test key <input id="secret" type="password" autocomplete="off" placeholder="Use an invalid QA value only"></label>
+        <button id="saveSecret" type="button">Save test key to target</button>
+      </fieldset>
+      <fieldset>
+        <legend>OAuth accounts</legend>
+        <ul id="accounts"></ul>
+        <button id="connect" type="button">Connect a test account</button>
+      </fieldset>
+      <fieldset>
+        <legend>Directory and original channel interaction</legend>
+        <button id="pickDirectory" type="button">Choose a directory on the target</button>
+        <output id="directory">No directory selected</output>
+        <button id="echo" type="button">Send channel probe</button>
+        <output id="channelState">No reply received</output>
+      </fieldset>
+      <form id="longForm">
+        <fieldset>
+          <legend>Long form: keyboard and scroll</legend>
+          <div id="longFields"></div>
+          <label>Last field <textarea id="lastField" rows="4" placeholder="Keep this draft while opening the keyboard or changing theme"></textarea></label>
+          <button type="submit">Save bottom field</button>
+        </fieldset>
+      </form>
+    </main>
+    <script src="settings.js"></script>
+  </body>
+</html>

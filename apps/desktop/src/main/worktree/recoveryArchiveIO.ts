@@ -11,7 +11,11 @@ export interface FileEvidence {
   mode: number;
 }
 
-/** Compressed, encrypted local recovery bytes; secrets never enter Git objects. */
+/**
+ * Compressed, encrypted local bytes that never enter Git objects. Worktree recycling no longer
+ * creates these (its Git snapshot stores new non-ignored files in the base repository's local
+ * object store); records written by older clients still restore from them.
+ */
 export interface WorktreeRecoveryArchive {
   file: string;
   encryptedKey: string;

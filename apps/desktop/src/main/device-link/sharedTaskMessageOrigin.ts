@@ -1,9 +1,10 @@
 import { readMessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
+import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
-const GUEST_HIDDEN_META_KEYS = ['botTaskCoordinationInput', 'agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
+const GUEST_HIDDEN_META_KEYS = ['autoReviewUserText', 'botTaskCoordinationInput', 'agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
 
 function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
   if (origin.kind === 'session') return { kind: 'session' };
@@ -52,17 +53,21 @@ export function redactMessageOriginForSharedGuest(agentMeta: unknown): unknown {
   return hidden ? rest : agentMeta;
 }
 
-/** 对单条消息行套用 {@link redactMessageOriginForSharedGuest}；无需改动时返回原引用。 */
+/** Strip private attribution and MCP App data from message rows; never mutate stored history. */
 export function redactMessageRowForSharedGuest<T>(message: T): T {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
   let agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
+  const content = projectMcpAppContent(record.content,
+    !!record.agentMeta && typeof record.agentMeta === 'object' &&
+    (record.agentMeta as Record<string, unknown>).mcpApp === true);
   // Preserve independent reply visibility without disclosing source identity
   // or sealing unrelated prose in the canonical model turn.
   if (record.role === 'assistant' && readMessageSourceGroup(record.agentMeta)) {
     agentMeta = { ...(agentMeta as Record<string, unknown>), explicitDelivery: true };
   }
-  return agentMeta === record.agentMeta ? message : ({ ...record, agentMeta } as T);
+  return agentMeta === record.agentMeta && content === record.content
+    ? message : ({ ...record, agentMeta, content } as T);
 }
 
 /**

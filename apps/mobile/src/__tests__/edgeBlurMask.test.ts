@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EDGE_BLUR_FADE_INSIDE, EDGE_BLUR_FADE_OUTSIDE, edgeBlurMask } from '@/session/edgeBlurMask';
+import { EDGE_BLUR_FADE_INSIDE, EDGE_BLUR_FADE_OUTSIDE, HEADER_BLUR_FADE_OUTSIDE, edgeBlurMask, headerBlurLayers } from '@/session/edgeBlurMask';
 
 const readTextLf = (path: string): string =>
   String(readFileSync(resolve(process.cwd(), path), 'utf8')).replace(/\r\n/g, '\n');
@@ -36,6 +36,30 @@ describe('edge blur mask', () => {
     // Smoothstep: shallow steps at both ends, steep in the middle.
     expect(alphas[0] - alphas[1]).toBeLessThan(alphas[4] - alphas[5]);
     expect(alphas[7] - alphas[8]).toBeLessThan(alphas[4] - alphas[5]);
+  });
+
+  it('can keep the whole chrome solid and feather only past its edge', () => {
+    const mask = edgeBlurMask(111, 'top', 0);
+    expect(mask.height).toBe(127);
+    expect(mask.startPoint.y * mask.height).toBeCloseTo(111);
+    expect(mask.endPoint.y).toBe(1);
+  });
+
+  it('thins the header blur progressively: three layers end at a third, two thirds and the full fade', () => {
+    expect(HEADER_BLUR_FADE_OUTSIDE).toBe(24);
+    const layers = headerBlurLayers(100);
+    expect(layers).toHaveLength(3);
+    for (const layer of layers) {
+      expect(layer.height).toBe(124);
+      // Every layer is solid over the chrome until 24pt above its edge.
+      expect(layer.startPoint.y * layer.height).toBeCloseTo(100 - 24);
+    }
+    expect(layers.map(layer => layer.endPoint.y * layer.height)).toEqual([76 + 16, 76 + 32, 124].map(value => expect.closeTo(value)));
+  });
+
+  it('keeps a chat header fully solid and starts every header layer at its edge', () => {
+    for (const layer of headerBlurLayers(111, 0)) expect(layer.startPoint.y * layer.height).toBeCloseTo(111);
+    expect(headerBlurLayers(111, 0).at(-1)!.endPoint.y).toBe(1);
   });
 
   it('keeps short chrome partly solid by capping the inside feather at half its height', () => {

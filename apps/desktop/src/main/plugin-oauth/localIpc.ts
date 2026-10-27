@@ -7,9 +7,17 @@ import {
   parsePluginSecretPresentation,
   parsePluginConnectionInput,
   parsePluginConnectionPresentation,
+  parseInputHandoffPresentation,
+  parseInputHandoffSubmission,
+  INPUT_HANDOFF_GHOST_ID,
+  PLUGIN_OAUTH_TTL_MS,
+  type InputHandoffPicture,
+  type InputHandoffPresentation,
+  type InputHandoffSubmission,
   type InvokeResultPayload,
   type PluginOauthPeerIdentity,
 } from '@cindy/device-link';
+import { randomUUID } from 'node:crypto';
 import { assistPluginOauth } from './controller.js';
 import { capturePluginOauthPeer } from './runtime.js';
 import { authenticateOauthController } from './authentication.js';
@@ -59,6 +67,11 @@ async function handleAuthorization(
   raw: unknown,
   secret?: Pick<LocalPluginSecretRequest, 'value' | 'presentation'>,
   connection?: Pick<LocalPluginConnectionRequest, 'value' | 'presentation'>,
+  input?: {
+    presentation: InputHandoffPresentation;
+    submission?: InputHandoffSubmission;
+    picture?(picture: InputHandoffPicture): Promise<InputHandoffSubmission>;
+  },
 ): Promise<{ accepted: true }> {
   const fail = () => new Error('OAUTH_BRIDGE_UNAVAILABLE');
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw fail();
@@ -102,6 +115,13 @@ async function handleAuthorization(
         ...(secret ? { secretValue: secret.value, secretPresentation: secret.presentation } : {}),
         ...(connection
           ? { connectionValue: connection.value, connectionPresentation: connection.presentation }
+          : {}),
+        ...(input
+          ? {
+              inputPresentation: input.presentation,
+              ...(input.submission ? { inputSubmission: input.submission } : {}),
+              ...(input.picture ? { inputPicture: input.picture } : {}),
+            }
           : {}),
         assertCurrent,
         openExternal: deps.openExternal,
@@ -164,4 +184,127 @@ export async function handleSubmitPluginConnection(
     value: parsePluginConnectionInput(value),
     presentation: parsePluginConnectionPresentation(presentation),
   });
+}
+
+/** 代输入 step for a task on another computer. The submission is never logged or echoed. */
+export async function handleSubmitInputHandoff(
+  deps: LocalOauthDeps,
+  raw: unknown,
+): Promise<{ accepted: true }> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new Error('INPUT_HANDOFF_UNAVAILABLE');
+  const { submission, presentation, ...target } = raw as Record<string, unknown>;
+  if ((target as { ghostId?: unknown }).ghostId !== INPUT_HANDOFF_GHOST_ID)
+    throw new Error('INPUT_HANDOFF_UNAVAILABLE');
+  const parsedPresentation = parseInputHandoffPresentation(presentation);
+  const parsedSubmission = parseInputHandoffSubmission(submission);
+  if (
+    parsedPresentation.picture ||
+    parsedPresentation.requestId !== (target as { requestId?: unknown }).requestId ||
+    parsedPresentation.revision !== parsedSubmission.expectedRevision
+  )
+    throw new Error('INPUT_HANDOFF_UNAVAILABLE');
+  return handleAuthorization(deps, target, undefined, undefined, {
+    submission: parsedSubmission,
+    presentation: parsedPresentation,
+  });
+}
+
+interface PictureExchange {
+  owner: number;
+  revision: number;
+  answer(submission: InputHandoffSubmission | null): void;
+  done: Promise<{ accepted: true }>;
+}
+/** Open screenshot steps by token; each is one signed exchange waiting for the owner. */
+const pictureExchanges = new Map<string, PictureExchange>();
+
+/**
+ * 代输入 screenshot step for a task on another computer: runs the signed
+ * exchange up to the sealed offer and hands its picture to the requesting
+ * window. The exchange then waits for `handleAnswerInputHandoffPicture`.
+ * The picture is returned to that window only and never stored.
+ */
+export function handleOpenInputHandoffPicture(
+  deps: LocalOauthDeps,
+  raw: unknown,
+  owner: number,
+): Promise<{ token: string; picture: InputHandoffPicture }> {
+  const fail = () => new Error('INPUT_HANDOFF_UNAVAILABLE');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return Promise.reject(fail());
+  const { presentation, ...target } = raw as Record<string, unknown>;
+  let parsed: InputHandoffPresentation;
+  try {
+    parsed = parseInputHandoffPresentation(presentation);
+  } catch {
+    return Promise.reject(fail());
+  }
+  if (
+    (target as { ghostId?: unknown }).ghostId !== INPUT_HANDOFF_GHOST_ID ||
+    !parsed.picture ||
+    parsed.requestId !== (target as { requestId?: unknown }).requestId ||
+    parsed.revision !== (target as { expectedRevision?: unknown }).expectedRevision ||
+    pictureExchanges.size >= 4
+  )
+    return Promise.reject(fail());
+  const token = randomUUID();
+  return new Promise((resolve, reject) => {
+    const done = handleAuthorization(deps, target, undefined, undefined, {
+      presentation: parsed,
+      picture: (picture) =>
+        new Promise<InputHandoffSubmission>((answered, declined) => {
+          const timer = setTimeout(() => entry.answer(null), PLUGIN_OAUTH_TTL_MS);
+          timer.unref?.();
+          const entry: PictureExchange = {
+            owner,
+            revision: parsed.revision,
+            answer: (submission) => {
+              clearTimeout(timer);
+              entry.answer = () => undefined;
+              if (submission) answered(submission);
+              else declined(fail());
+            },
+            done,
+          };
+          pictureExchanges.set(token, entry);
+          resolve({ token, picture });
+        }),
+    });
+    done.catch(reject).finally(() => {
+      pictureExchanges.get(token)?.answer(null);
+      pictureExchanges.delete(token);
+    });
+  });
+}
+
+/** The owner's tap or typing on an opened screenshot step; `null` closes it without acting. */
+export async function handleAnswerInputHandoffPicture(
+  raw: unknown,
+  owner: number,
+): Promise<{ accepted: boolean }> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('INPUT_HANDOFF_UNAVAILABLE');
+  const { token, submission } = raw as Record<string, unknown>;
+  const entry = typeof token === 'string' ? pictureExchanges.get(token) : undefined;
+  if (!entry || entry.owner !== owner) return { accepted: false };
+  // Closing waits for the exchange to wind down, so the same window can open the step again right away.
+  const close = async () => {
+    entry.answer(null);
+    await entry.done.catch(() => undefined);
+    return { accepted: false };
+  };
+  if (submission === null) return close();
+  let parsed: InputHandoffSubmission;
+  try {
+    parsed = parseInputHandoffSubmission(submission);
+  } catch {
+    return close();
+  }
+  if (parsed.expectedRevision !== entry.revision) return close();
+  entry.answer(parsed);
+  try {
+    await entry.done;
+    return { accepted: true };
+  } catch {
+    return { accepted: false };
+  }
 }

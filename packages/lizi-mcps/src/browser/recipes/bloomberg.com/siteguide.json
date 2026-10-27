@@ -5,6 +5,12 @@
     "rss": "https://feeds.bloomberg.com/<section>/news.rss",
     "rssMain": "https://feeds.bloomberg.com/news.rss"
   },
-  "recipes": ["bloomberg-feed"],
-  "notes": "只做公开 RSS 头条,不做正文:Bloomberg 文章正文在 www.bloomberg.com 上是付费墙 + 机器人验证(__NEXT_DATA__ 里的 story.body,要有效订阅会话才看得到),不在浏览器配方覆盖范围,故跳过正文抓取。\nRSS 源完全公开、纯 XML,可直接 navigate 后读 document.body.innerText 用正则切 <item>(bloomberg-feed 配方已封装,结果直接在 output(已自动解包),字段 title/summary/link/pubDate)。频道 slug→URL(bloomberg-feed 配方拼 feeds.bloomberg.com/<section>/news.rss):markets→/markets/news.rss、technology→/technology/news.rss、economics→/economics/news.rss、politics→/politics/news.rss、industries→/industries/news.rss、businessweek→/businessweek/news.rss、opinions→/bview/news.rss。综合首页是独立源 https://feeds.bloomberg.com/news.rss(URL 里没有 section 路径段),不能通过 bloomberg-feed 的 section 入参拼出——section 不要填 news(会拼成不存在的 /news/news.rss);要综合首页就直接 navigate 上面这个 rssMain URL。每个 <item> 含 title/description/link/guid/pubDate 及 media:content|media:thumbnail|enclosure 的配图 url。拿到 link 后若需正文,只能靠用户自己的 Bloomberg 订阅会话在浏览器里打开。"
+  "recipes": [
+    "bloomberg-feed"
+  ],
+  "notes": "只做公开 RSS 头条,不做正文:Bloomberg 文章正文在 www.bloomberg.com 上是付费墙 + 机器人验证(__NEXT_DATA__ 里的 story.body,要有效订阅会话才看得到),不在浏览器配方覆盖范围,故跳过正文抓取。\nRSS 源完全公开、纯 XML,可直接 navigate 后读 document.body.innerText 用正则切 <item>(bloomberg-feed 配方已封装,结果直接在 output(已自动解包),字段 title/summary/link/pubDate)。频道 slug→URL(bloomberg-feed 配方拼 feeds.bloomberg.com/<section>/news.rss):markets→/markets/news.rss、technology→/technology/news.rss、economics→/economics/news.rss、politics→/politics/news.rss、industries→/industries/news.rss、businessweek→/businessweek/news.rss、opinions→/bview/news.rss。综合首页是独立源 https://feeds.bloomberg.com/news.rss(URL 里没有 section 路径段),不能通过 bloomberg-feed 的 section 入参拼出——section 不要填 news(会拼成不存在的 /news/news.rss);要综合首页就直接 navigate 上面这个 rssMain URL。每个 <item> 含 title/description/link/guid/pubDate 及 media:content|media:thumbnail|enclosure 的配图 url。拿到 link 后若需正文,只能靠用户自己的 Bloomberg 订阅会话在浏览器里打开。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

@@ -9,11 +9,13 @@ import path from 'node:path';
 
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
+import { providerShareGuestPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startRemoteAgentSession } from '../controller/startRemote';
-import { guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from '../host/providerAccess';
+import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from '../host/providerAccess';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { guestProviderModelAllowed, guestProviderRouteForToken, resetGuestProviderRoutesForTest } from '../../maker-host/guest-provider-route-store';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 
@@ -82,7 +84,71 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGuestProviderRoutesForTest();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+// Unit regression for review 4328468761 / provider-groups §4, sharing §12.
+// The host tests stubbed this production binder and missed that relay controllers
+// have no direct-share member. Minimum: an authorized same-account controller
+// binding a guest-isolated task. Verify the real proxy grant, including revocation.
+describe('guest proxy binding for direct shares and same-account group relays', () => {
+  // Unit: an async authorization response must not resurrect a replaced binding.
+  it('rejects a failed grant query or one arriving after the task binding was released', async () => {
+    let finish!: (allowed: boolean) => void;
+    let unavailable = true;
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [view('spark', ['opus', 'sonnet'])],
+      guestAccess: () => null, ownerAllowed: () => true, providerAllowed: () => true,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+    });
+    const binding = await binder({ kind: 'claude-code', hostSessionId: 'late', providerId: 'spark', controller: 'owner', isCurrent: () => true,
+      relayModelAccess: { models: ['opus'], allows: () => unavailable ? Promise.reject(new Error('link unavailable')) : new Promise(resolve => { finish = resolve; }) } });
+    expect(binding!.modelIds).toEqual(['opus']);
+    expect(await guestProviderModelAllowed('spark', 'opus', 'late')).toBe(false);
+    unavailable = false;
+    const request = guestProviderModelAllowed('spark', 'opus', 'late');
+    binding!.release();
+    finish(true);
+    expect(await request).toBe(false);
+  });
+  it.each(['relay', 'share'])('binds a %s with its live model permissions and an authorized CLI catalog', async (kind) => {
+    const controller = kind === 'relay' ? 'owner-device' : providerShareGuestPeer('share-1', 'member-1', 'guest-device');
+    let active = true;
+    let providerEnabled = true;
+    const providerModels = new Set(['opus']);
+    const memberModels = new Set(['opus']);
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [view('spark', ['opus', 'sonnet'])],
+      guestAccess: () => kind === 'share' && active ? { providerId: 'spark', memberId: 'member-1' } : null,
+      ownerAllowed: () => active,
+      providerAllowed: () => providerEnabled,
+      modelAccess: {
+        allows: (_providerId, model, memberId) => providerModels.has(model) && (!memberId || memberModels.has(model)),
+        read: (_providerId, memberId) => ({ models: [...(memberId ? memberModels : providerModels)], providerModels: [...providerModels] }),
+      },
+    });
+    const input = { kind: 'claude-code' as const, hostSessionId: 'bound-guest', providerId: 'spark', controller, isCurrent: () => true };
+    const binding = await binder(input);
+    expect(binding).not.toBeNull();
+    expect(binding!.modelIds).toEqual(['opus']);
+    expect(guestProviderRouteForToken(binding!.routeToken)).toEqual({ sessionId: input.hostSessionId, providerId: 'spark' });
+    const allows = (model: string) => guestProviderModelAllowed('spark', model, input.hostSessionId);
+    expect(await allows('opus')).toBe(true);
+    expect(await allows('sonnet')).toBe(false);
+    providerModels.add('sonnet');
+    expect(await allows('sonnet')).toBe(kind === 'relay');
+    memberModels.add('sonnet');
+    expect(await allows('sonnet')).toBe(true);
+    providerEnabled = false;
+    expect(await allows('opus')).toBe(false);
+    providerEnabled = true;
+    active = false;
+    expect(await allows('opus')).toBe(false);
+    expect(await binder(input)).toBeNull();
+    binding!.release();
+    expect(guestProviderRouteForToken(binding!.routeToken)).toBeNull();
+  });
 });
 
 function recordingHandle(input: HostedStartInput, calls: { sends: number; models: unknown[][] }): AgentSessionHandle {
@@ -116,7 +182,7 @@ function recordingHandle(input: HostedStartInput, calls: { sends: number; models
   } as unknown as AgentSessionHandle;
 }
 
-async function setup(allowed: Set<string>, guest?: { sharedProviderId: string }) {
+async function setup(allowed: Set<string>, guest?: { sharedProviderId: string }, modelAllowed: (id: string, model: string) => boolean = () => true) {
   const project = path.join(root, 'proj');
   fs.mkdirSync(project, { recursive: true });
   const inputs: HostedStartInput[] = [];
@@ -134,9 +200,9 @@ async function setup(allowed: Set<string>, guest?: { sharedProviderId: string })
     ...(guest ? { controllerTrust: () => 'guest' as const } : {}),
     providerAccess: {
       resolve: async (kind, model, providerId) => guest
-        ? resolveGuestProviderId(views, guest.sharedProviderId, (id) => allowed.has(id), kind, model, providerId)
-        : resolveSharedProviderId(views, (id) => allowed.has(id), kind, model, providerId),
-      isAllowed: (id) => allowed.has(id),
+        ? resolveGuestProviderId(views, guest.sharedProviderId, (id) => allowed.has(id) && modelAllowed(id, model), kind, model, providerId)
+        : resolveSharedProviderId(views, (id) => allowed.has(id) && modelAllowed(id, model), kind, model, providerId),
+      isAllowed: (id, _controller, model) => allowed.has(id) && modelAllowed(id, model ?? ''),
     },
     ...(guest ? {
       bindGuestProviderRoute: async ({ hostSessionId, providerId }: { hostSessionId: string; providerId: string }) => {
@@ -202,7 +268,7 @@ describe('remote agent provider access on the computer running the agent', () =>
     const { host, calls, start } = await setup(new Set(['spark']));
     const handle = await start('spark');
     await handle.setModel!('opus');
-    // 不带来源的换模型原样到达 Agent(沿用当前来源)，不经授权核对。
+    // 不带来源的换模型仍原样到达 Agent；现在也会复核远程型号范围。
     expect(calls.models.at(-1)).toEqual(['opus', null]);
     await handle.close({ reason: 'navigation' });
     host.dispose();
@@ -238,5 +304,27 @@ describe('shared-provider guest models on the computer running the agent', () =>
     await handle.close({ reason: 'navigation' });
     await vi.waitFor(() => expect(releases.count).toBe(1));
     host.dispose();
+  });
+});
+
+/* 用户要求的型号授权此前只有目录隐藏；最小输入为允许一个型号，随后撤回。
+ * 经生产 startRemoteAgentSession → host 协议验证创建、无来源切模型、发消息与插话；沿用本文件 unit fixture。 */
+describe.each([false, true])('remote model access, shared guest=%s', (guest) => {
+  it('blocks a model on start, a model-only switch, and sends after access is revoked', async () => {
+    const models = new Set(['opus']);
+    const { host, calls, inputs, start } = await setup(new Set(['spark']), guest ? { sharedProviderId: 'spark' } : undefined, (_id, model) => models.has(model));
+    try {
+      await expect(start('spark', 'sonnet')).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(inputs).toHaveLength(0);
+      const handle = await start('spark', 'opus');
+      await expect(handle.setModel!('sonnet')).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(calls.models).toHaveLength(0);
+      await handle.send({ content: [{ type: 'text', text: 'allowed' }] } as never);
+      models.clear();
+      await expect(handle.send({ content: [{ type: 'text', text: 'blocked' }] } as never)).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      await expect(handle.steer!({ content: [{ type: 'text', text: 'blocked' }] } as never)).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(calls.sends).toBe(1);
+      await handle.close({ reason: 'navigation' });
+    } finally { host.dispose(); }
   });
 });

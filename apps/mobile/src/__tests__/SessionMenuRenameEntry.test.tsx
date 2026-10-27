@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
+vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => <div data-testid="session.testTags" /> }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -95,8 +95,12 @@ vi.mock("@/components/MobilePrimitives", async () => {
         createElement("button", { key: action.testID, "data-testid": action.testID, onClick: action.onPress }))),
   };
 });
+const sheetLifecycle = vi.hoisted(() => ({ closed: undefined as (() => void) | undefined }));
 vi.mock("@/session/SheetModal", () => ({
-  SheetModal: ({ children }: { children: ReactNode }) => children,
+  SheetModal: ({ children, onClosed }: { children: ReactNode; onClosed?: () => void }) => {
+    sheetLifecycle.closed = onClosed;
+    return children;
+  },
 }));
 vi.mock("@/session/SheetSurface", () => ({
   SheetSurface: ({ children, footer }: { children: ReactNode; footer?: ReactNode }) => <>{children}{footer}</>,
@@ -152,6 +156,34 @@ it("opening at rename goes straight to the editor and cancel closes the sheet", 
   }
 });
 
+// Unit: a slow archive preflight used to hold the menu open. The actual menu
+// must close immediately, but wait for native dismissal before opening an Alert.
+it.each([true, false])("archive closes the menu before a delayed decision (%s)", async (confirmed) => {
+  let decide!: (ok: boolean) => void;
+  const decision = new Promise<boolean>((resolve) => { decide = resolve; });
+  const commit = vi.fn();
+  const onArchive = vi.fn(async (prepare: (isCurrent: () => boolean) => Promise<boolean>) => {
+    if (await prepare(() => true)) commit();
+  });
+  const props = baseProps({ initialView: "menu", onArchive, confirmArchive: vi.fn(() => decision),
+    session: { id: "a", title: "Task", status: "active" } as SessionMenuSheetProps['session'] });
+  const { root, click } = await renderSheet(props);
+  try {
+    await click("session.archiveButton");
+    expect(props.onClose).toHaveBeenCalledOnce();
+    expect(onArchive).not.toHaveBeenCalled();
+    expect(props.confirmArchive).not.toHaveBeenCalled();
+    await act(async () => sheetLifecycle.closed?.());
+    expect(props.confirmArchive).toHaveBeenCalledOnce();
+    expect(onArchive).toHaveBeenCalledExactlyOnceWith(props.confirmArchive);
+    expect(commit).not.toHaveBeenCalled();
+    await act(async () => { decide(confirmed); });
+    expect(commit).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 it("confirming a direct rename closes the sheet", async () => {
   const props = baseProps();
   const { root, click } = await renderSheet(props);
@@ -191,4 +223,31 @@ it.each([
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+// PR #6529 replaces the brittle source guard with the production menu. Unit:
+// a Worker has archive enabled; the old checks did not exercise confirmation.
+// Ordinary rename cases above cannot catch the iOS failure where closing the
+// sheet before confirmation loses the Alert. Close only after onConfirmed.
+it("Worker details hide ordinary actions and wait for archive confirmation before closing", async () => {
+  const onArchive = vi.fn();
+  const props = baseProps({ initialView: "menu", worker: { onArchive },
+    session: { id: "worker", title: "Worker", orcaRole: "worker", status: "active" } as SessionMenuSheetProps['session'] });
+  const { host, root, click } = await renderSheet({ ...props, session: { ...props.session, orcaRole: undefined } });
+  const ordinaryActions = ["session.renameAction", "session.copyLinkAction", "session.detailsSearch",
+    "session.pinButton", "session.archiveButton", "session.deleteButton", "session.testTags"];
+  try {
+    for (const id of ordinaryActions) {
+      expect(host.querySelector(`[data-testid="${id}"]`)).not.toBeNull();
+    }
+    await act(async () => root.render(<SessionMenuSheet {...props} />));
+    for (const id of ordinaryActions) {
+      expect(host.querySelector(`[data-testid="${id}"]`)).toBeNull();
+    }
+    await click("session.workerArchive");
+    expect(onArchive).toHaveBeenCalledExactlyOnceWith(props.onClose);
+    expect(props.onClose).not.toHaveBeenCalled();
+    await act(async () => onArchive.mock.calls[0]![0]());
+    expect(props.onClose).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); }
 });

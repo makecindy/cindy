@@ -1,4 +1,17 @@
 {
+  "skin_macii": "Macintosh II",
+  "skin_powerbook": "PowerBook 170",
+  "skin_thinkpad": "ThinkPad 701C",
+  "skin_classic": "经典原版",
+  "skin_compact": "窄边经典",
+  "skin_edge": "极简大屏",
+  "skin_modern": "现代",
+  "nextSkin": "下一个外观",
+  "retroSkin": "复古",
+  "modernSkin": "现代",
+  "switchModern": "切换到现代",
+  "switchRetro": "切换到复古",
+  "skinSwipeHint": "在这里左右滑动切换外观。",
   "hostDisconnected": "电脑已主动断开远程桌面连接。",
   "privacyScreen": "电脑防窥",
   "privacyScreenHint": "遮住电脑屏幕。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
@@ -160,5 +173,8 @@
   "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
   "hostMute": "远程电脑静音",
   "hostMuteHint": "连接期间将远程电脑静音",
-  "hostMuteFailed": "无法修改远程电脑的静音状态"
+  "hostMuteFailed": "无法修改远程电脑的静音状态",
+  "handoffEnded": "这次代输入已经结束，没有可显示的窗口。",
+  "handoffUnavailable": "这台电脑暂时不能只显示这个窗口。请在那台电脑上更新 Cindy，或开启远程桌面。",
+  "handoffWindow": "代输入 · {{app}}"
 }

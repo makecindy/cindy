@@ -37,15 +37,18 @@ import {
   focusMainWindow,
   openMainWindowBillingTopUp,
   openMainWindowSession,
+  openMainWindowRemoteControlSettings,
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { getActiveControllers } from '../device-link/dispatch.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import {
@@ -58,7 +61,7 @@ import {
 } from '../maker-ipc/usage.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import { serverApiFetch } from '../serverApiClient.js';
-import { readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
+import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
 import { observeUsageChanges, readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
@@ -84,6 +87,7 @@ import {
   type MenubarSubscriptionInput,
 } from './snapshot.js';
 import { buildMenubarUiStrings, createMenubarTranslate } from './strings.js';
+import { buildMenubarActivities } from './activity.js';
 
 const log = createLogger('menubar');
 
@@ -137,7 +141,7 @@ interface TimedCache<T> {
   readAtMs: number;
 }
 
-class MenubarService {
+export class MenubarService {
   private readonly host: MacMenubarNativeHost;
   private readonly creditSamples = new CreditSampleStore();
   private settings: MenubarSettings;
@@ -189,6 +193,26 @@ class MenubarService {
     if (this.started) this.scheduleRebuild(0);
   }
 
+  /** Remote activity updates the icon immediately, independently of usage collection. */
+  refreshControlState(): void {
+    if (!this.started || !this.lastView || this.lastView.gate) return;
+    const control = this.controlState();
+    if (
+      this.lastView.remotelyControlled === control.remotelyControlled
+      && JSON.stringify(this.lastView.remoteControllerNames) === JSON.stringify(control.remoteControllerNames)
+    ) return;
+    this.lastView = { ...this.lastView, ...control };
+    this.host.publish(this.lastView);
+  }
+
+  private controlState(gate?: MenubarGate): Pick<MenubarView, 'remotelyControlled' | 'remoteControllerNames'> {
+    const controllers = gate ? [] : getActiveControllers();
+    return {
+      remotelyControlled: controllers.length > 0,
+      remoteControllerNames: controllers.map(controller => controller.name),
+    };
+  }
+
   /** Opens the panel under the status item. */
   openPanel(): void {
     if (!this.started) return;
@@ -209,6 +233,11 @@ class MenubarService {
     this.host.prepare();
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
+      observeClaudeAccountUsage(() => {
+        if (!this.balanceAccountKey()?.startsWith('quota:')) return;
+        this.balance = null;
+        this.scheduleRebuild(0);
+      }),
       authManager.onAuthStateChange((state) => {
         if (!state.isAuthenticated) this.balance = null;
         // Usage history belongs to the data owner; token refreshes keep the cache.
@@ -225,6 +254,7 @@ class MenubarService {
     const island = getAgentIslandService();
     if (island) {
       this.disposers.push(
+        island.subscribeTaskOverview(() => this.publishTaskOverview()),
         island.subscribeSessionActivity(({ previous, current }) => {
           const wasRunning = previous ? isSessionActivityRunning(previous) : false;
           const isRunning = current ? isSessionActivityRunning(current) : false;
@@ -315,6 +345,7 @@ class MenubarService {
 
   private async collectAndPublish(nowMs: number, force: boolean, markStale: () => void): Promise<void> {
     const generation = getActiveAppSession().generation;
+    const quotaRevision = readClaudeAccountUsageRevision();
     const collected = await collectMenubarInputs({
       nowMs,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
@@ -332,7 +363,16 @@ class MenubarService {
       activities: () => getAgentIslandService()?.getSessionActivitySnapshots() ?? [],
       sessionRow: async (sessionId) => {
         const row = await getSessionRowSnapshot(sessionId);
-        return row ? { title: row.title, model: row.model ?? null, agentKind: row.agentKind ?? null } : null;
+        return row
+          ? {
+              title: row.title,
+              model: row.model ?? null,
+              agentKind: row.agentKind ?? null,
+              source: row.source ?? null,
+              // The in-memory route is newer than the row (a provider switched this turn).
+              providerId: hasSessionProvider(sessionId) ? getSessionProvider(sessionId) : (row.providerId ?? null),
+            }
+          : null;
       },
       selfDeviceName: deviceName(),
       onError: (scope, error) => log.warn('menu bar source failed', { scope, error: errorMessage(error) }),
@@ -340,6 +380,10 @@ class MenubarService {
     // An owner switch that started during the reads makes them the old owner's data.
     const after = getActiveAppSession();
     if (!this.started || isAppSessionBoundaryPending() || after.generation !== generation) return;
+    if (readClaudeAccountUsageRevision() !== quotaRevision) {
+      this.scheduleRebuild(0);
+      return;
+    }
     this.publish(collected, nowMs);
   }
 
@@ -434,6 +478,8 @@ class MenubarService {
       ...(gate ? { gate } : {}),
     };
     const view = buildMenubarView(input);
+    Object.assign(view, this.taskOverview(gate));
+    Object.assign(view, this.controlState(gate));
     this.lastView = view;
     this.host.publish(view);
     if (gate) {
@@ -442,6 +488,24 @@ class MenubarService {
       return;
     }
     this.updateLowAlert(isLowOnEverything(input), input);
+  }
+
+  /** Unread changes must not wait for quota/history/network reads to finish. */
+  private taskOverview(gate?: MenubarGate): Pick<MenubarView, 'activities' | 'attentionCount'> {
+    const locale = getResolvedMainLocale();
+    const activities = gate ? [] : buildMenubarActivities(
+      getAgentIslandService()?.getTaskOverview() ?? [], this.settings.privacy,
+      createMenubarTranslate(locale, key => rawMainString(key, locale)),
+    );
+    return { activities, attentionCount: activities.filter(row => row.attention).length };
+  }
+
+  private publishTaskOverview(): void {
+    if (!this.started || !this.lastView || this.lastView.gate || isAppSessionBoundaryPending() || !hasDataOwner()) return;
+    const overview = this.taskOverview();
+    if (JSON.stringify(this.lastView.activities) === JSON.stringify(overview.activities)) return;
+    this.lastView = { ...this.lastView, ...overview };
+    this.host.publish(this.lastView);
   }
 
   // ── Low alert ──────────────────────────────────────────────────────────────
@@ -485,11 +549,11 @@ class MenubarService {
    */
   private balanceAccountKey(): string | null {
     const auth = authManager.getAuthState();
-    if (auth.mode === 'local') return auth.dataOwnerId ? `quota:local:${auth.dataOwnerId}` : null;
+    if (auth.mode === 'local') return auth.dataOwnerId ? `quota:local:${auth.dataOwnerId}:${auth.ownerGeneration}:${readClaudeAccountUsageRevision()}` : null;
     if (!getAppCapabilities().canUseCindyAccountServices) return null;
     const user = auth.user;
     if (!user) return null;
-    if (user.membershipKind === 'org') return auth.dataOwnerId ? `quota:cloud:${auth.dataOwnerId}` : null;
+    if (user.membershipKind === 'org') return auth.dataOwnerId ? `quota:cloud:${auth.dataOwnerId}:${auth.ownerGeneration}:${readClaudeAccountUsageRevision()}` : null;
     if (user.membershipKind !== 'personal') return null;
     return `${user.id}:${CURRENT_CINDY_REGION}`;
   }
@@ -514,6 +578,7 @@ class MenubarService {
       this.balance = { accountKey, reading, fetchedAtMs: Date.now() };
       return reading;
     } catch (error) {
+      if (this.balanceAccountKey() !== accountKey) return null;
       log.warn('menu bar balance read failed', { error: errorMessage(error) });
       // Keep showing the last known amount; its "updated" time tells the age.
       return cached?.reading ?? null;
@@ -539,6 +604,7 @@ class MenubarService {
       quota: {
         resetsAtMs: Number.isFinite(resetsAtMs) ? resetsAtMs : null,
         todaySpend: Number.isFinite(quota.todaySpend) ? quota.todaySpend : null,
+        dailyLimitEnabled: quota.dailyLimitEnabled,
       },
     };
   }
@@ -605,13 +671,20 @@ class MenubarService {
         this.showMainWindow();
         return;
       case 'open-session':
-        openMainWindowSession(message.sessionId);
+        if (this.lastView?.activities?.some(row => row.sessionId === message.sessionId)) {
+          getAgentIslandService()?.openTaskOverviewSession(message.sessionId);
+        } else {
+          openMainWindowSession(message.sessionId);
+        }
         return;
       case 'detail-action':
         void this.runDetailAction(message.sourceId);
         return;
       case 'open-provider-settings':
         openMainWindowVoiceSettings('providers');
+        return;
+      case 'open-remote-control-settings':
+        openMainWindowRemoteControlSettings();
         return;
       case 'settings':
         this.applySettingsPatch(message.patch);
@@ -709,6 +782,10 @@ export function setMenubarEnabled(enabled: boolean): MenubarState {
 
 export function refreshMenubarLocalization(): void {
   service?.refreshLocalization();
+}
+
+export function refreshMenubarControlState(): void {
+  service?.refreshControlState();
 }
 
 export function stopMenubarService(): void {

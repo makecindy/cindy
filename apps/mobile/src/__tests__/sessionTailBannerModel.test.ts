@@ -57,6 +57,7 @@ describe('resolveSessionTailBanner — error-tail', () => {
       clientId: 'e1',
       text: i18n.t('session.tail.replyFailed'),
       rawError: 'process exited unexpectedly',
+      reason: null,
       summaryKey: 'session.tail.replyFailed',
       continueKind: 'error',
       retryable: true,

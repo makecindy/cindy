@@ -25,11 +25,10 @@ import {
   presentationDragIndicator,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
-import { ScrollView, useWindowDimensions, View } from "react-native";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ScrollView, View } from "react-native";
+import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, spacing, useTheme } from "@/theme";
-import { useMobileKeyboardState } from "./useMobileKeyboardState";
 import type {
   SessionDetailsAction,
   SessionDetailsNativeProps,
@@ -48,7 +47,6 @@ export function SessionDetailsNative({
 }: SessionDetailsNativeProps) {
   const { colors, mode } = useTheme();
   const { bottom: bottomInset } = useSafeAreaInsets();
-  const keyboardOverlap = useKeyboardOverlap(!!footer && visible);
   return (
     <Host
       colorScheme={mode}
@@ -78,7 +76,7 @@ export function SessionDetailsNative({
                 inset inside scroll content, not as an empty strip below its clip. */}
             <Group modifiers={[padding({ bottom: footer ? 0 : -bottomInset })]}>
               <RNHostView>
-                <View ref={keyboardOverlap.ref} onLayout={keyboardOverlap.measure} style={{ flex: 1 }}>
+                <View style={{ flex: 1 }}>
                   <ScrollView
                     keyboardShouldPersistTaps="handled"
                     contentContainerStyle={{
@@ -89,45 +87,22 @@ export function SessionDetailsNative({
                   >
                     {children}
                   </ScrollView>
-                  {footer ? (
-                    <View style={{ padding: spacing.lg, paddingBottom: spacing.lg + keyboardOverlap.overlap }}>
-                      {footer}
-                    </View>
-                  ) : null}
                 </View>
               </RNHostView>
             </Group>
+            {/* Let SwiftUI reserve the footer's intrinsic height above its keyboard
+                safe area. A footer inside the filling RN host can overflow the
+                native viewport when the sheet changes detents. */}
+            {footer ? (
+              <RNHostView matchContents>
+                <View style={{ padding: spacing.lg }}>{footer}</View>
+              </RNHostView>
+            ) : null}
           </VStack>
         </Group>
       </BottomSheet>
     </Host>
   );
-}
-
-/**
- * 底部按钮被键盘挡住的高度。SwiftUI sheet 对内嵌 RN 内容的键盘避让不完整,底部
- * 按钮会被键盘盖住一截;这里按实际位置补齐:量内容区在窗口里的底边,与键盘顶边比较。
- * 量的是外层容器,尺寸不受补出的 padding 影响,不会来回抖动。
- */
-function useKeyboardOverlap(enabled: boolean) {
-  const ref = useRef<View>(null);
-  const keyboard = useMobileKeyboardState();
-  const { height: windowHeight } = useWindowDimensions();
-  const [bottom, setBottom] = useState<number | null>(null);
-  const measure = useCallback(() => {
-    ref.current?.measureInWindow((_x, y, _width, height) => setBottom(y + height));
-  }, []);
-  useEffect(() => {
-    if (!enabled || !keyboard.visible) return;
-    measure();
-    // sheet 跟随键盘移动、展开的动画结束后再量一次,以最终位置为准。
-    const timer = setTimeout(measure, 400);
-    return () => clearTimeout(timer);
-  }, [enabled, keyboard.height, keyboard.visible, measure]);
-  const overlap = enabled && keyboard.visible && bottom !== null
-    ? Math.max(0, Math.ceil(bottom - (windowHeight - keyboard.height)))
-    : 0;
-  return { ref, measure, overlap };
 }
 
 export function SessionDetailsNativeActions({

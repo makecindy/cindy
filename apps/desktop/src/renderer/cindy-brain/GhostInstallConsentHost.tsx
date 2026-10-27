@@ -220,7 +220,14 @@ export function GhostInstallConsentHost() {
                         to: facts.version,
                         source,
                       }),
-                content: <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly} />,
+                content: <>
+                  {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
+                    <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
+                    {request.target.sourceChanged && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
+                    {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
+                  </div>}
+                  <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly} />
+                </>,
                 maxWidth: 460,
                 contentSelectable: true,
                 describeContent: true,

@@ -18,11 +18,12 @@
  * 批准记录只在短时间内有效；命令与抓取的批准用一次即失效，路径批准在有效期内覆盖同一路径的读写
  * (编辑会先读后写)。
  */
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { classifyShellCommand, reviewAction } from '@cindy/maker-core';
+import { classifyShellCommand, reviewAction, type GitRead } from '@cindy/maker-core';
 
-import { isShareCredentialCommand, isShareCredentialPath } from '../credentials';
+import { isShareCredentialCommand, isShareCredentialPath, shareCredentialGitReads } from '../credentials';
 import { realPathOrAncestor, type ExecutorWorkspace } from './workspace';
 
 /**
@@ -92,13 +93,17 @@ function approvalOf(action: ExecutorAction): { kind: Approval['kind']; key: stri
 }
 
 export interface ExecutorGateOptions {
-  /** 供应商分享的受邀者任务：凭证类操作不论权限档都要本机用户确认。 */
-  confirmCredentials?: boolean;
+  /**
+   * 供应商分享的受邀者任务：凭证类操作不论权限档都要本机用户确认。传函数时每次操作都重新问一遍
+   * (受邀者在设置里把这个分享切成「信任 {分享者}」后，运行中的任务下一步就不再问)。
+   */
+  confirmCredentials?: boolean | (() => boolean);
 }
 
 export class ExecutorGate {
   private mode: ExecutorGateMode;
   private approvals: Approval[] = [];
+  private credentialExemptions: Approval[] = [];
   private credentialsAllowedForSession = false;
 
   constructor(
@@ -112,14 +117,28 @@ export class ExecutorGate {
 
   setMode(mode: ExecutorGateMode): void {
     this.credentialsAllowedForSession = false;
+    this.credentialExemptions = [];
     // 同一路径的临时批准也必须撤销，否则它会在 TTL 内绕过恢复后的凭证确认。
     this.approvals = this.approvals.filter((approval) => !approval.credential);
     this.mode = mode;
   }
 
-  /** 本机用户在凭证确认卡上选择了「本任务总是允许」。授权随执行器关闭或权限档变化失效。 */
+  /** 本机用户在凭证确认卡上选择了「本任务总是允许」。 */
   allowCredentialsForSession(): void {
-    if (this.options.confirmCredentials) this.credentialsAllowedForSession = true;
+    if (this.confirmsCredentials()) this.credentialsAllowedForSession = true;
+  }
+
+  /** 新执行器按任务级记录恢复「本任务总是允许」；不受当前分享级信任开关影响。 */
+  restoreCredentialsForSession(): void {
+    // 任务级记录的恢复与当前分享级信任开关独立：信任开启时暂时不需要确认，
+    // 但关闭后仍应保留已经明确授予的任务级授权。
+    this.credentialsAllowedForSession = true;
+  }
+
+  /** 这个任务此刻要不要把凭证类操作交给本机用户确认。 */
+  private confirmsCredentials(): boolean {
+    const option = this.options.confirmCredentials;
+    return typeof option === 'function' ? option() : option === true;
   }
 
   getMode(): ExecutorGateMode {
@@ -137,6 +156,19 @@ export class ExecutorGate {
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
 
+  recordCredentialExemption(action: ExecutorAction): void {
+    if (!this.isCredentialAction(action)) return;
+    this.prune();
+    this.credentialExemptions.push({
+      ...approvalOf(action),
+      expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS,
+      credential: true,
+    });
+    if (this.credentialExemptions.length > MAX_APPROVALS) {
+      this.credentialExemptions.splice(0, this.credentialExemptions.length - MAX_APPROVALS);
+    }
+  }
+
   /**
    * 这个操作是否要按「凭证类」由本机用户确认(只在供应商分享的受邀者任务里)：读写凭证类路径(链接按
    * 真实目标再判一次)、目录级读取的根本身是凭证目录，或命令读取 / 打出凭证。
@@ -146,22 +178,40 @@ export class ExecutorGate {
   }
 
   private isCredentialAction(action: ExecutorAction): boolean {
-    if (!this.options.confirmCredentials) return false;
+    if (!this.confirmsCredentials()) return false;
     if (action.kind === 'fetch') return false;
     if (action.kind === 'exec') {
-      return isShareCredentialCommand(action.command, this.workspace.allRoots(), { cwd: action.cwd, platform: process.platform });
+      return isShareCredentialCommand(action.command, this.workspace.allRoots(), {
+        cwd: action.cwd,
+        platform: process.platform,
+        resolveFilePath: (operand, cwd) => fs.realpathSync.native(this.workspace.resolve(operand, cwd)),
+      });
     }
     return isShareCredentialPath(path.resolve(action.path)) || isShareCredentialPath(realPathOrAncestor(action.path));
   }
 
+  /**
+   * 命令要按凭证确认、但只是因为 git 查看内容或打出 git 配置时，返回这些 git 调用(执行器在本机核实读不到
+   * 凭证后可以不问)；其余情况返回 null。
+   */
+  credentialGitReads(action: ExecutorAction): GitRead[] | null {
+    if (!this.confirmsCredentials() || action.kind !== 'exec') return null;
+    return shareCredentialGitReads(action.command, this.workspace.allRoots(), {
+      cwd: action.cwd,
+      platform: process.platform,
+      resolveFilePath: (operand, cwd) => fs.realpathSync.native(this.workspace.resolve(operand, cwd)),
+    });
+  }
+
   authorize(action: ExecutorAction): ExecutorGateDecision {
-    const credential = this.needsCredentialConsent(action);
+    let credential = this.needsCredentialConsent(action);
+    if (credential && this.consumeCredentialExemption(action) && this.credentialGitReads(action) !== null) credential = false;
     if (this.mode === 'full' && !credential) return { ok: true, elevated: true };
     // 抓取网页：本机用户批准过这个地址就放开内网。公网样式的域名也可能解析到内网(公司内网域名)，
     // 只看地址文本判定为不必问，但抓取时会按 DNS 结果被拦下。
     if (action.kind === 'fetch' && this.consume(action)) return { ok: true, elevated: true };
     if (!credential && !this.requiresApproval(action)) return { ok: true };
-    if (this.consume(action)) return { ok: true, elevated: true };
+    if (this.consume(action, credential)) return { ok: true, elevated: true };
     return { ok: false, reason: this.deniedReason(action) };
   }
 
@@ -198,17 +248,28 @@ export class ExecutorGate {
     return action.scope === 'tree' && !this.workspace.contains(action.path);
   }
 
-  private consume(action: ExecutorAction): boolean {
+  private consume(action: ExecutorAction, credential = false): boolean {
     this.prune();
     const { kind, key } = approvalOf(action);
-    const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key);
+    const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key
+      && (!credential || approval.credential));
     if (index < 0) return false;
     if (kind !== 'path') this.approvals.splice(index, 1);
+    return true;
+  }
+
+  private consumeCredentialExemption(action: ExecutorAction): boolean {
+    this.prune();
+    const { kind, key } = approvalOf(action);
+    const index = this.credentialExemptions.findIndex((approval) => approval.kind === kind && approval.key === key);
+    if (index < 0) return false;
+    this.credentialExemptions.splice(index, 1);
     return true;
   }
 
   private prune(): void {
     const t = this.now();
     this.approvals = this.approvals.filter((approval) => approval.expiresAt > t);
+    this.credentialExemptions = this.credentialExemptions.filter((approval) => approval.expiresAt > t);
   }
 }

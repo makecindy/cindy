@@ -11,7 +11,7 @@ export function sanitizeModelPreferences(value: unknown): MobileModelPreferences
   if (Array.isArray(raw.favorites)) result.favorites = raw.favorites.filter((item): item is MobileModelFavorite =>
     !!item && typeof item.uid === 'string' && !!item.uid && typeof item.providerId === 'string' && !!item.providerId
     && typeof item.modelId === 'string' && !!item.modelId && agents.has(item.agent)
-    && typeof item.effort === 'string' && typeof item.fast === 'boolean');
+    && typeof item.effort === 'string' && (typeof item.fast === 'boolean' || item.fast === 'ultrafast'));
   if (raw.engines && typeof raw.engines === 'object') for (const [key, agent] of Object.entries(raw.engines)) {
     if (agents.has(agent)) result.engines[key] = agent as AgentKind;
   }

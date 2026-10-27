@@ -18,6 +18,7 @@ import {
   isHookSchedulerOrigin,
 } from '@/lib/messageAutomationOrigin';
 import { joinSourceTooltip } from '@/lib/messageSourceLabel';
+import { isCrossDeviceSourceSessionId } from '@cindy/maker-shared/message-source';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
 
@@ -166,9 +167,10 @@ export function AutomationOriginBadge({
     if (targetSessionId) {
       idLines.push(t('chat.userMessage.sourceIds.session', { id: targetSessionId }));
     }
-    open = targetSessionId
+    // 另一台电脑上的来源任务（deviceId::sessionId）不是这里能直接打开的任务：只显示来源与 id。
+    open = targetSessionId && !isCrossDeviceSourceSessionId(targetSessionId)
       ? () => {
-          // 工具只能在同一台设备的任务之间投递：远程任务的来源任务也在那台设备上。
+          // 其余来源任务与当前任务在同一台设备上：远程任务的来源任务也在那台设备上。
           if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, targetSessionId);
           navigate(`/cc-agent/${encodeURIComponent(targetSessionId)}`);
         }

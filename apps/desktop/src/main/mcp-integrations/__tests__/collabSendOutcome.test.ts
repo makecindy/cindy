@@ -1,4 +1,5 @@
 import type { SessionSendResult } from '@cindy/maker-core';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
@@ -21,6 +22,18 @@ const mockState = vi.hoisted(() => ({
     _sessionInstanceId: string | undefined,
   ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
+  publishImage: vi.fn(),
+  afterSelectCompanion: null as null | (() => void),
+  personalFeishu: {
+    getOwnerOpenId: () => 'ou_personal',
+    sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_personal_file' })),
+  },
+  companionFeishu: {
+    getOwnerOpenId: () => 'ou_companion',
+    sendMarkdownText: vi.fn(async () => ({ messageId: 'om_companion_text' })),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_companion_file' })),
+  },
 }));
 
 vi.mock('electron', () => ({
@@ -36,6 +49,9 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
+  getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => undefined,
+  confirmTaskAction: vi.fn(async () => true),
 }));
 
 vi.mock('@cindy/mcps', () => ({
@@ -71,14 +87,21 @@ vi.mock('../../scheduler-host/index.js', () => ({
 }));
 
 vi.mock('../../im/index.js', () => ({
-  feishuIm: {
-    sendFile: vi.fn(),
+  feishuIm: mockState.personalFeishu,
+}));
+
+vi.mock('../../im/shared/botImConnectionRuntime', () => ({
+  getBotFeishuTransport: (botId: string) => {
+    if (mockState.afterSelectCompanion) queueMicrotask(mockState.afterSelectCompanion);
+    return botId === 'bot-feishu' ? mockState.companionFeishu : null;
   },
 }));
 
 vi.mock('../cindyProxyMedia.js', () => ({
   getCindyProxyMediaService: () => ({ mcp: {} }),
 }));
+
+vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: mockState.publishImage }));
 
 vi.mock('../../maker-host/session-search.js', () => ({
   searchSessionsFn: vi.fn(),
@@ -116,6 +139,10 @@ import {
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
+import { createDbClient } from '../../localDb/client/DbClient.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import type { FeishuBotMcpHostDeps, CreateLiziMcpProvidersOptions } from '@cindy/mcps';
+import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
 
 const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
@@ -168,6 +195,69 @@ function createCollabService(overrides: Record<string, ReturnType<typeof vi.fn>>
 }
 
 describe('collab send outcome semantics', () => {
+  // Unit: exercise the real provider callback with the existing media importer
+  // as its boundary. Missing sent-image previews and stale-task publication were
+  // not covered by the channel transport tests.
+  it.each(['ready', 'unavailable', 'non-image', 'unsupported-image', 'remote'] as const)('prepares outbound chat images with task ownership: %s', async (state) => {
+    mockState.publishImage.mockReset().mockResolvedValue(state === 'unavailable'
+      ? { ok: false, errorCode: 'MEDIA_PUBLISH_FAILED' }
+      : { ok: true, url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
+    let live = true;
+    createDesktopMcpProviders({
+      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(), getLiveSessionGrantState: () => ({
+        permissionMode: 'auto', remoteHostId: null, isCurrent: () => live,
+      }),
+    });
+    const prepare = mockState.capturedProvidersConfig!.prepareOutboundImage as NonNullable<CreateLiziMcpProvidersOptions['prepareOutboundImage']>;
+    const source = path.join(path.sep, 'task', state === 'non-image' ? 'report.pdf'
+      : state === 'unsupported-image' ? 'photo.BMP' : 'photo.png');
+    const prepared = await prepare(source, { agentKind: 'codex', workingDir: path.dirname(source),
+      sessionId: 'image-task', sessionInstanceId: 'runtime', ...(state === 'remote' ? { remoteHostId: 'ssh-host' } : {}) });
+    if (state === 'non-image' || state === 'remote' || state === 'unsupported-image') {
+      expect(mockState.publishImage).not.toHaveBeenCalled();
+      expect(prepared.path).toBe(source);
+      expect(prepared.url).toBeUndefined();
+      if (state === 'unsupported-image') expect(prepared.errorCode).toBe('IMAGE_PREVIEW_UNSUPPORTED');
+      return;
+    }
+    expect(mockState.publishImage).toHaveBeenCalledWith(source,
+      { sessionId: 'image-task', workingDir: path.dirname(source) },
+      expect.objectContaining({ isCurrent: expect.any(Function), authorize: expect.any(Function) }));
+    if (state === 'ready') {
+      expect(prepared).toMatchObject({ url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+        path: path.resolve(mockState.userDataDir, 'cindy-media', 'blobs', 'aa', `${'a'.repeat(64)}.png`) });
+    } else expect(prepared).toMatchObject({ path: source, errorCode: 'MEDIA_PUBLISH_FAILED' });
+    prepared.assertCurrent!();
+    live = false;
+    expect(prepared.assertCurrent).toThrow('SESSION_SCOPE_CHANGED');
+  });
+
+  // The live authority API returns a fresh snapshot on every call. Reacquiring
+  // one after I/O would silently authorize a new permission/Plan generation.
+  it('pins the permission generation before image preparation first yields', async () => {
+    let generation = 0;
+    mockState.publishImage.mockReset().mockResolvedValue({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    createDesktopMcpProviders({
+      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(), getLiveSessionGrantState: () => {
+        const captured = generation;
+        return { permissionMode: 'auto', remoteHostId: null, isCurrent: () => captured === generation };
+      },
+    });
+    const prepare = mockState.capturedProvidersConfig!.prepareOutboundImage as NonNullable<CreateLiziMcpProvidersOptions['prepareOutboundImage']>;
+    const preparing = prepare(path.join(path.sep, 'task', 'photo.png'), {
+      agentKind: 'codex', workingDir: path.join(path.sep, 'task'),
+      sessionId: 'image-task', sessionInstanceId: 'runtime',
+    });
+    generation++;
+    const prepared = await preparing;
+    expect(mockState.publishImage.mock.calls[0]![2].isCurrent()).toBe(false);
+    expect(prepared.assertCurrent).toThrow('SESSION_SCOPE_CHANGED');
+  });
+
   afterEach(() => {
     mockState.logger.warn.mockClear();
     mockState.logger.info.mockClear();
@@ -204,6 +294,142 @@ describe('collab send outcome semantics', () => {
       } as never),
     ).toBe(true);
 
+  });
+
+  it('maps send_to_worker images to the host imagePaths field at the collab boundary', async () => {
+    const sendToWorker = vi.fn(async () => ({
+      ok: true as const,
+      agentKind: 'codex' as const,
+      wakeKind: 'already-active' as const,
+      targetTitle: null,
+      targetLastUserSendAt: null,
+    }));
+    mockState.collabService = createCollabService({ sendToWorker });
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(),
+    });
+    const orca = mockState.capturedProvidersConfig?.orca as {
+      sendToWorker: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      images: ['C:/tmp/a.png'],
+    });
+    expect(sendToWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      imagePaths: ['C:/tmp/a.png'],
+    });
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
+    expect(sendToWorker).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
+  });
+
+  // #6439: real Desktop host callbacks + worker DB, only the external IM service
+  // is replaced. Covers missing awaits at host call sites, beyond resolver tests.
+  it('sends canonical background text and files through companion host callbacks with a worker DB', async () => {
+    const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    try {
+      commitVolatileAppSession('cloud', 'feishu-test-owner');
+      await client.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+      await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT)');
+      await client.exec("INSERT INTO bot_profiles VALUES ('bot-feishu', 'active')");
+      await client.exec("INSERT INTO sessions VALUES ('background-receipt', 'bot')");
+      await client.exec("INSERT INTO bot_session_links VALUES ('background-receipt', 'bot-feishu', 'canonical')");
+      setCurrentDbClient(client, 'feishu-test-owner');
+      createDesktopMcpProviders({
+        botCapabilities,
+        getMakerMemoryManager: vi.fn(),
+        lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+        invokeRemote: vi.fn(),
+      });
+      const feishu = mockState.capturedProvidersConfig!.feishuBot as FeishuBotMcpHostDeps;
+      const session = { sessionId: 'background-receipt', sessionInstanceId: 'runtime' };
+      const owner = await feishu.getOwnerOpenId(session);
+      expect(owner).toBe('ou_companion');
+      expect(await feishu.sendMessage(owner!, 'task complete', session.sessionId, session))
+        .toMatchObject({ ok: true, messageId: 'om_companion_text' });
+      expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
+        .toMatchObject({ ok: true, messageId: 'om_companion_file' });
+      expect(mockState.companionFeishu.sendMarkdownText).toHaveBeenCalledWith('ou_companion', 'task complete');
+      expect(mockState.companionFeishu.sendFile).toHaveBeenCalledWith('ou_companion', '/tmp/report.txt', 'report.txt');
+
+      // A boundary may start after the resolver fulfills but before its caller
+      // resumes. Both production send callbacks must recheck before dispatch.
+      for (const transition of ['pending', 'generation'] as const) {
+        for (const send of [
+          () => feishu.sendMessage(owner!, 'must not send', session.sessionId, session),
+          () => feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session),
+        ]) {
+          let release: (() => void) | undefined;
+          mockState.companionFeishu.sendMarkdownText.mockClear();
+          mockState.companionFeishu.sendFile.mockClear();
+          mockState.afterSelectCompanion = () => {
+            if (transition === 'pending') release = beginAppSessionBoundary();
+            else commitVolatileAppSession('cloud', 'feishu-test-owner', true);
+          };
+          try {
+            expect(await send()).toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+            expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+            expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
+          } finally {
+            mockState.afterSelectCompanion = null;
+            release?.();
+          }
+        }
+      }
+
+      // A paused profile may still have a live tool call and connected transport.
+      // The persisted pause must block both sends even though its link survives.
+      await client.exec("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-feishu'");
+      try {
+        await expect(feishu.getOwnerOpenId(session)).rejects.toThrow('Companion is not active');
+        expect(await feishu.sendMessage(owner!, 'paused', session.sessionId, session))
+          .toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+        expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
+          .toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+        expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+        expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
+        expect(mockState.personalFeishu.sendMarkdownText).not.toHaveBeenCalled();
+        expect(mockState.personalFeishu.sendFile).not.toHaveBeenCalled();
+      } finally {
+        await client.exec("UPDATE bot_profiles SET status = 'active' WHERE id = 'bot-feishu'");
+      }
+
+      // Same-account archive removes canonical membership without changing the
+      // DB snapshot. An app-scoped recipient must not cross to personal credentials.
+      await client.exec("UPDATE bot_session_links SET role = 'history' WHERE session_id = 'background-receipt'");
+      for (const send of [
+        () => feishu.sendMessage(owner!, 'must not switch bots', session.sessionId, session),
+        () => feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session),
+      ]) {
+        expect(await send()).toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+      }
+      expect(mockState.personalFeishu.sendMarkdownText).not.toHaveBeenCalled();
+      expect(mockState.personalFeishu.sendFile).not.toHaveBeenCalled();
+    } finally {
+      commitVolatileAppSession('signed-out');
+      clearCurrentDbClient(client);
+      await client.dispose();
+    }
   });
 
   it('rejects start_skill_learning after the built-in Learn Skill is disabled', async () => {

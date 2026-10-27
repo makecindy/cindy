@@ -1,16 +1,15 @@
 ---
 id: appearance
-title: Appearance, theme, language and notifications
-summary: Theme, theme family, fonts, display language, and desktop / FeiShu notifications — all in Settings > General.
-tab: general
+title: Appearance, theme, wallpaper and fonts
+summary: Theme, theme family, wallpaper, fonts, sidebar styles, panel layout, and reply animation — all in Settings > Appearance.
+tab: appearance
 ---
 
-Settings > General controls how the app looks and how it notifies you.
+Settings > Appearance controls how the app looks. It starts with the theme and appearance mode, followed by Wallpaper, Fonts, Sidebar & panels, and Reply Animation. Display language and notifications stay in Settings > General (see the language and notifications topic).
 
-**Appearance:**
-
-- **Theme**: light, dark, or system (follows your OS).
-- **Theme family**: pick from the registered theme families; each family supplies its own colors for light and dark. The app uses a VSCode-style token system (see docs/design-rules/cindy-design-system.md) so themes only override what they need.
+- **Theme**: pick from the registered theme families; each family supplies its own colors for light and dark. The app uses a VSCode-style token system (see docs/design-rules/cindy-design-system.md) so themes only override what they need. Families with only one variant are tagged Light only / Dark only; while one is selected the appearance mode is fixed to that variant, and your saved mode returns when you pick a two-variant theme.
+- **Appearance mode**: light, dark, or system (follows your OS).
+- **Wallpaper**: choose a Cindy scene, your own image, or a video for the whole app. The wallpaper is independent of the theme.
 - **Fonts**: choose fonts and sizes for interface text and code. Code font size changes code blocks, change comparisons, and editors; inline code, status numbers, badges, and path labels keep their size.
 - **Pinned Style**: show pinned sessions as Text, Cards, or List. **List Style** controls unpinned sessions: Text uses one line; List adds a preview.
 - **Local theme brand identity**: this is an optional power-user feature configured in the local theme JSON. The settings page intentionally keeps only create-copy, open-folder, and refresh actions. New copies include self-explanatory example paths directly in the JSON.
@@ -27,16 +26,9 @@ Settings > General controls how the app looks and how it notifies you.
 
   The example filenames describe the final display areas; source images may be exported at 2x/3x while keeping the same aspect ratios. Paths must be absolute JSON strings; spaces do not need shell quotes. PNG, JPEG, and WebP are supported. Transparent padding is trimmed at render time without changing the source file. Only `brand.icon` and `brand.logo` are recognized; the previous single-image fields are not compatible with the redesigned two-asset layout.
 
-**Language:**
-
-- Display language: System / English / 简体中文 / 繁體中文 / 日本語 / 한국어. Used for the interface and AI error reports. Other replies follow your message or language request. On mobile, the phone's display language is used for AI error reports for messages sent from that phone.
-
-**Notifications:**
-
-- **System Notifications** — notify when a session finishes, encounters an error, or needs a reply. Regular sessions notify only while the window is in the background. When Agent Island is enabled, it handles these alerts instead.
-- **FeiShu DM on session finished** — requires the FeiShu bot to be configured (see the FeiShu bot topic).
+- **Panel layout**: panel positions and widths are saved automatically; **Restore default layout** puts them back.
+- **Reply Animation**: new reply text fades in while it streams. Turn it off to show text immediately. It stays off when your system reduces motion.
 
 **Notes:**
 
 - Theme changes apply immediately; no restart needed.
-- Language changes apply immediately, but a few static strings may need a window reload to update.

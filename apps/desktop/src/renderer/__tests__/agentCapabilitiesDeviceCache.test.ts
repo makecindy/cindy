@@ -17,6 +17,7 @@ interface Caps {
     contextWindow: number;
     efforts: string[];
     defaultEffort: string | null;
+    effortsUnknown?: boolean;
   }>;
   hasFastMode: boolean;
   effortLevels: unknown[];
@@ -311,6 +312,28 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
         remoteHostId: null,
       }),
     ).toBe(false);
+  });
+
+  it.each([undefined, true, false])('preserves remote effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const snapshot: Caps = {
+      ...caps('dev-1:codex'),
+      availableModels: [{
+        id: 'empty-efforts',
+        displayName: 'Empty efforts',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+      }],
+    };
+    const invoke = vi.fn(async () => snapshot);
+    const getCapabilities = vi.fn(async (agent: string) => caps(`local:${agent}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.availableModels[0]?.effortsUnknown).toBe(effortsUnknown);
   });
 
   it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {

@@ -1,3 +1,4 @@
+import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
 import type { TFunction } from 'i18next';
 
 import { extractIpcError } from '@/utils/ipcError';
@@ -26,6 +27,8 @@ export function getCollaborationStartErrorMessage(
 ): string {
   const ipcError = extractIpcError(err);
   const base = (() => {
+    const limitKey = remoteAgentLimitErrorKey(err);
+    if (limitKey) return t(limitKey);
     if (options.remoteDevice && ipcError?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
       return t('newChat.collaboration.unsupportedRemoteHint');
     }
@@ -47,7 +50,7 @@ export function getCollaborationStartErrorMessage(
   // 用户据此可能以为没发、再提交一次,或在不知情下让首轮脱离协同运行(codex review P2)。
   // remoteDevice 已经占掉了 `_CONTINUE` 后缀那一档,所以用一句独立的补充说明,而不是再
   // 铺一套 `_REMOTE_CONTINUE` 文案 —— 两句都是完整句子,拼接不会产生语法碎片。
-  if (options.remoteDevice && options.continueAsSingleSession) {
+  if (options.continueAsSingleSession && (options.remoteDevice || remoteAgentLimitErrorKey(err))) {
     return `${base}${t('newChat.collaboration.remoteContinueNotice')}`;
   }
   return base;

@@ -18,6 +18,25 @@ function msg(overrides: Partial<TgMessage> = {}): TgMessage {
 }
 
 describe('detectGroupTrigger', () => {
+  it.each(['Cindy 赞助', 'Cindy 现在也有', 'cindy 帮我看看', 'Cindy', ' Cindy？', '我问过 Cindy 了'])(
+    '仅提到显示名不触发：%s',
+    (text) => {
+      expect(detectGroupTrigger(msg({ text }), BOT_ID, BOT_USERNAME, 'Cindy')).toBeNull();
+      expect(
+        detectGroupTrigger(msg({ text: undefined, caption: text }), BOT_ID, BOT_USERNAME, 'Cindy'),
+      ).toBeNull();
+    },
+  );
+
+  it.each(['@CindyOther', '@Cindy_bot', '@Cindy2'])('提及以显示名开头的其它账号不触发：%s', (text) => {
+    expect(detectGroupTrigger(msg({ text }), BOT_ID, BOT_USERNAME, 'Cindy')).toBeNull();
+  });
+
+  it('保留显式 @显示名的兼容入口', () => {
+    expect(detectGroupTrigger(msg({ text: '@Cindy 帮我看看' }), BOT_ID, BOT_USERNAME, 'Cindy'))
+      .toEqual({ text: '帮我看看' });
+  });
+
   it('@bot 提及触发并剥掉提及', () => {
     const m = msg({
       text: `@${BOT_USERNAME} 部署一下`,

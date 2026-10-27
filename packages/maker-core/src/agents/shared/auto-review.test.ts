@@ -10,16 +10,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   classifyShellCommand,
   isProtectedSystemPath,
   reviewAction,
   shellCommandReadsCredentials,
+  type GitRead,
 } from './auto-review.js';
 
 const roots = ['/repo', '/extra'];
+const toForwardSlashes = (value: string) => value.replace(/\\/g, '/');
 
 describe('reviewAction — 非 shell 动作', () => {
   it('read / session-state → auto-approve', () => {
@@ -4683,6 +4685,36 @@ describe('删除也是写通道:普通 rm / mv 源 / cmd del(第四十八批评�
 });
 
 describe('shellCommandReadsCredentials — 只认凭证那一部分红线', () => {
+  it.each([800, 3200, 6400, 24000])('scans repeated gh auth heads in under a second (%i repetitions)', (count) => {
+    const command = 'gh auth a '.repeat(count);
+    const start = performance.now();
+    expect(shellCommandReadsCredentials(command, roots)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it('keeps token flags at the end of long auth segments without repeated backtracking', () => {
+    const prefix = 'gh auth a '.repeat(24000);
+    for (const flag of ['--show-token', '--show-token=true', '-t', '-wt=true', '-tw']) {
+      expect(shellCommandReadsCredentials(prefix + flag, roots), flag).toBe(true);
+    }
+    const invalidCluster = 'gh auth status -' + 't'.repeat(240000) + '-';
+    const start = performance.now();
+    expect(shellCommandReadsCredentials(invalidCluster, roots)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it('does not carry auth context into another command segment', () => {
+    for (const separator of [';', '|', '&', '\n']) {
+      expect(shellCommandReadsCredentials(`gh auth status${separator}echo --show-token`, roots)).toBe(false);
+      expect(shellCommandReadsCredentials(`gh auth status${separator}/usr/bin/gh auth status --hostname github.com -wt`, roots)).toBe(true);
+    }
+    for (const command of ['gh auth a gh auth\nstatus -t', 'gh auth gh auth\nstatus --show-token']) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(true);
+    }
+    expect(shellCommandReadsCredentials('./gh auth status --show-token', roots)).toBe(true);
+    expect(shellCommandReadsCredentials('notgh auth status --show-token', roots)).toBe(false);
+  });
+
   it('读凭证 / 密钥文件、钥匙串、令牌与云 metadata 都算', () => {
     for (const command of [
       'cat ~/.ssh/id_rsa',
@@ -4715,5 +4747,498 @@ describe('shellCommandReadsCredentials — 只认凭证那一部分红线', () =
       expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
     }
     expect(shellCommandReadsCredentials('', roots)).toBe(false);
+  });
+});
+
+// 两个附加选项只供供应商分享的受邀者任务用(apps/desktop/src/main/remote-agent/credentials.ts)。
+describe('shellCommandReadsCredentials — 分享任务的附加选项', () => {
+  it('accumulates prior mutations without tainting earlier reads or losing the file-only cd exemption', () => {
+    vi.stubEnv('CDPATH', undefined);
+    try {
+      const files: boolean[] = [];
+      const git: boolean[] = [];
+      expect(shellCommandReadsCredentials(
+        'echo a;cd /repo/examples && cat example.pub;git diff;touch generated;cat example.pub;git diff', roots, {
+          cwd: '/repo',
+          platform: 'linux',
+          fileReadRequiresConsent: (read) => { files.push(read.priorSegmentsMayMutate === true); return false; },
+          gitContentRead: (read) => { git.push(read.priorSegmentsMayMutate === true); return true; },
+        },
+      )).toBe(false);
+      expect(files).toEqual([false, true]);
+      expect(git).toEqual([true, true]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps a mutation sticky across later read-only segments for both Git read callbacks', () => {
+    const reads: boolean[] = [];
+    const record = (read: GitRead) => { reads.push(read.priorSegmentsMayMutate === true); return true; };
+    expect(shellCommandReadsCredentials(
+      'echo a;git config --list;git diff;git add -A;echo done;git config --list;git diff', roots, {
+        cwd: '/repo', gitContentRead: record, gitConfigRead: record,
+      },
+    )).toBe(false);
+    expect(reads).toEqual([false, false, true, true]);
+  });
+
+  it.each([
+    "bash -c 'cat .env'",
+    "python -c 'open(\".env\").read()'",
+    'echo $(git diff)',
+  ])('limits nested credential checks to sharing options: %s', (command) => {
+    expect(shellCommandReadsCredentials(command, roots)).toBe(false);
+    expect(classifyShellCommand(command, roots)).toBe('prompt');
+    expect(shellCommandReadsCredentials(command, roots, {
+      gitContentRead: () => true,
+      gitConfigRead: () => true,
+    })).toBe(true);
+  });
+
+  it('passes original reader operands, redirects and auxiliary files to the sharing path check', () => {
+    for (const command of ['cat .env.example', 'cat < .env.example', 'grep -f .env.example README.md']) {
+      const checked: string[] = [];
+      expect(shellCommandReadsCredentials(command, roots, {
+        cwd: '/repo',
+        platform: 'linux',
+        credentialTextTransform: (text) => text.replaceAll('.env.example', 'example'),
+        fileReadRequiresConsent: (read) => {
+          checked.push(read.operand);
+          return read.operand === '.env.example';
+        },
+      }), command).toBe(true);
+      expect(checked, command).toContain('.env.example');
+    }
+    expect(shellCommandReadsCredentials('cat .env.example', roots, {
+      credentialTextTransform: (text) => text.replaceAll('.env.example', 'example'),
+      fileReadRequiresConsent: () => false,
+    })).toBe(false);
+    expect(shellCommandReadsCredentials('cat .env.example', roots)).toBe(true);
+  });
+
+  it('binds sharing file checks to the segment directory and invalidates preceding mutations', () => {
+    for (const [command, expected] of [
+      ['cd /repo/examples && cat example.pub', { cwd: '/repo/examples', priorSegmentsMayMutate: false }],
+      ['ln -sf .env example.pub && cat example.pub', { cwd: '/repo', priorSegmentsMayMutate: true }],
+      ['HOME=/other cat example.pub', { cwd: '/repo', priorSegmentsMayMutate: true }],
+      ['cd "$DIR" && cat example.pub', { cwd: undefined }],
+    ] as const) {
+      const checked: unknown[] = [];
+      shellCommandReadsCredentials(command, roots, {
+        cwd: '/repo',
+        platform: 'linux',
+        fileReadRequiresConsent: (read) => {
+          checked.push(read);
+          return true;
+        },
+      });
+      expect(checked, command).toEqual([expect.objectContaining({ operand: 'example.pub', ...expected })]);
+    }
+  });
+  const sourceSearches = [
+    "rg -n 'API_KEY' --glob '*.ts'",
+    "rg -g '*.{ts,tsx}' token src",
+    "rg -g '*.tsx' -g '!*.test.tsx' secret",
+    "grep -rn --include='*.md' token .",
+  ];
+
+  it('不传选项时判定不变：按扩展名缩小范围的搜索与 git 查看内容照旧必问(本机自动审查同此)', () => {
+    for (const command of [...sourceSearches, 'git diff', 'git log -p', 'git grep -n token']) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(true);
+      expect(classifyShellCommand(command, roots), command).toBe('prompt-each-time');
+    }
+  });
+
+  it('sourceFileSelectors：只选中源码与文档扩展名的搜索不算读取凭证', () => {
+    for (const command of sourceSearches) {
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(false);
+    }
+    for (const command of [
+      // 文件名本身像凭证、可能存放凭证的格式、扩展名不确定、搜索目标就是凭证。
+      "rg -g '.env.ts' KEY",
+      "rg -g 'server.key.ts' KEY",
+      "rg -g '.ssh/**/*.ts' KEY",
+      "rg -g '*.json' KEY",
+      "grep -rn --include='*.sh' KEY .",
+      "rg -g '*.ts*' KEY",
+      "rg -g '*.t[s]' KEY",
+      "rg -g '*.ts' KEY .env",
+      'grep -rn KEY .',
+      'rg --hidden KEY',
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(true);
+    }
+  });
+
+  it('Git 探针只把不改运行环境的裸 git 调用标成可沿用宿主运行环境', () => {
+    for (const executable of [
+      'git',
+      './git',
+      '/usr/bin/git',
+      'git.exe',
+      'GIT',
+      'env -u GIT_CONFIG_GLOBAL git',
+      'env --unset=GIT_CONFIG_GLOBAL git',
+      'env -i git',
+      'env --ignore-environment git',
+      'exec -c git',
+      'PATH=/other/bin git',
+      'LD_PRELOAD=/other/lib.so git',
+      'command -p git',
+    ]) {
+      for (const subcommand of ['diff', 'config --list']) {
+        const command = executable + ' ' + subcommand;
+        expect(shellCommandReadsCredentials(command, roots), command).toBe(subcommand === 'diff');
+        const reads: GitRead[] = [];
+        const collect = (read: GitRead) => {
+          reads.push(read);
+          return true;
+        };
+        expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect, gitConfigRead: collect }), command).toBe(false);
+        expect(reads, command).toEqual([expect.objectContaining({ usesInheritedGitRuntime: executable === 'git' })]);
+      }
+    }
+  });
+
+  it('keeps sharing source searches behind consent when they follow symbolic links', () => {
+    for (const command of [
+      "rg --follow -g '*.ts' token .",
+      "rg -nL -g '*.ts' token .",
+      "grep -Rn --include='*.md' token .",
+      "grep --dereference-recursive --include='*.md' token .",
+      "grep --dereference-r --include='*.md' token .",
+      "egrep -Rn --include='*.md' token .",
+      "fgrep --dereference-r --include='*.md' token .",
+      "ag -uf token .",
+    ]) {
+      const localDecision = shellCommandReadsCredentials(command, roots);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: false }), command).toBe(localDecision);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(true);
+    }
+  });
+
+  it('keeps sharing searches behind consent when ripgrep config can inject options', () => {
+    for (const command of [
+      "rg -g '*.ts' token .",
+      "rg -e --no-config -g '*.ts' .",
+      "rg --regexp=--no-config -g '*.ts' .",
+      "rg --glob --no-config -g '*.ts' token .",
+      "rg -g--no-config -g '*.ts' token .",
+      "rg -n --no-config -g '*.ts' token .",
+      'rg -- --no-config',
+    ]) {
+      const localDecision = shellCommandReadsCredentials(command, roots);
+      expect(shellCommandReadsCredentials(command, roots, { ripgrepConfigActive: true }), command).toBe(localDecision);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: false, ripgrepConfigActive: true }), command)
+        .toBe(localDecision);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true, ripgrepConfigActive: true }), command)
+        .toBe(true);
+    }
+    for (const command of [
+      "RIPGREP_CONFIG_PATH=/other/config rg -g '*.ts' token .",
+      "env RIPGREP_CONFIG_PATH=/other/config rg -g '*.ts' token .",
+      "export RIPGREP_CONFIG_PATH=/other/config && rg -g '*.ts' token .",
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(true);
+    }
+    const opts = { sourceFileSelectors: true, ripgrepConfigActive: true };
+    for (const command of [
+      "rg --no-config -g '*.ts' token .",
+      "RIPGREP_CONFIG_PATH=/other/config rg --no-config -g '*.ts' token .",
+      "grep -rn --include='*.md' token .",
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, opts), command).toBe(false);
+    }
+    expect(shellCommandReadsCredentials("rg --no-config --follow -g '*.ts' token .", roots, opts)).toBe(true);
+    expect(shellCommandReadsCredentials("rg -g '*.ts' token .", roots, { sourceFileSelectors: true })).toBe(false);
+    const checkFile = vi.fn((read: { operand: string }) => read.operand === '.env');
+    expect(shellCommandReadsCredentials("rg --no-config -g '*.ts' token .", roots, {
+      ...opts, cwd: '/repo', fileReadRequiresConsent: checkFile,
+    })).toBe(false);
+    expect(checkFile).not.toHaveBeenCalledWith(expect.objectContaining({ operand: 'token' }));
+    expect(shellCommandReadsCredentials("rg --no-config -g '*.ts' token .env", roots, {
+      ...opts, cwd: '/repo', fileReadRequiresConsent: checkFile,
+    })).toBe(true);
+  });
+
+  it('keeps sharing source searches behind consent when ripgrep may run a preprocessor', () => {
+    for (const command of [
+      "rg token -g '*.ts' --pre=/tmp/filter .",
+      "rg --pre /tmp/filter token -g '*.ts' .",
+      "rg --no-config token -g '*.ts' --pre=/tmp/filter .",
+      "rg token -g '*.ts' --pre=/tmp/filter --pre-glob '*.ts' .",
+      "rg token -g '*.ts' --pre=/tmp/filter --no-pre .",
+      "rg token -g '*.ts' --pre='' .",
+      "rg token -g '*.ts' --pr=/tmp/filter .",
+      "rg token -g '*.ts' --p /tmp/filter .",
+      "rg -e -- -e token -g '*.ts' --pre=/tmp/filter .",
+      "rg token -g '*.ts' --'pre'=/tmp/filter .",
+    ]) {
+      const localDecision = shellCommandReadsCredentials(command, roots);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: false }), command).toBe(localDecision);
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(true);
+    }
+    for (const command of [
+      "rg token -g '*.ts' .",
+      "rg --no-config token -g '*.ts' .",
+      "rg token -g '*.ts' --pre-glob '*.ts' .",
+      "rg token -g '*.ts' --no-pre .",
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, { sourceFileSelectors: true }), command).toBe(false);
+    }
+  });
+
+  it('checks runtime helpers for sharing Git metadata without changing local decisions', () => {
+    for (const command of ['git status', 'git ls-files', 'git diff --name-only', 'git log --oneline']) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+      const collect = vi.fn(() => true);
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect }), command).toBe(false);
+      expect(collect, command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ metadataOnly: true }));
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: () => false }), command).toBe(true);
+    }
+  });
+
+  it('marks sharing Git probes unsafe when --bare changes the repository context', () => {
+    for (const subcommand of ['show HEAD', 'config --list']) {
+      const command = 'git --bare ' + subcommand;
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(subcommand === 'show HEAD');
+      const collect = vi.fn(() => false);
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect, gitConfigRead: collect }), command).toBe(true);
+      expect(collect, command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        cwd: undefined,
+        priorSegmentsMayMutate: true,
+      }));
+    }
+  });
+
+  it('keeps sharing content reads behind consent when Git parsing or readonly classification fails', () => {
+    for (const command of [
+      'git --git-dir=/repo/.git --work-tree=/repo diff --cached',
+      'git diff --ext-diff --cached',
+      'git diff --textconv --cached',
+      'git diff --ext-diff -- README.md',
+      'git show --textconv HEAD:README.md',
+      'git cat-file --textconv HEAD:README.md',
+      'git log --name-only --ext-diff HEAD',
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+      const collect = vi.fn(() => true);
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect, gitConfigRead: collect }), command).toBe(true);
+      expect(collect, command).not.toHaveBeenCalled();
+    }
+    expect(shellCommandReadsCredentials('git --version', roots, { gitContentRead: () => true, gitConfigRead: () => true })).toBe(false);
+  });
+
+  it('checks sharing implicit config reads even when flags take positional values', () => {
+    for (const command of [
+      'git config --fil /tmp/config http.extraHeader',
+      'git config -f/tmp/config --type path http.extraHeader',
+      'git config --type path user.password',
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+      const collect = vi.fn(() => false);
+      expect(shellCommandReadsCredentials(command, roots, { gitConfigRead: collect }), command).toBe(true);
+      expect(collect, command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sub: 'config' }));
+    }
+  });
+
+  it.each([
+    '--remerge-diff', '--remerge-di', '--remerge', '--dd',
+    '--diff-merges=remerge', '--diff-merges remerge', '--diff-merges=first-parent', '--diff-merges=on',
+  ])(
+    'checks implicit merge patches as sharing content without changing local decisions: %s', (option) => {
+      const command = 'git log ' + option + ' -1';
+      expect(shellCommandReadsCredentials(command, roots)).toBe(false);
+      // The existing general classifier treats the dd token as high impact.
+      expect(classifyShellCommand(command, roots)).toBe(option === '--dd' ? 'prompt-each-time' : 'auto-approve');
+      const collect = vi.fn(() => true);
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect })).toBe(false);
+      expect(collect).toHaveBeenCalledExactlyOnceWith(expect.not.objectContaining({ metadataOnly: true }));
+    },
+  );
+
+  it.each([
+    'git diff --check', 'git diff --cached --check', 'git diff --stat --check',
+    'git log --check -1', 'git show --check HEAD', 'git whatchanged --check -1',
+  ])('checks whitespace diagnostics as sharing content without changing local decisions: %s', (command) => {
+    expect(shellCommandReadsCredentials(command, roots)).toBe(false);
+    expect(classifyShellCommand(command, roots)).toBe('auto-approve');
+    const collect = vi.fn(() => true);
+    expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect })).toBe(false);
+    expect(collect).toHaveBeenCalledExactlyOnceWith(expect.not.objectContaining({ metadataOnly: true }));
+    expect(shellCommandReadsCredentials(command, roots, { gitContentRead: () => false })).toBe(true);
+  });
+
+  it('checks sharing git show object types even when patch output is suppressed', () => {
+    for (const command of ['git show -s deadbeef', 'git show --name-only deadbeef', 'git show --no-patch']) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+      const collect = vi.fn(() => false);
+      expect(shellCommandReadsCredentials(command, roots, { gitContentRead: collect }), command).toBe(true);
+      expect(collect, command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sub: 'show' }));
+    }
+    const collect = vi.fn(() => false);
+    expect(shellCommandReadsCredentials('git show -s HEAD:src/app.ts', roots, { gitContentRead: collect })).toBe(true);
+    expect(collect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ metadataOnly: true }));
+    expect(shellCommandReadsCredentials('git show -s HEAD:src/app.ts', roots, { gitContentRead: () => true })).toBe(false);
+    expect(shellCommandReadsCredentials('git show -s HEAD:src/app.ts', roots)).toBe(false);
+  });
+
+  it('gitContentRead：git 查看内容先问调用方，并带上 git 实际运行的目录', () => {
+    const reads: GitRead[] = [];
+    const record = (read: GitRead) => {
+      reads.push(read);
+      return true;
+    };
+    expect(shellCommandReadsCredentials('git log -p -- src/app.ts', roots, { gitContentRead: record })).toBe(false);
+    expect(shellCommandReadsCredentials('cd /repo/packages/a && git diff', roots, { gitContentRead: record })).toBe(false);
+    expect(shellCommandReadsCredentials('cd "$DIR" && git diff', roots, { gitContentRead: record })).toBe(false);
+    expect(shellCommandReadsCredentials('(cd /repo/a && ls); git diff', roots, { gitContentRead: record })).toBe(false);
+    expect(reads.map(({ sub, args }) => ({ sub, args }))).toEqual([
+      { sub: 'log', args: ['-p', '--', 'src/app.ts'] },
+      { sub: 'diff', args: [] },
+      { sub: 'diff', args: [] },
+      { sub: 'diff', args: [] },
+    ]);
+    expect(reads.map(({ cwd }) => cwd && toForwardSlashes(cwd))).toEqual(['/repo', '/repo/packages/a', undefined, undefined]);
+    const compoundReads: GitRead[] = [];
+    expect(shellCommandReadsCredentials('git add -A && git diff --cached', roots, {
+      gitContentRead: (read) => {
+        compoundReads.push(read);
+        return true;
+      },
+    })).toBe(false);
+    expect(compoundReads).toEqual([expect.objectContaining({
+      sub: 'diff',
+      priorSegmentsMayMutate: true,
+    })]);
+    for (const command of [
+      'git diff $(git add -A)',
+      'git diff ' + String.fromCharCode(96) + 'git add -A' + String.fromCharCode(96),
+      'git diff >(git add -A)',
+      'git diff > .cache',
+    ]) {
+      const sideEffectReads: GitRead[] = [];
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitContentRead: (read) => {
+          sideEffectReads.push(read);
+          return true;
+        },
+      }), command).toBe(false);
+      expect(sideEffectReads, command).toEqual([expect.objectContaining({ priorSegmentsMayMutate: true })]);
+    }
+    for (const command of [
+      'printf item | xargs git diff',
+      'xargs sh -c "git diff"',
+      "env -S 'git diff'",
+      "env --split-string='git diff'",
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitContentRead: () => true,
+        gitConfigRead: () => true,
+      }), command).toBe(true);
+    }
+    for (const command of ['echo "$(git diff)"', 'cat <(git diff)', "sh -c 'git diff'"]) {
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitContentRead: () => true,
+        gitConfigRead: () => true,
+      }), command).toBe(true);
+    }
+    for (const command of [
+      "find . -exec sh -c 'git diff' {} \\;",
+      "python -c 'git diff'",
+      "node -e 'git diff'",
+      "eval 'git diff'",
+      "awk 'BEGIN { system(\"git diff\") }'",
+      "perl -e 'system(\"git diff\")'",
+      "bash -lc 'git diff'",
+      "sh -xec 'git diff'",
+      "bash --command='git diff'",
+      'echo "$(git.exe diff)"',
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitContentRead: () => true,
+        gitConfigRead: () => true,
+      }), command).toBe(true);
+    }
+    for (const command of [
+      "sh -c 'cat .env'",
+      "python -c 'open(\".env\").read()'",
+      'echo "$(cat .env)"',
+    ]) {
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitContentRead: () => true,
+        gitConfigRead: () => true,
+      }), command).toBe(true);
+    }
+    // 调用方没核实时照旧算；还有别的理由时不受影响。
+    expect(shellCommandReadsCredentials('git diff', roots, { gitContentRead: () => false })).toBe(true);
+    expect(shellCommandReadsCredentials('git diff && cat .env', roots, { gitContentRead: () => true })).toBe(true);
+    expect(shellCommandReadsCredentials('git diff -- .env', roots, { gitContentRead: () => true })).toBe(true);
+  });
+
+  it('checks sharing Git logical variables without changing local decisions', () => {
+    for (const variable of ['-l', 'GIT_EDITOR', 'GIT_PAGER', 'GIT_SEQUENCE_EDITOR']) {
+      const command = 'git var ' + variable;
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+      expect(shellCommandReadsCredentials(command, roots, { gitConfigRead: () => false }), command).toBe(true);
+      const collect = vi.fn(() => true);
+      expect(shellCommandReadsCredentials(command, roots, { gitConfigRead: collect }), command).toBe(false);
+      expect(collect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sub: 'var', args: [variable] }));
+    }
+  });
+
+  it('gitConfigRead：会打出 git 配置或保存的凭证的调用交给调用方', () => {
+    const printing = [
+      'git remote -v',
+      'git remote get-url origin',
+      'git remote show origin',
+      'git config --list',
+      'git config --get remote.origin.url',
+      'git config user.name',
+      'git var -l',
+      'printf "protocol=https\\nhost=github.com\\n" | git credential fill',
+      'git-credential-store get',
+      'git -c credential.helper=store credential fill',
+    ];
+    // 不传选项时判定不变(本机自动审查同此)。
+    for (const command of printing.slice(0, 7)) {
+      expect(shellCommandReadsCredentials(command, roots), command).toBe(false);
+    }
+    expect(classifyShellCommand('git remote -v', roots)).toBe('auto-approve');
+    const reads: GitRead[] = [];
+    for (const command of printing) {
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitConfigRead: (read) => {
+          reads.push(read);
+          return false;
+        },
+      }), command).toBe(true);
+    }
+    expect(reads.map(({ sub }) => sub)).toEqual([
+      'remote', 'remote', 'remote', 'config', 'config', 'config', 'var', 'credential', 'credential', 'credential',
+    ]);
+    // 全局选项认不出时只粗找子命令，目录按认不出。
+    expect(reads[9]?.cwd).toBeUndefined();
+    expect(reads[0]?.cwd && toForwardSlashes(reads[0].cwd)).toBe('/repo');
+    for (const command of ['git remote', 'git remote add origin https://github.com/a/b.git', 'git config user.name Me', 'git status']) {
+      expect(shellCommandReadsCredentials(command, roots, { gitConfigRead: () => false }), command).toBe(false);
+    }
+    for (const command of [
+      'git -c include.path=/tmp/secret-config config --list',
+      'git --config-env include.path=GIT_INCLUDE_PATH config --list',
+    ]) {
+      const overrideReads: GitRead[] = [];
+      expect(shellCommandReadsCredentials(command, roots, {
+        gitConfigRead: (read) => {
+          overrideReads.push(read);
+          return true;
+        },
+      }), command).toBe(false);
+      expect(overrideReads, command).toEqual([expect.objectContaining({
+        sub: 'config',
+        priorSegmentsMayMutate: true,
+      })]);
+    }
   });
 });

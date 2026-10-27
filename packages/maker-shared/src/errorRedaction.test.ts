@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProxyTokenInvalidError,
@@ -10,6 +11,20 @@ import {
   redactSensitiveText,
   parseAgentErrorCode,
 } from './errorRedaction.js';
+
+describe('explicit Codex history recovery offer', () => {
+  const message = 'stream disconnected before completion: stream closed before response.completed';
+  it('offers recovery for the terminal close without classifying it as encryption failure', () => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex' })).toBe(true);
+  });
+  it.each([
+    { running: true }, { remoteHostId: 'ssh' }, { agentDeviceId: 'worker' },
+    { agentKind: 'cc' }, { message: 'Connection reset' },
+    { message: 'stream disconnected before completion: timeout' },
+  ])('does not offer unsupported or unrelated recovery: %s', overrides => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex', ...overrides })).toBe(false);
+  });
+});
 
 describe('Responses Lite request error classification', () => {
   it('recognizes the upstream error inside a JSON envelope', () => {
@@ -41,6 +56,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded_budget',
     '账户余额不足，请充值',
     '账户欠费',
+    'You hit your spend cap set by the owner of your workspace. Ask them to raise it.',
   ])('recognizes deterministic usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
   });
@@ -260,9 +276,9 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'parses %s directly and inside an IPC error', code => {
-      for (const prefix of ['', "Error invoking remote method 'maker:send': Error: "]) {
+      for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: "]) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
       }
     },

@@ -1,7 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Tip } from '@/components/ui/tooltip';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { cn } from '@/lib/utils';
 import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
 import {
@@ -78,30 +77,14 @@ function FailedScheduleNotice({
   };
 
   return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
+    <ErrorNotice
+      className={cn('mx-auto', className)}
       style={style}
       data-testid="unread-failed-schedule-banner"
       data-banner-kind="unread-failed-schedule"
-    >
-      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
-      </span>
-      <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
-        <button
-          type="button"
-          onClick={dismiss}
-          aria-label={t('chat.unreadFailedScheduleBanner.dismissTitle')}
-          className="shrink-0 rounded-full p-0.5 text-[var(--error-fg)] hover:bg-[var(--button-primary-hover)] active:bg-[var(--button-primary-pressed)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      </Tip>
-    </div>
+      message={t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
+      onDismiss={dismiss}
+      dismissLabel={t('chat.unreadFailedScheduleBanner.dismissTitle')}
+    />
   );
 }

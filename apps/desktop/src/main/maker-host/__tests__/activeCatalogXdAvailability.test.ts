@@ -820,6 +820,30 @@ describe('XD 网关权威模型清单重建', () => {
     expect(resolveXdPiGatewayApi('meta/muse-wonder-1.0')).toBe('openai-responses');
   });
 
+  it.each(['google/gemini-4-argon', 'gemini-4-argon'])(
+    'Gemini 4 Argon 网关条目 %s 采用 Server Responses 兼容配置，在 Codex / Pi 默认显示',
+    (id) => {
+      setActiveCatalog(BUNDLED_CATALOG);
+      setXdGatewayModels([{ id, agents: ['claude-code', 'codex', 'pi'] }]);
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const model = xdModels(agent).find((m) => m.id === id);
+        expect(model, agent).toMatchObject({
+          name: 'Gemini 4 Argon',
+          group: 'google',
+          nativeApi: 'openai-responses',
+          contextWindow: 1_048_576,
+          supportsImageInput: true,
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        });
+        // 现有 Server 配置避开 Gateway 的 Google 原生端点限制；Claude Code bridge 仍默认关闭。
+        if (agent === 'claude-code') expect(model?.defaultEnabled).toBe(false);
+        else expect(model?.defaultEnabled).not.toBe(false);
+      }
+      expect(resolveXdPiGatewayApi(id)).toBe('openai-responses');
+    },
+  );
+
   it('efforts 缺失时不合成档位，也不猜默认档', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

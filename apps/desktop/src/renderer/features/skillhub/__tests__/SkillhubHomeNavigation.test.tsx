@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useRef } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -41,6 +42,7 @@ vi.mock('../SkillhubMarketPreviewPanel', () => ({ SkillhubMarketPreviewPanel: ()
 import { SkillhubHomeView } from '../SkillhubHomeView';
 import { SkillhubLocalLayout } from '../SkillhubLocalLayout';
 import { useSkillhubHomeNavigation } from '../hooks/useSkillhubHomeNavigation';
+import { useSettingsEscape } from '@/components/settings/useSettingsEscape';
 
 function NavigationControls() {
   const location = useLocation();
@@ -80,6 +82,13 @@ function DetailNavigation() {
   );
 }
 
+function SettingsCatalog() {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const navigate = useNavigate();
+  useSettingsEscape(rootRef, true, () => navigate('/away'));
+  return <div ref={rootRef}><SkillhubHomeView embedded /></div>;
+}
+
 function CatalogHarness({ entry = '/skillhub/local' }: {
   entry?: string | { pathname: string; state: unknown };
 }) {
@@ -96,7 +105,7 @@ function CatalogHarness({ entry = '/skillhub/local' }: {
           <Route path=":kind/project/:hash/:name" element={<DetailNavigation />} />
           </Route>
         </Route>
-        <Route path="/settings" element={<SkillhubHomeView embedded />} />
+        <Route path="/settings" element={<SettingsCatalog />} />
         <Route path="*" element={null} />
       </Routes>
     </MemoryRouter>
@@ -177,6 +186,51 @@ describe('Skill home navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
     expect(screen.getByTestId('location').textContent).toBe('/before');
   });
+
+  // Unit regression: the real catalog/header/router must retain IME drafts without
+  // filtering or replacing history. Existing navigation cases cover only committed text.
+  // Minimal failure: compositionstart followed by a single change used to navigate.
+  it.each([
+    ['/skillhub/local', true], ['/skillhub/local', false],
+    ['/settings?tab=ghosts#catalog', true], ['/settings?tab=ghosts#catalog', false],
+  ] as const)(
+    'commits Chinese search only after composition ends in %s (native IME flag: %s)',
+    (entry, isComposing) => {
+      mocks.store.skills[0].name = '中文技能';
+      renderCatalog(entry);
+      fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.local' }));
+      const input = screen.getByRole('textbox', { name: 'skillhub.home.search' }) as HTMLInputElement;
+      const initialState = screen.getByTestId('navigation-state').textContent;
+      input.focus();
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: 'zhong' } });
+      expect(input.value).toBe('zhong');
+      expect(screen.getByTestId('navigation-state').textContent).toBe(initialState);
+      expect(screen.getByRole('button', { name: /design-tools/ })).toBeTruthy();
+      const escape = new KeyboardEvent('keydown', {
+        key: 'Escape', isComposing, bubbles: true, cancelable: true,
+      });
+      fireEvent(input, escape);
+      expect(escape.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe('zhong');
+
+      fireEvent.change(input, { target: { value: '中文' } });
+      fireEvent.compositionEnd(input, { data: '中文' });
+      expect(screen.getByRole('textbox', { name: 'skillhub.home.search' })).toBe(input);
+      expect(input.value).toBe('中文');
+      expect(document.activeElement).toBe(input);
+      expect(JSON.parse(screen.getByTestId('navigation-state').textContent!).skillhubHome.query)
+        .toBe('中文');
+      expect(screen.getByRole('button', { name: /中文技能/ })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /design-tools/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /中文技能/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Detail Back' }));
+      expect((screen.getByRole('textbox', { name: 'skillhub.home.search' }) as HTMLInputElement).value)
+        .toBe('中文');
+    },
+  );
 
   it.each([
     ['global', 'Detail Back'], ['global', 'Browser Back'],

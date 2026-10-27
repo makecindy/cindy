@@ -44,8 +44,13 @@ export type CommandKind = 'desktop' | 'agent-builtin' | 'agent-skill';
 /** A desktop-side command. Execution is performed in the main process. */
 export interface DesktopCommandMeta {
   kind: 'desktop';
+  /** Inserted text and identity key. */
   name: string;
   description: string;
+  /** Display text when it differs from the inserted `name` (e.g. a hidden `/slug` qualifier). */
+  label?: string;
+  /** Trailing tag in the row, e.g. a plugin's source. */
+  meta?: string;
 }
 
 /** A command baked into the agent (e.g. /compact for Claude Code). */

@@ -16,12 +16,13 @@ function isSnapshotShape(value: unknown): value is Record<string, unknown> {
 
 export interface RemoteDeviceUsageMirror<T> {
   useMirror(deviceId: string | null, providerId?: string): T | null;
-  request(deviceId: string, providerId?: string): void;
+  request(deviceId: string, providerId?: string, queueIfPending?: boolean): void;
   resetForTest(): void;
 }
 
 export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   invokeChannel: string | null;
+  decodeRead?: (value: unknown) => T | null | undefined;
   invokeArgs?: unknown[];
   pushChannel: string;
   defaultProviderId?: string;
@@ -32,6 +33,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     revision: number;
     unsupportedUntil: number;
     pending: boolean;
+    refreshQueued: boolean;
     /** Last time a read or push settled this entry; 0 = never. */
     settledAt: number;
     owner: ReturnType<typeof getDataOwnerGeneration>;
@@ -52,6 +54,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         revision: 0,
         unsupportedUntil: 0,
         pending: false,
+        refreshQueued: false,
         settledAt: 0,
         owner: cacheOwner,
         listeners: new Set(),
@@ -66,10 +69,14 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     entry.settledAt = Date.now();
     for (const notify of entry.listeners) notify();
   }
-  function request(deviceId: string, providerId?: string): void {
+  function request(deviceId: string, providerId?: string, queueIfPending = false): void {
     if (!cfg.invokeChannel) return;
     const entry = entryFor(deviceId, providerId);
-    if (entry.pending || Date.now() < entry.unsupportedUntil) return;
+    if (entry.pending) {
+      if (queueIfPending) entry.refreshQueued = true;
+      return;
+    }
+    if (Date.now() < entry.unsupportedUntil) return;
     const revision = entry.revision;
     const args = [...(cfg.invokeArgs ?? [])];
     // Keep the legacy builtin call shape; scoped reads must explicitly name their provider.
@@ -88,7 +95,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
           (!isSnapshotShape(value) || value.providerId !== providerId)
         )
           return;
-        if (value === null || isSnapshotShape(value)) apply(entry, value as T | null);
+        if (cfg.decodeRead) {
+          const decoded = cfg.decodeRead(value);
+          if (decoded !== undefined) apply(entry, decoded);
+        } else if (value === null || isSnapshotShape(value)) apply(entry, value as T | null);
       })
       .catch((error: unknown) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
@@ -101,6 +111,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       })
       .finally(() => {
         entry.pending = false;
+        if (entry.refreshQueued) {
+          entry.refreshQueued = false;
+          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId);
+        }
       });
   }
   function useMirror(deviceId: string | null, providerId?: string): T | null {

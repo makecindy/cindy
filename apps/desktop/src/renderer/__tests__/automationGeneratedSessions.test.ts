@@ -106,6 +106,7 @@ describe('automation-generated sessions', () => {
     // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
     // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
+      'side-chat',
       'desktop',
       'feishu',
       'slack',
@@ -120,9 +121,6 @@ describe('automation-generated sessions', () => {
       'review',
       'shared',
       'plugin',
-      // /cindy-make 制作个人版创建的代码任务:按源码 workingDir 归入项目分组。
-      'cindy-make',
-      'cindy-make-merge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
@@ -131,6 +129,8 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make-merge');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');

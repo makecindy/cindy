@@ -1,3 +1,4 @@
+// guard: DESIGN.md contrast/readability and #1427: system-native selection highlighting must not be overwritten by an opaque per-view color; static native-renderer contract.
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';

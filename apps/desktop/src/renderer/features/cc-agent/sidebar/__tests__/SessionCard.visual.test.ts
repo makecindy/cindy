@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
@@ -164,10 +165,8 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
 
 vi.mock('@/lib/sessionAttentionStore', () => ({
   useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
-}));
-
-vi.mock('../../lib/scrollIntoNearestView', () => ({
-  scrollIntoNearestView: vi.fn(),
+  getSessionAttentionKinds: () => mocks.attentionKindBySession,
+  subscribeSessionAttention: () => () => undefined,
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -241,7 +240,13 @@ function sessionRowEl(): HTMLElement {
 }
 
 describe('SessionCard visual cases', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
     clearRemoteSessionActivity();
     mocks.navigate.mockReset();
     mocks.dropdownMenuOpen = false;
@@ -257,6 +262,60 @@ describe('SessionCard visual cases', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
+
+  it.each(['list', 'card'] as const)(
+    'shows the sorting timestamp in the %s row with legacy fallback',
+    (variant) => {
+      const session: Session = {
+        ...sessionCardVisualCases[0].session,
+        updatedAt: '2026-10-24T09:00:00.000Z',
+        userSendAt: '2026-10-24T08:00:00.000Z',
+        lastActivityAt: '2026-10-24T10:00:00.000Z',
+      };
+      for (const expected of [session.lastActivityAt, session.userSendAt, session.updatedAt]) {
+        const view = renderCase(sessionCardVisualCases[0].id, { session, variant });
+        expect(view.container.querySelector('time')?.getAttribute('dateTime')).toBe(expected);
+        view.unmount();
+        if (session.lastActivityAt) delete session.lastActivityAt;
+        else session.userSendAt = null;
+      }
+    },
+  );
+
+  it('scrolls a text row into nearest view only when it becomes active', () => {
+    const props = {
+      session: sessionCardVisualCases[0].session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const view = render(createElement(SessionItem, props));
+    const row = view.container.querySelector(`[data-session-id="${props.session.id}"]`);
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    expect(row).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The old source guard never exercised this transition. Keep the real
+    // SessionItem effect and helper in this unit regression; only stub native DOM.
+    view.rerender(createElement(SessionItem, { ...props, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'nearest', behavior: 'smooth' });
+    expect(scrollIntoView.mock.contexts).toEqual([row]);
+
+    const updatedSession = { ...props.session, preview: 'Updated preview' };
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: false }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {

@@ -1,12 +1,13 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行:新建固定;自动任务 / Plugins / 伙伴 / 搜索与带主视图的插件
+ * 一条同级、等权的列表行:新建固定;自动任务 / Plugins / 搜索与带主视图的插件
  * 按用户偏好排序与显示(插件的显隐沿用其「在侧边栏显示」开关);未勾选的进「更多」。
  * 最小化插件面板恢复入口仍按需出现。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
- *   - 伙伴:原位切换为「返回任务」动作,随目标更换文案和图标,不显示选中高亮。
+ *   - 伙伴 2026-10-13 起不再是导航行:它是侧栏第一层的「伙伴」段(置顶上方),
+ *     与任务列表并存,不再整栏切换(见 features/bots/TeammatesSection)。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
  *     就地展开成搜索框,结果由下方功能槽(CCAgentSidebarUpper)替换列表绘制。搜索状态经
  *     ConversationSearchProvider 的 context 共享(行在此、结果在功能槽,两者是兄弟子树)。
@@ -19,13 +20,12 @@
  * 与 Shell"不感知路由"的原则:本组件是原 HorizontalTabbar 的同位替代,封装了
  * 自身的路由 / cc-agent 数据,Shell 仍只负责把它渲染在顶行(见 Sidebar.tsx)。
  *
- * rail(收窄)态:任务视图用 SidebarRailNavigation;其它 Feature 的 rail 只由
- * section="rail" 补一个伙伴入口。
+ * rail(收窄)态:任务视图用 SidebarRailNavigation;其它 Feature 的 rail 不再补入口
+ * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft,
   CirclePlus,
   Ellipsis,
   SlidersHorizontal,
@@ -35,14 +35,12 @@ import { useLocation, useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useAuth } from '@/contexts/AuthContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
@@ -57,6 +55,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { NewTag } from './NewTag';
 import { SidebarNavigationCustomize } from './SidebarNavigationCustomize';
 import { useHoverOpenMenu } from './useHoverOpenMenu';
 import {
@@ -121,21 +120,12 @@ function useSidebarNavigationActions(
 ): Record<SidebarNavigationItemId, SidebarNavigationAction> {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const location = useLocation();
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
   const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
-  // `activeKey` is intentionally sticky for the other navigation rows, but this
-  // action must describe the actual destination. Settings and other auxiliary
-  // routes should continue to offer entry to Teammates, not a stale return.
-  const isBotsView = isBotsPath(location.pathname);
-  // The teammate entry counts what waits at its destination: unread teammate
-  // messages, or tasks needing attention once it has become "back to tasks".
-  const navigationCounts = useNavigationAttention();
-  const botsCount = isBotsView ? navigationCounts.tasks : navigationCounts.teammates;
   return {
     automations: {
       label: t('ccAgent.layout.automations'),
@@ -152,17 +142,6 @@ function useSidebarNavigationActions(
       showDot: hasGhostUnread,
       dotTone: hasRetirementUnread ? 'awaiting' : 'done',
     },
-    bots: {
-      label: t(isBotsView ? 'sidebar.backToSessions' : 'sidebar.tabs.bots'),
-      icon: isBotsView ? ArrowLeft : SIDEBAR_NAVIGATION_ITEM_ICONS.bots,
-      onSelect: () => navigateToView(isBotsView ? 'cc-agent' : 'bots'),
-      active: false,
-      showDot: false,
-      count: {
-        value: botsCount,
-        label: t(isBotsView ? 'sidebar.taskAttentionCount' : 'sidebar.teammateUnreadCount', { count: botsCount }),
-      },
-    },
     search: {
       label: t('sidebar.navigation.items.search'),
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.search,
@@ -171,10 +150,6 @@ function useSidebarNavigationActions(
       showDot: false,
     },
   };
-}
-
-function isBotsPath(pathname: string): boolean {
-  return pathname === '/bots' || pathname.startsWith('/bots/');
 }
 
 /**
@@ -226,21 +201,6 @@ function useSidebarNavigationEntries(): {
     if (dataOwnerId) markSidebarAppArrivalsSeen(dataOwnerId);
   };
   return { order, hidden, isVisible, appFor, unseen, markSeen };
-}
-
-/** Quiet grayscale tag for entries that just joined More. */
-function NewTag({ className }: { className?: string }) {
-  const { t } = useTranslation();
-  return (
-    <span
-      className={cn(
-        'shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-10 font-medium leading-4 text-[var(--text-primary)]',
-        className,
-      )}
-    >
-      {t('sidebar.navigation.new')}
-    </span>
-  );
 }
 
 /**
@@ -423,7 +383,6 @@ export function SidebarRailNavigation({
           />
         );
       })}
-      <GhostPanelRestoreEntry variant="rail" className={SIDEBAR_RAIL_ICON_BUTTON_CLASS} />
       <SidebarNavigationMoreMenu
         hiddenIds={entries.hidden}
         actions={actions}
@@ -465,7 +424,6 @@ export function SidebarTopNav({
   const { navigateToView } = useActiveMainView();
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
   const { dataOwnerId } = useAuth();
-  const navigationPrefs = useSidebarNavigationPrefs(dataOwnerId);
   const entries = useSidebarNavigationEntries();
   const [customizing, setCustomizing] = useState(false);
   const [showHiddenSearch, setShowHiddenSearch] = useState(false);
@@ -482,28 +440,18 @@ export function SidebarTopNav({
 
   // 搜索结果 overlay 只在 cc-agent 视图(CCAgentSidebarUpper)绘制;本行却在所有非 rail 视图都渲染。
   // 用户在 plugins / 设置等视图输入搜索时,先切回 cc-agent 视图,结果才有处显示(同视图为 no-op)。
-  const ensureConversationView = useCallback(() => navigateToView('cc-agent'), [navigateToView]);
+  // 伙伴页与任务共用同一侧栏(结果就地显示),搜索时不必离开正在看的伙伴聊天。
+  const onBotsRoute = location.pathname === '/bots' || location.pathname.startsWith('/bots/');
+  const ensureConversationView = useCallback(() => {
+    if (!onBotsRoute) navigateToView('cc-agent');
+  }, [navigateToView, onBotsRoute]);
 
   const showPinned = section !== 'scrollable' && section !== 'rail';
   const showScrollable = section !== 'pinned' && section !== 'rail';
   const pinSearch = section === 'scrollable' && search.query.trim().length > 0;
-  if (section === 'rail') {
-    // Other features' rails only borrow the teammate tile; the task rail renders
-    // the full navigation itself. The bots feature owns the tile on its route.
-    const bots = actions.bots;
-    if (isBotsPath(location.pathname) || !navigationPrefs.visible.includes('bots')) return <></>;
-    return (
-      <div className="flex shrink-0 justify-center px-2 pt-2 pb-1">
-        <SidebarIconButton
-          icon={bots.icon}
-          label={bots.label}
-          aria-description={bots.count?.value ? bots.count.label : undefined}
-          badge={<EntryCountBadge count={bots.count} />}
-          onClick={bots.onSelect}
-        />
-      </div>
-    );
-  }
+  // 其它 Feature 的 rail 过去只借这里补一个伙伴入口;伙伴并入侧栏后 rail 入口由
+  // 任务侧栏的 CollapsedView 提供,这里不再渲染内容。
+  if (section === 'rail') return <></>;
   const renderActionRow = (id: Exclude<SidebarNavigationItemId, 'search'>) => {
     const action = actions[id];
     const Icon = action.icon;
@@ -532,9 +480,6 @@ export function SidebarTopNav({
       </button>
     );
   };
-  const restoreRow = showScrollable ? (
-    <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
-  ) : null;
   const searchRow = showScrollable ? (
     <SidebarInlineSearch
       search={search}
@@ -609,7 +554,6 @@ export function SidebarTopNav({
         ) : !showSearch ? (
           <div className="flex flex-col gap-0.5 pr-3 pl-3">
             {orderedNavigationRows}
-            {restoreRow}
             {customizeRow}
           </div>
         ) : (
@@ -630,8 +574,7 @@ export function SidebarTopNav({
                 results follow them instead of replacing them. */}
             <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
               {rowsAfterSearch}
-              {restoreRow}
-              {customizeRow}
+                {customizeRow}
             </div>
           </>
         )}
@@ -639,7 +582,7 @@ export function SidebarTopNav({
     );
   }
 
-  // Persistent-view contract: saved navigation order -> {restoreRow} -> More.
+  // Persistent-view contract: saved navigation order -> More.
   return (
     // pt-1(原 2.5):顶行 chrome 收窄到 46px 后,列表整体上提贴近顶行(对齐 Codex)。
     // 分段渲染时(section≠'all')两段各自成块,由调用方分别放进固定区 / 滚动区;
@@ -673,7 +616,6 @@ export function SidebarTopNav({
         ) : (
           orderedNavigationRows
         ))}
-      {showScrollable && !customizing && restoreRow}
       {showScrollable && !customizing && customizeRow}
     </div>
   );

@@ -8,7 +8,7 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 import { Check, ChevronDown } from 'lucide-react';
 
 import type { UsageHistoryDevice } from '@/hooks/useUsageHistory';
@@ -67,7 +67,7 @@ const STATUS_KEY: Record<Exclude<UsageHistoryDevice['status'], 'ok' | 'syncing'>
 };
 
 const itemClassName =
-  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]';
+  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]';
 
 export function UsageDeviceSelect({
   value,
@@ -113,7 +113,7 @@ export function UsageDeviceSelect({
     <Select.Root value={value} onValueChange={onValueChange}>
       <Select.Trigger
         aria-label={t('usageHistory.device.ariaLabel')}
-        className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+        className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
       >
         <span className="min-w-0 truncate">
           <Select.Value />
@@ -128,7 +128,7 @@ export function UsageDeviceSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
         >
           <Select.Viewport>
             {options.map((option) => {

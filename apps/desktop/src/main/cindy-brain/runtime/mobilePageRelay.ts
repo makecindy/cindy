@@ -2,7 +2,7 @@ import type { PluginPageEvent } from '@cindy/device-link';
 
 export type MobileRelayOperation =
   | { op: 'connect'; pageId: string; channels: string[] }
-  | { op: 'post'; pageId: string; channel: string; data: unknown }
+  | { op: 'post'; pageId: string; channel: string; data: unknown; sourceId?: string }
   | { op: 'poll'; pageId: string; after: number }
   | { op: 'disconnect'; pageId: string };
 
@@ -19,10 +19,18 @@ function relay(operation: MobileRelayOperation) {
   const pages: Map<string, Page> = (root.__cindyMobilePages ??= new Map<string, Page>());
   let page: Page | undefined = pages.get(operation.pageId);
   if (operation.op === 'connect') {
-    if (page) return;
-    page = { channels: new Map(), events: [], sequence: 0, bytes: 0, overflow: false };
+    page ??= { channels: new Map(), events: [], sequence: 0, bytes: 0, overflow: false };
     const target = page;
+    for (const [name, channel] of target.channels) {
+      if (!operation.channels.includes(name)) {
+        channel.close();
+        target.channels.delete(name);
+      }
+    }
+    target.events = target.events.filter((event) => operation.channels.includes(event.channel));
+    target.bytes = new TextEncoder().encode(JSON.stringify(target.events)).length;
     for (const name of operation.channels) {
+      if (target.channels.has(name)) continue;
       const channel = new BroadcastChannel(name);
       channel.onmessage = (event) => {
         let data: unknown, bytes: number;
@@ -72,7 +80,7 @@ function relay(operation: MobileRelayOperation) {
   // Plugins forward this opaque origin when requesting a host confirmation.
   channel.postMessage(
     data && typeof data === 'object' && !Array.isArray(data)
-      ? { ...data, mobilePageId: operation.pageId }
+      ? { ...data, mobilePageId: operation.sourceId ?? operation.pageId }
       : data,
   );
 }

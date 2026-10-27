@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 // register.ts wires disableOrcaInternal inside one large closure with many runtime
 // deps (maker, stores, caches), so the repo tests its IPC-boundary invariants via
-// source assertion (see makerOrcaRoleMarking.test.ts / orcaWorkflowRoute.test.ts).
+// source assertion (see makerOrcaRoleMarking.test.ts / the Orca route behavior tests).
 // The *behavioral* predicate (clear lead role iff no active team) is covered by
 // orcaStrandedLeadReconcile.test.ts; here we lock down that disableOrcaInternal's
 // "no active team" branch is no longer an unconditional no-op.

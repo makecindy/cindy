@@ -449,6 +449,25 @@ describe('packGhostDir', () => {
     }
   });
 
+  it.each([0, 1])('does not write an in-workdir package after live Plan authority expires at check %s', async (remainingChecks) => {
+    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify(GOOD_MANIFEST), 'main.js': 'export default {}' });
+    let remaining = remainingChecks;
+    expect(await packGhostDirRaw(dir, { sessionWorkdir: workDir, isCurrent: () => remaining-- > 0 }))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(fs.existsSync(path.join(dir, 'demo-1.0.0.cindy'))).toBe(false);
+  });
+
+  it.each([0, 1])('does not scaffold inside workdir after live Plan authority expires at check %s', async (remainingChecks) => {
+    const dir = path.join(workDir, 'plan-blocked-plugin');
+    const writeScaffold = vi.fn(testScaffoldWriter);
+    let remaining = remainingChecks;
+    expect(await scaffoldGhostDirRaw({ dir, template: 'plain', id: 'plan-blocked-plugin', name: 'Plan test', minCindyVersion: '1.2.3' },
+      { sessionWorkdir: workDir, isCurrent: () => remaining-- > 0, writeScaffold }))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(writeScaffold).not.toHaveBeenCalled();
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
   it('does not write a package after the outside grant expires', async () => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(GOOD_MANIFEST),
@@ -1686,6 +1705,12 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('documents optional Host task card visibility separately from task capabilities', () => {
+    expect(FORGE_GUIDE).toContain('"showTaskPreferences": false');
+    expect(FORGE_GUIDE).toContain('"showTaskPreferences": true');
+    expect(FORGE_GUIDE).toContain('任务 API、已有配置的读取和执行规则、权限检查均保持原样');
+  });
+
   it('账号业务元数据使用插件 KV，不声明 Host 昵称接口', () => {
     expect(FORGE_GUIDE).toContain('昵称等自定义账号元数据由插件通过 `/kv` 保存');
     expect(FORGE_GUIDE).toContain('执行仍传账号 id，不把昵称当作指令或授权');
@@ -1977,6 +2002,12 @@ describe('FORGE_GUIDE', () => {
   it('手册覆盖关键章节(身份卡/工具面/管子/聊天卡片/订阅拦截/网络代发/系统提示/沙箱红线/打包)', () => {
     for (const marker of [
       'ghost.json',
+      // 2026-10-20 同账号插件资料同步：manifest 声明、API 与结果不明语义同步交付。
+      '`library`、`deviceSync`、`sessionContext`',
+      '4.10.2 同账号电脑间的插件资料同步',
+      '"deviceSync": true',
+      'cindy.deviceSync',
+      'SYNC_RESULT_UNKNOWN',
       '两段式',
       'call_tool',
       'tool-result',
@@ -2126,14 +2157,12 @@ describe('FORGE_GUIDE', () => {
       '面板(panel.html/css/js)',
       'panel.position',
       '右侧栏页签',
-      // 2026-07-25 标准头系统按钮:主机画标题条,systemButtons 逐个关
-      // (maximize 撑满 / detach 独立窗口 / minimize 气泡);§2 样例与 §5
-      // 面板章节同步。
+      // 2026-10 停靠面板收束:panel.position left = 右侧栏常驻面板(不跟对话的全局
+      // 页签),systemButtons 保留兼容但不生效;§0 / §2 样例与 §5 面板章节同步。
       'systemButtons',
-      '撑满内容区',
-      '在独立窗口中打开',
-      'minimize',
-      '最小化面板',
+      '右侧栏常驻面板',
+      '全局页签',
+      '弹成独立 OS 窗口',
       // Manifest v3:直接字段声明能力；未知字段保留但不授权。
       'v3 直接用顶层字段声明插件贡献项与自主 Host 能力',
       'v2 的 `slots` 只用于存量包兼容',
@@ -2154,7 +2183,7 @@ describe('FORGE_GUIDE', () => {
       '`mainView.title`',
       '`mainView.icon`',
       '`puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`',
-      '只控制主视图的侧边栏入口',
+      '只控制主视图的左侧导航入口',
       // 2026-07-28 图标与官方仓门禁(#809):§1/§2 的 icon 字段说明、
       // §8.1 官方插件仓的四语言 locale 与 assets/icon.png 惯例。
       '"icon": "assets/icon.png"',
@@ -2178,7 +2207,7 @@ describe('FORGE_GUIDE', () => {
       "kind: 'deposit_media'",
       "kind: 'release_media'",
       '"cindy": { "media": ["deposit"] }',
-      '每意识配额 1GB',
+      '每个插件配额 1GB',
       '寄存物不是产物',
       // 2026-07-29 媒体代办画面参数:edit_image 放开 aspectRatio,视频四参数
       // (ratio/resolution/duration/fps)+ 实际生效参数回执 videoParams。

@@ -18,9 +18,12 @@ afterEach(() => {
 });
 
 describe('Windows built-in Skill activation identity', () => {
-  it.each(['realpath', 'missing'] as const)(
-    'preserves intent across version revisions with case differences (%s)',
-    (mode) => {
+  it.each([
+    ['realpath', 'learn'], ['missing', 'learn'],
+    ['realpath', 'cindy-plugin-creator'], ['missing', 'cindy-plugin-creator'],
+  ] as const)(
+    'preserves intent across version revisions with case differences (%s, %s)',
+    (mode, name) => {
       vi.stubGlobal('process', { ...process, platform: 'win32' });
       const resolve = (value: fs.PathLike) => {
         if (mode === 'missing') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -33,11 +36,11 @@ describe('Windows built-in Skill activation identity', () => {
       const sources = [
         'v6-0123456789abcdef-11111111-1111-1111-1111-111111111111',
         'v7-fedcba9876543210-22222222-2222-2222-2222-222222222222',
-      ].map((version) => path.join(sourceRoot, '.versions', version, 'learn'));
+      ].map((version) => path.join(sourceRoot, '.versions', version, name));
       const keys = sources.map((source) => canonicalBuiltInSkillActivationPath(
         source, path.join(appData, 'CindyGlobal'), appData,
       ));
-      expect(keys).toEqual([path.join(sourceRoot, 'learn'), path.join(sourceRoot, 'learn')]);
+      expect(keys).toEqual([path.join(sourceRoot, name), path.join(sourceRoot, name)]);
     },
   );
 

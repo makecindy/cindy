@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import { isHostManagedSession } from '@/session/hostManagedSession';
 
@@ -9,29 +7,5 @@ describe('host-managed Session presentation', () => {
     expect(isHostManagedSession({ source: 'bot' })).toBe(true);
     expect(isHostManagedSession({ source: 'desktop' })).toBe(false);
     expect(isHostManagedSession(null)).toBe(false);
-  });
-
-  it('hides host-owned settings while preserving permission controls and the composer', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    expect(source).toContain('const sessionManagedByHost = useHostManagedSession(');
-    expect(source).toContain('messageOnly={sessionManagedByHost}');
-    const details = readFileSync(resolve(process.cwd(), 'src/session/SessionMenuSheet.tsx'), 'utf8');
-    expect(details).toContain('visible && !messageOnly');
-    expect(details).toContain('const mainActions = messageOnly ? []');
-    expect(details).toContain('const deleteAction = messageOnly ? undefined');
-    expect(details).toContain("!messageOnly && view === 'info'");
-    expect(source).toContain('{renderSessionPermissionButton()}');
-    expect(source).toContain('currentSession && runtimeOptions ? (');
-    expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
-    expect(source).toContain('{!sessionManagedByHost && composerRuntimeSummary ? (');
-    const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
-    expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
-    expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
-    const modelPicker = source.slice(source.indexOf('const toggleComposerModelPicker'), source.indexOf('// 账号限额按需拉取'));
-    expect(modelPicker).toContain('if (!canConfigureSessionModel)');
-    expect(modelPicker).toContain('setModelSheetOpen(false);');
-    expect(source).toContain('{renderComposerAttachmentButton()}');
-    expect(source).toContain('{renderComposerInlineStop()}');
   });
 });

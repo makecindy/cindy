@@ -113,9 +113,18 @@ describe('shared production image interactions', () => {
         expect(fileCopy).toHaveBeenCalledWith({ filePath: '/fixture/preview.png' }),
       );
       expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));
-      // The message toolbar copies Markdown text, never the image or its path.
-      fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
-      expect(writeText).toHaveBeenCalledWith('![preview](/fixture/preview.png)');
+      // The message toolbar copies Markdown text, never the image or its path. A teammate
+      // reply hangs the compact toolbar beside its bubble, with Copy inside More.
+      if (simplified) {
+        fireEvent.pointerDown(
+          screen.getByRole('button', { name: label('chat.messageActionBar.moreActions') }),
+          { button: 0, ctrlKey: false },
+        );
+        fireEvent.click(screen.getByRole('menuitem', { name: label('chat.messageActionBar.copy') }));
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
+      }
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('![preview](/fixture/preview.png)'));
       expect(nativeCopy).not.toHaveBeenCalled();
     },
   );

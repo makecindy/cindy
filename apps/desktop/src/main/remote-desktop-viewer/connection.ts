@@ -1,4 +1,5 @@
 import {
+  handoffWindowCapabilities,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopRequest,
   REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
@@ -27,6 +28,9 @@ import {
 import { ViewerSafety, type ViewerClipboard } from './safety.js';
 import type { ViewerCredentials } from './credentials.js';
 
+/** After the window leaves the foreground, one last pass may still read the local clipboard. */
+const CLIPBOARD_GRACE_MS = 1000;
+
 /** Main owns the target, account generation and lease for one lightweight viewer.
  * A destroyed/hidden window cannot leave late starts or inputs alive. No closeLink.
  */
@@ -50,6 +54,7 @@ export class RemoteViewerConnection {
   private preferencesValue = { ...DEFAULT_VIEWER_PREFERENCES };
   private safetyState = new ViewerSafety();
   private clipboardProgress: number | null = null;
+  private clipboardGrace = 0;
   private channelRequests = new Map<string, (outcome: RemoteViewerChannelOutcome) => void>();
   private channelRequestId = 0;
   constructor(
@@ -78,7 +83,10 @@ export class RemoteViewerConnection {
   ) {}
   bind(target: RemoteViewerTarget): void {
     const owner = this.deps.owner();
-    const sameScope = this.owner === owner && this.target?.deviceId === target.deviceId;
+    const sameScope =
+      this.owner === owner &&
+      this.target?.deviceId === target.deviceId &&
+      this.target.handoff === target.handoff;
     this.deactivate();
     if (!sameScope) this.lifecycle = null;
     this.owner = owner;
@@ -191,6 +199,9 @@ export class RemoteViewerConnection {
       if ('lease' in request && request.lease !== this.lease)
         throw new Error('DESKTOP_LEASE_EXPIRED');
       if (request.op === 'start' && this.starting) throw new Error('DESKTOP_BUSY');
+      // The window decides whether this is a 代输入 window view; the page cannot widen or swap it.
+      if (request.op === 'start' && request.handoff !== this.target?.handoff)
+        throw new Error('DESKTOP_UNAVAILABLE');
       // Clipboard contents and credentials are handled only by dedicated Main adapters.
       if (
         request.op === 'clipboard' ||
@@ -238,7 +249,10 @@ export class RemoteViewerConnection {
           const result = await this.send(outgoing, check);
           if (request.op === 'capabilities') {
             check();
-            this.caps = result as RemoteDesktopCapabilities;
+            const caps = result as RemoteDesktopCapabilities;
+            // A window view never runs whole-desktop safety features (masks, mute, clipboard sync).
+            this.caps =
+              target.handoff && caps?.handoffWindow ? handoffWindowCapabilities(caps) : caps;
           }
           if (isStart) {
             const lease = result as RemoteDesktopLease;
@@ -461,13 +475,41 @@ export class RemoteViewerConnection {
     this.check(generation);
     return parsed;
   }
+  private focused(): boolean {
+    return this.deps.focused?.() ?? true;
+  }
+  /**
+   * Focus only decides when this window reads its own clipboard; the computer's
+   * sync stays enabled for the whole control session. Regaining focus syncs at
+   * once; leaving runs one pass at once (so a copy made on the computer arrives
+   * here before the user pastes). New local reads stay
+   * allowed for CLIPBOARD_GRACE_MS after the blur, not just for that pass: a
+   * copy chord's delayed pull (about 200 ms after the key) may land after it.
+   */
   async focusChanged(): Promise<void> {
     const generation = this.generation;
-    // Cancel local reads immediately, then reconcile after any old enable has
-    // settled. Use current focus when reconciling (blur/focus may race).
-    await this.safetyState.pauseClipboard();
-    if (!this.active || generation !== this.generation) return;
+    const live = () => this.active && generation === this.generation;
+    if (this.focused()) {
+      // Wake only after in-flight work settles: its failure would re-arm the backoff.
+      await this.safetyState.idle();
+      this.safetyState.wake();
+      if (live()) await this.safety(generation).catch(() => {});
+      return;
+    }
+    this.clipboardGrace = Date.now() + CLIPBOARD_GRACE_MS;
+    await this.safetyState.idle();
+    if (!live() || this.focused()) return;
     await this.safety(generation).catch(() => {});
+    // No blur cleanup: idle() waiters may already have started the delayed
+    // copy pass. The grace gates new passes; ClipboardCounter retires itself
+    // when idle. Only authority changes cancel work already admitted.
+  }
+  /** A copy or paste in the picture: sync now instead of at the next poll. */
+  async syncClipboard(generation: number): Promise<RemoteViewerSafety> {
+    this.check(generation);
+    await this.safetyState.idle();
+    this.safetyState.wake();
+    return this.safety(generation);
   }
   async safety(generation: number, retry = false): Promise<RemoteViewerSafety> {
     this.check(generation);
@@ -482,18 +524,18 @@ export class RemoteViewerConnection {
         return false;
       }
     };
+    // Focus and blur grace only admit a pass. Once admitted it finishes across
+    // focus changes and deadline expiry; authority and manual transfers still
+    // invalidate it through current()/clipboardPending.
+    const clipboardAllowed = this.focused() || Date.now() < this.clipboardGrace;
     const value =
       lease && this.caps
         ? await this.safetyState.tick({
             lease,
             caps: this.caps,
-            preferences: {
-              ...this.preferencesValue,
-              clipboardSync: this.preferencesValue.clipboardSync && (this.deps.focused?.() ?? true),
-            },
+            preferences: { ...this.preferencesValue },
             current,
-            clipboardCurrent: () =>
-              current() && !this.clipboardPending && (this.deps.focused?.() ?? true),
+            clipboardCurrent: () => current() && !this.clipboardPending && clipboardAllowed,
             clipboard: this.deps.clipboard,
             request: async (message, check) => {
               check();

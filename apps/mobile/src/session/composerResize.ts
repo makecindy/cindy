@@ -165,14 +165,31 @@ export function settleComposerResizeDrag(input: SettleComposerResizeDragInput): 
   return bounds.minContentHeight;
 }
 
-/** 松手时手势向下位移达到该值即可触发「下拉收起」（配合高度处于单行吸附区）。 */
+/**
+ * 输入框到一行后继续下拉、折叠工具栏所用的距离；松手时向下位移达到该值
+ * （且高度处于单行吸附区）即「下拉收起」。
+ */
 export const COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD = 24;
+
+/** 工具栏折叠完（看起来只剩一行）后，还要再往下拉这么多才不等松手直接收起。 */
+export const COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL = 40;
 
 /** After the editor reaches one line, consume the remaining pull by folding its chrome. */
 export function composerCollapseProgress(input: ApplyComposerResizeDragInput): number {
   'worklet';
   const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
   return clamp(remainingPull / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/**
+ * 拖动途中是否直接收起：先缩到一行、再折叠完工具栏，之后还要多拉
+ * COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL。把「看起来到一行」与「收键盘」错开，
+ * 用户能先看到收缩到底，再决定继续往下拉收起。
+ */
+export function shouldDismissComposerDuringDrag(input: ApplyComposerResizeDragInput): boolean {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return remainingPull >= COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD + COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL;
 }
 
 export interface ShouldDismissComposerOnReleaseInput {

@@ -6,7 +6,6 @@ import { buildUserProvider, type Provider } from '@cindy/model-providers';
 import { createCustomImageChannel, registerCustomImageChannels } from '../customImageChannel.js';
 import { pruneDynamicImageChannels } from '../byokImageChannel.js';
 import { ImageChannelRegistry } from '../imageChannelRegistry.js';
-import { filterLegacyCindyMediaConfig } from '../cindyMediaCatalog.js';
 
 const MODEL = 'team/gpt-image-2.5-sunburst';
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -84,18 +83,14 @@ function harness(initial = provider()) {
 }
 
 describe('standalone custom OpenAI Images', () => {
-  it('keeps URL-capable custom sources in Core but out of legacy image preferences', () => {
+  it('keeps URL-capable custom sources in Core but out of the legacy image channel', () => {
     const h = harness();
     const registry = new ImageChannelRegistry();
     registry.register('relay', h.channel);
     registry.register('existing', { ready: () => true, generateImage: vi.fn(), editImage: vi.fn() });
-    const custom = { id: 'media:relay:image', modelId: MODEL, providerId: 'relay', label: 'Custom', supportsEdit: true };
-    const existing = { ...custom, id: 'media:existing:image', providerId: 'existing', label: 'Existing' };
-    const config = { models: [custom, existing], defaults: { standard: custom.id, draft: custom.id, best: custom.id } };
-    const legacy = filterLegacyCindyMediaConfig(config, model => registry.isProviderLegacyReady(model.providerId, model.modelId));
-    expect(legacy).toEqual({ models: [existing], defaults: { standard: existing.id, draft: existing.id, best: existing.id } });
+    expect(registry.isProviderLegacyReady('relay', MODEL)).toBe(false);
+    expect(registry.isProviderLegacyReady('existing', MODEL)).toBe(true);
     expect(registry.isProviderReady('relay', MODEL)).toBe(true);
-    expect(config.models).toEqual([custom, existing]);
     expect(h.fetchImplementation).not.toHaveBeenCalled();
   });
 

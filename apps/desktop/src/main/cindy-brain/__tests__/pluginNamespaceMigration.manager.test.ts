@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { PluginMarketLedger } from '../../plugin-market/ledger.js';
+import { StableOwnerPostCommitCoordinator } from '../../stableOwnerPostCommit.js';
 import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
 import { resolveGhostFirstPartyPrivilege } from '../ghostFirstPartyPrivilege.js';
 import {
@@ -26,6 +27,7 @@ import { pluginInstanceRegistryPath } from '../pluginInstanceRegistry.js';
 let workDir: string;
 let rootDir: string;
 let manager: GhostManager;
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 const demoSkillSource = '---\nname: demo\ndescription: Demo skill\n---\n\nDemo\n';
 
 const mutateSnapshot: NonNullable<GhostManagerOptions['mutateSnapshot']> = async ({ parentDir, ...request }) => {
@@ -77,12 +79,12 @@ it.each(['_ns', '_ns/_root'])('rejects linked %s parents for content recovery an
   await fs.promises.mkdir(outside, { recursive: true });
   await fs.promises.mkdir(path.dirname(contentNs), { recursive: true });
   await fs.promises.writeFile(path.join(outside, 'sentinel'), 'keep');
-  await fs.promises.symlink(outside, contentNs, 'dir');
+  await fs.promises.symlink(outside, contentNs, directoryLinkType);
   expect(() => assertManagedPluginParentSync(rootDir, relId)).toThrow();
 
   const store = new GhostInstallReceiptStore(() => stateRoot);
   await fs.promises.mkdir(path.dirname(path.join(stateRoot, reservedRoot)), { recursive: true });
-  await fs.promises.symlink(outside, path.join(stateRoot, reservedRoot), 'dir');
+  await fs.promises.symlink(outside, path.join(stateRoot, reservedRoot), directoryLinkType);
   await expect(store.writePendingMutation(relId, {
     kind: 'install', packageSha256: 'a'.repeat(64),
   })).rejects.toThrow();
@@ -97,7 +99,7 @@ it('does not recover an interrupted namespaced uninstall through a linked conten
   await fs.promises.mkdir(path.join(outside, 'acme', 'hello'), { recursive: true });
   await fs.promises.writeFile(path.join(outside, 'acme', 'hello', 'sentinel'), 'keep');
   await fs.promises.mkdir(rootDir, { recursive: true });
-  await fs.promises.symlink(outside, path.join(rootDir, '_ns'), 'dir');
+  await fs.promises.symlink(outside, path.join(rootDir, '_ns'), directoryLinkType);
   const store = new GhostInstallReceiptStore(() => stateRoot);
   await store.writePendingMutation('_ns/acme/hello', { kind: 'uninstall' });
   manager = createManager({ getStateDir: () => stateRoot });
@@ -111,7 +113,7 @@ it('refuses to publish a namespaced receipt through a linked approval parent', a
   const outside = path.join(workDir, 'outside');
   await fs.promises.mkdir(outside);
   await fs.promises.writeFile(path.join(outside, 'sentinel'), 'keep');
-  await fs.promises.symlink(outside, path.join(stateRoot, '_ns'), 'dir');
+  await fs.promises.symlink(outside, path.join(stateRoot, '_ns'), directoryLinkType);
   const store = new GhostInstallReceiptStore(() => stateRoot);
   const approval = store.read('hello');
   expect(approval.state).toBe('approved');
@@ -172,6 +174,120 @@ async function stampLegacyOrganizationInstall(id = 'hello', withSkill = false): 
 }
 
 describe('GhostManager namespace migration census', () => {
+  // Unit regression: a persisted pending row outside the census was skipped by
+  // both migration and confirmation. Recover only from positive market facts;
+  // keep the physical instance, approval, enabled state and skill snapshot.
+  it.each(['market', 'missing', 'forge-stamped', 'write-failed', 'binding-before-lock', 'binding-before-commit'])('handles an orphan pending record without inventing migration eligibility (evidence=%s)', async (evidence) => {
+    const positive = evidence === 'market';
+    const bindingChanged = evidence.startsWith('binding-');
+    await plantLegacyInstall('hello', true, evidence === 'forge-stamped' ? 'agent-forge' : undefined);
+    const approved = receiptStore().read('hello');
+    if (approved.state !== 'approved') throw new Error('expected approved install');
+    await receiptStore(mutateSnapshot).write({ ...approved.receipt, packageSha256: 'a'.repeat(64) }, {
+      skillSourceDir: path.join(rootDir, 'hello'),
+    });
+    manager.ensureNamespaceMigrationCensus();
+    manager.list();
+    const registryPath = path.join(workDir, 'ghosts-install-state', 'plugin-instances.v2.json');
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+    registry.census.pendingRelIds = [];
+    if (bindingChanged) registry.instances.hello.pluginId = 'plugin-a';
+    fs.writeFileSync(registryPath, JSON.stringify(registry));
+    if (evidence === 'forge-stamped') {
+      const current = receiptStore().read('hello');
+      if (current.state !== 'approved') throw new Error('expected approved install');
+      await receiptStore(mutateSnapshot).write({ ...current.receipt, namespace: 'acme' }, {
+        skillSourceDir: path.join(rootDir, 'hello'),
+      });
+    }
+    let evidenceReads = 0;
+    manager = createManager({
+      mutateSnapshot,
+      classifyPendingNamespace: () => ({ kind: 'commit', namespace: 'acme', basis: 'market-organization' }),
+      readUnconfirmedConfirmationEvidence: () => {
+        evidenceReads += 1;
+        // Simulate a binding replacement at either async commit boundary.
+        // A matching old package must not confirm the replacement plugin.
+        if (bindingChanged && evidenceReads === (evidence === 'binding-before-lock' ? 1 : 2)) {
+          const changed = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+          changed.instances.hello.pluginId = 'plugin-b';
+          fs.writeFileSync(registryPath, JSON.stringify(changed));
+        }
+        return {
+          marketRecords: positive || evidence === 'write-failed' || bindingChanged ? [{ namespace: 'acme', organizationId: 'org-acme', scope: 'organization' as const, installed: true, packageSha256: 'a'.repeat(64) }] : undefined,
+          packageSha256: 'a'.repeat(64),
+          forgeSelfTest: evidence === 'forge-stamped',
+          currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme' },
+        };
+      },
+    });
+    // Waiting for positive evidence must preserve the install without making
+    // the startup coordinator repeatedly scan the entire plugin market.
+    const scheduleRetry = vi.fn();
+    const startup = new StableOwnerPostCommitCoordinator({
+      snapshot: () => ({ scopeKey: 'owner:1', dataOwnerId: 'owner', stable: true }),
+      warn: vi.fn(), scheduleRetry,
+    });
+    const maintenance = vi.fn(async () => {
+      await manager.reconcilePendingRootNamespaces(true);
+      return 'completed' as const;
+    });
+    startup.setTask(maintenance);
+    const failedWrite = evidence === 'write-failed'
+      ? vi.spyOn(GhostInstallReceiptStore.prototype, 'write').mockRejectedValueOnce(new Error('receipt write failed'))
+      : null;
+    try {
+      await expect(startup.ensure('startup')).resolves.toBe(failedWrite ? 'failed' : 'completed');
+      if (failedWrite) expect(scheduleRetry).toHaveBeenCalledOnce();
+      else {
+        await startup.ensure('stable-again');
+        expect(scheduleRetry).not.toHaveBeenCalled();
+      }
+    } finally {
+      failedWrite?.mockRestore();
+    }
+    expect(maintenance).toHaveBeenCalledOnce();
+    const installed = manager.list()[0];
+    expect(installed).toMatchObject({ enabled: true, namespaceState: positive ? 'confirmed' : 'pending' });
+    expect(installedGhostStoragePart(installed)).toBe('hello');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
+    expect(await manager.verifyApprovedSkillSnapshot(installed)).toBe(true);
+    if (positive) expect(installed.namespace).toBe('acme');
+  });
+
+  it.each([false, true])('repairs the same release in a migrated bare directory without changing storage identity (enabled=%s)', async (enabled) => {
+    const archive = vi.fn();
+    manager = createManager({ mutateSnapshot, onArchiveSourceState: archive });
+    await stampLegacyOrganizationInstall('hello', true);
+    await manager.setEnabled('hello', enabled);
+    const previous = manager.list()[0];
+    expect(manager.approvedInstallEvidence('hello')?.packageSha256).toBeNull();
+    const pkg = await makeCindy('hello', true);
+    const inspected = await manager.inspect(pkg);
+    if ('rejection' in inspected) throw new Error('expected valid market package');
+
+    const result = await manager.update(pkg, {
+      namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(previous.approval),
+      expectedPackageSha256: inspected.packageSha256,
+    });
+
+    expect(result).toMatchObject({ ghost: { dir: previous.dir, namespace: 'acme', enabled, manifest: { version: '1.0.0' } } });
+    const restored = manager.list()[0];
+    expect(installedGhostStoragePart(restored)).toBe(installedGhostStoragePart(previous));
+    expect(archive).not.toHaveBeenCalled();
+    expect(await manager.verifyApprovedSkillSnapshot(restored)).toBe(true);
+    const evidence = manager.approvedInstallEvidence('hello');
+    expect(evidence?.packageSha256).toBe(inspected.packageSha256);
+    expect(resolveGhostFirstPartyPrivilege({
+      ghostId: 'hello', namespace: 'acme', builtin: false, installOrigin: 'manual',
+      currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme' },
+      marketRecord: {
+        scope: 'organization', organizationId: 'org-acme', source: 'market', installed: true,
+        sha256: inspected.packageSha256, approvedPackageSha256: evidence?.packageSha256 ?? null,
+      },
+    })).toMatchObject({ brokerEligible: true, basis: 'market-organization-current' });
+  });
+
   it('retries a failed first directory scan instead of persisting an empty census', async () => {
     await plantLegacyInstall('hello');
     const actualRead = fs.readdirSync;
@@ -709,6 +825,40 @@ describe('GhostManager namespace migration census', () => {
     expect(resumed.mock.results[0]?.value).toBe('pending');
   });
 
+  // A background list may precede the resume callback by several awaits. A
+  // cached enabled projection must not restart a resident disabled meanwhile.
+  // Unit: one pending legacy resident; existing tests use only fresh sync lists.
+  it('rechecks enabled state before resuming from a prepared background list', async () => {
+    await plantLegacyInstall('hello');
+    const resumed = vi.fn();
+    manager = createManager({
+      canResumePendingResidentOffline: () => true,
+      onResumePendingResidentOffline: resumed,
+    });
+    manager.ensureNamespaceMigrationCensus();
+    const installed = await manager.listAsync();
+    expect(installed[0]).toMatchObject({ enabled: true, namespaceState: 'pending' });
+    await manager.setEnabled('hello', false);
+    manager.resumePendingResidentsOffline(installed);
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  // Census publication changes namespace eligibility without a content
+  // transaction. A per-refresh view must observe that new registry (unit).
+  it('invalidates a background refresh when the census changes without an install mutation', async () => {
+    await plantLegacyInstall('hello');
+    const read = vi.spyOn(GhostInstallReceiptStore.prototype, 'readAsync');
+    try {
+      const refresh = manager.createBackgroundRefresh();
+      expect((await refresh.registry()).census).toBeNull();
+      expect(manager.ensureNamespaceMigrationCensus()).not.toBeNull();
+      expect((await refresh.registry()).census).not.toBeNull();
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it('does not assign an organization namespace to a plugin planted after the census', async () => {
     await fs.promises.mkdir(rootDir, { recursive: true });
     expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
@@ -1116,6 +1266,35 @@ describe('GhostManager namespace migration census', () => {
 
 });
 
+describe('single instance lookup', () => {
+  it('projects one instance exactly as list() does without rescanning', async () => {
+    await expect(manager.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a',
+    })).resolves.toMatchObject({ ghost: { instanceKey: '_ns__acme__hello' } });
+    await expect(manager.install(await makeCindy('other'))).resolves.toMatchObject({ ghost: {} });
+    const listed = manager.list().find((ghost) => ghost.instanceKey === '_ns__acme__hello');
+    const readdir = vi.spyOn(fs, 'readdirSync');
+    try {
+      expect(manager.findInstalledInstance('_ns__acme__hello')).toEqual(listed);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+    await expect(manager.setEnabled('_ns/acme/hello', false)).resolves.toEqual({ ok: true });
+    expect(manager.findInstalledInstance('_ns__acme__hello')).toMatchObject({ enabled: false });
+  });
+
+  it('leaves removed and unregistered installs to the full scan', async () => {
+    await expect(manager.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a',
+    })).resolves.toMatchObject({ ghost: {} });
+    await expect(manager.uninstall('_ns/acme/hello', { notify: false })).resolves.toEqual({ ok: true });
+    expect(manager.findInstalledInstance('_ns__acme__hello')).toBeUndefined();
+    await plantLegacyInstall('legacy');
+    expect(manager.findInstalledInstance('legacy')).toBeUndefined();
+  });
+});
+
 describe('plugin instance registry boundaries', () => {
   it('uses the directory key for a new install and removes that key on uninstall', async () => {
     const installed = await manager.install(await makeCindy('hello'));
@@ -1196,6 +1375,75 @@ describe('plugin instance registry boundaries', () => {
       source: 'market', pluginId: 'plugin-a', contentRelId: '_ns/_root/hello', active: true,
     });
     expect(fs.existsSync(path.join(rootDir, '_ns', '_root', 'hello'))).toBe(true);
+  });
+
+  it('takes back the bare key for a removed pre-registry organization install', async () => {
+    const canReclaimLegacyBareInstance = vi.fn(() => true);
+    const reclaiming = createManager({ mutateSnapshot, canReclaimLegacyBareInstance });
+    await expect(reclaiming.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a',
+    })).resolves.toMatchObject({ ghost: { instanceKey: 'hello', namespace: 'acme' } });
+    expect(canReclaimLegacyBareInstance).toHaveBeenCalledWith({
+      ghostId: 'hello', namespace: 'acme', pluginId: 'plugin-a',
+    });
+    expect(fs.existsSync(path.join(rootDir, 'hello'))).toBe(true);
+    const registry = JSON.parse(fs.readFileSync(
+      pluginInstanceRegistryPath(path.join(workDir, 'ghosts-install-state')), 'utf8',
+    )) as { instances: Record<string, { namespace: string | null; namespaceState: string; contentRelId: string }> };
+    expect(registry.instances['hello']).toMatchObject({
+      namespace: 'acme', namespaceState: 'confirmed', contentRelId: 'hello',
+    });
+  });
+
+  it('keeps the bare key for the instance that still owns it', async () => {
+    const reclaiming = createManager({ mutateSnapshot, canReclaimLegacyBareInstance: () => true });
+    await plantLegacyInstall('hello');
+    reclaiming.list();
+    await expect(reclaiming.commitPendingNamespace('hello', null, 'explicit-root')).resolves.toEqual({ ok: true });
+    await expect(reclaiming.uninstall('hello', { notify: false })).resolves.toEqual({ ok: true });
+    await expect(reclaiming.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a',
+    })).resolves.toMatchObject({ ghost: { instanceKey: '_ns__acme__hello' } });
+  });
+
+  it('takes the bare key from a removed local install once the user confirms', async () => {
+    await plantLegacyInstall('hello');
+    manager.list();
+    await expect(manager.commitPendingNamespace('hello', null, 'manual-after-sync')).resolves.toEqual({ ok: true });
+    expect(manager.canOfferBareReclaim('hello', 'acme', 'plugin-a')).toBe(false);
+    await expect(manager.uninstall('hello', { notify: false })).resolves.toEqual({ ok: true });
+    expect(manager.canOfferBareReclaim('hello', 'acme', 'plugin-a')).toBe(true);
+    await expect(manager.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a', reclaimLegacyBareInstance: true,
+    })).resolves.toMatchObject({ ghost: { instanceKey: 'hello', namespace: 'acme' } });
+    const registry = JSON.parse(fs.readFileSync(
+      pluginInstanceRegistryPath(path.join(workDir, 'ghosts-install-state')), 'utf8',
+    )) as { instances: Record<string, { namespace: string | null; namespaceState: string; active: boolean }> };
+    expect(registry.instances['hello']).toMatchObject({ namespace: 'acme', namespaceState: 'confirmed', active: true });
+  });
+
+  it('never offers another organization its bare key', async () => {
+    await plantLegacyInstall('hello');
+    manager.list();
+    await expect(manager.commitPendingNamespace('hello', 'other', 'market-organization')).resolves.toEqual({ ok: true });
+    await expect(manager.uninstall('hello', { notify: false })).resolves.toEqual({ ok: true });
+    expect(manager.canOfferBareReclaim('hello', 'acme', 'plugin-a')).toBe(false);
+    await expect(manager.install(await makeCindy('hello'), {
+      namespace: 'acme', registrySource: 'market', pluginId: 'plugin-a', reclaimLegacyBareInstance: true,
+    })).resolves.toMatchObject({ ghost: { instanceKey: '_ns__acme__hello' } });
+  });
+
+  it('offers a bare-id library only while nothing installed or foreign owns the bare id', async () => {
+    expect(manager.bareLibraryOffer('hello', 'acme')).toBe('available');
+    await plantLegacyInstall('hello');
+    manager.list();
+    expect(manager.bareLibraryOffer('hello', 'acme')).toBe('in-use');
+    await expect(manager.commitPendingNamespace('hello', 'acme', 'market-organization')).resolves.toEqual({ ok: true });
+    expect(manager.bareLibraryOffer('hello', 'acme')).toBe('in-use');
+    await expect(manager.uninstall('hello', { notify: false })).resolves.toEqual({ ok: true });
+    expect(manager.bareLibraryOffer('hello', 'acme')).toBe('available');
+    expect(manager.bareLibraryOffer('hello', 'other')).toBe('unavailable');
+    expect(manager.bareLibraryOffer('hello', null)).toBe('unavailable');
   });
 
   it('records the market plugin id instead of treating the install as manual', async () => {

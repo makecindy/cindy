@@ -52,6 +52,15 @@ describe("remote desktop wire boundary", () => {
         parseRemoteDesktopRequest({ op: "start", displayId: "1", resume }),
       ).toThrow("INVALID_REQUEST");
   });
+  it("carries a 代输入 request id on start, never a window of the viewer's choosing", () => {
+    expect(parseRemoteDesktopRequest({ op: "start", displayId: "1", handoff: "req_1-a" })).toEqual({
+      op: "start",
+      displayId: "1",
+      handoff: "req_1-a",
+    });
+    for (const handoff of ["", "a b", "x".repeat(129), 42, null, { window: 7 }])
+      expect(() => parseRemoteDesktopRequest({ op: "start", displayId: "1", handoff })).toThrow("INVALID_REQUEST");
+  });
   it("limits permission actions to status and the dedicated guide", () => {
     expect(
       parseRemoteDesktopRequest({ op: "permissions", action: "guide" }),

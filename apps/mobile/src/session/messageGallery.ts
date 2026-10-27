@@ -10,9 +10,10 @@ import { buildAttachmentPayload, buildMediaPayload, payloadMediaKindLabel } from
 import type { MobileMessageRenderItem, MobileWorkChildItem } from '@/session/messageRenderModel';
 import { logUnhandledRenderItem } from '@/session/assertNever';
 import { applySentAttachmentThumbOverlay, getSentAttachmentThumbUri } from '@/session/sentAttachmentThumbStore';
-import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
+import { sentImageGalleryKey, type GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 import { i18n } from '@/i18n';
 import { svgAttachmentForDisplay } from '@/session/messageAttachments';
+import { pendingSendGalleryImage } from '@/session/pendingSendImages';
 
 /**
  * 全屏查看器的一页:图片或视频(同一条消息里的图片与视频可连续横滑;名字沿用
@@ -66,9 +67,12 @@ export function collectMobileMessageGalleryImages(
   ) => {
     const url = payload.media.url.trim();
     if (!url || !isLightboxMediaKind(payload.media.kind)) return;
-    const dedupeKey = `${currentGroupKey}::${url}`;
+    // 待发送的两个附件可能物化到同一个内容地址，仍须与两个可点击缩略图逐槽对应。
+    const dedupeKey = `${currentGroupKey}::${payload.galleryImageKey ? `slot:${payload.galleryImageKey}` : `url:${url}`}`;
     if (seenUrls.has(dedupeKey)) return;
     seenUrls.add(dedupeKey);
+    // Distinct attachment identities remain separate pages; body references to their URL still dedupe.
+    seenUrls.add(`${currentGroupKey}::url:${url}`);
     images.push({ key, title, url, payload, groupKey: currentGroupKey, ...(previewUri ? { previewUri } : {}) });
   };
 
@@ -104,7 +108,13 @@ export function collectMobileMessageGalleryImages(
       const previewUri = attachment.kind === 'image' && displayAttachment.uri
         ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? displayAttachment.uri) ?? localPreview?.uri
         : null;
-      push(`${keyPrefix}:attachment:${index}`, attachment.name, payload, previewUri);
+      // The verified send snapshot bridges outbox/queue keys to formal history, even when
+      // an earlier unreadable upload first enters the gallery at this exact handoff.
+      const galleryImageKey = localPreview && clientId
+        ? localPreview.galleryImageKey ?? sentImageGalleryKey(clientId, localPreview.attachmentId)
+        : undefined;
+      push(galleryImageKey ?? `${keyPrefix}:attachment:${index}`, attachment.name,
+        galleryImageKey ? { ...payload, galleryImageKey } : payload, previewUri);
     });
     message.media?.forEach((media, index) => pushMedia(media, `${keyPrefix}:media:${index}`));
     // 正文 Markdown 图片(![](url) / 安全 <img>)也纳入图集,点开后可与附件图片一起横滑翻页。
@@ -187,8 +197,10 @@ export function collectMobileMessageGalleryImages(
         // fork 来源标记只含导航 UI,no-op。
         break;
       case 'pending_send':
-        // 待发送气泡:附件还是 `cindy-oss-attach://` 中转引用 / 本地预览,不是可供
-        // lightbox 分页的正式媒体;等消息回流后由 message 路径入图集。
+        item.thumbs.forEach((thumb, slot) => {
+          const image = pendingSendGalleryImage(thumb, undefined, slot);
+          if (image) push(image.key, image.title, image.payload, image.previewUri);
+        });
         break;
       default:
         // 穷尽性保证:新增 render-item 变体会被 typecheck 拦下(入参 never)。运行时降级为 log+skip
@@ -210,6 +222,13 @@ export function galleryImageIndexForPayload(
   payload: MessagePayload | null,
 ): number {
   if (!payload || payload.kind !== 'media' || !isLightboxMediaKind(payload.media.kind)) return -1;
+  if (payload.galleryImageKey) {
+    const identityIndex = images.findIndex((image) => image.key === payload.galleryImageKey);
+    if (identityIndex >= 0 || payload.galleryImageSlot === undefined) return identityIndex;
+    // The selected message's slot can be replaced between the press and viewer mount.
+    // Count placeholders too; readable-page indices can change while uploads settle.
+    return images.findIndex((image) => image.payload.galleryImageSlot === payload.galleryImageSlot);
+  }
   const url = payload.media.url.trim();
   if (!url) return -1;
   return images.findIndex((image) => image.url === url);
@@ -230,9 +249,21 @@ export function lightboxImagesForPayload(
   images: readonly MobileMessageGalleryImage[],
   payload: Extract<MessagePayload, { kind: 'media' }>,
   sourceGroupKey?: string | null,
+  previousImages?: readonly MobileMessageGalleryImage[] | null,
+  sourceGroupPresent = false,
+  retainPendingSnapshot = false,
 ): MobileMessageGalleryImage[] {
+  // 待发送消息仍在时跟随该消息的当前图集：编辑可替换最初点开的附件身份。
+  if (payload.galleryImageKey && sourceGroupKey) {
+    const currentGroup = images.filter((image) => image.groupKey === sourceGroupKey);
+    // A present row with no readable images is an edit, not a row handoff. Never revive its old payload.
+    if (currentGroup.length > 0 || sourceGroupPresent) return currentGroup;
+  }
   const url = payload.media.url.trim();
-  const matches = url ? images.filter((image) => image.url === url) : [];
+  // 待发送附件的临时文件、持久副本、远端原图地址会变化，匹配应跟随附件身份。
+  const matches = images.filter((image) => payload.galleryImageKey
+    ? image.key === payload.galleryImageKey
+    : !!url && image.url === url);
   if (matches.length > 0) {
     if (sourceGroupKey && matches.some((image) => image.groupKey === sourceGroupKey)) {
       return images.filter((image) => image.groupKey === sourceGroupKey);
@@ -243,6 +274,16 @@ export function lightboxImagesForPayload(
     if (matches.every((image) => image.groupKey === groupKey)) {
       return images.filter((image) => image.groupKey === groupKey);
     }
+  }
+  // Only a live outbox/queue/settling item may bridge a temporary gap in formal history.
+  // Canceled rows and expired settling items must not revive their original payload.
+  if (payload.galleryImageKey && !retainPendingSnapshot) return [];
+  // 最初点开的附件可能已被编辑替换，因此有来源时按消息归属保留最新快照。
+  if (payload.galleryImageKey && previousImages) {
+    const previousGroup = previousImages.filter((image) => sourceGroupKey
+      ? image.groupKey === sourceGroupKey
+      : image.key === payload.galleryImageKey);
+    if (previousGroup.length > 0) return sourceGroupKey ? previousGroup : [...previousImages];
   }
   return [{
     key: 'lightbox:payload',

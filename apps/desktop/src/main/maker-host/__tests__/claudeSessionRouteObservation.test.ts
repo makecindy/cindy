@@ -82,10 +82,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
     clearSessionProvider('sess-1');
   });
 
-  it('records gateway for x-api-key (gateway-spawn) passthrough even when the live key is gone', () => {
+  it('records gateway for x-api-key (gateway-spawn) passthrough even when the live key is gone', async () => {
     const transform = createModelRoutingTransform();
     // 本机 key 已清(gatewayKey=null), 但 child 冻结的 x-api-key 仍在请求上。
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
@@ -94,10 +94,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(takeClaudeRequestRoute(1)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
   });
 
-  it('records gateway for oauth-spawn requests swapped onto the gateway key', () => {
+  it('records gateway for oauth-spawn requests swapped onto the gateway key', async () => {
     gatewayKey = 'sk-live';
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -105,9 +105,9 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
 
-  it('refuses no-credential anthropic requests locally instead of relaying them, and records nothing', () => {
+  it('refuses no-credential anthropic requests locally instead of relaying them, and records nothing', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -115,13 +115,13 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBeNull();
   });
 
-  it('records exact routes for explicitly selected XD and Anthropic providers', () => {
+  it('records exact routes for explicitly selected XD and Anthropic providers', async () => {
     setSessionProvider('sess-1', 'xd');
     routeMocks.resolveSessionRouteDecision.mockReturnValueOnce({
       headerOverride: { 'x-api-key': 'sk-gw' },
     });
     expect(
-      createModelRoutingTransform()(
+      await createModelRoutingTransform()(
         { model: 'claude-opus-4-8[1m]' },
         { ...ctxWith(SESSION_HEADER), reqId: 21 } as never,
       ),
@@ -132,7 +132,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
     setSessionProvider('sess-1', 'anthropic');
     routeMocks.resolveSessionRouteDecision.mockClear();
     expect(
-      createModelRoutingTransform()(
+      await createModelRoutingTransform()(
         { model: 'claude-opus-4-8[1m]' },
         { ...ctxWith(SESSION_HEADER), reqId: 22 } as never,
       ),
@@ -141,9 +141,9 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(takeClaudeRequestRoute(22)).toBeNull();
   });
 
-  it('records gateway for an explicitly selected XD passthrough with a frozen child key', () => {
+  it('records gateway for an explicitly selected XD passthrough with a frozen child key', async () => {
     setSessionProvider('sess-1', 'xd');
-    const decision = createModelRoutingTransform()(
+    const decision = await createModelRoutingTransform()(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }, 23),
     );
@@ -164,10 +164,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBeNull();
   });
 
-  it('routes but does not record when the request has no session header', () => {
+  it('routes but does not record when the request has no session header', async () => {
     gatewayKey = 'sk-live';
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -175,17 +175,17 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBeNull();
   });
 
-  it('corrects the recorded route when credentials change between requests', () => {
+  it('corrects the recorded route when credentials change between requests', async () => {
     const transform = createModelRoutingTransform();
     // 第一笔: 无 key → 本地拒绝,不记录。
-    transform(
+    await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-1')).toBeNull();
     // 用户配上网关 key → 下一笔换 key 走网关, 观察值自动纠正。
     gatewayKey = 'sk-live';
-    transform(
+    await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );

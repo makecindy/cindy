@@ -43,10 +43,10 @@ export interface MobileLocalAttachmentUploadCandidate {
   height?: number | null;
   /**
    * 任务真正开跑时的异步就位钩子(相册 ph:// → file:// 换址、HEIC 转码缩边等重活)。
-   * 返回的字段覆盖到 candidate 上再进后续管线;托盘预览始终用原始 uri,所以入队
-   * 当帧就有缩略图,重活全在后台。
+   * 返回的字段覆盖到 candidate 上再进后续管线;入队时先显示缩略图,就位后
+   * 立即切换预览地址,无需等待压缩和上传结束。重活全在后台。
    */
-  resolve?: () => Promise<Partial<Pick<
+  resolve?: (signal?: AbortSignal) => Promise<Partial<Pick<
     MobileLocalAttachmentUploadCandidate,
     'uri' | 'name' | 'mimeType' | 'size' | 'width' | 'height' | 'skipPreprocess'
   >>>;
@@ -61,6 +61,8 @@ export interface MobileLocalAttachmentUploadCandidate {
   cleanupLocalUris?: (uris: readonly string[]) => Promise<void>;
   /** 宿主侧溯源 id(相册 asset.id → attachment 映射用),管线不消费。 */
   sourceId?: string;
+  /** Source position within one external share; retained across retries. */
+  incomingShareOrder?: { batchId: string; index: number };
   /**
    * 圈点标注元数据(uri 已是烧录产物时携带;管线不消费,onUploaded 原样回传,
    * 宿主据此给附件打 annotated 标并记录「矢量笔迹 + 原图」的再编辑真相)。
@@ -85,6 +87,8 @@ export interface MobileLocalAttachmentUploadCandidate {
    * 供自行生成了输入文件的调用方(标注烧录图等)按生命周期回收;管线不消费。
    */
   onAbandoned?: () => void;
+  /** 上传已交付后释放原生选图句柄；失败仍保留，供原地重试。 */
+  onConsumed?: () => void;
 }
 
 /** 托盘 pending 卡的渲染数据(image → 缩略卡;file → 文件名 chip)。 */
@@ -280,7 +284,7 @@ export function createMobileLocalAttachmentUploadController(
       pending.push({
         localId: task.localId,
         kind: task.candidate.kind,
-        previewUri: task.candidate.uri,
+        previewUri: task.resolvedSource?.uri || task.candidate.uri,
         name: task.candidate.name,
         size: task.candidate.size,
         sourceId: task.candidate.sourceId,
@@ -322,6 +326,8 @@ export function createMobileLocalAttachmentUploadController(
     if (keepOriginal) task.prepared = undefined;
     const cleanup = task.candidate.cleanupLocalUris;
     if (!cleanup) return;
+    // Failed uploads retain the picker thumbnail, but recycle resolved originals.
+    task.resolvedSource = undefined;
     const originalUri = task.candidate.uri;
     const uris = [...task.localUris].filter((uri) => !keepOriginal || uri !== originalUri);
     task.localUris = keepOriginal ? new Set([originalUri]) : new Set();
@@ -355,10 +361,11 @@ export function createMobileLocalAttachmentUploadController(
     // 先跑 candidate 自带的就位钩子(相册换址 / HEIC 转码),结果覆盖进管线输入。
     let source = task.candidate;
     if (source.resolve) {
-      source = { ...source, ...(await step(source.resolve())) };
+      source = { ...source, ...(await step(source.resolve(task.abort.signal))) };
     }
     task.resolvedSource = source;
     task.localUris.add(source.uri);
+    if (!disposed && !task.discarded && source.uri !== task.candidate.uri) notifyPending();
     // 只有图片需要降采样;文件(pdf / office / 文本)与已优化产物原样直传。
     const prepared = source.kind === 'image' && !source.skipPreprocess
       ? await step(deps.preprocess({
@@ -473,6 +480,7 @@ export function createMobileLocalAttachmentUploadController(
           outcome = 'discarded';
         } else {
           outcome = 'uploaded';
+          try { task.candidate.onConsumed?.(); } catch { /* 回收不改变交付结果 */ }
         }
       }
     } catch (err) {
@@ -732,4 +740,20 @@ export function createMobileLocalAttachmentUploadController(
       }
     },
   };
+}
+
+/** Reorder only members of the same share, preserving all unrelated slot positions. */
+export function incomingShareSlotOrder(orders: readonly (MobileLocalAttachmentUploadCandidate['incomingShareOrder'] | undefined)[]): number[] {
+  const result = orders.map((_, index) => index);
+  const groups = new Map<string, number[]>();
+  orders.forEach((order, index) => {
+    if (!order) return;
+    const group = groups.get(order.batchId) ?? [];
+    group.push(index); groups.set(order.batchId, group);
+  });
+  for (const positions of groups.values()) {
+    const sorted = [...positions].sort((a, b) => orders[a]!.index - orders[b]!.index);
+    positions.forEach((position, i) => { result[position] = sorted[i]; });
+  }
+  return result;
 }

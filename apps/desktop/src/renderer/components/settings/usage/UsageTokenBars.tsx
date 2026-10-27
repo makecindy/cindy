@@ -15,7 +15,7 @@
  * 不再用原生 title —— 原生提示无法排版配色, 也不给每根柱子各挂一个 Radix 实例。
  */
 
-import React, { useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -65,23 +65,62 @@ function niceTicks(max: number): number[] {
   return ticks;
 }
 
-export function UsageTokenBars({
-  modelDaily,
-  colorOrder,
-  todayKey,
-  selectedDay,
-  highlightRecentWeek = false,
-  onDayClick,
-}: {
-  modelDaily: UsageHistoryModelDay[];
-  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
-  colorOrder: string[];
+/** 柱图的一行来源数据：某天某个分段(模型、人或电脑)的 token；key 决定配色顺序与合并。 */
+export interface UsageSeriesDay {
+  day: string;
+  key: string;
+  tokens: number;
+}
+
+interface UsageBarsProps {
   todayKey: string;
   selectedDay?: string | null;
   /** Visual emphasis only; a multi-day range does not select individual buttons. */
   highlightRecentWeek?: boolean;
   onDayClick?: (day: string) => void;
+}
+
+export function UsageTokenBars({
+  modelDaily,
+  colorOrder,
+  ...props
+}: UsageBarsProps & {
+  modelDaily: UsageHistoryModelDay[];
+  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
+  colorOrder: string[];
 }): React.JSX.Element {
+  const daily = useMemo(
+    () => modelDaily.map((row) => ({ day: row.day, key: usageModelKey(row.agentKind, row.model), tokens: row.tokens })),
+    [modelDaily],
+  );
+  const labels = useMemo(
+    () => new Map(modelDaily.map((row) => [usageModelKey(row.agentKind, row.model), row.model])),
+    [modelDaily],
+  );
+  const labelOf = useCallback((key: string) => labels.get(key) ?? key, [labels]);
+  return <UsageSeriesBars {...props} daily={daily} order={colorOrder} labelOf={labelOf} />;
+}
+
+/**
+ * 按任意分段堆叠的近 30 天每日 token 柱图：设置 → 用量按模型；「远程与分享」页的用量还可按人、按电脑
+ * (provider-groups.md §7)。几何、交互、浮层与配色规则与模型柱图完全相同(usage-history-charts.md)。
+ */
+export function UsageSeriesBars({
+  daily,
+  order,
+  labelOf,
+  todayKey,
+  selectedDay,
+  highlightRecentWeek = false,
+  onDayClick,
+}: UsageBarsProps & {
+  daily: readonly UsageSeriesDay[];
+  /** 分段 key 的固定顺序，决定堆叠次序与配色；不在里面的合并成「其它」。 */
+  order: readonly string[];
+  /** 分段在浮层与读屏文本里的名字。 */
+  labelOf: (key: string) => string;
+}): React.JSX.Element {
+  const colorOrder = order;
   const { t, i18n } = useTranslation();
   const dateFormatter = useMemo(
     () =>
@@ -96,9 +135,9 @@ export function UsageTokenBars({
   const bars = useMemo(() => {
     const ranks = new Map(colorOrder.map((key, rank) => [key, rank]));
     const segsByDay = new Map<string, Map<number, DaySegment>>();
-    for (const row of modelDaily) {
+    for (const row of daily) {
       if (row.tokens <= 0) continue;
-      const rank = ranks.get(usageModelKey(row.agentKind, row.model)) ?? colorOrder.length;
+      const rank = ranks.get(row.key) ?? colorOrder.length;
       let daySegs = segsByDay.get(row.day);
       if (!daySegs) {
         daySegs = new Map();
@@ -113,7 +152,7 @@ export function UsageTokenBars({
       } else {
         daySegs.set(rank, {
           rank,
-          label: rank >= colorOrder.length ? t('usageDashboard.othersLegend') : row.model,
+          label: rank >= colorOrder.length ? t('usageDashboard.othersLegend') : labelOf(row.key),
           tokens: row.tokens,
         });
       }
@@ -130,7 +169,7 @@ export function UsageTokenBars({
       });
     }
     return { list, max: Math.max(...list.map((b) => b.tokens), 0) };
-  }, [modelDaily, colorOrder, todayKey, t]);
+  }, [daily, colorOrder, labelOf, todayKey, t]);
 
   const plotRef = useRef<HTMLDivElement>(null);
   const descriptionIdBase = useId();

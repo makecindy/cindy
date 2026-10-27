@@ -92,6 +92,23 @@ it("leaves model admission to the computer running the agent when the task's age
   expect(h.run).toHaveBeenCalledOnce();
 });
 
+it('passes an explicitly empty SSH effort through persistence and first startup', async () => {
+  const bootstrap = vi.fn(async (row: OpenedSessionRow) => row.effort);
+  const opened = await openSession(
+    {
+      id: 'ssh-no-effort',
+      body: { ...body, remoteHostId: 'remote-mac', effort: '' },
+    },
+    bootstrap,
+  );
+  expect(opened.row).toMatchObject({ remoteHostId: 'remote-mac', effort: '' });
+  expect(bootstrap).toHaveBeenCalledWith(
+    expect.objectContaining({ remoteHostId: 'remote-mac', effort: '' }),
+    expect.any(Function),
+  );
+  expect(opened.value).toBe('');
+});
+
 it('still admits the model here for a blank agent computer', async () => {
   await expect(openSession({ body: { ...body, providerId: 'disconnected', agentDeviceId: '  ' } })).rejects.toThrow('供应商');
   expect(h.values).not.toHaveBeenCalled();

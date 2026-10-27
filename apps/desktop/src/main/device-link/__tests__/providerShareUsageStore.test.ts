@@ -75,6 +75,70 @@ describe('provider share usage store', () => {
     expect(after.find((model) => model.memberKey === null)).toMatchObject({ turns: 5, inputTokens: 50 });
   });
 
+  // 「用量」块按天筛选(provider-groups.md §7)：每天按组内电脑拆开，拆法与 query 相同。
+  it('lists daily usage per member split by computer, newest day first and only for requested shares', () => {
+    let now = new Date(2026, 9, 10, 12).getTime();
+    const file = path.join(dir, 'usage.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      rows: [{
+        day: '2026-10-09', shareId: 's', memberId: 'm', kind: 'claude-code', providerId: 'anthropic', model: 'opus',
+        turns: 3, inputTokens: 30, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0, lastAt: 1,
+      }],
+    }));
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    store.record('s', 'm', { kind: 'claude-code', providerId: 'anthropic', memberKey: 'local', samples: [sample('opus', 10, 1)] });
+    store.record('s', 'm', { kind: 'claude-code', providerId: 'anthropic', memberKey: 'device:studio:a2', samples: [sample('opus', 20, 2)] });
+    now = new Date(2026, 9, 11, 12).getTime();
+    store.record('s', 'm', { kind: 'claude-code', providerId: 'anthropic', memberKey: 'local', samples: [sample('opus', 5, 5)] });
+    store.record('other', 'x', { kind: 'codex', providerId: 'openai', memberKey: 'local', samples: [sample('gpt', 1, 1)] });
+
+    const history = store.history(new Set(['s']));
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ shareId: 's', memberId: 'm', lastUsedAt: now });
+    expect(history[0]!.days.map((row) => [row.day, row.memberKey, row.inputTokens])).toEqual([
+      ['2026-10-11', 'local', 5],
+      ['2026-10-10', 'local', 10],
+      ['2026-10-10', 'device:studio:a2', 20],
+      // 加组内电脑之前记的：没有区分电脑。
+      ['2026-10-09', null, 30],
+    ]);
+  });
+
+  it('bounds daily expansion before splitting every stored computer distribution', () => {
+    let now = new Date(2026, 9, 12, 12).getTime();
+    const file = path.join(dir, 'bounded-history.json');
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    store.record('s', 'm', { kind: 'claude-code', providerId: 'anthropic', memberKey: 'device:new', samples: [sample('new', 1, 1)] });
+    now = new Date(2026, 9, 11, 12).getTime();
+    store.record('s', 'm', { kind: 'claude-code', providerId: 'anthropic', memberKey: 'device:old', samples: [sample('old', 1, 1)] });
+    const history = store.history(new Set(['s']), { maxRows: 1 });
+    expect(history[0]).toMatchObject({ shareId: 's', memberId: 'm', lastUsedAt: new Date(2026, 9, 12, 12).getTime() });
+    expect(history[0]?.days).toHaveLength(1);
+    expect(history[0]?.days[0]).toMatchObject({ day: '2026-10-12', model: 'new', memberKey: 'device:new' });
+  });
+
+  it('applies the split-row budget across members after excluding removed members', () => {
+    let now = new Date(2026, 9, 10, 12).getTime();
+    const store = createProviderShareUsageStore(path.join(dir, 'split-history.json'), { now: () => now });
+    const record = (memberId: string, memberKey: string) => store.record('s', memberId, {
+      kind: 'claude-code', providerId: 'anthropic', memberKey, samples: [sample('opus', 1, 1)],
+    });
+    record('m', 'device:old');
+    now = new Date(2026, 9, 11, 12).getTime();
+    for (let index = 0; index < 512; index++) record('m', `device:d${index}`);
+    now = new Date(2026, 9, 12, 12).getTime();
+    record('removed', 'local');
+    const history = store.history(new Set(['s']), {
+      maxRows: 3, memberKeys: new Set([JSON.stringify(['s', 'm'])]),
+    });
+    expect(history).toHaveLength(1);
+    expect(history[0]?.days).toHaveLength(3);
+    expect(history[0]?.days.every((row) => row.day === '2026-10-11')).toBe(true);
+    expect(history[0]?.days.map((row) => row.memberKey)).toEqual(['device:d0', 'device:d1', 'device:d2']);
+    expect(history[0]?.lastUsedAt).toBe(new Date(2026, 9, 11, 12).getTime());
+  });
+
   it('keeps existing computer distributions and all counters after exceeding the per-row capacity and restarting', async () => {
     const now = new Date(2026, 9, 11, 12).getTime();
     const file = path.join(dir, 'usage.json');

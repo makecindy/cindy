@@ -1,3 +1,4 @@
+import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
   buildAttachmentPersistFileRefs,
   buildAttachmentPersistImageRefs,
@@ -101,6 +102,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
+    errorCanContinue: record?.errorCanContinue === true,
     autoResumePending: readRecord(record?.autoResumePending),
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,
@@ -142,6 +144,8 @@ export function buildQueuedTextMessage(
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
     slashCommandRanges?: Array<{ start: number; end: number }>;
+    /** 伙伴私聊引用回复：写进信封，宿主据此给伙伴附上原消息。 */
+    replyQuote?: ChatReplyQuote;
   } = {},
 ): QueuedRemoteMessage {
   const trimmed = text.trim();
@@ -162,6 +166,7 @@ export function buildQueuedTextMessage(
     options.pastedTextRanges,
     options.slashCommandRanges,
     options.agentReferences,
+    options.replyQuote,
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
@@ -219,6 +224,7 @@ function stringifyUserContent(
   pastedTextRanges: Array<{ start: number; end: number; display: string }> = [],
   slashCommandRanges?: Array<{ start: number; end: number }>,
   agentReferences: AgentInputReference[] = [],
+  replyQuote?: ChatReplyQuote,
 ): string {
   return JSON.stringify({
     text,
@@ -228,7 +234,19 @@ function stringifyUserContent(
     ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
     ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
     ...(agentReferences.length > 0 ? { agentReferences } : {}),
+    ...(replyQuote ? { replyQuote } : {}),
   });
+}
+
+/** 排队编辑整条替换时沿用原消息的引用回复：引用属于这条消息，不属于被编辑的正文。 */
+export function queuedMessageReplyQuote(
+  message: Pick<QueuedRemoteMessage, 'persistedContent'>,
+): ChatReplyQuote | undefined {
+  try {
+    return readChatReplyQuote(readRecord(JSON.parse(message.persistedContent))?.replyQuote) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 排队编辑时从持久化信封恢复引用标志，避免整条替换后 marker 退化为正文。 */

@@ -1,4 +1,7 @@
-import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
+import type {
+  BrowserControlResult,
+  BrowserControlRuntime,
+} from '@cindy/browser-control-runtime';
 import type { AgentKind } from '@cindy/maker-core';
 
 import type { Recipe, SiteGuide } from './browser/recipe-loader.js';
@@ -95,11 +98,90 @@ export interface FeishuBotSendMessageResult {
   reason?: string;
 }
 
+/**
+ * 当前 tool-call 的归属 session(host 从 LiziMcpSessionContext 取)。宿主据此选出
+ * 这一轮真正要出站的 bot:个人设置页那份 FeishuIM,或触发本轮的伙伴自有连接。
+ * 没有它(hook 会话 / 桌面任务)就回落到个人 bot。
+ */
+export interface FeishuBotHostSession {
+  sessionId?: string;
+  sessionInstanceId?: string;
+  /** Trusted host session metadata; preserves an explicit Feishu reply target. */
+  vendorOptions?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * 飞书轮次内工具用到的 transport 子集(结构类型:桌面侧传的是触发本轮的那条连接自己的
+ * `FeishuIM`,单测可用假对象)。所有方法都以这条连接的 bot 身份出站。
+ */
+export interface FeishuBotLaneTransport {
+  getService(): 'feishu' | 'lark';
+  getBotAppId(): string | null;
+  sendText(userId: string, text: string): Promise<{ messageId: string }>;
+  sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }>;
+  replyText(replyToMessageId: string, text: string): Promise<{ messageId: string }>;
+  replyMarkdownText(replyToMessageId: string, markdown: string): Promise<{ messageId: string }>;
+  sendFile(userId: string, absPath: string, displayName?: string): Promise<FeishuBotSendFileResult & { messageId?: string }>;
+  reactToMessage(messageId: string, emojiType: string): Promise<string | null>;
+  removeMessageReaction(messageId: string, reactionId: string): Promise<void>;
+  getChatInfo(chatId: string): Promise<Record<string, unknown>>;
+  listChatMembers(
+    chatId: string,
+    opts?: { pageToken?: string; pageSize?: number },
+  ): Promise<{
+    items: Array<{ memberId: string; name: string }>;
+    memberTotal: number | null;
+    nextPageToken: string | null;
+  }>;
+  getMessage(messageId: string): Promise<Record<string, unknown> | null>;
+  pinMessage(messageId: string): Promise<void>;
+  unpinMessage(messageId: string): Promise<void>;
+  recallMessage(messageId: string): Promise<void>;
+  callApi(args: {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    path: string;
+    params?: Record<string, unknown>;
+    data?: unknown;
+  }): Promise<Record<string, unknown>>;
+}
+
+/**
+ * 飞书轮次的逐轮作用域(桌面 `im/shared/channelToolScope.ts` 的租约投影)。由渠道在
+ * provider 开始本轮前登记、终态释放;**不来自模型参数**。没有作用域的调用一律 fail closed。
+ */
+export interface FeishuBotLaneScope {
+  im: FeishuBotLaneTransport;
+  /** lane userId(私聊 open_id 或 `g/{chatId}[/{threadId}]`),transport 解码后出站。 */
+  laneUserId: string;
+  /** 飞书原生 chat_id(私聊是 p2p chat)。 */
+  chatId: string;
+  /** 话题 id;非话题为空串。 */
+  threadId: string;
+  chatKind: 'direct' | 'group';
+  /** 触发本轮的是不是主人(Main 校验过的身份)。 */
+  requesterIsOwner: boolean;
+  /** 触发消息的 message_id(回复 / 表情的默认目标)。 */
+  triggerMessageId: string;
+  /** 伙伴自有连接(true)还是设置页个人 bot(false)。 */
+  companion: boolean;
+  /**
+   * 当前任务工作目录(来自本次 tool-call 的 session ctx,不来自模型参数);非主人触发的
+   * 轮次 send_file 只能发这里面的文件,缺省时一律拒绝。
+   */
+  workingDir?: string;
+}
+
 export interface FeishuBotMcpHostDeps {
+  /**
+   * 读取当前 session 的飞书逐轮作用域;非飞书轮次 / 轮次已结束返回 null。宿主实现
+   * 用 `session.sessionId` + `sessionInstanceId` 查租约(旧实例借不到新实例权限)。
+   */
+  readLaneScope?(session: FeishuBotHostSession): FeishuBotLaneScope | null;
   sendFile(
     chatId: string,
     absPath: string,
     displayName?: string,
+    session?: FeishuBotHostSession,
   ): Promise<FeishuBotSendFileResult>;
   /**
    * Push a markdown text message to the given chat (private DM). Backed by
@@ -114,6 +196,7 @@ export interface FeishuBotMcpHostDeps {
     markdown: string,
     /** Trusted calling session, only for notifications to the bot owner. */
     notificationSessionId?: string,
+    session?: FeishuBotHostSession,
   ): Promise<FeishuBotSendMessageResult>;
   /**
    * Return the bot's TOFU-recorded owner openId — i.e. the person who first
@@ -125,7 +208,7 @@ export interface FeishuBotMcpHostDeps {
    * Returns null when no owner has been bound yet — user must DM the bot once
    * first (same precondition as scheduler feishu-completion notifications).
    */
-  getOwnerOpenId(): string | null;
+  getOwnerOpenId(session?: FeishuBotHostSession): string | null | Promise<string | null>;
   logger?: LiziMcpLogger;
 }
 
@@ -232,6 +315,11 @@ export interface SchedulerMcpDeps {
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
   /**
+   * 同账号其它电脑上的定时任务(host 注入,desktop 经既有 `maker:schedule:*` 远程控制通道)。
+   * 缺省 = host 未接 → 工具的 `device` 只接受 local,其它值返 REMOTE_UNSUPPORTED。
+   */
+  remote?: import('./scheduler/_devices.js').SchedulerRemoteDeps;
+  /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为
    * scheduler-host/hook-script-generator.installHookScript):落盘路径规范、
    * 命令拼装、落盘后自测全部由 host 代码保证,agent 不允许绕开它手写脚本文件。
@@ -239,6 +327,11 @@ export interface SchedulerMcpDeps {
    * (同 MemoryMcpDeps.searchSessions 模式)。
    */
   hookScript?: SchedulerHookScriptService;
+  /**
+   * 本机定时任务可选的 Agent 运行位置与各处的模型(与协同 Worker 的 list_available_models
+   * 同一份 host 实现)。agentDeviceId:null = 本机。缺省 = schedule_list_models 不注册。
+   */
+  listModels?: import('./xdt-helper/list_available_models.js').ListAvailableModelsDeps['listAvailableModels'];
   logger?: LiziMcpLogger;
 }
 
@@ -250,6 +343,8 @@ export interface SchedulerHookScriptService {
    * meta.workDir 为准。未注入时回落 schedule.workingDir 旧行为。
    */
   resolveSessionWorkDir?(sessionId: string): Promise<string | undefined>;
+  /** Bound task's current Agent location; remote-only routes cannot generate local hook scripts. */
+  isSessionAgentOnOtherDevice?(sessionId: string): Promise<boolean>;
   /**
    * 把受支持的单脚本相对命令固化为绝对路径。任意 shell 命令保持原样；相对脚本
    * 缺少原 cwd 或文件不存在时必须报错，避免改绑后以 fail-open 静默绕过 hook。
@@ -469,6 +564,8 @@ export interface SessionSearchOptions {
 
 export interface SessionSearchHit {
   sessionId: string;
+  /** 宿主生成的任务深链，包含所属设备，供按需引用原对话。 */
+  sessionUrl: string;
   messageId: string;
   role: string;
   /** FTS5 snippet() 高亮片段 */
@@ -544,15 +641,40 @@ export type ControlResult<T extends object = object, E extends string = never> =
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 
+export interface ResolvedBrowserScreenshot {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg';
+}
+
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   getRuntime(): BrowserControlRuntime;
+  /**
+   * Resolve a successful screenshot runtime result into verified image bytes.
+   * The host owns file-system access so this package never receives a generic
+   * arbitrary-path reader; inline-only hosts may validate and decode in memory.
+   */
+  resolveScreenshot?(
+    result: BrowserControlResult,
+  ): Promise<ResolvedBrowserScreenshot>;
+  /** Shrink the LLM-facing copy to the shared stream-safe byte budget. */
+  compressInlineImage?: CompressInlineImageFn;
   /** Switch the host-wide, persisted automation target; returns the actual mode. */
   setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */
   supportsSemanticQueries?(): boolean;
+  /** Trusted host-only credential IO; never exposed as a tool or page input. */
+  recipeSecrets?: { read(key: string): string | null; write(key: string, value: string): boolean };
+  /** Creates invocation-local file access using the host's existing upload policy. */
+  recipeFiles?: (sessionId?: string) => Promise<{ read(file: string): Buffer; open(file: string): number }>;
+  /**
+   * 代输入: true while the target tab still shows a page where the owner just
+   * typed a secret. Page-state reads (evaluate, requests, response bodies,
+   * console) are then refused.
+   */
+  pageReadsRestricted?(target: { profile?: string; targetId?: string }): Promise<boolean>;
   logger?: LiziMcpLogger;
   /**
    * Optional L2 (user-local) recipe layer. The host scans userData, parses with
@@ -653,6 +775,11 @@ export interface ComputerMcpDeps {
     args: Record<string, unknown>,
     context?: ComputerMcpCallContext,
   ): Promise<unknown>;
+  /**
+   * 代输入: whether typing would land in a password field — the element at a
+   * screen point of this app, or its focused element. Roles only, never values.
+   */
+  isSecureTarget?(target: { pid: number; point?: { x: number; y: number } }): Promise<boolean>;
   logger?: LiziMcpLogger;
 }
 
@@ -830,6 +957,8 @@ export interface LiziMcpSessionContext {
   mcpCallerKind?: LiziMcpCallerKind;
   /** True only when the harness bridge has installed provenance enforcement. */
   mcpCallerAttested?: boolean;
+  /** In-process host callback; only the attested Codex root route may use it. */
+  nativeHarnessHook?: (input: unknown, metadata: unknown) => Promise<Record<string, unknown>>;
 }
 
 export interface CodexHttpMcpConfig {

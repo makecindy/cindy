@@ -78,14 +78,14 @@ import {
   probeMetroOwnership,
 } from './sim-metro.mjs';
 
-import { readSimEnvironment } from './lib/sim-environment.mjs';
-import { extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity } from './lib/sim-whoami.mjs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const iosDir = join(mobileDir, 'ios');
 const buildDir = join(iosDir, 'build');
-const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
@@ -150,11 +150,31 @@ if (process.platform === 'win32') {
   process.exit(process.exitCode ?? 0);
 }
 
-// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。
+// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。默认先找 Cindy 模拟器,
+// 没有再找系统模拟器;CINDY_MOBILE_SIMULATOR 可固定其一。
+let deviceSet = null;
 if (!buildOnly) {
-  const booted = capture('xcrun', ['simctl', 'list', 'devices', 'booted']);
-  if (bootedSimulatorLinesForTarget(booted.split('\n'), simulatorUdid).length !== 1) {
+  let selected;
+  try {
+    selected = selectBootedSimulator(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices', 'booted'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
+    process.exit(1);
+  }
+  if (selected.targetBooted.length !== 1) {
     console.error('✗ 需要唯一的已启动模拟器；多设备时传 --udid，指定设备必须已启动。');
+    process.exit(1);
+  }
+  deviceSet = selected.deviceSet;
+  console.log(`==> 目标模拟器(${deviceSet.name}):${selected.targetBooted[0].trim()}`);
+} else if (simulatorUdid) {
+  // 仅构建不要求设备已启动,但 xcodebuild 的精确目标只对系统目录有效:先确认 UDID 属于哪个目录。
+  try {
+    deviceSet = findSimulatorDeviceSet(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
     process.exit(1);
   }
 }
@@ -171,7 +191,8 @@ async function ensureMetroOwnershipBeforeLaunch(packageName) {
   });
   if (verdict.healthy) return true;
   console.error(`Native package installed (${packageName}); launch blocked: ${verdict.code}.`);
-  console.error(`Run pnpm mobile:sim:start -- --region=${region}, then mobile:sim:whoami with the same region.`);
+  const mock = readSimEnvironment(mobileDir, buildEnv).uiMock ? ' --mock' : '';
+  console.error(`Run pnpm mobile:sim:start -- --region=${region}${mock}, then mobile:sim:whoami with the same options.`);
   process.exitCode = 1;
   return false;
 }
@@ -199,7 +220,7 @@ async function rebuildAndroidSimulator() {
   const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   console.log('› Android gradle assembleDebug');
   if (process.platform === 'win32') {
-    run('cmd.exe', ['/d', '/s', '/c', 'gradlew.bat assembleDebug'], {
+    run('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], {
       cwd: androidDir,
       env: javaEnv,
       windowsVerbatimArguments: true,
@@ -303,10 +324,12 @@ if (!app) {
   }
   const scheme = workspace.replace(/\.xcworkspace$/, '');
 
-  const simulatorDestination = simulatorUdid
+  // xcodebuild 只认得系统设备目录;其它设备目录(如 Cindy 模拟器)用通用目标编译,再按目录安装。
+  const exactDestination = simulatorUdid && !deviceSet?.path;
+  const simulatorDestination = exactDestination
     ? `platform=iOS Simulator,id=${simulatorUdid}`
     : 'generic/platform=iOS Simulator';
-  console.log(`› 编译 ${scheme}(${simulatorUdid ? 'exact' : 'generic'} iOS Simulator destination)…`);
+  console.log(`› 编译 ${scheme}(${exactDestination ? 'exact' : 'generic'} iOS Simulator destination)…`);
   run('xcodebuild', [
     '-workspace', join(iosDir, workspace),
     '-scheme', scheme,
@@ -348,18 +371,18 @@ if (clean) {
   // uninstall 容错:app 未安装时 simctl 返回非零会让 execFileSync 抛错、后续 install 不执行
   // (首次干净安装就是这个场景)。卸载失败基本只意味着"本来就没装",忽略即可。
   try {
-    run('xcrun', ['simctl', 'uninstall', simulatorUdid ?? 'booted', bundleId]);
+    run('xcrun', simctlArgs(deviceSet, ['uninstall', simulatorUdid ?? 'booted', bundleId]));
   } catch {
     console.log('  (没有可卸载的旧包,跳过)');
   }
 }
 console.log('› 安装到 booted 模拟器…');
-run('xcrun', ['simctl', 'install', simulatorUdid ?? 'booted', app]);
-assertNativeIdentity(capture('xcrun', ['simctl', 'get_app_container', simulatorUdid ?? 'booted', bundleId, 'app']).trim());
+run('xcrun', simctlArgs(deviceSet, ['install', simulatorUdid ?? 'booted', app]));
+assertNativeIdentity(capture('xcrun', simctlArgs(deviceSet, ['get_app_container', simulatorUdid ?? 'booted', bundleId, 'app'])).trim());
 
 if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1);
 console.log('› 启动…');
-run('xcrun', ['simctl', 'launch', simulatorUdid ?? 'booted', bundleId]);
+run('xcrun', simctlArgs(deviceSet, ['launch', simulatorUdid ?? 'booted', bundleId]));
 console.log(`\n✓ 完成。${bundleId} 已安装并发送启动请求；尚未验证页面显示。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
 
 /**

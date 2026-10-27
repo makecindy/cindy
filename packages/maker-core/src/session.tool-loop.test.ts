@@ -39,7 +39,9 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
   sessions.push(session);
   const seen: AgentEvent[] = [];
   session.onEvent((event) => seen.push(event));
+  // Each call follows a model sampling (seconds), unlike one script issuing calls back to back.
   const tool = async (id: string, extra: Partial<AgentEvent> = {}, name = 'read', input: unknown = { path: 'same.ts' }) => {
+    await vi.advanceTimersByTimeAsync(3_000);
     queue.push({ type: 'tool_use', data: { toolUseId: id, toolName: name, input }, source: agentKind, ...extra });
     queue.push({ type: 'tool_result_full', data: { toolUseId: id, fullText: 'same result' }, source: agentKind, ...extra });
     queue.push({ type: 'tool_result', data: { toolUseIds: [id], summary: 'done' }, source: agentKind, ...extra });
@@ -128,6 +130,7 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     await t.session.send('first');
     const generation = t.session.getTurnGeneration();
     for (let i = 0; i < 3; i++) await t.tool(String(i));
+    await vi.advanceTimersByTimeAsync(3_000);
     t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
     t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
     t.queue.push({ type: 'tool_result', source: agentKind, data: { toolUseIds: ['unrelated'], summary: 'done' } });
@@ -258,6 +261,7 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     const t = setup(agentKind, false, reviewer);
     await t.session.send('investigate');
     for (let i = 0; i < 3; i++) await t.tool(String(i));
+    await vi.advanceTimersByTimeAsync(3_000);
     t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
     t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
     await vi.advanceTimersByTimeAsync(0);
@@ -304,6 +308,37 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.close).toHaveBeenCalledOnce();
     expect(t.session.getStatus()).toBe('closed');
   });
+});
+
+// 2026-10-18 误报:code mode 脚本在后台连着发起调用(点保存后反复截快照等页面更新),
+// app-server 不标注调用属于哪段脚本。同一调用的突发重复(无模型采样间隔)不计数,模型逐次重复仍须中断。
+it('does not count a Codex call repeated in a script burst, but still stops a model repeating itself', async () => {
+  const t = setup('codex');
+  const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+  let n = 0;
+  const call = async (action: string, text: string, ref?: string) => {
+    const item = {
+      type: 'mcpToolCall', id: `exec-${n++}`, server: 'cindy_browser', tool: 'call_tool',
+      arguments: { name: 'browser', args: { action, ...(ref ? { ref } : {}) } }, status: 'completed',
+      result: { content: [{ type: 'text', text }] },
+    };
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+    translateItemNotification('completed', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+  await t.session.send('upload the icons');
+  await vi.advanceTimersByTimeAsync(3_000);
+  for (let i = 0; i < 30; i++) {
+    await call(i % 7 === 0 ? 'click' : 'snapshot', i % 7 === 0 ? `clicked e${i}` : 'saving', i % 7 === 0 ? `e${i}` : undefined);
+    await vi.advanceTimersByTimeAsync(800);
+  }
+  expect(t.errors()).toHaveLength(0);
+  for (let i = 0; i < 4; i++) {
+    await vi.advanceTimersByTimeAsync(3_000);
+    await call('snapshot', 'saving');
+  }
+  expect(t.errors()).toHaveLength(1);
+  expect(t.errors()[0]).toMatchObject({ data: { toolLoop: { kind: 'consecutive', count: 4 } } });
 });
 
 it.each([false, true])('keeps translated Codex waits alive with agent states=%s', async (hasAgentStates) => {

@@ -1,8 +1,10 @@
+import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
+  resolveCodexCompatibilityWireProtocol,
   type CatalogModel,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -10,17 +12,23 @@ import {
 export type SessionRuntimeMutationSource = 'agent' | 'fallback';
 
 export interface SessionRuntimeProfile {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   providerId: string | null;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
   profile: SessionRuntimeProfile;
+  /**
+   * Pi-only：该选择的思考开关意图（renderer 记忆，缺省开）。settle 重放时随
+   * selection 一并应用；不落 DB（会随 runtimePending 投影带出，renderer 不消费）。
+   */
+  thinking?: boolean;
 }
 
 export interface SessionRuntimeControlSnapshot {
@@ -86,9 +94,9 @@ const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
 function routeKey(
-  profile: Pick<SessionRuntimeProfile, 'agentKind' | 'providerId' | 'model'>,
+  profile: Pick<SessionRuntimeProfile, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>,
 ): string {
-  return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}`;
+  return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}${modelRouteLocationKey(profile.agentDeviceId)}`;
 }
 
 function stateFor(sessionId: string): SessionRuntimeControlState {
@@ -222,6 +230,8 @@ export function deferSessionRuntimeAxisMutation(params: {
   source: SessionRuntimeMutationSource;
   effectiveProfile: SessionRuntimeProfile;
   pendingPatch: SessionRuntimeAxisPatch;
+  /** Pi-only：延期期间也要记住目标模型的思考开关意图（结算重放时用）。 */
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
   const hadPendingMutation = state.pending !== null;
@@ -231,11 +241,13 @@ export function deferSessionRuntimeAxisMutation(params: {
         ...state.pending,
         generation: state.generation,
         profile: { ...state.pending.profile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       }
     : {
         generation: state.generation,
         source: params.source,
         profile: { ...params.effectiveProfile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       };
   if (!hadPendingMutation) state.pendingRouteExplicit = false;
   if (params.source === 'agent') {
@@ -273,13 +285,27 @@ export function acceptSessionRuntimeMutation(params: {
   profile: SessionRuntimeProfile;
   previousProfile?: SessionRuntimeProfile;
   deferred: boolean;
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
+  const previousPending = state.pending;
   state.generation += 1;
+  // 延期替换时若本次没算出意图（undefined），且仍指向**同一个目标**（model 与
+  // provider 都相同），继承上一份 pending：一次「无法判定」的点击不该把用户刚
+  // 表达过的思考开关悄悄清掉。换到别的模型时不继承——旧模型的开关不适用，
+  // 否则 A 的 off 会串给 B；false / true 是明确意图，永远以本次为准。
+  const samePendingTarget =
+    previousPending != null &&
+    previousPending.profile.model === params.profile.model &&
+    (previousPending.profile.providerId ?? null) === (params.profile.providerId ?? null);
+  const acceptedThinking =
+    params.thinking ??
+    (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
   const accepted: PendingSessionRuntimeMutation = {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
+    ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
@@ -415,15 +441,26 @@ export function resolveCompatibleSessionRuntimeEffort(
   );
 }
 
+/** A cleared fixed-effort axis must not revive the NOT NULL row's historical rank. */
+export function resolveSessionRuntimeRefreshEffort(params: {
+  model: CatalogModel | null;
+  storedEffort: Effort | null;
+  persistedEffort: Effort | null;
+}): Effort | null {
+  return params.storedEffort ?? (params.model
+    ? resolveCompatibleSessionRuntimeEffort(params.model, params.persistedEffort)
+    : params.persistedEffort);
+}
+
 export function resolveSessionRuntimeAxes(params: {
   model: CatalogModel;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   effortExplicit: boolean;
   fastExplicit: boolean;
   allowFixedEffortPlaceholder?: boolean;
 }):
-  | { ok: true; effort: Effort | null; fastMode: boolean }
+  | { ok: true; effort: Effort | null; fastMode: boolean | 'ultrafast' }
   | { ok: false; reason: 'effort-unavailable' | 'fast-unavailable' } {
   if (
     params.effortExplicit &&
@@ -436,13 +473,13 @@ export function resolveSessionRuntimeAxes(params: {
   ) {
     return { ok: false, reason: 'effort-unavailable' };
   }
-  if (params.fastExplicit && params.fastMode && params.model.supportsFastMode !== true) {
+  if (params.fastExplicit && params.fastMode && (params.model.supportsFastMode !== true || (params.fastMode === 'ultrafast' && params.model.supportsUltrafastMode !== true))) {
     return { ok: false, reason: 'fast-unavailable' };
   }
   return {
     ok: true,
     effort: resolveCompatibleSessionRuntimeEffort(params.model, params.effort),
-    fastMode: params.fastMode && params.model.supportsFastMode === true,
+    fastMode: params.model.supportsFastMode === true && (params.fastMode !== 'ultrafast' || params.model.supportsUltrafastMode === true) ? params.fastMode : false,
   };
 }
 
@@ -458,6 +495,27 @@ export function pickSessionRuntimeFallback(params: {
   visited.add(routeKey(params.current));
   const rail = connectedProvidersForAgent([...params.providers], params.current.agentKind);
   const candidates: Array<{ providerId: string; model: CatalogModel }> = [];
+  const currentProvider = params.providers.find((provider) => provider.id === params.current.providerId);
+  const currentModel = currentProvider?.models[params.current.agentKind]?.find(
+    (model) => model.id === params.current.model,
+  );
+  // Model names do not establish wire compatibility. In particular, a completed
+  // web_search_call may be serializable by a bridge while the next native search
+  // remains unsupported. Generic fallback has no task/request capability proof,
+  // so keep Codex on its current transport instead of silently introducing a bridge.
+  // Explicit model routes override provider defaults in the actual Codex route.
+  const effectiveWireProtocol = (provider: ProviderView, model: CatalogModel): string =>
+    model.route?.wireProtocol ??
+    resolveCodexCompatibilityWireProtocol(provider, params.current.agentKind, model) ??
+    provider.routing.codex?.wireProtocol ?? 'openai-responses';
+  const currentCompatibility = currentProvider && currentModel
+    ? effectiveWireProtocol(currentProvider, currentModel)
+    : null;
+  const compatibleProvider = (provider: ProviderView, model: CatalogModel): boolean =>
+    params.current.agentKind !== 'codex' || (
+      currentProvider !== undefined && currentModel !== undefined &&
+      effectiveWireProtocol(provider, model) === currentCompatibility
+    );
 
   for (const provider of rail) {
     for (const model of provider.models[params.current.agentKind] ?? []) {
@@ -468,7 +526,7 @@ export function pickSessionRuntimeFallback(params: {
       ) {
         continue;
       }
-      if (model.id === params.current.model && provider.id !== params.current.providerId) {
+      if (compatibleProvider(provider, model) && model.id === params.current.model && provider.id !== params.current.providerId) {
         candidates.push({ providerId: provider.id, model });
       }
     }
@@ -482,7 +540,7 @@ export function pickSessionRuntimeFallback(params: {
       ) {
         continue;
       }
-      if (!model.newSessionDefault?.includes(params.current.agentKind)) continue;
+      if (!compatibleProvider(provider, model) || !model.newSessionDefault?.includes(params.current.agentKind)) continue;
       candidates.push({ providerId: provider.id, model });
     }
   }

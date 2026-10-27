@@ -3,6 +3,8 @@ import type {
   PluginSecretPresentation,
   PluginConnectionPresentation,
   PluginConnectionInput,
+  InputHandoffPresentation,
+  InputHandoffSubmission,
 } from '@cindy/device-link';
 import type { GhostSetupInlineSecretField } from './ghost.js';
 
@@ -20,6 +22,17 @@ export interface LocalPluginSecretRequest extends LocalPluginOauthRequest {
 export interface LocalPluginConnectionRequest extends LocalPluginOauthRequest {
   value: PluginConnectionInput;
   presentation: PluginConnectionPresentation;
+}
+
+/** 代输入 step for a task on another computer; `ghostId` is INPUT_HANDOFF_GHOST_ID. */
+export interface LocalInputHandoffRequest extends LocalPluginOauthRequest {
+  submission: InputHandoffSubmission;
+  presentation: InputHandoffPresentation;
+}
+
+/** 代输入 screenshot step on another computer: opens its sealed picture for this window. */
+export interface LocalInputHandoffPictureRequest extends LocalPluginOauthRequest {
+  presentation: InputHandoffPresentation;
 }
 
 export function createPluginConnectionPresentation(

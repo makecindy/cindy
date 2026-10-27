@@ -43,3 +43,8 @@ export function getBootDeviceId(): string | null {
     return null;
   }
 }
+
+/** Optional message anchor; the boot gate retains it across canonical task routing. */
+export function getBootMessageClientId(): string | null {
+  return new URLSearchParams(window.location.search).get('bootMessage') || null;
+}

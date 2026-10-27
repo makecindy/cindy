@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkerInfo } from '../hooks/useWorkers';
 import { WorkerListToolbar, workerTabsScrollStep } from '../RolePillDropdown';
+import { __resetWorkerAttentionStoreForTest, hasWorkerAttention, markWorkerAttention } from '../lib/workerAttentionStore';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -93,11 +95,31 @@ function setReducedMotion(reduced: boolean): void {
 describe('WorkerTabsList overflow scrolling', () => {
   beforeEach(() => {
     localStorage.clear();
+    __resetWorkerAttentionStoreForTest();
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+  });
+
+  // Replaces RolePill's source-only clear guard with the real attention store:
+  // hidden selection must retain the notification until its view is visible.
+  it('retains hidden selected-worker attention and clears only the visible live worker', () => {
+    const live = worker();
+    const done = worker({ workerId: 'worker-done', sessionId: 'session-done', status: 'done', focused: false });
+    markWorkerAttention(live.workerId);
+    markWorkerAttention(done.workerId);
+    const props = { worker: live, workers: [live, done], selectedWorkerId: live.workerId,
+      activeWorkerCount: 1, softLimit: 5, hardLimit: 8, onSwitchFocus: vi.fn(),
+      onOpenCreate: vi.fn(), onArchiveWorker: vi.fn() };
+    const view = render(<WorkerListToolbar {...props} clearAttentionWhenVisible={false} />);
+    expect(hasWorkerAttention(live.workerId)).toBe(true);
+    view.rerender(<WorkerListToolbar {...props} clearAttentionWhenVisible />);
+    expect(hasWorkerAttention(live.workerId)).toBe(false);
+    expect(hasWorkerAttention(done.workerId)).toBe(true);
+    view.rerender(<WorkerListToolbar {...props} selectedWorkerId={done.workerId} clearAttentionWhenVisible />);
+    expect(hasWorkerAttention(done.workerId)).toBe(true);
   });
 
   it('uses a bounded step that fits the visible tab strip', () => {

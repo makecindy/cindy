@@ -35,7 +35,7 @@ export interface SessionRuntimeProfile {
   model: string;
   providerId: string | null;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
@@ -115,7 +115,7 @@ export interface SessionControlDeps {
       model?: string;
       providerId?: string | null;
       effort?: Effort;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
     };
   }): Promise<
     ControlResult<
@@ -442,7 +442,7 @@ export function registerSetSessionRuntimeTool(
         .describe('来源 id；null 表示恢复该模型的默认来源。'),
       model: z.string().min(1).optional().describe('目标模型 id。'),
       effort: z.enum(EFFORT_VALUES).optional().describe('推理强度。省略表示保持当前值。'),
-      fast: z.boolean().optional().describe('是否启用 Fast。'),
+      fast: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('false=标准，true=快速，ultrafast=超快（仅支持该档位的 Codex 模型）。'),
       expected_generation: z
         .number()
         .int()

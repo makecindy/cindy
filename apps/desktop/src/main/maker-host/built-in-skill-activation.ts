@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CINDY_LEARN_NAME, CINDY_SKILL_CREATOR_NAME } from '../../shared/cindyBuiltInSkills';
-const BUILT_IN_SKILL_NAMES = [CINDY_SKILL_CREATOR_NAME, CINDY_LEARN_NAME];
+import { CINDY_BUILT_IN_SKILL_NAMES } from '../../shared/cindyBuiltInSkills';
 const ACTIVE_BUNDLE_LINK = '.active';
 const VERSIONS_DIRECTORY = '.versions';
 function normalizeForCompare(value: string): string {
@@ -35,7 +34,7 @@ export function canonicalBuiltInSkillActivationPath(
   appDataDir?: string,
 ): string {
   const name = path.basename(source);
-  if (!(BUILT_IN_SKILL_NAMES as readonly string[]).includes(name)) return source;
+  if (!(CINDY_BUILT_IN_SKILL_NAMES as readonly string[]).includes(name)) return source;
   const bundleRoot = path.dirname(source);
   const managedRoots = [
     builtInSkillsRoot(userDataDir),

@@ -26,11 +26,12 @@ beforeEach(() => {
   beforeReply = undefined;
   sqlite = new Database(':memory:');
   sqlite.exec(`
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, hidden_at INTEGER);
     CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
     CREATE TABLE bot_session_links (session_id TEXT UNIQUE, bot_id TEXT);
     INSERT INTO bot_profiles VALUES ('visible', NULL, 'active'), ('hidden', 1, 'active'), ('archived', NULL, 'archived');
-    INSERT INTO sessions VALUES ('ordinary', 'desktop'), ('visible', 'bot'), ('hidden', 'bot'), ('archived', 'bot'), ('orphan', 'bot');
+    INSERT INTO sessions (id, source) VALUES ('ordinary', 'desktop'), ('visible', 'bot'), ('hidden', 'bot'), ('archived', 'bot'), ('orphan', 'bot');
+    INSERT INTO sessions (id, source, hidden_at) VALUES ('background', 'plugin', 5);
     INSERT INTO bot_session_links VALUES ('visible', 'visible'), ('hidden', 'hidden'), ('archived', 'archived');
   `);
   const transport: DbTransport = {
@@ -58,17 +59,17 @@ describe('remote visibility batch SQL', () => {
   it('preserves ordinary, visible, hidden, archived, orphan and missing access semantics', async () => {
     const ids = ['ordinary', 'visible', 'hidden', 'archived', 'orphan', 'missing'];
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(ids))).toEqual({
-      ordinary: 'ordinary', visible: 'visible', hidden: 'hidden', archived: 'hidden', orphan: 'hidden', missing: 'missing',
+      ordinary: 'ordinary', visible: 'visible', hidden: 'background', archived: 'background', orphan: 'background', missing: 'missing',
     });
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(ids, 'bot'))).toEqual({
       ordinary: 'missing', visible: 'visible', hidden: 'hidden', archived: 'hidden', orphan: 'missing', missing: 'missing',
     });
-    expect(await readRemoteBotSessionAccess('hidden')).toBe('hidden');
+    expect(await readRemoteBotSessionAccess('hidden')).toBe('background');
   });
 
   it('returns 1,000 authorized tasks in order without a per-row RPC burst or interactive admission', async () => {
     const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `task-${i}` }));
-    const insert = sqlite.prepare("INSERT INTO sessions VALUES (?, 'desktop')");
+    const insert = sqlite.prepare("INSERT INTO sessions (id, source) VALUES (?, 'desktop')");
     sqlite.transaction(() => { for (const row of rows) insert.run(row.id); })();
     const input = [...rows, { id: 'hidden' }, rows[0]];
     expect(await runAsBackgroundDbRpc(() => projectRemoteSessionResult('local-db:sessions:list', input)))
@@ -76,6 +77,17 @@ describe('remote visibility batch SQL', () => {
     expect(calls).toHaveLength(6);
     expect(peak).toBe(1);
     expect(calls.every((call) => call.params.length <= 200 && call.admission === 'background')).toBe(true);
+  });
+
+  it('omits plugin background tasks from list channels while single reads still resolve them', async () => {
+    const rows = [{ id: 'ordinary' }, { id: 'background' }];
+    expect(await projectRemoteSessionResult('local-db:sessions:list', rows)).toEqual([{ id: 'ordinary' }]);
+    expect(await projectRemoteSessionResult('maker:list-active', [{ sessionId: 'ordinary' }, { sessionId: 'background' }]))
+      .toEqual([{ sessionId: 'ordinary' }]);
+    expect(await projectRemoteSessionResult('maker:list-active', { format: 'active-sessions-v2', sessions: [{ sessionId: 'background' }] }))
+      .toEqual({ format: 'active-sessions-v2', sessions: [] });
+    expect(await projectRemoteSessionResult('local-db:sessions:get', { id: 'background' })).toEqual({ id: 'background' });
+    expect(await projectRemoteSessionResult('local-db:sessions:get-many', rows)).toEqual(rows);
   });
 
   it('discards already read chunks and stops issuing SQL if the data owner changes', async () => {

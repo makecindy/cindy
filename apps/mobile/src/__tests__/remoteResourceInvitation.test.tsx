@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   params: { collectionId: 'teammates', resourceId: 'bot-1', resourceKind: 'bot', deviceId: 'mac', deviceName: 'Mac' },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   read: vi.fn(), action: vi.fn(), upsert: vi.fn(), push: null as null | ((device: string, payload: any) => void),
-  link: { connectionEpoch: 1, status: 'online', invoke: vi.fn(), onRemoteResourceChanged: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() },
+  link: { openLink: vi.fn(), connectionEpoch: 1, status: 'online', invoke: vi.fn(), onRemoteResourceChanged: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() },
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -19,6 +19,7 @@ vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { Redirect: ({ href }: { href: string }) => { useEffect(() => h.router.replace(href), [href]); return null; }, useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useRouter: () => h.router, useLocalSearchParams: () => h.params };
 });
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('react-native-safe-area-context', async () => { const { createElement: el } = await import('react'); return { SafeAreaView: ({ children }: any) => el('div', {}, children) }; });
 vi.mock('@/components/AppText', () => ({ Text: 'span' }));
@@ -36,7 +37,7 @@ vi.mock('@/components/MobilePrimitives', async () => {
 vi.mock('@/platform/chrome', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.generation }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
-vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
+vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: String }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResources', async (importOriginal) => ({ ...await importOriginal<typeof import('../device-link/remoteResources')>(), getRemoteResource: h.read, invokeRemoteResourceAction: h.action }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { getSessionDeviceId: () => null, upsertDeviceSession: h.upsert } }));
@@ -48,7 +49,7 @@ const resource = (stage: string) => ({ ref: { collectionId: 'teammates', kind: '
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
-  vi.clearAllMocks(); h.generation = 1; h.params.collectionId = 'teammates';
+  vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.generation = 1; h.params.collectionId = 'teammates';
   h.link.onRemoteResourceChanged.mockImplementation(callback => { h.push = callback; return () => { h.push = null; }; });
   h.link.invoke.mockResolvedValue({ id: 'chat-1', source: 'bot' });
   container = document.createElement('div'); root = createRoot(container);

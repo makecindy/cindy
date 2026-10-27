@@ -14,6 +14,7 @@ import {
   Folder,
   FolderOpen,
   Globe2,
+  ListTodo,
   MessageSquareQuote,
   Monitor,
   Plug,
@@ -40,6 +41,7 @@ export interface MentionChipAttrs {
     | 'browser-tab'
     | 'desktop-window'
     | 'bot'
+    | 'todo'
     | 'plugin-resource'
     | 'plugin-capability';
   /** Visible basename, Agent name, command, conversation title/message or project name. */
@@ -75,6 +77,7 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   if (attrs.kind === 'browser-tab') return <Globe2 aria-hidden />;
   if (attrs.kind === 'desktop-window') return <Monitor aria-hidden />;
   if (attrs.kind === 'bot') return <Bot aria-hidden />;
+  if (attrs.kind === 'todo') return <ListTodo aria-hidden />;
   if (attrs.kind === 'plugin-resource') return <Plug aria-hidden />;
   return parseSessionDeepLinkHref(attrs.path)?.messageClientId ? (
     <MessageSquareQuote aria-hidden />
@@ -320,6 +323,13 @@ const ICON_PATHS: Record<Exclude<MentionChipAttrs['kind'], 'slash'>, string[]> =
     'M15 13v2',
     'M9 13v2',
     'M6 18h12a2 2 0 0 0 2-2v-4a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v4a2 2 0 0 0 2 2Z',
+  ],
+  todo: [
+    'M4 5h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+    'm3 17 2 2 4-4',
+    'M13 6h8',
+    'M13 12h8',
+    'M13 18h8',
   ],
   'plugin-resource': ['M12 22v-5', 'M9 8V2', 'M15 8V2', 'M18 8v5a6 6 0 0 1-12 0V8Z'],
   'plugin-capability': [

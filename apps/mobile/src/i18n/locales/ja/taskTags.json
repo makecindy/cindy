@@ -34,6 +34,7 @@
   "editLabel": "「{{name}}」を編集",
   "reorderLabel": "「{{name}}」の順序を変更",
   "reorderHint": "ハンドルを長押ししてドラッグで並べ替え",
+  "reorderFooter": "長押ししてドラッグすると並べ替えられます。",
   "pink": "ピンク",
   "coral": "コーラル",
   "teal": "ティール",

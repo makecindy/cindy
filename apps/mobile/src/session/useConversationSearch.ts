@@ -1,5 +1,5 @@
 import { useRetainedHomeState, type HomeViewSession } from './homeViewSession';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
@@ -20,6 +20,7 @@ import {
 } from '@/session/conversationSearch';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { useStableValue } from '@/utils/useStableValue';
+import type { ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import type {
   ConversationSearchAgentFilter,
   ConversationSearchLastActivityFilter,
@@ -37,12 +38,14 @@ export function useConversationSearch({
   retainedState,
   lockedWorkingDirs,
   projects,
+  projectAliases,
 }: {
   origins: readonly ConversationSearchDeviceOrigin[];
   enabled: boolean;
   retainedState?: HomeViewSession;
   lockedWorkingDirs?: string[] | null;
   projects?: readonly ConversationSearchProjectOption[];
+  projectAliases?: ProjectAliasDisplayIndex;
 }): {
   query: string;
   setQuery: (value: string) => void;
@@ -124,7 +127,9 @@ export function useConversationSearch({
     setProjectSelection('all');
   }, []);
 
-  useEffect(() => {
+  // Publish "searching" before paint, including the debounce interval. Otherwise
+  // an empty local projection can briefly claim there are no matching tasks.
+  useLayoutEffect(() => {
     const trimmed = query.trim();
     if (!enabled || !trimmed) {
       requestSeq.current += 1;
@@ -154,6 +159,7 @@ export function useConversationSearch({
         {
           invoke,
           getCachedSessions: () => remoteSessionStore.getSessions(),
+          projectAliases,
           isDeviceUnresponsive: (deviceId) => unresponsiveDevicesStore.has(deviceId),
         },
       ).then((page) => {
@@ -191,6 +197,7 @@ export function useConversationSearch({
     statusFilter,
     unnamedLabel,
     workingDirs,
+    projectAliases,
   ]);
 
   return {

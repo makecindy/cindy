@@ -10,12 +10,26 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 
-import { REMOTE_AGENT_GROUP_SWITCH_STATE_KEY, type RemoteAgentErrorInfo } from '@cindy/device-link';
+import { parseProviderSharePeer, REMOTE_AGENT_GROUP_SWITCH_STATE_KEY, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 /** 受邀者在组内电脑上的不透明键(32 位十六进制)。 */
 export function relayKeyFor(guestController: string): string {
   return createHash('sha256').update(`provider-group-relay\0${guestController}`).digest('hex').slice(0, 32);
+}
+
+/**
+ * 受邀者的转分享键(32 位十六进制，provider-sharing.md §4.3)：按本机分享给他的那个分享与成员派生，同一个人从
+ * 哪台电脑来都相同(relay 键按设备分)。分享来的组内电脑的主人按这个键逐人同意；不含身份信息。
+ */
+export function reshareKeyFor(shareId: string, memberId: string): string {
+  return createHash('sha256').update(`provider-group-reshare\0${shareId}\0${memberId}`).digest('hex').slice(0, 32);
+}
+
+/** 受邀者对端 → 转分享键；不是受邀者返回 undefined。 */
+export function reshareKeyForGuest(guestController: string): string | undefined {
+  const peer = parseProviderSharePeer(guestController);
+  return peer?.role === 'guest' ? reshareKeyFor(peer.shareId, peer.memberId) : undefined;
 }
 
 /** 受邀者任务在组内电脑上的任务 id。 */
@@ -28,7 +42,7 @@ export function relaySessionIdFor(guestController: string, sessionId: string): s
  * 对受邀者没有意义，还会透露组内电脑与本机的关系：统一成「暂时不可用」。Agent 本身的报错(用量上限等)
  * 在事件流里，不经过这里。
  */
-const LOCATION_CODES = /^REMOTE_AGENT_(?:SHARE_PAUSED|SHARE_REMOVED|SHARE_UNAVAILABLE|PROVIDER_NOT_ALLOWED|ACCOUNT_CHANGED|PEER_TOO_OLD|DEVICE_UNREACHABLE|BUSY|UNAVAILABLE)$|^(?:ACCESS_REVOKED|REMOTE_DISABLED|CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|DEVICE_OFFLINE|PEER_RESET|TIMEOUT|INVOKE_TIMEOUT|LINK_CLOSED|LINK_NOT_OPEN|NOT_CONNECTED)$/;
+const LOCATION_CODES = /^REMOTE_AGENT_(?:SHARE_PAUSED|SHARE_REMOVED|SHARE_UNAVAILABLE|PROVIDER_NOT_ALLOWED|RESHARE_NOT_ALLOWED|ACCOUNT_CHANGED|PEER_TOO_OLD|DEVICE_UNREACHABLE|BUSY|UNAVAILABLE)$|^(?:ACCESS_REVOKED|REMOTE_DISABLED|CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|DEVICE_OFFLINE|PEER_RESET|TIMEOUT|INVOKE_TIMEOUT|LINK_CLOSED|LINK_NOT_OPEN|NOT_CONNECTED)$/;
 
 export const RELAY_UNAVAILABLE_ERROR: RemoteAgentErrorInfo = {
   code: 'REMOTE_AGENT_UNAVAILABLE',

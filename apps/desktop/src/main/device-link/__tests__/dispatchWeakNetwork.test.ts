@@ -70,6 +70,7 @@ import {
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
+  setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   wireInboundDispatch,
 } from '../dispatch';
@@ -252,7 +253,25 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {
+    const accepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(accepted);
+    const sendLinkAccept = vi.fn().mockImplementationOnce(() => { throw backpressure(); });
+    const client = mkClient({ sendLinkAccept });
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-a', undefined);
+    expect(accepted).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, 'ctrl-b', 'open-b', undefined);
+    expect(accepted.mock.calls).toEqual([['ctrl-b']]);
+    accepted.mockClear();
+    vi.advanceTimersByTime(500);
+    expect(accepted.mock.calls).toEqual([['ctrl-a']]);
+    expect(__testing.getActiveControllers().map(c => c.deviceId).sort()).toEqual(['ctrl-a', 'ctrl-b']);
+  });
+
   it('refreshes first-join authority and ignores an older failed open after a newer success', async () => {
+    const accepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(accepted);
     const client = mkClient();
     __testing.setActiveClient(client as never);
     const peer = sharedTaskGuestPeer('m', 'g', 'd');
@@ -269,6 +288,7 @@ describe('[1] link-accept 发送失败的有限重试', () => {
     await Promise.resolve(); await Promise.resolve();
     expect(client.closeLink).not.toHaveBeenCalled();
     expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+    expect(accepted).not.toHaveBeenCalled();
   });
   it('declares history projection support in the host accept, including for legacy controllers', () => {
     const client = mkClient();

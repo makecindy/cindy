@@ -9,7 +9,13 @@ import {
   botOwnedSessionNotificationTitle,
 } from '@/lib/sessionEventNotification';
 import { BotLifecycleSettings } from '../BotLifecycleSettings';
-import { isBotGroupLaneSession, withoutBotGroupLanes } from '../botGroupLane';
+import {
+  isBotChannelLaneSession,
+  isBotGroupLaneSession,
+  isBotHiddenLaneSession,
+  withoutBotGroupLanes,
+  withoutBotHiddenLanes,
+} from '../botGroupLane';
 import { botRosterActivityAt } from '../botRosterDisplay';
 import type { BotProfile } from '../botStore';
 
@@ -53,6 +59,8 @@ function profile(sessions: BotProfile['sessions']): BotProfile {
 const lane = { id: 'lane', title: 'group lane', kind: 'group' as const, role: 'group' as const, updatedAt: 900 };
 const archivedLane = { ...lane, id: 'archived-lane', kind: 'history' as const, status: 'archived' as const };
 const history = { id: 'old', title: 'Old private task', kind: 'history' as const, role: 'history' as const, updatedAt: 5 };
+const channelLane = { id: 'im-lane', title: '[TG·群] 100123', kind: 'channel' as const, role: 'channel' as const, updatedAt: 950 };
+const archivedChannelLane = { ...channelLane, id: 'im-archived', title: 'old IM lane', status: 'archived' as const };
 
 beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
@@ -62,7 +70,11 @@ beforeEach(() => {
       localDb: {
         bots: {
           list: vi.fn(async () => [
-            { id: 'bot-1', name: 'Helper', sessions: [lane, { id: 'chat', title: 'Helper', role: 'canonical' }] },
+            {
+              id: 'bot-1',
+              name: 'Helper',
+              sessions: [lane, channelLane, { id: 'chat', title: 'Helper', role: 'canonical' }],
+            },
           ]),
           health: vi.fn(async () => null),
           lifecycleEvents: vi.fn(async () => []),
@@ -100,5 +112,42 @@ describe('group lanes stay out of a teammate’s own surfaces', () => {
   it('marks lanes so notification owners can skip them', async () => {
     await expect(botOwnedSessionNotificationTitle('lane')).resolves.toBe(BOT_GROUP_LANE_SESSION);
     await expect(botOwnedSessionNotificationTitle('chat')).resolves.toBe('Helper');
+  });
+});
+
+describe('IM channel lanes stay out of a teammate’s own surfaces', () => {
+  it('identifies channel lanes separately from group-chat lanes', () => {
+    expect(isBotChannelLaneSession(channelLane)).toBe(true);
+    expect(isBotChannelLaneSession({ kind: 'channel' })).toBe(true);
+    expect(isBotChannelLaneSession(lane)).toBe(false);
+    // The group-chat sidebar must not pick up IM lanes.
+    expect(isBotGroupLaneSession(channelLane)).toBe(false);
+    expect(isBotHiddenLaneSession(channelLane)).toBe(true);
+    expect(isBotHiddenLaneSession(lane)).toBe(true);
+    expect(isBotHiddenLaneSession(history)).toBe(false);
+    expect(withoutBotHiddenLanes([lane, channelLane, history, archivedChannelLane])).toEqual([history]);
+  });
+
+  it('does not let IM group activity reorder the teammate roster', () => {
+    expect(botRosterActivityAt(profile([history, channelLane]))).toBe(5);
+  });
+
+  it('keeps channel lanes, even archived ones, out of the history list', () => {
+    render(
+      <MemoryRouter>
+        <BotLifecycleSettings
+          bot={profile([history, channelLane, { ...archivedChannelLane, kind: 'history' as const }])}
+          onOpenSession={vi.fn()}
+          mode="history"
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Old private task')).toBeTruthy();
+    expect(screen.queryByText('old IM lane')).toBeNull();
+    expect(screen.queryByText('[TG·群] 100123')).toBeNull();
+  });
+
+  it('suppresses notifications for channel lanes like group lanes', async () => {
+    await expect(botOwnedSessionNotificationTitle('im-lane')).resolves.toBe(BOT_GROUP_LANE_SESSION);
   });
 });

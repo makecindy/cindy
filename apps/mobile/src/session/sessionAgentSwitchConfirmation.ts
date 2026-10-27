@@ -53,7 +53,7 @@ export type AgentLocationPatch = { agentDeviceId?: string | null };
 /**
  * 远程 Agent:选中一行模型时 Agent 的运行位置怎么处理(规则见 resolveAgentLocationPick)。
  * 换到另一台电脑(或改回被控电脑)先确认;取消 = null,调用方什么都不改。
- * movable = false(访客 / 不支持切换 / 旧被控端)时只接受被控电脑自己的目录。
+ * movable = false 时只接受 Agent 当前所在电脑的目录，既不搬回被控电脑也不换到其他电脑。
  */
 export async function confirmAgentLocationForPick(
   input: {
@@ -69,8 +69,8 @@ export async function confirmAgentLocationForPick(
   },
   showAlert: ShowAlert = Alert.alert,
 ): Promise<AgentLocationPatch | null> {
-  if (!input.movable) return input.catalogDeviceId === null ? {} : null;
   const pick = resolveAgentLocationPick(input);
+  if (!input.movable) return pick.relocateTo === undefined ? {} : null;
   if (pick.needsConfirm) {
     const target = input.catalogDeviceId
       ? { kind: 'device' as const, name: input.deviceName(input.catalogDeviceId) }

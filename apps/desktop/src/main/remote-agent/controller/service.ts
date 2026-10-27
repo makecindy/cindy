@@ -23,22 +23,27 @@ import type {
   StartSessionOptions,
 } from '@cindy/maker-core';
 import { resolveMemoryScopeKey } from '@cindy/maker-core';
+import { createLogger } from '../../logger.js';
 
+import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
 import type { GuardedFetch } from '../executor/webFetch';
+import { RemoteConnectionPool } from './connectionPool';
 import { remoteAgentEventMapper } from './eventMap';
 import {
   collectAncestorInstructionFiles,
+  collectAncestorMarkers,
   collectInstructionImports,
   collectPersonalConfig,
   collectProjectInstructionFiles,
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
-import { RemoteAgentPoller, remoteAgentInvoker } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
 import { startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 
 export interface DeviceAgentServiceDeps {
+  readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
   rgPath(): string;
   /** 本机 codex 程序(给对方的 Codex 提供 exec-server 执行环境)。 */
@@ -71,6 +76,8 @@ export interface DeviceAgentServiceDeps {
   };
   /** 任务的「Agent 所在电脑」是不是分享来的供应商(受邀者任务)。 */
   isSharedProviderDevice?(deviceId: string): boolean;
+  /** 受邀者在设置里把这个分享切成了「信任 {分享者}」(每次操作前问一遍)。 */
+  skipSharedProviderCredentialConsent?(deviceId: string): boolean;
   /** 受邀者任务在本机抓取网页的出站通道(WebFetch)。 */
   webFetch?: GuardedFetch;
   /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
@@ -83,7 +90,7 @@ const SHARED_PROVIDER_CREDENTIAL_NOTICE =
   "This task uses a shared provider, so what the agent reads passes through the sharer's computer or another computer they arrange. "
   + 'This may involve credentials, so it needs your confirmation. '
   + 'Always allow for this session skips further shared-provider credential confirmations in this task. '
-  + 'Reopening the task or changing its permission mode requires confirmation again.';
+  + 'Changing its permission mode or Plan mode, or quitting Cindy, requires confirmation again.';
 
 function mcpTargets(extra: PiExtraSpawnConfig | null): Map<string, LocalMcpTarget> {
   const targets = new Map<string, LocalMcpTarget>();
@@ -148,7 +155,21 @@ export function remoteAgentPollerFor(
 /** Maker 的 startDeviceAgentSession 实现。 */
 export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const log = deps.logger.child('remote-agent');
+  // Agent 统一流有突发限流；启动阶段日志必须完整落在 main 流，才能解释慢启动。
+  const startupLog = createLogger('remote-agent:startup');
   const pollerFor = (deviceId: string): RemoteAgentPoller => remoteAgentPollerFor(deviceId, deps.remoteInvoke, log);
+  // 每台运行 Agent 的电脑一个连接池：对方按这台设备计名额，池里算的是本机在那台上开着的连接；
+  // 闲置多久可以让出按那台主人设置的闲置收回时长(打开前与主动让出前从 caps 读)。
+  const pools = new Map<string, RemoteConnectionPool>();
+  const poolFor = (deviceId: string): RemoteConnectionPool => {
+    let pool = pools.get(deviceId);
+    if (!pool) {
+      const invoke = remoteAgentInvoker(deviceId, deps.remoteInvoke);
+      pool = new RemoteConnectionPool({ log, readCaps: () => RemoteAgentRunClient.caps(invoke) });
+      pools.set(deviceId, pool);
+    }
+    return pool;
+  };
   return async (input: { agentKind: AgentKind; deviceId: string; options: StartSessionOptions }): Promise<AgentSessionHandle> => {
     const opts: StartSessionOptions = { ...input.options };
     const poller = pollerFor(input.deviceId);
@@ -176,8 +197,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     return startRemoteAgentSession(input.agentKind, opts, {
+      readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
       invoke: poller.invoke,
       poller,
+      pool: poolFor(input.deviceId),
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
       ...(sessionId && deps.isGroupAssigned?.(sessionId) ? { groupAssigned: true } : {}),
@@ -192,7 +215,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         : {}),
       ...(webFetch ? { webFetch } : {}),
       ...(shared
-        ? { credentialConsent: { description: deps.sharedProviderCredentialNotice?.() ?? SHARED_PROVIDER_CREDENTIAL_NOTICE } }
+        ? {
+            credentialConsent: {
+              description: deps.sharedProviderCredentialNotice?.() ?? SHARED_PROVIDER_CREDENTIAL_NOTICE,
+              // 受邀者在设置里对这个分享选了「信任 {分享者}」：实时读，运行中切换下一步就生效。
+              skip: () => deps.skipSharedProviderCredentialConsent?.(input.deviceId) === true,
+              ...(sessionId ? { grant: credentialGrantFor(sessionId, input.deviceId) } : {}),
+            },
+          }
         : {}),
       prepareMcp: async ({ kind, opts: startOpts, vendorOptions }): Promise<PreparedRemoteMcp> => {
         const extra = await deps.prepareMcpBridge(deps.mcpProviders(), deps.logger, {
@@ -227,13 +257,19 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectAncestorFiles: input.agentKind === 'codex'
         ? undefined
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
+      // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
+      ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
       collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles, collect),
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
       mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
       newId: randomUUID,
-      log,
+      log: {
+        debug: (message, fields) => startupLog.debug(message, fields),
+        info: (message, fields) => log.info(message, fields),
+        warn: (message, fields) => log.warn(message, fields),
+      },
     });
   };
 }

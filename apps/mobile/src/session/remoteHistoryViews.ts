@@ -4,6 +4,7 @@ import type { RemoteMessage } from './types';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { clearMessageReadingPositions } from './messageReadingPosition';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 // Data and resident message lists share the same five-task retention policy.
 type Reader = Pick<MobileMakerTransport, 'readHistoryView' | 'readWorkDetails' | 'setHistoryExpanded'>;
@@ -49,9 +50,13 @@ export function getRemoteHistoryView(deviceId: string, sessionId: string, reader
   if (existing) return existing;
   const entry: Entry = { deviceId, sessionId, reader, consumers: 0,
     view: new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
       page: (before) => entry.reader.readHistoryView(sessionId, before),
       details: (ref, after) => entry.reader.readWorkDetails(sessionId, ref, after),
       expanded: (refs) => entry.reader.setHistoryExpanded(sessionId, refs),
+      diagnostic: (event) => mobileDebugLog('debug', 'recovery', 'history view changed', {
+        hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
+      }),
     }) };
   return entry;
 }

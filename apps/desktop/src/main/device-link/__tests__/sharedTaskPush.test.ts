@@ -310,6 +310,118 @@ describe('shared task guests never see the owner private message sources', () =>
   });
 });
 
+describe('shared task MCP App data stays at the owner boundary', () => {
+  const message = {
+    clientId: 'app-card',
+    sessionId: 'task-a',
+    role: 'assistant',
+    agentMeta: { mcpApp: true },
+    content: {
+      mcpApp: {
+        version: 1,
+        serverId: 'private-server',
+        serverRevision: 'private-revision',
+        resourceUri: 'ui://private/app',
+        connectionId: 'private-connection',
+        tool: {
+          name: 'draft',
+          title: 'Draft form',
+          inputSchema: { type: 'object', description: 'private-schema' },
+          _meta: { private: 'tool' },
+        },
+        arguments: { private: 'input' },
+        result: {
+          content: [
+            { type: 'text', text: 'Saved result', _meta: { private: 'block' } },
+            { type: 'resource', resource: { text: 'private-html' } },
+            { type: 'image', data: 'private-image' },
+            { type: 'text', text: 'Second paragraph' },
+          ],
+          structuredContent: { private: 'structured' },
+          _meta: { private: 'view-only' },
+        },
+        future: 'private-future',
+      },
+      future: 'private-envelope',
+    },
+  };
+  const expected = {
+    mcpAppHistory: { version: 1, title: 'Draft form', text: 'Saved result\n\nSecond paragraph' },
+  };
+
+  it.each(['online', 'reconnecting'])(
+    'redacts %s pushes before delivery or offline queueing',
+    async (status) => {
+      const transport = client();
+      transport.getStatus.mockReturnValue(status);
+      __testing.setActiveClient(transport as never);
+      subscriptions.subscribe(guestA, ['session:task-a']);
+      subscriptions.subscribe('own-task', ['session:task-a']);
+      __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message });
+      await vi.advanceTimersByTimeAsync(300);
+      const payload = (peer: string) =>
+        status === 'online'
+          ? transport.sendPush.mock.calls.find((call) => call[0] === peer)![2]
+          : __testing.queuedPushesFor(peer)[0].payload;
+      expect(payload(guestA).message.content).toEqual(expected);
+      expect(JSON.stringify(payload(guestA))).not.toMatch(
+        /private-|structuredContent|arguments|_meta/,
+      );
+      expect(payload('own-task').message.content).toEqual(message.content);
+      expect(message.content.mcpApp.arguments).toEqual({ private: 'input' });
+    },
+  );
+
+  it.each(['local-db:messages:list', 'local-db:messages:view', 'local-db:messages:work-details'])(
+    'redacts %s history while preserving same-account results',
+    (channel) => {
+      const transport = client();
+      __testing.setActiveClient(transport as never);
+      const page =
+        channel === 'local-db:messages:list'
+          ? [message]
+          : {
+              messages: [message],
+              items: [
+                {
+                  type: 'work',
+                  key: 'work',
+                  summary: {},
+                  children: [{ type: 'messages', key: 'prose', messages: [message] }],
+                },
+              ],
+            };
+      __testing.sendInvokeResultSafe(
+        transport as never,
+        guestA,
+        'guest',
+        { ok: true, result: page },
+        channel,
+        ['task-a'],
+      );
+      __testing.sendInvokeResultSafe(
+        transport as never,
+        'own-task',
+        'owner',
+        { ok: true, result: page },
+        channel,
+        ['task-a'],
+      );
+      const results = new Map(
+        transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2].result]),
+      );
+      const guest = results.get('guest');
+      expect(
+        channel === 'local-db:messages:list' ? guest[0].content : guest.messages[0].content,
+      ).toEqual(expected);
+      if (channel !== 'local-db:messages:list')
+        expect(guest.items[0].children[0].messages[0].content).toEqual(expected);
+      expect(JSON.stringify(guest)).not.toMatch(/private-|structuredContent|arguments|_meta/);
+      expect(results.get('owner')).toEqual(page);
+    },
+  );
+});
+
 describe('shared task workdir watch', () => {
   it('delivers file tree events only to the guest whose admitted watch matches, and stops after revoke', async () => {
     const transport = client();

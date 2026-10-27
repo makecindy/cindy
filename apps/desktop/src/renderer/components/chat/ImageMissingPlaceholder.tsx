@@ -36,21 +36,22 @@ export function ImageMissingPlaceholder({
       className={cn(
         'flex flex-col items-center justify-center gap-2',
         'rounded-[12px] border border-dashed',
-        'border-[var(--border)] bg-[var(--muted)]',
-        'p-4 text-[var(--muted-foreground)]',
+        // These tokens are HSL channels: `var(--border)` alone is invalid CSS and drew a black border.
+        'border-border bg-muted',
+        'p-4 text-muted-foreground',
         className,
       )}
       style={{ maxWidth, minHeight: 140 }}
     >
       {status === 'loading' ? (
         <span
-          className="inline-flex animate-spin motion-reduce:animate-none opacity-60"
+          className="inline-flex animate-spin motion-reduce:animate-none text-[var(--text-tertiary)]"
           aria-hidden="true"
         >
           <LoaderCircle className="h-8 w-8" />
         </span>
       ) : (
-        <ImageOff className="h-8 w-8 opacity-60" aria-hidden="true" />
+        <ImageOff className="h-8 w-8 text-[var(--text-tertiary)]" aria-hidden="true" />
       )}
       <div className="text-xs font-medium">
         {t(
@@ -64,7 +65,7 @@ export function ImageMissingPlaceholder({
       {/* v5: 原生 title 替换为 Radix Tooltip(mono) — 文件名走 mono 风格。 */}
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 opacity-75">{filename}</div>
+          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</div>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>

@@ -88,6 +88,18 @@ class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
 
 const cache = new SessionBucketCache();
 const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
+/**
+ * 已收到「转入后台」推送(hiddenAt 非空)的任务。推送可能早于任务进缓存(首次列表请求
+ * 在途),所以不论当时是否移除了行都登记;列表响应与本地插入写缓存前据此过滤,直到
+ * 收到 hiddenAt:null(恢复显示)。
+ */
+const hiddenSessionIds = new Set<string>();
+
+function withoutHiddenSessions(list: Session[]): Session[] {
+  if (hiddenSessionIds.size === 0) return list;
+  const next = list.filter((session) => !hiddenSessionIds.has(session.id));
+  return next.length === list.length ? list : next;
+}
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
   revision: number;
@@ -702,7 +714,9 @@ export const sessionsStore = {
     let promise = inflight.get(filter);
     if (!promise) {
       const request = fetchFilter(filter, opts)
-        .then((data) => {
+        .then((fetched) => {
+          // 转入后台推送可能早于这次列表响应到达:提交前按已知后台任务过滤。
+          const data = withoutHiddenSessions(fetched);
           // reset / forceRefresh 会把旧 request 从 inflight 移除。只有仍被
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
@@ -958,6 +972,26 @@ export const sessionsStore = {
    */
   patchLocal(id: string, patch: Partial<Session>): void {
     if (!id || !patch) return;
+    // 插件把任务转入后台(hiddenAt 非空):主进程列表已排除它,这里与删除一样从所有桶
+    // 就地移除;再整体重拉一次,补齐满桶空位并压过转入后台前发出的旧列表请求。
+    // 不论当时是否在缓存里都登记,挡住随后到达的旧列表响应。恢复显示的 hiddenAt:null
+    // 只解除登记,再由紧随的 sessions:created 推送触发重拉。
+    if (typeof patch.hiddenAt === 'string' && patch.hiddenAt.length > 0) {
+      hiddenSessionIds.add(id);
+      const row = this.findById(id);
+      let removed = false;
+      for (const [filter, list] of cache) {
+        const next = list.filter((session) => session.id !== id);
+        if (next.length === list.length) continue;
+        cache.set(filter, next);
+        removed = true;
+      }
+      if (removed) notify();
+      patchSubs.forEach((fn) => fn(id, patch, row ? mergeSession(row, patch) : null));
+      if (removed) void this.forceRefreshAll().catch(() => undefined);
+      return;
+    }
+    if (patch.hiddenAt === null) hiddenSessionIds.delete(id);
     const pendingBeforePatch =
       patch.status !== undefined ? pendingStatusTransitions.get(id) : undefined;
     const sourceSession = patch.status !== undefined ? this.findById(id) : null;
@@ -1098,6 +1132,8 @@ export const sessionsStore = {
     if (session.source === 'bot') return;
     // /review 审查任务同样不进普通任务列表,只从来源任务的审查卡片打开。
     if (session.source === 'review') return;
+    // 已转入后台的任务不经本地插入回到列表。
+    if (hiddenSessionIds.has(session.id)) return;
     // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览
     // 必须在入库前就登记。若不在这里叠,第一帧仍是哨兵,用户会先看到「未命名任务」。
     const [withPreview] = applyAutoTitlePreviews([session]);
@@ -1111,6 +1147,25 @@ export const sessionsStore = {
     if (touched) notify();
   },
 
+  /**
+   * 新建页的未发送任务被真正删掉：直接移出缓存，不登记「已删除」状态——同一个 id 之后
+   * 还可能重新建出来(继续输入)，登记过的删除状态会把重建的任务挡在列表外。
+   */
+  removeLocal(id: string): void {
+    autoTitlePreviews.delete(id);
+    sessionTitleOverrides.delete(id);
+    sessionSpendOverrides.delete(id);
+    sessionStatusOverrides.delete(id);
+    let touched = false;
+    for (const [filter, list] of cache) {
+      const next = list.filter((item) => item.id !== id);
+      if (next.length === list.length) continue;
+      cache.set(filter, next);
+      touched = true;
+    }
+    if (touched) notify();
+  },
+
   /** 仅供测试 / 登出清理。 */
   reset(): void {
     cache.clear();
@@ -1119,6 +1174,7 @@ export const sessionsStore = {
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
     sessionStatusOverrides.clear();
+    hiddenSessionIds.clear();
     statusTransitionGeneration += 1;
     pendingStatusTransitions.clear();
     for (const waiters of pendingStatusTransitionWaiters.values()) {
@@ -1156,8 +1212,15 @@ if (typeof window !== 'undefined') {
   // 那个串与这里预览的是同一个(共用 normalizeAutoTitle),所以回流时不跳变。
   onAutoTitlePreview((sessionId, title) => {
     const current = sessionsStore.findById(sessionId);
-    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。
-    if (current && !isDefaultDraftSessionTitle(current.title)) return;
+    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。仍显示着上一次预览时
+    // 可以换成新的预览(新建页的未发送任务随输入实时更新标题)。
+    if (
+      current &&
+      !isDefaultDraftSessionTitle(current.title) &&
+      current.title !== autoTitlePreviews.get(sessionId)
+    ) {
+      return;
+    }
     // 乐观写入走专门的门:不登记权威 override、不回收叠加层,顺序无所谓。
     autoTitlePreviews.set(sessionId, title);
     if (current) applyOptimisticTitle(sessionId, title);

@@ -1,56 +1,70 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { compareFailedScheduleRuns, scheduleFailureMessageKey, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
-import { CircleAlert, X } from 'lucide-react-native';
+import {
+  compareFailedScheduleRuns,
+  scheduleFailureMessageKey,
+  type FailedScheduleRunSnapshot,
+} from '@cindy/maker-shared/schedule-model';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
-import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { ErrorNotice } from '@/components/ErrorNotice';
+import { spacing } from '@/theme/tokens';
 
 /** Only a local display preference: never writes a run or a read receipt. */
-export function FailedScheduleNotice({ source, run }: { source: string; run: FailedScheduleRunSnapshot }) {
+export function FailedScheduleNotice({
+  source,
+  run,
+}: {
+  source: string;
+  run: FailedScheduleRunSnapshot;
+}) {
   const key = `scheduleFailureDismissal:${source}`;
   const [loaded, setLoaded] = useState(false);
-  const [dismissed, setDismissed] = useState<FailedScheduleRunSnapshot | null>(null);
+  const [dismissed, setDismissed] = useState<FailedScheduleRunSnapshot | null>(
+    null,
+  );
   const { t } = useTranslation();
-  const { colors } = useTheme();
-  const styles = useThemedStyles(makeStyles);
   useEffect(() => {
     let active = true;
     setLoaded(false);
     setDismissed(null);
-    void AsyncStorage.getItem(key).then((raw) => {
-      if (!active || !raw) return;
-      try {
-        const value = JSON.parse(raw);
-        if (typeof value?.runId === 'string' && typeof value.firedAt === 'number' && Number.isFinite(value.firedAt)) setDismissed(value);
-      } catch { /* Invalid preferences do not hide history. */ }
-    }).catch(() => undefined).finally(() => { if (active) setLoaded(true); });
-    return () => { active = false; };
+    void AsyncStorage.getItem(key)
+      .then((raw) => {
+        if (!active || !raw) return;
+        try {
+          const value = JSON.parse(raw);
+          if (
+            typeof value?.runId === 'string' &&
+            typeof value.firedAt === 'number' &&
+            Number.isFinite(value.firedAt)
+          )
+            setDismissed(value);
+        } catch {
+          /* Invalid preferences do not hide history. */
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
   }, [key]);
-  if (!loaded || (dismissed && compareFailedScheduleRuns(dismissed, run) >= 0)) return null;
+  if (!loaded || (dismissed && compareFailedScheduleRuns(dismissed, run) >= 0))
+    return null;
   const dismiss = () => {
     setDismissed(run);
     void AsyncStorage.setItem(key, JSON.stringify(run)).catch(() => undefined);
   };
   return (
-    <View style={styles.box} testID="session.failedScheduleNotice">
-      <CircleAlert color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />
-      <Text style={styles.text}>{t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`)}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel={t('session.failedScheduleNotice.dismissTitle')}
-        onPress={dismiss} style={({ pressed }) => [styles.close, pressed && styles.pressed]}>
-        <X color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />
-      </Pressable>
-    </View>
+    <ErrorNotice
+      style={{ marginTop: spacing.sm }}
+      testID="session.failedScheduleNotice"
+      message={t(
+        `session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`,
+      )}
+      onDismiss={dismiss}
+      dismissLabel={t('session.failedScheduleNotice.dismissTitle')}
+    />
   );
 }
-const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  box: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm,
-    paddingLeft: spacing.md, backgroundColor: colors.surfaceElevated, borderColor: colors.errorBorder,
-    borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container },
-  text: { flex: 1, color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
-  close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
-  pressed: mobileInteractionStyles.pressed,
-});

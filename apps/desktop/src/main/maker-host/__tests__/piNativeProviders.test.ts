@@ -52,6 +52,7 @@ import {
   pruneAnthropicCompatForGateway,
   type PiBundledModelInfo,
 } from '../pi-host.js';
+import * as gatewayModelCatalog from '../pi-gateway-model-catalog.js';
 import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
@@ -254,6 +255,84 @@ describe('ChatGPT image capability authority (#2674)', () => {
   );
 });
 
+describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
+  // Test value: the production Gateway spec must enable Pi's native empty-reasoning fallback.
+  // Existing Gateway coverage omitted Flash/V4.1; the minimal input is either exact Chat ID
+  // with no native compat row. Unit tier: no binary, network or account access.
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-flash',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash-vision-exp',
+    'deepseek/deepseek-v4-flash',
+  ])('supplies replay compatibility for %s locally and remotely', (id) => {
+    setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+    for (const remote of [false, true]) {
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote })).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          requiresReasoningContentOnAssistantMessages: true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+    }
+  });
+
+  it.each([undefined, false, true])('fills only an undeclared replay flag (%s)', (replay) => {
+    const id = 'deepseek/deepseek-v4.1-flash';
+    const compat = {
+      supportsDeveloperRole: false,
+      ...(replay === undefined ? {} : { requiresReasoningContentOnAssistantMessages: replay }),
+    };
+    const profile = { api: 'openai-completions' as const, compat, thinkingLevelMap: { high: 'high' } };
+    const probe = vi.spyOn(gatewayModelCatalog, 'resolveBundledPiGatewayModelProfile').mockReturnValue(profile);
+    try {
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({
+        ...profile,
+        compat: {
+          ...compat,
+          requiresReasoningContentOnAssistantMessages: replay ?? true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+      expect(compat).not.toHaveProperty('sendSessionAffinityHeaders');
+      expect(compat.requiresReasoningContentOnAssistantMessages).toBe(replay);
+    } finally { probe.mockRestore(); }
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)(
+    'does not add Chat replay metadata to %s', (api) => {
+      const id = 'deepseek/deepseek-v4.1-flash';
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: {
+          schemaVersion: 3, updatedAt: '2026-10-26T00:00:00.000Z',
+          models: [{ id: 'xd/deepseek-fixture', name: 'DeepSeek fixture', nativeApi: api,
+            routes: [{ providerId: 'xd', modelId: id, agents: ['codex'] }] }],
+        },
+      });
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe(api);
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it.each(['other/deepseek-v4.1-flash', 'deepseek/future-model', 'deepseek-flash'])(
+    'does not infer replay compatibility from the name %s', (id) => {
+      setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe('openai-completions');
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it('does not make an unavailable Gateway model selectable', () => {
+    expect(resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4.1-flash')).toBeUndefined();
+  });
+});
+
 describe('resolvePiCindyGatewayModelApi', () => {
   it('keeps a Registry-linked Cindy Server protocol above local and Gateway metadata', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
@@ -428,6 +507,49 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  // Tier 2: the actual launch builder must carry a user's V6 selection, including
+  // protocol limits, instead of reverting to the connection's Messages default.
+  it.each(['anthropic-messages', 'openai-completions', 'openai-responses'] as const)(
+    'launches Kimi through the selected V6 %s interface', (api) => {
+      const config = { id: 'kimi-v6', name: 'Kimi', runtimes: { pi: {
+        catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding',
+        wireProtocol: 'anthropic-messages' as const,
+        models: [{ id: 'k3.1-pro', name: 'K3.1', interfaceId: `moonshot-kimi-code-${api}` }],
+      } } };
+      const provider = buildUserProvider(config);
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+      const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      const projected = result.providers[0].models[0];
+      expect(projected.api ?? result.providers[0].api).toBe(api);
+      expect(projected.baseUrl ?? result.providers[0].baseUrl).toBe(api === 'anthropic-messages' ? 'https://api.kimi.com/coding' : 'https://api.kimi.com/coding/v1');
+      expect(projected).toMatchObject({ wireId: 'k3.1-pro', contextWindow: 262144, maxTokens: 262144, input: ['text', 'image'] });
+    },
+  );
+
+  it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])(
+    'sends the Google Gemini API preset %s to the native /v1beta root', (id) => {
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+      const config = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: {
+        pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [{ id, name: id }] },
+      } };
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config, { presets: [preset] })] };
+      const { providers } = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      // Discovery keeps the OpenAI-compatible connection root; the native SDK must not inherit it.
+      expect(providers[0].baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai');
+      expect(providers[0].models[0]).toMatchObject({
+        api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      });
+    },
+  );
+
+  it('never rewrites a custom Gemini proxy endpoint', () => {
+    const baseUrl = 'https://proxy.example/v1beta/openai';
+    const { providers } = buildPiNativeProvidersFromConfigs([{ id: 'gemini-proxy', name: 'Proxy', runtimes: {
+      pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
+    } }], () => 'fixture-key');
+    expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
     const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',
       'huggingface', 'nvidia', 'together', 'mistral', 'opencode', 'qwen-token-plan',
@@ -2366,8 +2488,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
     expect(providers).toHaveLength(1);
     expect(providers[0]).toMatchObject({ api, baseUrl: 'http://127.0.0.1:9999',
+      cacheIdentityBaseUrl: 'https://openrouter.ai/api/v1',
       headers: { 'x-cindy-pi-provider-id': 'openrouter-test', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
-      models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999' }],
+      models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999', cacheIdentityBaseUrl: 'https://openrouter.ai/api/v1' }],
     });
     expect(env).toEqual({});
   });

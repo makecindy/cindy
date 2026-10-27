@@ -1,3 +1,4 @@
+import { CLAUDE_QUOTA_STATE_READ } from '../../shared/claudeQuotaState';
 /**
  * maker:usage:* IPC 的纯 handler body。
  *
@@ -71,8 +72,10 @@ export function toLegacyUsdModelPricing(
 
 /** usage handler 需要的 host-level 查询与刷新能力。 */
 export interface MakerUsageHandlerDeps {
+  readClaudeAccountQuotaClear?(): { quotaState: 'unlimited' | 'invalidated' } | null;
   readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage>;
   readCodexAccountUsageSnapshot(providerId?: string): Promise<RateLimitSnapshot | null>;
+  setCodexResetAutoUse?(patch: Record<string, unknown> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
   readCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   consumeCodexRateLimitReset(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(providerId?: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
@@ -109,8 +112,11 @@ export function registerMakerUsageHandlers(
     if (kind === 'claude-code') {
       // Both first load and explicit refresh must reach the existing owner-scoped fetcher.
       // Cached reads retain its throttle; an empty cache gets the existing warm-start path.
-      await deps.triggerClaudeAccountUsageRefresh(deps.readClaudeAccountUsageSnapshot() === null);
-      return deps.readClaudeAccountUsageSnapshot();
+      await deps.triggerClaudeAccountUsageRefresh(
+        deps.readClaudeAccountUsageSnapshot() === null && deps.readClaudeAccountQuotaClear?.()?.quotaState !== 'unlimited',
+      );
+      return deps.readClaudeAccountUsageSnapshot()
+        ?? (providerId === CLAUDE_QUOTA_STATE_READ ? deps.readClaudeAccountQuotaClear?.() ?? null : null);
     }
     return null;
   });
@@ -143,6 +149,16 @@ export function registerMakerUsageHandlers(
       }
     },
   );
+
+  registry.handle(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, async (_event, patch: unknown, accountKey: unknown, providerId?: unknown) => {
+    if (patch !== null && (!patch || typeof patch !== 'object' || Array.isArray(patch)
+      || Object.keys(patch).some(key => !['enabled', 'lowQuota', 'minimumDays', 'expiring', 'expiryMinutes'].includes(key)))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid reset settings');
+    }
+    if (!deps.setCodexResetAutoUse) throwIpcError('UNSUPPORTED_CAPABILITY', 'Automatic reset settings unavailable');
+    return deps.setCodexResetAutoUse(patch as Record<string, unknown> | null,
+      requireString(accountKey, 'accountKey'), providerId === undefined ? undefined : requireString(providerId, 'providerId'));
+  });
 
   // Claude 订阅账号余量 (5h/周/分模型窗口) — cached-first, 内部按需后台刷新。
   registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async (event, providerId) => {

@@ -7,6 +7,26 @@ vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: h.spawn }));
 vi.mock('node:util', () => ({ promisify: () => h.exec }));
 vi.mock('node:fs', () => ({ accessSync: vi.fn(), constants: { X_OK: 1 } }));
 import { readLinuxClipboardSnapshot, writeLinuxClipboard } from '../linuxClipboardNative';
+it.each([
+  [6016, 3384, true],
+  [6000, 4000, true],
+  [6001, 4000, false],
+] as const)('applies Desktop image bounds to Linux %s x %s', async (width, height, accepted) => {
+  const png = Buffer.alloc(33);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+  png.writeUInt32BE(width, 16);
+  png.writeUInt32BE(height, 20);
+  h.exec.mockImplementation(async (_tool, args: string[]) => ({
+    stdout: args.includes('--list-types') ? Buffer.from('image/png\n') : png,
+  }));
+  if (accepted)
+    expect((await readLinuxClipboardSnapshot()).content.png).toBe(png.toString('base64'));
+  else await expect(readLinuxClipboardSnapshot()).rejects.toThrow('CLIPBOARD_TOO_LONG');
+});
+it('reports a Linux read buffer limit as size, not clipboard access failure', async () => {
+  h.exec.mockRejectedValue({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+  await expect(readLinuxClipboardSnapshot()).rejects.toThrow('CLIPBOARD_TOO_LONG');
+});
 beforeEach(() => {
   h.exec.mockReset();
   h.spawn.mockReset();

@@ -35,8 +35,10 @@ import { _resetNativePopupTabsForTests, registerNativePopupTab } from '../native
 import {
   _resetStore,
   addTab,
+  closeTab,
   ensureHydrated,
   getBucket,
+  invalidateSessionCaches,
   setTabCloseInterceptor,
 } from '../../store';
 
@@ -567,18 +569,104 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     expect(browserWebviewPool.peek(tab.id)).toBeNull();
   });
 
-  it('focus restores registration of an existing browser tab', async () => {
+  it('focus leaves guest registration to ensure without materializing a page', async () => {
     const api = installFakeIpc();
     initRsbBrowserBridge();
     await ensureHydrated('owner');
     const tab = await addTab('owner', 'web-browser', { url: 'https://example.test' });
-    const entry = browserWebviewPool.acquire(tab.id);
-    entry.webview.getWebContentsId = () => 78;
     api.tabOpCb?.({ reqId: 'focus-existing', op: 'focus', sessionId: 'owner', tabId: tab.id });
     await vi.waitFor(() => expect(api.tabOpResult).toHaveBeenCalledWith(
       expect.objectContaining({ reqId: 'focus-existing', ok: true, tabId: tab.id }),
     ));
-    expect(api.report).toHaveBeenCalledWith({ sessionId: 'owner', tabId: tab.id, webContentsId: 78 });
+    expect(api.report).not.toHaveBeenCalled();
+    expect(browserWebviewPool.peek(tab.id)).toBeNull();
+  });
+
+  it.each(['close', 'handoff'] as const)('focus never recreates a guest after %s during setActive IPC', async (change) => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    await ensureHydrated('owner');
+    const tab = await addTab('owner', 'web-browser', { url: 'https://example.test' });
+    await addTab('owner', 'web-browser', { url: 'https://other.test' });
+    let finishActive!: () => void;
+    const setActive = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finishActive = resolve; }))
+      .mockResolvedValue({ ok: true });
+    (window as unknown as { electronAPI: { localDb?: unknown } }).electronAPI.localDb = {
+      rightSidebarTabs: { setActive, close: vi.fn(async () => ({ ok: true })) },
+    };
+    api.tabOpCb?.({ reqId: 'racing-focus', op: 'focus', sessionId: 'owner', tabId: tab.id });
+    await vi.waitFor(() => expect(setActive).toHaveBeenCalledTimes(1));
+    if (change === 'close') await closeTab('owner', tab.id);
+    else invalidateSessionCaches();
+    finishActive();
+    await vi.waitFor(() => expect(api.tabOpResult).toHaveBeenCalled());
+    expect(browserWebviewPool.peek(tab.id)).toBeNull();
+    expect(api.report).not.toHaveBeenCalled();
+    expect(getBucket('owner').tabs.some((item) => item.id === tab.id)).toBe(false);
+  });
+
+  it.each(['timeout', 'navigation', 'report', 'report-timeout'] as const)('open cleans up its new tab after %s failure, preserving existing tabs', async (failure) => {
+    vi.useFakeTimers();
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    await ensureHydrated('owner');
+    const existing = await addTab('owner', 'web-browser', { url: 'https://existing.test' });
+    if (failure === 'report') api.report.mockRejectedValue(new Error('registration rejected'));
+    if (failure === 'report-timeout') api.report.mockImplementation(() => new Promise(() => {}));
+    const realAcquire = browserWebviewPool.acquire.bind(browserWebviewPool);
+    const acquireSpy = vi.spyOn(browserWebviewPool, 'acquire').mockImplementation((tabId) => {
+      const entry = realAcquire(tabId);
+      entry.webview.getWebContentsId = () => {
+        if (failure === 'report' || failure === 'report-timeout') return 98;
+        throw new Error('not attached');
+      };
+      if (failure === 'navigation') {
+        vi.spyOn(entry.webview, 'setAttribute').mockImplementation(() => { throw new Error('src failed'); });
+      }
+      return entry;
+    });
+    try {
+      api.tabOpCb?.({ reqId: 'failed-open', op: 'open', sessionId: 'owner', url: 'https://new.test' });
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(api.tabOpResult).toHaveBeenCalledWith(expect.objectContaining({ reqId: 'failed-open', ok: false }));
+      expect(getBucket('owner').tabs.map((tab) => tab.id)).toEqual([existing.id]);
+      expect(getBucket('owner').activeTabId).toBe(existing.id);
+      expect(browserWebviewPool.inspectTabIds()).toEqual([]);
+    } finally {
+      acquireSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('open exposes the recoverable tabId when persistence prevents rollback', async () => {
+    const api = installFakeIpc();
+    const tabsIpc = {
+      list: vi.fn(async () => ({ tabs: [], activeTabId: null })),
+      upsert: vi.fn(async () => ({ ok: true })),
+      close: vi.fn(async () => { throw new Error('database unavailable'); }),
+      setActive: vi.fn(async () => ({ ok: true })),
+    };
+    (window as unknown as { electronAPI: { localDb?: unknown } }).electronAPI.localDb = { rightSidebarTabs: tabsIpc };
+    api.report.mockRejectedValue(new Error('registration rejected'));
+    initRsbBrowserBridge();
+    const realAcquire = browserWebviewPool.acquire.bind(browserWebviewPool);
+    const acquireSpy = vi.spyOn(browserWebviewPool, 'acquire').mockImplementation((tabId) => {
+      const entry = realAcquire(tabId);
+      entry.webview.getWebContentsId = () => 99;
+      return entry;
+    });
+    try {
+      api.tabOpCb?.({ reqId: 'rollback-failed', op: 'open', sessionId: 'owner' });
+      await vi.waitFor(() => expect(api.tabOpResult).toHaveBeenCalledWith(expect.objectContaining({
+        reqId: 'rollback-failed', ok: false, error: expect.stringContaining('cleanup failed'),
+      })));
+      const remaining = getBucket('owner').tabs;
+      expect(remaining).toHaveLength(1);
+      expect(api.tabOpResult.mock.calls[0][0].error).toContain(remaining[0].id);
+      expect(tabsIpc.close).toHaveBeenCalledWith({ id: remaining[0].id });
+    } finally {
+      acquireSpy.mockRestore();
+    }
   });
 
   it('ensure cannot restore a tab belonging to another session', async () => {

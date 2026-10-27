@@ -76,6 +76,16 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
   const installer = path.resolve(__dirname, '../../../resources/linux/install-user.sh');
   const packages = new Map<string, { file: string; digest: string; size: number }>();
   const execFileAsync = promisify(execFile);
+  // These two short-name members need only the standard 60-byte ar header and
+  // even-byte padding. Build the fixture in-process instead of launching six ar
+  // children; the installer still parses and extracts the real archive via bsdtar.
+  function arMember(name: string, data: Buffer): Buffer {
+    const header = [
+      `${name}/`.padEnd(16), '0'.padEnd(12), '0'.padEnd(6), '0'.padEnd(6),
+      '100644'.padEnd(8), String(data.length).padEnd(10), '`\n',
+    ].join('');
+    return Buffer.concat([Buffer.from(header, 'ascii'), data, Buffer.from(data.length % 2 ? '\n' : '')]);
+  }
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-install-test-'));
     prefix = path.join(root, 'home', "Cindy's space $literal");
@@ -94,10 +104,13 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       stageLinuxBuildInfo(appDir, 'linux', process.arch, version, 'global');
       if (version === '1.0.3') fs.symlinkSync('/etc/passwd', path.join(appDir, 'escape'));
       await execFileAsync('bsdtar', ['-czf', 'data.tar.gz', './usr'], { cwd: pkg, timeout: 15_000 });
-      fs.writeFileSync(path.join(pkg, 'debian-binary'), '2.0\n');
       const file = path.join(pkg, 'package.deb');
-      await execFileAsync('ar', ['rc', file, 'debian-binary', 'data.tar.gz'], { cwd: pkg, timeout: 15_000 });
-      const bytes = fs.readFileSync(file);
+      const bytes = Buffer.concat([
+        Buffer.from('!<arch>\n'),
+        arMember('debian-binary', Buffer.from('2.0\n')),
+        arMember('data.tar.gz', fs.readFileSync(path.join(pkg, 'data.tar.gz'))),
+      ]);
+      fs.writeFileSync(file, bytes);
       packages.set(version, { file, digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length });
     }));
     for (const result of results) {

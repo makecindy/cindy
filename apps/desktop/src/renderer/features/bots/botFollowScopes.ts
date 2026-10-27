@@ -14,7 +14,10 @@ const log = createLogger('BotFollowScopes');
 
 export interface BotFollowScope {
   botId: string;
+  /** Every task the Bot is responsible for: its own background tasks and the ones it took over. */
   sessionIds?: readonly string[];
+  /** Only the background tasks the Bot started itself; older hosts omit it. */
+  delegatedSessionIds?: readonly string[];
 }
 
 const EMPTY: readonly BotFollowScope[] = [];
@@ -105,33 +108,61 @@ function getSnapshot(): readonly BotFollowScope[] {
   return scopes;
 }
 
-/** 能被伙伴跟进的任务:本机、未归档、普通来源、不是伙伴自己的任务或 Orca worker。 */
-function isFollowableSession(session: Session): boolean {
-  if (session.status !== 'active') return false;
+/** 本机普通任务:不是远程任务、伙伴自己的主任务或 Orca worker。 */
+function isLocalPlainSession(session: Session): boolean {
   if (session.remoteHostId || session.deviceLinkDeviceId) return false;
   if (session.source === 'bot' || session.orcaRole === 'worker') return false;
   return isWorkbenchTaskSource(session.source);
 }
 
-/** 正在负责这件任务的伙伴(按名字排序;隐藏、停用的伙伴不显示)。 */
-export function useSessionFollowers(session: Session): BotProfile[] {
+/** 能被伙伴跟进的任务:本机、未归档的普通任务。 */
+function isFollowableSession(session: Session): boolean {
+  return session.status === 'active' && isLocalPlainSession(session);
+}
+
+/** 伙伴自己开的后台任务:归档后从工作台打开仍要标明归属并能回到该伙伴(cindy-bots-runtime.md 任务入口)。 */
+function isDelegatableSession(session: Session): boolean {
+  return (session.status === 'active' || session.status === 'archived') && isLocalPlainSession(session);
+}
+
+function useScopedBots(
+  session: Session,
+  eligible: (session: Session) => boolean,
+  ids: (scope: BotFollowScope) => readonly string[] | undefined,
+): BotProfile[] {
   const followScopes = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const profiles = useBotProfiles();
-  const followable = isFollowableSession(session);
+  const followable = eligible(session);
   const sessionId = session.id;
   return useMemo(() => {
     if (!followable || followScopes.length === 0) return [];
-    const following = new Set(
+    const matching = new Set(
       followScopes
-        .filter((scope) => Array.isArray(scope.sessionIds) && scope.sessionIds.includes(sessionId))
+        .filter((scope) => { const list = ids(scope); return Array.isArray(list) && list.includes(sessionId); })
         .map((scope) => scope.botId),
     );
-    if (following.size === 0) return [];
+    if (matching.size === 0) return [];
     return profiles
-      .filter((bot) => following.has(bot.id) && bot.enabled && !bot.hiddenAt
+      .filter((bot) => matching.has(bot.id) && bot.enabled && !bot.hiddenAt
         && (bot.status === undefined || bot.status === 'active'))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [followable, followScopes, profiles, sessionId]);
+  }, [followable, followScopes, ids, profiles, sessionId]);
+}
+
+const responsibleIds = (scope: BotFollowScope) => scope.sessionIds;
+const delegatedIds = (scope: BotFollowScope) => scope.delegatedSessionIds;
+
+/** 正在负责这件任务的伙伴(按名字排序;隐藏、停用的伙伴不显示)。 */
+export function useSessionFollowers(session: Session): BotProfile[] {
+  return useScopedBots(session, isFollowableSession, responsibleIds);
+}
+
+/**
+ * 这件任务是哪位伙伴自己开的后台任务(委派子任务);主人的任务被伙伴接手只算「在跟进」,
+ * 不算伙伴的后台任务。已归档的后台任务仍标归属。旧宿主没有这份投影时不猜。
+ */
+export function useSessionDelegatingBot(session: Session): BotProfile | null {
+  return useScopedBots(session, isDelegatableSession, delegatedIds)[0] ?? null;
 }
 
 export const __testing = {

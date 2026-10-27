@@ -13,7 +13,7 @@ import {
 
 const provider = (id: string, extra: Record<string, unknown> = {}) =>
   ({ id, name: id, models: {}, connected: true, remoteInvocationEnabled: true, ...extra }) as unknown as ProviderView;
-const summary = (owner: string, members: Array<{ kind: string; agentDeviceId: string | null; providerId: string }>) => ({
+const summary = (owner: string, members: Array<{ kind: string; agentDeviceId: string | null; providerId: string; hostDeviceId?: string }>) => ({
   group: {
     strategy: 'least',
     autoSwitch: true,
@@ -49,6 +49,33 @@ describe('collectMobileProviderGroups', () => {
     expect(groups.memberOf.get(providerGroupEntryKey('vm', 'anthropic-9z'))).toEqual({ deviceId: 'mini', providerId: 'anthropic' });
     expect(groups.sizes.get(providerGroupEntryKey('mini', 'anthropic'))).toBe(4);
     expect(groups.hidden.has(providerGroupEntryKey(null, 'account'))).toBe(false);
+  });
+
+  it('counts computers, not accounts, when one computer has several accounts in the group', () => {
+    const groups = collectMobileProviderGroups({
+      hostDeviceId: 'host',
+      hostProviders: [],
+      catalogs: [
+        {
+          deviceId: 'mini',
+          providers: [provider('anthropic', summary('anthropic', [
+            { kind: 'device', agentDeviceId: 'vm', providerId: 'anthropic-a' },
+            { kind: 'device', agentDeviceId: 'vm', providerId: 'anthropic-b' },
+            { kind: 'device', agentDeviceId: 'vm', providerId: 'anthropic-c' },
+            // 同一个人从同一台电脑分享的两个账号算一台；还没记下那台电脑的分享按分享各算一台。
+            { kind: 'share', agentDeviceId: 'share:s1', providerId: 'claude', hostDeviceId: 'kai-pc' },
+            { kind: 'share', agentDeviceId: 'share:s2', providerId: 'claude-b', hostDeviceId: 'kai-pc' },
+            { kind: 'share', agentDeviceId: 'share:s-special', providerId: 'claude-c', hostDeviceId: 'phone~1' },
+            { kind: 'share', agentDeviceId: 'share:s3', providerId: 'claude' },
+          ]))],
+        },
+      ],
+    });
+    // 组所在电脑 + vm(三个账号) + Kai 的那台(两个分享) + 旧的一个分享 = 4 台电脑；账号仍各自收进组那一项。
+    expect(groups.sizes.get(providerGroupEntryKey('mini', 'anthropic'))).toBe(5);
+    expect(groups.hidden.has(providerGroupEntryKey('share:s2', 'claude-b'))).toBe(true);
+    expect(['anthropic-a', 'anthropic-b', 'anthropic-c']
+      .every((id) => groups.hidden.has(providerGroupEntryKey('vm', id)))).toBe(true);
   });
 
   it('labels the controlled computer’s own group and shared groups, and keeps entries that carry a group', () => {

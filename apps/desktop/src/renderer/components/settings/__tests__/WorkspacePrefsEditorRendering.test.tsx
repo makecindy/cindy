@@ -47,7 +47,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
     modelId: string;
     fastModeConfigurable?: boolean;
-    onUnifiedSelect?: (selection: { engine: 'cc' | 'codex' | 'pi'; modelId: string; providerId: string; effort: string; fast: boolean; favoriteUid: null }) => void;
+    onUnifiedSelect?: (selection: { engine: 'cc' | 'codex' | 'pi'; modelId: string; providerId: string; effort: string; fast: boolean; favoriteUid: null; agentDevice?: { deviceId: string; name: string } }) => void;
+    remoteAgent?: { selectedDeviceId: string | null };
     effort: string;
     vendorKey: string;
     triggerVariant?: string;
@@ -75,10 +76,17 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // 未知模型的 trigger 文案由调用方给出;这里回放它对一个不存在的 id 的结果。
       data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
       data-fast-configurable={String(props.fastModeConfigurable)}
+      data-agent-device={props.remoteAgent?.selectedDeviceId ?? ''}
       onClick={() => props.onModelChange('gpt-5.5')}
       // 分段行点击(供应商, 模型, effort)原子选择 —— 回放 onProviderChange 的行为锁触发器。
       onKeyDown={() => props.onProviderChange?.('anthropic', 'claude-opus-5')}
     >
+      <button data-testid="shared-model" onClick={(event) => {
+        event.stopPropagation();
+        props.onUnifiedSelect?.({ engine: 'codex', modelId: 'shared-model', providerId: 'owner-provider',
+          effort: 'high', fast: false, favoriteUid: null,
+          agentDevice: { deviceId: 'share:owner', name: 'Owner' } });
+      }} />
       {(['cc', 'codex', 'pi'] as const).map((engine) => (
         <button key={engine} data-testid={`model-harness-${engine}`} disabled={props.disabled}
           onClick={(event) => { event.stopPropagation(); props.onUnifiedSelect?.({ engine,
@@ -119,6 +127,7 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
       permissionMode: 'bypassPermissions',
     }),
     providerSourceFor: () => null,
+    agentDeviceFor: () => null,
     applyProviderSource: vi.fn(),
     editable: true,
     pendingWs: null,
@@ -167,6 +176,15 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     expect(screen.getByTestId('model-selector').getAttribute('data-sources-enabled')).toBe('true');
   });
 
+  it('saves shared execution location with the workspace model and displays it after reload', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ agentDeviceFor: () => 'share:owner' })} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-agent-device')).toBe('share:owner');
+    fireEvent.click(screen.getByTestId('shared-model'));
+    expect(applyPatch).toHaveBeenCalledWith('cindy', {
+      agentKind: 'codex', model: 'shared-model', effort: 'high',
+    }, 'owner-provider', 'share:owner');
+  });
+
   // 双写串联(Greptile/codex review):model/effort 走远端 prefs patch,来源作为
   // applyPatch 第三参在远端成功后落本地 —— 不再各自 fire-and-forget(分裂态风险)。
   it('分段行选择:(模型, 来源)经 applyPatch 串联落库,不直接调 applyProviderSource', () => {
@@ -179,6 +197,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       'cindy',
       expect.objectContaining({ model: 'claude-opus-5', agentKind: 'claude-code' }),
       'anthropic',
+      null,
     );
     expect(applyProviderSource).not.toHaveBeenCalled();
   });
@@ -325,7 +344,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       agentKind: 'claude-code',
       model: 'claude-opus-4-8',
       effort: 'high',
-    }, 'xd');
+    }, 'xd', null);
   });
 
   it('未知/过期 agentKind 归一到默认 agent,分段控件不禁死', () => {
@@ -353,7 +372,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       agentKind: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
-    }, 'xd');
+    }, 'xd', null);
   });
 
   it('切换 Harness 原子写入选中的模型与档位,保留权限', () => {
@@ -365,7 +384,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       agentKind: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
-    }, 'xd');
+    }, 'xd', null);
   });
 
   // 当前 Harness 的能力失败不能阻止改选另一个 Harness；权限仍依赖当前能力。
@@ -379,7 +398,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       agentKind: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
-    }, 'xd');
+    }, 'xd', null);
     expect(screen.getByTestId('model-selector').getAttribute('data-disabled')).toBe('false');
     expect(screen.getByTestId('permission-selector').getAttribute('data-disabled')).toBe('true');
   });

@@ -1,6 +1,7 @@
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName } from '@/lib/modelDisplayNames';
-import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
+import { Lock, SlidersHorizontal, Star } from 'lucide-react';
+import { SpeedIcon } from './SpeedIcon';
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
@@ -55,7 +56,10 @@ export function UnifiedModelRow({
   onPaymentRequired,
   sourceLabel,
 }: {
-  /** Supplied only in the combined All / Favorites views. */
+  /**
+   * Supplied only in the combined All / Favorites views; omitted = the local description.
+   * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
+   */
   sourceLabel?: string;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -98,7 +102,7 @@ export function UnifiedModelRow({
   };
   const tripleTitle = `${engineOption.label}${
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
-  }${configurationEnabled && config.fast ? ' · Fast' : ''}`;
+  }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
     ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
@@ -122,7 +126,8 @@ export function UnifiedModelRow({
     'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (interactionDisabled || paymentRequired) return;
+      // 不出配置浮层的行(远程收藏 / 最近行 / 设置类入口)不抢原生右键菜单。
+      if (interactionDisabled || paymentRequired || !customizable) return;
       event.preventDefault();
       openConfig(event.currentTarget);
     },
@@ -291,11 +296,10 @@ export function UnifiedModelRow({
               <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
             )}
             {configurationEnabled && config.fast && (
-              <Zap
+              <SpeedIcon
+                mode={config.fast}
                 size={11}
-                fill="currentColor"
                 className="shrink-0"
-                aria-label={t('newChat.modelSelector.meta.fastBadge')}
               />
             )}
           </span>
@@ -306,7 +310,7 @@ export function UnifiedModelRow({
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
-      {sourceLabel && entry.providerId !== 'xd' ? (
+      {sourceLabel ? (
         <ModelSourceDetails
           providerId={entry.providerId}
           label={providerAccountLabel(

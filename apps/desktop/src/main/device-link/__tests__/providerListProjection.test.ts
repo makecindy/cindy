@@ -58,13 +58,20 @@ describe('schedule binding list projection', () => {
     const full = [
       { ...fields, prompt: 'x'.repeat(5 * 1024 * 1024), script: { code: 'private' } },
       { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
     );
-    expect(projected).toEqual([fields, { ...fields, id: 'second', recurring: false }]);
+    expect(projected).toEqual([
+      fields,
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off' },
+    ]);
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });

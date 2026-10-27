@@ -1,0 +1,17 @@
+{
+  "head": "synthetic-head-a",
+  "checks": [
+    {
+      "id": "unit",
+      "head": "synthetic-head-a",
+      "status": "PASS"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "report",
+      "head": "synthetic-head-a",
+      "location": "synthetic://unit-report"
+    }
+  ]
+}

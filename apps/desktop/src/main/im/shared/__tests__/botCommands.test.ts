@@ -11,6 +11,7 @@ import {
   type BotCommandDefinition,
   buildPersonalBotCommandMenu,
   isBotCommandAvailableOnChannel,
+  isCompanionManagedCommand,
   OFFICIAL_BOT_COMMANDS,
   buildOfficialBotCommandMenus,
   parsePersonalBotCommand,
@@ -107,6 +108,15 @@ describe('bot command registry', () => {
       { command: 'ctr', description: 'translated:settings.telegramBot.commandMenu.ctr' },
       { command: 'exctr', description: 'translated:settings.telegramBot.commandMenu.exctr' },
     ]);
+  });
+
+  it('伙伴自有连接的菜单去掉交给伙伴后会被拒的 /project /model /permission', () => {
+    expect(
+      buildPersonalBotCommandMenu((key) => `translated:${key}`, { surface: 'companion' }).map((e) => e.command),
+    ).toEqual(['start', 'new', 'help', 'stop', 'session', 'settings', 'ctr', 'exctr']);
+    expect(isCompanionManagedCommand('/model')).toBe(true);
+    expect(isCompanionManagedCommand('permission')).toBe(true);
+    expect(isCompanionManagedCommand('/new')).toBe(false);
   });
 
   it('归一化隐藏别名 /exitctr, 同时保留原始拼写与参数', () => {

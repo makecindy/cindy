@@ -61,7 +61,13 @@ describe('PluginPublisherApi', () => {
       expect(opts.redactErrorDetails).toBe(true);
       expect(opts.logLabel).toBe('/api/publisher');
       expect(opts.headers).toEqual({ 'x-cindy-version': '1.2.3' });
-      expect(opts.allowedRedactedErrorCodes).toContain('PLUGIN_NAMESPACE_CLIENT_REQUIRED');
+      expect(opts.allowedRedactedErrorCodes).toEqual(expect.arrayContaining([
+        'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+        'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+        'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+        'PUBLISH_GHOST_ID_INVALID',
+        'PLUGIN_GHOST_ID_RESERVED',
+      ]));
     }
   });
 

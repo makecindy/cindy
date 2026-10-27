@@ -1,4 +1,4 @@
-import { historyViewLeaves, historyWorkSummaries, type HistoryMessageSource } from './historyView.js';
+import { historyViewLeaves, historyWorkSummaries, historyCacheReceiptFollows, isHistoryCacheReceipt, type HistoryMessageSource } from './historyView.js';
 import type { HistoryViewSnapshot } from './historyViewController.js';
 
 /** Live content may be newer, but its provisional timestamp must not replace known history order. */
@@ -45,11 +45,22 @@ export class HistoryViewHandoff<T extends HistoryMessageSource> {
     const available = historyViewLeaves(snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : []);
     for (const detail of snapshot.details.values()) available.push(...detail.messages);
     const history = new Map(available.map(row => [row.clientId, row]));
+    // IDs and createdAt do not change when a saved body is updated. A push
+    // received after this page's read began must remain visible even if that
+    // older page arrives later. Fresh reads also retire receipts from an earlier run.
+    const receivedAfterRead = (row: T) => historyCacheReceiptFollows(row.cacheReceipt, snapshot.readReceipt, snapshot.stale);
+    // Only a complete, authoritative empty read can prove an absent body was
+    // removed. Apply the same receipt evidence before either handoff is merged.
+    const cleared = snapshot.ready && !snapshot.stale && !snapshot.hasMore && snapshot.items.length === 0;
+    const supersededByEmptyRead = (row: T) => cleared
+      && isHistoryCacheReceipt(row.cacheReceipt) && isHistoryCacheReceipt(snapshot.readReceipt)
+      && !receivedAfterRead(row);
     const current = new Set(raw.map(row => row.clientId));
     for (const id of this.pending) if (!current.has(id)) this.pending.delete(id);
     for (const row of raw) {
       if (row.role !== 'assistant') continue;
-      if (this.streaming(row)) this.pending.add(row.clientId);
+      if (supersededByEmptyRead(row)) this.pending.delete(row.clientId);
+      else if (this.streaming(row)) this.pending.add(row.clientId);
       else if (history.has(row.clientId) && !this.streaming(history.get(row.clientId)!)) this.pending.delete(row.clientId);
     }
     const pending = new Set(this.pending);
@@ -58,12 +69,28 @@ export class HistoryViewHandoff<T extends HistoryMessageSource> {
       const known = history.get(row.clientId);
       history.set(row.clientId, known ? liveContentWithHistoryOrder(row, known) : row);
     }
-    // A row leaves the tail once history covers it or the raw store drops it (delete/rewind).
-    for (const id of this.tail) if (!current.has(id) || history.has(id)) this.tail.delete(id);
+    const rawById = new Map(raw.map(row => [row.clientId, row]));
+    for (const id of this.tail) {
+      const row = rawById.get(id);
+      if (!row || supersededByEmptyRead(row) || (history.has(id) && !receivedAfterRead(row))) {
+        this.tail.delete(id);
+      }
+    }
     const endMs = snapshot.stale ? historyViewEndMs(snapshot) : 0;
     for (const row of raw) {
-      if ((row.role !== 'user' && row.role !== 'assistant') || history.has(row.clientId)) continue;
-      if (snapshot.stale && Date.parse(row.createdAt) > endMs) this.tail.add(row.clientId);
+      if (row.role !== 'user' && row.role !== 'assistant') continue;
+      const known = history.get(row.clientId);
+      if (known) {
+        if (receivedAfterRead(row)) {
+          this.tail.add(row.clientId);
+          history.set(row.clientId, liveContentWithHistoryOrder(row, known));
+        }
+        continue;
+      }
+      // Once receipt order is available, wall-clock fallback must not revive an
+      // already superseded body when this fresh view becomes stale on blur.
+      if (receivedAfterRead(row) || (!isHistoryCacheReceipt(row.cacheReceipt)
+        && snapshot.stale && Date.parse(row.createdAt) > endMs)) this.tail.add(row.clientId);
       if (this.tail.has(row.clientId)) history.set(row.clientId, row);
     }
     const tail = this.tail.size ? new Set(this.tail) : EMPTY;

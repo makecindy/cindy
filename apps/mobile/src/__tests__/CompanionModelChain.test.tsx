@@ -1,3 +1,4 @@
+vi.mock('@/session/useRemoteAgentCatalogs', () => ({ useRemoteAgentCatalogs: () => [] }));
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -184,5 +185,14 @@ it("passes the full account, engine, effort and fast route back from the unified
     effort: "high",
     fast: true,
   });
-  expect(select).toHaveBeenCalledWith(route);
+  expect(select).toHaveBeenCalledWith({ ...route, agentDeviceId: null });
+});
+
+it('keeps the selected shared location in the complete route', async () => {
+  const select = vi.fn(() => true);
+  await act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true, deviceId: 'remote-mac', onClose() {}, onClosed() {}, onSelect: select,
+  })));
+  await h.picker.unified.onSelect({ agent: 'codex', modelId: 'gpt-6', providerId: 'openai:second', effort: 'high', fast: true }, { deviceId: 'share:one' });
+  expect(select).toHaveBeenCalledWith({ ...route, agentDeviceId: 'share:one' });
 });

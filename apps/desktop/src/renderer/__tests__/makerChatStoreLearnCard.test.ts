@@ -123,6 +123,57 @@ describe('learn 状态卡 store 行为', () => {
   });
 });
 
+describe('voice call history projection', () => {
+  // Real history ingress: a handoff must have a distinct entry even when its
+  // call card is outside the loaded page. Prefix-only lookalikes stay ordinary.
+  it('labels a host-receipted voice handoff without rewriting its original or role', async () => {
+    const id = sid('voice-handoff-history');
+    const original = '请在后台整理计划，然后退出语音模式。';
+    const clientId = 'voice-task:call:u1';
+    transportMocks.listMessages.mockResolvedValueOnce([
+      {
+        id: 'handoff-row', clientId, sessionId: id, role: 'user', content: original,
+        agentMeta: { autoReviewUserText: {
+          kind: 'agent-request', request: { userText: original, sessionId: id, clientId: 'u1' },
+        } }, createdAt: 1000,
+      },
+      {
+        id: 'ordinary-row', clientId: 'voice-task:call:u2', sessionId: id,
+        role: 'user', content: original, createdAt: 2000,
+      },
+    ] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    const [handoff, ordinary] = makerChatStore.getSnapshot(id).messages;
+    expect(handoff).toMatchObject({
+      clientId, role: 'user', content: original,
+      systemCardType: 'voice-call-task', systemCardData: { text: original },
+    });
+    expect(ordinary.systemCardType).toBeUndefined();
+  });
+
+  it('restores the call as one expandable card without projecting turns as main messages', async () => {
+    const id = sid('voice-call-history');
+    const record = {
+      version: 1, callId: 'call', startedAt: 1000, endedAt: 2000, handoffs: [],
+      turns: [
+        { id: 'voice-input', role: 'user', text: 'Call-only context.', createdAt: 1100, complete: true },
+        { id: 'voice-reply', role: 'assistant', text: 'Hello.', createdAt: 1200, complete: true },
+      ],
+    };
+    transportMocks.listMessages.mockResolvedValueOnce([{
+      id: 'call-row', clientId: 'voice-call:call', sessionId: id,
+      role: 'assistant', content: '', agentMeta: { voiceCall: record }, createdAt: 1000,
+    }] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    expect(makerChatStore.getSnapshot(id).messages).toMatchObject([{
+      clientId: 'voice-call:call', content: '', systemCardType: 'voice-call',
+      systemCardData: { record },
+    }]);
+  });
+});
+
 describe('agent switch 历史投影', () => {
   it('保留 resumed=true,让桌面端显示已续接原生会话', async () => {
     const id = sid('agent-switch-resumed');
@@ -214,6 +265,52 @@ describe('teammate result attachment history', () => {
 });
 
 // Both initial history and live message insertion use the same stored-row projection.
+describe('MCP App read-only history', () => {
+  it.each(['owner', 'guest', 'pending'])(
+    'keeps public text and titles for %s card history',
+    async (audience) => {
+      const id = sid('mcp-app-history');
+      const text = audience === 'pending' ? '' : 'Saved form result';
+      transportMocks.listMessages.mockResolvedValueOnce([
+        {
+          id: 'app-row',
+          clientId: 'app-card',
+          sessionId: id,
+          role: 'assistant',
+          createdAt: Date.now(),
+          content:
+            audience !== 'owner'
+              ? { mcpAppHistory: { version: 1, title: 'Saved form', text } }
+              : {
+                  mcpApp: {
+                    version: 1,
+                    serverId: 'example',
+                    serverRevision: 'revision',
+                    resourceUri: 'ui://example/app',
+                    tool: { name: 'draft', title: 'Saved form', inputSchema: { type: 'object' } },
+                    arguments: {},
+                    result: {
+                      content: [{ type: 'text', text: 'Saved form result' }],
+                      _meta: { private: 'view-only' },
+                    },
+                  },
+                },
+          agentMeta: { mcpApp: true },
+        },
+      ] as never);
+      makerChatStore.ensureInitialMessages(id);
+      await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+      expect(makerChatStore.getSnapshot(id).messages[0]).toMatchObject({
+        systemCardType: 'mcp-app',
+        systemCardData: { title: 'Saved form', fallbackText: text },
+      });
+      expect(
+        JSON.stringify(makerChatStore.getSnapshot(id).messages[0].systemCardData),
+      ).not.toContain('view-only');
+    },
+  );
+});
+
 describe('private group reply source', () => {
   it('keeps group provenance on assistant rows without relabeling normal private replies', async () => {
     const id = sid('group-private-source');

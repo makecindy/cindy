@@ -42,6 +42,13 @@ describe('parseRecipes', () => {
     expect(() => parseRecipes({ a: bad })).toThrow();
   });
 
+  // #6822: the production parser must reject result checks that can verify an
+  // absent result. Existing shape tests did not cover expectation semantics (unit).
+  it.each([{ minCount: 0 }, {}])('rejects a vacuous result expectation: %j', (expectation) => {
+    expect(() => parseRecipes({ a: JSON.stringify({ id: 'empty-check',
+      steps: [{ action: 'evaluate', fn: '() => undefined', expect: expectation }] }) })).toThrow(/expect/);
+  });
+
   it('throws on duplicate recipe id', () => {
     expect(() =>
       parseRecipes({ a: VALID_RECIPE, b: VALID_RECIPE }),

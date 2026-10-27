@@ -9,12 +9,6 @@
   filter: invert(1);
 }
 
-/**
- * Shared Plugin / Skill catalog chrome. Catalog pages have no enter-rise
- * animation; selection and overflow still ease.
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
- */
-
 /* Keep disclosure content mounted so collapse can ease out instead of jumping. */
 .plugin-installed-overflow {
   display: grid;
@@ -97,9 +91,26 @@
   }
 }
 
-@container plugin-detail (max-width: 420px) {
+@container plugin-detail (max-width: 520px) {
+  .plugin-detail-frame .plugin-detail-heading {
+    display: contents;
+  }
+
+  .plugin-detail-frame .plugin-detail-heading > h1 {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
   .plugin-detail-frame .plugin-detail-metadata {
-    display: none;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 0;
   }
 }
 

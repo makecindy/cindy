@@ -119,6 +119,7 @@ describe('desktop auth IPC validation', () => {
 
   it('accepts each non-browser action shape', () => {
     expect(parseDesktopLoginAction({ type: 'reset' })).toEqual({ type: 'reset' });
+    expect(parseDesktopLoginAction({ type: 'back', token: 'ignored' })).toEqual({ type: 'back' });
     expect(parseDesktopLoginAction({ type: 'cancel-browser' })).toEqual({
       type: 'cancel-browser',
     });

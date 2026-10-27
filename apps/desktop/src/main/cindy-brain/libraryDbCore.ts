@@ -38,7 +38,7 @@ export interface SqliteDatabase {
   backup(destination: string): Promise<void>;
   transaction<T>(fn: () => T): () => T;
 }
-export type SqliteDatabaseConstructor = new (path: string, options?: { readonly?: boolean }) => SqliteDatabase;
+export type SqliteDatabaseConstructor = new (path: string, options?: { readonly?: boolean; nativeBinding?: string }) => SqliteDatabase;
 
 /** 语句门白名单(见文件头第 2 条论证)。 */
 const ALLOWED_FIRST_WORDS = new Set([
@@ -141,6 +141,8 @@ export type LibraryDbResult<T> = { ok: true } & T | { ok: false; code: LibraryDb
  */
 export function createLibraryDbCore(opts: {
   DatabaseCtor: SqliteDatabaseConstructor;
+  /** Trusted host startup configuration, never part of plugin SQL requests. */
+  nativeBinding?: string;
   onLog?: (msg: string, meta?: Record<string, unknown>) => void;
 }) {
   const open: OpenDatabases = {};
@@ -151,7 +153,7 @@ export function createLibraryDbCore(opts: {
 
   async function openDatabase(dbPath: string): Promise<LibraryDbResult<{ opened: true }>> {
     if (open[dbPath]) return { ok: true, opened: true };
-    const db = new opts.DatabaseCtor(dbPath);
+    const db = new opts.DatabaseCtor(dbPath, opts.nativeBinding ? { nativeBinding: opts.nativeBinding } : undefined);
     // 与主库同水位的关键 pragma;cache/mmap 收小(per-plugin 多库并存)。
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');

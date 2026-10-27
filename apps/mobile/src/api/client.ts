@@ -1,10 +1,13 @@
 import { i18n } from '@/i18n';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 export class ApiError extends Error {
   constructor(
     public readonly code: string,
     public readonly status: number,
     message: string,
+    /** The server's structured `error.details`, when it sent an object. */
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -21,6 +24,10 @@ export interface ApiFetchOptions {
   cache?: 'no-store';
   /** Reject stale account-scoped work before transport or auth side effects. */
   assertCurrent?: () => void;
+  /** Extra request headers (e.g. Chat Server's X-Chat-Actor); never overrides auth or content type. */
+  headers?: Record<string, string>;
+  /** Cancels this request, including body parsing, without terminating account auth. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_API_TIMEOUT_MS = 20_000;
@@ -46,7 +53,8 @@ export async function apiFetchRaw<T>(
   opts: ApiFetchOptions,
 ): Promise<T> {
   opts.assertCurrent?.();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (opts.signal?.aborted) throw requestAborted();
+  const headers: Record<string, string> = { ...opts.headers, 'Content-Type': 'application/json' };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.cache === 'no-store') {
     // Also tell native HTTP caches not to reuse or store short-lived responses.
@@ -59,38 +67,56 @@ export async function apiFetchRaw<T>(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const controller = timeoutMs > 0 ? new AbortController() : null;
+  let cancelRequest: (() => void) | undefined;
   try {
+    const cancellation = opts.signal ? new Promise<never>((_resolve, reject) => {
+      cancelRequest = () => { controller?.abort(); reject(requestAborted()); };
+      opts.signal!.addEventListener('abort', cancelRequest, { once: true });
+    }) : null;
     const requestPromise = (async (): Promise<{ response: Response; data: unknown }> => {
       const nextResponse = await fetch(opts.baseUrl + path, {
         method: opts.method ?? 'GET',
         headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-        signal: controller?.signal,
+        signal: controller?.signal ?? opts.signal,
         ...(opts.cache ? { cache: opts.cache } : {}),
       });
       let nextData: unknown = null;
       try {
         nextData = await nextResponse.json();
-      } catch {
+      } catch (error) {
+        if (opts.signal?.aborted) throw requestAborted();
+        if (nextResponse.status === 204 || nextResponse.status === 205) {
+          return { response: nextResponse, data: null };
+        }
+        // JSON SyntaxError messages/stacks can include response contents.
+        mobileDebugLog('warn', 'network', 'response read failed', { status: nextResponse.status },
+          error instanceof SyntaxError ? 'SyntaxError' : error);
+        if (nextResponse.ok) {
+          throw new ApiError('INVALID_RESPONSE', nextResponse.status, i18n.t('apiErrors.requestFailed'));
+        }
         nextData = null;
       }
       return { response: nextResponse, data: nextData };
     })();
-    const result = timeoutMs > 0
-      ? await Promise.race([
-        requestPromise,
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            void requestPromise.catch(() => undefined);
-            reject(new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout')));
-            controller?.abort();
-          }, timeoutMs);
-        }),
-      ])
-      : await requestPromise;
+    const pending = [requestPromise];
+    if (cancellation) pending.push(cancellation);
+    if (timeoutMs > 0) pending.push(new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        void requestPromise.catch(() => undefined);
+        reject(new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout')));
+        controller?.abort();
+      }, timeoutMs);
+    }));
+    const result = await Promise.race(pending);
     response = result.response;
     data = result.data;
   } catch (err) {
+    // Explicit cancellation is not a timeout, network failure, or auth boundary.
+    if (opts.signal?.aborted) throw requestAborted();
+    if (!(err instanceof ApiError) || err.code === 'REQUEST_TIMEOUT') {
+      mobileDebugLog('warn', 'network', 'request failed', err);
+    }
     if (err instanceof ApiError) throw err;
     if (isAbortError(err)) {
       throw new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout'));
@@ -107,10 +133,12 @@ export async function apiFetchRaw<T>(
     throw err;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+    if (cancelRequest) opts.signal?.removeEventListener('abort', cancelRequest);
   }
 
   // A late old-account response must not terminate the newly active account.
   opts.assertCurrent?.();
+  if (opts.signal?.aborted) throw requestAborted();
   if (!response.ok) {
     const error = readError(data);
     const code = error.code ?? `HTTP_${response.status}`;
@@ -121,17 +149,21 @@ export async function apiFetchRaw<T>(
         // Preserve the original typed API error even if local cleanup fails.
       }
     }
-    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'));
+    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'), error.details);
   }
 
   return data as T;
+}
+
+function requestAborted(): Error {
+  return Object.assign(new Error('Request cancelled'), { name: 'AbortError' });
 }
 
 function isAbortError(err: unknown): boolean {
   return !!err && typeof err === 'object' && 'name' in err && err.name === 'AbortError';
 }
 
-function readError(data: unknown): { code?: string; message?: string } {
+function readError(data: unknown): { code?: string; message?: string; details?: Record<string, unknown> } {
   if (!data || typeof data !== 'object') return {};
   const payload = data as Record<string, unknown>;
   const nested = payload.error;
@@ -141,5 +173,7 @@ function readError(data: unknown): { code?: string; message?: string } {
   return {
     code: typeof record.code === 'string' ? record.code : undefined,
     message: typeof record.message === 'string' ? record.message : undefined,
+    details: record.details && typeof record.details === 'object' && !Array.isArray(record.details)
+      ? record.details as Record<string, unknown> : undefined,
   };
 }

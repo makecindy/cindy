@@ -29,6 +29,7 @@ import {
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
 import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
 export interface InstallTargetSkill {
@@ -92,13 +93,14 @@ export function InstallTargetPicker({
   skill,
   onClose,
   onInstallComplete,
-  runAction = runMarketInstall,
+  runAction,
   titleKey = 'skillhub.installPicker.title',
   subtitleKey = 'skillhub.installPicker.subtitle',
   successToastKey = 'skillhub.installPicker.installSuccess',
   failedToastKey = 'skillhub.installPicker.installFailed',
 }: InstallTargetPickerProps) {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
   const [installing, setInstalling] = useState(false);
@@ -109,7 +111,22 @@ export function InstallTargetPicker({
   const [installedPaths, setInstalledPaths] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
+    if (open && target) void target.refresh();
+  }, [open, target?.refresh]);
+
+  useEffect(() => {
     if (!open || !skill) return;
+    setInstalledPaths(new Map());
+    if (target) {
+      const paths = new Map<string, string>();
+      for (const local of target.state.skills) {
+        if (local.registrySkillName !== skill.name || !local.registryEntry
+          || (local.registryEntry.catalogScope ?? 'market') !== (skill.catalogScope ?? 'market')) continue;
+        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name)), local.registryEntry.version);
+      }
+      setInstalledPaths(paths);
+      return;
+    }
     let cancelled = false;
     void window.electronAPI.skillhub.registry
       .getByName({ name: skill.name })
@@ -125,7 +142,7 @@ export function InstallTargetPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, skill?.name]);
+  }, [open, skill?.name, skill?.catalogScope, target?.state.skills]);
 
   useEffect(() => {
     if (!open) {
@@ -166,7 +183,15 @@ export function InstallTargetPicker({
   const performInstall = async (installPath?: string) => {
     setBannerError(null);
     try {
-      const res = await runAction({ name: skill.name, installPath, catalogScope: skill.catalogScope });
+      const execute = runAction ?? (target ? async (): Promise<InstallTargetActionResult> => {
+        const project = installPath ? target.projects.find((entry) => joinSkillInstallPath(entry.projectRoot, skill.name) === installPath)?.target : undefined;
+        if ((installPath && !project) || !target.writable) return { success: false, errorCode: 'UNAVAILABLE' };
+        const result = await target.mutate('install', undefined, { name: skill.name,
+          catalogScope: skill.catalogScope, latestVersion: String(skill.latestVersion ?? '') }, project);
+        if (!target.current()) return { success: false, errorCode: 'CANCELLED' };
+        return result.phase === 'succeeded' ? { success: true } : { success: false, errorCode: result.phase === 'cancelled' ? 'CANCELLED' : 'UNAVAILABLE' };
+      } : runMarketInstall);
+      const res = await execute({ name: skill.name, installPath, catalogScope: skill.catalogScope });
       if (res.success) {
         toast.success(
           t(successToastKey, {
@@ -189,7 +214,7 @@ export function InstallTargetPicker({
           cancelText: t('skillhub.installPicker.conflictDialog.cancel'),
         });
         if (!ok) return;
-        const forced = await runAction({ name: skill.name, installPath, force: true, catalogScope: skill.catalogScope });
+        const forced = await execute({ name: skill.name, installPath, force: true, catalogScope: skill.catalogScope });
         if (forced.success) {
           toast.success(
             t(successToastKey, {
@@ -221,7 +246,7 @@ export function InstallTargetPicker({
   };
 
   const handleOtherDirectory = async () => {
-    if (!beginInstallBusy()) return;
+    if (target || !beginInstallBusy()) return;
     try {
       const r = await window.electronAPI.dialog.showOpenDirectory({});
       if (!r.success || !r.path) return;
@@ -293,7 +318,7 @@ export function InstallTargetPicker({
             onClick={() => {
               void handleOtherDirectory();
             }}
-            disabled={installing}
+            disabled={installing || !!target}
           >
             <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             {t('skillhub.installPicker.otherDirectory')}
@@ -309,7 +334,7 @@ export function InstallTargetPicker({
         <div className="flex flex-col" style={{ padding: '4px 12px 12px 12px' }}>
           <button
             type="button"
-            disabled={installing || !!globalInstalledVersion}
+            disabled={installing || !!globalInstalledVersion || (!!target && !target.writable)}
             onClick={() => {
               void handleInstall(undefined);
             }}
@@ -330,7 +355,7 @@ export function InstallTargetPicker({
             </div>
             <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
               <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}>
-                {t('skillhub.installPicker.global')}
+                {t('skillhub.installPicker.global')}{target ? ` · ${target.name}` : ''}
               </span>
               <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-11)' }}>
                 ~/.agents/skills/{skill.name}
@@ -388,7 +413,7 @@ export function InstallTargetPicker({
                   <button
                     key={p.projectRoot}
                     type="button"
-                    disabled={installing || isRowInstalled}
+                    disabled={installing || isRowInstalled || (!!target && !target.writable)}
                     onClick={() => {
                       void handleInstall(installPath);
                     }}
@@ -415,7 +440,7 @@ export function InstallTargetPicker({
                         {p.displayName}
                       </span>
                       <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-11)' }}>
-                        {installPath}
+                        {target ? target.name : installPath}
                       </span>
                     </div>
                     {isRowInstalled ? (

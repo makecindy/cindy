@@ -1,6 +1,18 @@
 import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
+import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
-export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'missing';
+/**
+ * ordinary / visible: listed tasks; background: owner-readable tasks omitted from
+ * default lists (including hidden companion and plugin tasks). hidden: denied by
+ * the current owner scope; missing: no record. Account/device authorization is upstream.
+ */
+export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'background' | 'missing';
+
+/** 列表类 channel:插件后台隐藏任务不出现在这些结果里(与本机任务列表同口径)。 */
+const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
+  'local-db:sessions:list',
+  'maker:list-active',
+]);
 type Lookup = (sessionId: string, kind?: 'session' | 'bot') => Promise<RemoteBotSessionAccess>;
 export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: 'session' | 'bot') => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
 let lookup: Lookup | null = null;
@@ -9,6 +21,65 @@ let batchLookup: RemoteBotSessionBatchLookup | null = null;
 export function setRemoteBotSessionLookup(value: Lookup | null, batch: RemoteBotSessionBatchLookup | null = null): void {
   lookup = value;
   batchLookup = value ? batch : null;
+  // Joined requests keep the lookup they were issued against; new ones use the new one.
+  pendingPushAccess.clear();
+}
+
+/**
+ * Push 授权的同轮合并读取(DataLoader 形状,不是缓存)。
+ *
+ * 同一次同步分发(多控制端扇出、一次批量 flush、一轮离线回放)里的 push 在调用时登记
+ * 要查的任务 ID,本轮微任务结束时合并成一次批量读取;读取发出后的登记进入下一轮。
+ * 因此每条 push 的授权读取都在它到达 wire 边界之后才发出,结果只交给已登记的请求,
+ * 读取结算后不保留——隐藏/删除/换账号之后到达的 push 必然重新读库,与逐条读取同样新鲜。
+ * 按 DB 准入等级分轮,后台读不会搭上交互读的轮次(反之亦然)。
+ */
+interface PushAccessRound {
+  readonly ids: Set<string>;
+  /** Settles per ID so an injected single lookup failure stays scoped to that ID. */
+  readonly result: Promise<ReadonlyMap<string, Promise<RemoteBotSessionAccess>>>;
+}
+const pendingPushAccess = new Map<DbRpcAdmissionClass, PushAccessRound>();
+
+function readSessionAccess(
+  single: Lookup, batch: RemoteBotSessionBatchLookup | null, ids: readonly string[],
+): ReadonlyMap<string, Promise<RemoteBotSessionAccess>> {
+  const access = new Map<string, Promise<RemoteBotSessionAccess>>();
+  if (batch) {
+    const rows = batch(ids, 'session');
+    for (const id of ids) access.set(id, rows.then((map) => map.get(id) ?? 'hidden'));
+  } else {
+    // Injected single-lookup consumers keep the previous one-at-a-time read shape.
+    let previous: Promise<unknown> = Promise.resolve();
+    for (const id of ids) {
+      const current = previous.then(() => single(id, 'session'));
+      access.set(id, current);
+      previous = current.catch(() => undefined);
+    }
+  }
+  for (const pending of access.values()) pending.catch(() => undefined);
+  return access;
+}
+
+function readPushSessionAccess(single: Lookup, ids: readonly string[]): Promise<RemoteBotSessionAccess[]> {
+  const admission = currentDbRpcAdmissionClass();
+  let round = pendingPushAccess.get(admission);
+  if (!round) {
+    const roundIds = new Set<string>();
+    const activeBatch = batchLookup;
+    let start!: () => void;
+    const result = new Promise<void>((resolve) => { start = resolve; })
+      .then(() => readSessionAccess(single, activeBatch, [...roundIds]));
+    const created: PushAccessRound = { ids: roundIds, result };
+    round = created;
+    pendingPushAccess.set(admission, created);
+    queueMicrotask(() => {
+      if (pendingPushAccess.get(admission) === created) pendingPushAccess.delete(admission);
+      start();
+    });
+  }
+  for (const id of ids) round.ids.add(id);
+  return round.result.then((access) => Promise.all(ids.map((id) => access.get(id) ?? 'hidden')));
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -107,6 +178,26 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
+  if (channel === 'local-db:conversations:search') {
+    if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+    const row = record(value);
+    if (!row || !Array.isArray(row.results)) return value;
+    // Recheck exact records at delivery; a companion's sidebar visibility is not
+    // permission to read this owner's task. The device/account boundary is upstream.
+    const ids = [...new Set(row.results.flatMap(item => {
+      const id = record(record(item)?.session)?.id;
+      return typeof id === 'string' ? [id] : [];
+    }))];
+    const access = batchLookup
+      ? await batchLookup(ids, 'session')
+      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'session')] as const)));
+    const results = row.results.filter(item => {
+      const id = record(record(item)?.session)?.id;
+      const status = typeof id === 'string' ? access.get(id) : undefined;
+      return status === 'ordinary' || status === 'visible' || status === 'background';
+    });
+    return { ...row, results };
+  }
   if (channel === DL_HISTORY_QUERY_CHANNEL) {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     // Rechecked on normal, cached and queued delivery by the existing dispatch path.
@@ -127,7 +218,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       for (const id of ids) access.set(id, await lookup(id, 'session'));
     }
     const visible = (id: unknown) => typeof id === 'string'
-      && (access.get(id) === 'ordinary' || access.get(id) === 'visible');
+      && (access.get(id) === 'ordinary' || access.get(id) === 'visible' || access.get(id) === 'background');
     // The page and its foreign references share one fresh, source-owned lookup.
     // Missing or hidden page members invalidate pagination; optional parents
     // are simply omitted, including on cached/queued delivery after a hide.
@@ -161,6 +252,9 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   }
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
+  const excludeBackground = BACKGROUND_EXCLUDED_LIST_CHANNELS.has(channel);
+  const excluded = (access: RemoteBotSessionAccess) =>
+    access === 'hidden' || (excludeBackground && access === 'background');
   const identity = (item: unknown) => {
     const row = record(item);
     const ref = record(row?.ref);
@@ -172,7 +266,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   const project = async (item: unknown) => {
     const key = identity(item);
     if (!key) return item;
-    return await activeLookup(key.id, key.kind) === 'hidden' ? null : item;
+    return excluded(await activeLookup(key.id, key.kind)) ? null : item;
   };
   if (Array.isArray(value)) {
     const identities = value.map(identity);
@@ -191,7 +285,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     }
     return value.filter((item, index) => {
       const key = identities[index];
-      return item !== null && (!key || (accessByKind.get(key.kind)?.get(key.id) ?? 'hidden') !== 'hidden');
+      return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
     });
   }
   const row = record(value);
@@ -205,15 +299,20 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   return projected;
 }
 
-/** Called at delivery, including buffered batches and offline replay. */
+/**
+ * Called at delivery, including buffered batches and offline replay. The read is
+ * shared only with pushes reaching the wire boundary in the same pass (see
+ * readPushSessionAccess); it is never reused once issued.
+ */
 export async function projectRemoteBotPush(value: unknown, channel = ''): Promise<unknown | null> {
   if (!lookup) return value;
   const ids = sessionIds(value);
   const row = record(value);
   if (channel === 'local-db:sessions:created' && typeof row?.id === 'string') ids.push(row.id);
-  for (const id of new Set(ids)) {
-    const access = await lookup(id);
-    if (access === 'hidden' || (access === 'missing' && row?.source === 'bot')) return null;
+  const unique = [...new Set(ids)];
+  if (!unique.length) return value;
+  for (const status of await readPushSessionAccess(lookup, unique)) {
+    if (status === 'hidden' || (status === 'missing' && row?.source === 'bot')) return null;
   }
   return value;
 }

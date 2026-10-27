@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 
 import {
   beginInteractionRoute,
@@ -29,8 +29,8 @@ function ask(requestId: string): InteractionRequest {
 }
 
 function makeSession() {
-  let listener: InteractionHandler | null = null;
-  const setInteractionListener = vi.fn((next: InteractionHandler | null) => {
+  let listener: InteractionResolver | null = null;
+  const setInteractionListener = vi.fn((next: InteractionResolver | null) => {
     listener = next;
   });
   return {

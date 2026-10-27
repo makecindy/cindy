@@ -6,19 +6,21 @@
 import path from 'node:path';
 
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../shared/ghost.js';
-import { installedGhostPhysicalRelId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { installedGhostPhysicalRelId, installedGhostStoragePart, parsePluginInstallRelId } from '../../shared/pluginIdentity.js';
 import type { GhostManifest, InstalledGhost } from '../../shared/ghost.js';
 import { isResidentBrowserGhost } from './residentGhost.js';
 import {
+  canReclaimLegacyBareInstance,
   classifyNamespaceMigration,
   readNamespaceMigrationInstallOrigin,
   readNamespaceMigrationMarketRecord,
   type NamespaceClassification,
 } from './pluginNamespaceMigration.js';
 import { buildUnconfirmedConfirmationEvidence } from './pluginInstanceConfirmation.js';
-import type { InstanceConfirmationEvidence, PluginInstanceRecord } from './pluginInstanceRegistry.js';
+import { marketRowMatchesUnconfirmedInstance, type InstanceConfirmationEvidence, type PluginInstanceRecord } from './pluginInstanceRegistry.js';
 import {
   hasVerifiedDisconnectedOrganizationInstallation,
+  hasVerifiedLegacyMarketInstallation,
   installedMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
@@ -93,6 +95,7 @@ export interface NamespaceMigrationHost {
   isNamespaceMigrationBusy(ghostId: string): boolean;
   preparePendingResidentForMigration(ghostId: string): Promise<boolean>;
   readUnconfirmedConfirmationEvidence(record: PluginInstanceRecord): InstanceConfirmationEvidence;
+  canReclaimLegacyBareInstance(input: { ghostId: string; namespace: string; pluginId: string }): boolean;
   rememberOfflineResident(ghostId: string): void;
   forgetOfflineResident(ghostId: string): void;
   clearPendingResidentMigrationRetry(ghostId: string): void;
@@ -118,6 +121,14 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
       offlineResidentScopeKey = scopeKey;
     }
     return ownedResidentIds;
+  }
+
+  function currentOrganizationFacts(): { organizationId: string; orgSlug: string | null } | null {
+    const state = deps.getAuthState();
+    const user = state.isAuthenticated ? state.user : null;
+    return user?.membershipKind === 'org' && user.orgId
+      ? { organizationId: user.orgId, orgSlug: user.orgSlug ?? null }
+      : null;
   }
 
   function namespaceMigrationMarketRecordsForGhost(ghostId: string): PluginMarketInstallationRecord[] {
@@ -284,32 +295,59 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
       });
     },
     readUnconfirmedConfirmationEvidence(record: PluginInstanceRecord): InstanceConfirmationEvidence {
-      const state = deps.getAuthState();
-      const user = state.isAuthenticated ? state.user : null;
-      const currentOrganization = user?.membershipKind === 'org' && user.orgId
-        ? { organizationId: user.orgId, orgSlug: user.orgSlug ?? null }
-        : null;
-      let packageSha256: string | null = null;
+      const currentOrganization = currentOrganizationFacts();
+      let approved: ReturnType<NamespaceMigrationManager['approvedInstallEvidence']> = null;
       let forgeSelfTest = false;
       try {
-        packageSha256 = deps.getGhostManager().approvedInstallEvidence(record.contentRelId)?.packageSha256 ?? null;
+        approved = deps.getGhostManager().approvedInstallEvidence(record.contentRelId);
       } catch {
-        packageSha256 = null;
+        // Unreadable approval cannot supply recovery evidence.
       }
       try {
         forgeSelfTest = deps.getGhostManager().readApprovedInstallOriginStrict(record.contentRelId) === 'agent-forge';
       } catch {
         forgeSelfTest = false;
       }
-      let rows: Parameters<typeof buildUnconfirmedConfirmationEvidence>[0]['rows'];
+      let rows: PluginMarketInstallationRecord[] | undefined;
       try {
         rows = namespaceMigrationMarketRecordsForGhost(record.ghostId);
       } catch {
         rows = undefined;
       }
+      let legacyManifestVerified = false;
+      if (approved?.legacyMigrated && approved.packageSha256 === null && rows &&
+          parsePluginInstallRelId(record.contentRelId)) {
+        try {
+          const snapshot = deps.readInstalledGhostManifestSnapshot(
+            path.join(deps.brainRootDir(), ...record.contentRelId.split('/')), GHOST_INSTALL_MANIFEST_MAX_BYTES);
+          legacyManifestVerified = hasVerifiedLegacyMarketInstallation({
+            records: rows.filter((row) => row.installed &&
+              marketRowMatchesUnconfirmedInstance(row, record, currentOrganization)),
+            evidence: approved,
+            identity: snapshot.ok && snapshot.snapshot ? installedMarketManifestIdentity(snapshot.snapshot) : null,
+          });
+        } catch {
+          // Preserve the old installation until independent evidence is readable.
+        }
+      }
       return buildUnconfirmedConfirmationEvidence({
-        rows, record, currentOrganization, packageSha256, forgeSelfTest,
+        rows, record, currentOrganization, packageSha256: approved?.packageSha256 ?? null,
+        forgeSelfTest, legacyManifestVerified,
       });
+    },
+    canReclaimLegacyBareInstance({ ghostId, namespace, pluginId }): boolean {
+      try {
+        const lookup = deps.getPluginMarketLedger().lookupInstallationsForNamespaceMigration(ghostId);
+        if (lookup.kind !== 'found') return false;
+        return canReclaimLegacyBareInstance({
+          pluginId,
+          namespace,
+          records: lookup.records ?? [],
+          currentOrganization: currentOrganizationFacts(),
+        });
+      } catch {
+        return false;
+      }
     },
   };
 }

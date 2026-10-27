@@ -82,6 +82,23 @@ interface PendingResponse {
 export interface WecomIMOptions {
   clientFactory?: (options: WSClientOptions) => WSClient;
   now?: () => number;
+  /**
+   * 凭证在 host.secrets 里的键名前缀。缺省为空 = 设置页那份个人 bot 的历史键名;
+   * 伙伴自有连接各给一个前缀, 同一进程里多份实例互不读写对方的凭证。
+   */
+  secretKeyPrefix?: string;
+  /**
+   * 是否注册 `wecomBot:*` 设置卡 IPC 并广播状态(缺省 true)。通道名固定, 同进程
+   * 第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
+   */
+  ipc?: boolean;
+}
+
+export interface WecomConfigState {
+  status: IMStatus;
+  botId: string | null;
+  ownerUserId: string | null;
+  saveErrorStatus?: IMStatus;
 }
 
 /** Enterprise WeChat transport with durable chunked-text output. */
@@ -117,10 +134,10 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   }
 
   async init(): Promise<void> {
-    this.botId = this.host.secrets.read(BOT_ID_SECRET_KEY)?.trim() ?? "";
+    this.botId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY))?.trim() ?? "";
     this.ownerUserId =
-      this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? "";
-    const secret = this.host.secrets.read(BOT_SECRET_SECRET_KEY)?.trim() ?? "";
+      this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY))?.trim() ?? "";
+    const secret = this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY))?.trim() ?? "";
     if (!this.botId || !secret) {
       this.setStatus({ kind: "idle" });
       return;
@@ -139,13 +156,114 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.setStatus({ kind: "idle" });
   }
 
-  registerIpc(): void {
-    const state = (saveErrorStatus?: IMStatus) => ({
+  /** 本实例的 secret 键名(见 WecomIMOptions.secretKeyPrefix)。 */
+  private key(base: string): string {
+    return `${this.options.secretKeyPrefix ?? ""}${base}`;
+  }
+
+  getConfigState(saveErrorStatus?: IMStatus): WecomConfigState {
+    return {
       status: this.status,
       botId: this.botId || null,
       ownerUserId: this.ownerUserId || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
-    });
+    };
+  }
+
+  /** TOFU 认定的主人(首个私聊发言人); 还没人私聊过时为空串。 */
+  getOwnerUserId(): string {
+    return this.ownerUserId;
+  }
+
+  /**
+   * 直接认定主人(不等首个私聊): 宿主把设置页那份个人 bot 移给伙伴时带上原主人,
+   * 避免 TOFU 在迁移后换人。写不进安全存储时返回 false, 内存态不变。
+   */
+  presetOwnerUserId(ownerUserId: string): boolean {
+    const next = ownerUserId.trim();
+    if (!next) return false;
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), next)) return false;
+    this.ownerUserId = next;
+    return true;
+  }
+
+  /**
+   * 保存凭证并建连(设置卡与伙伴连接共用)。凭证写不进安全存储时回滚并返回
+   * saveErrorStatus; 建连是异步的, 返回时 status 通常还是 connecting, 调用方按
+   * onStatusChange 等终态。
+   */
+  async setConfig(payload: unknown): Promise<WecomConfigState> {
+    const record = isRecord(payload) ? payload : {};
+    const botId = typeof record.botId === "string" ? record.botId.trim() : "";
+    const secret = typeof record.secret === "string" ? record.secret.trim() : "";
+    if (!botId || !secret) {
+      const failed: IMStatus = {
+        kind: "error",
+        reason: "Bot ID 和 Secret 不能为空",
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+    if (!this.host.secrets.isAvailable()) {
+      const failed: IMStatus = {
+        kind: "error",
+        reason: SECRET_WRITE_FAILED_REASON,
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+
+    const previousBotId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY));
+    const previousSecret = this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY));
+    const previousOwner = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY));
+    const botChanged = Boolean(
+      previousBotId?.trim() && previousBotId.trim() !== botId,
+    );
+    const saved =
+      this.host.secrets.write(this.key(BOT_ID_SECRET_KEY), botId) &&
+      this.host.secrets.write(this.key(BOT_SECRET_SECRET_KEY), secret);
+    if (!saved) {
+      this.restoreSecret(this.key(BOT_ID_SECRET_KEY), previousBotId);
+      this.restoreSecret(this.key(BOT_SECRET_SECRET_KEY), previousSecret);
+      this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwner);
+      const failed: IMStatus = {
+        kind: "error",
+        reason: SECRET_WRITE_FAILED_REASON,
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+    if (botChanged) {
+      this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+      this.ownerUserId = "";
+    }
+    this.botId = botId;
+    this.connect(botId, secret);
+    return this.getConfigState();
+  }
+
+  /** 断开并清掉本实例的全部凭证(含 TOFU 主人)。 */
+  async clearCredentials(): Promise<WecomConfigState> {
+    this.generation += 1;
+    this.client?.disconnect();
+    this.client = null;
+    this.pendingFrames.clear();
+    this.pendingResponses.clear();
+    this.inboundTails.clear();
+    this.seenMessageIds.clear();
+    this.host.secrets.remove(this.key(BOT_ID_SECRET_KEY));
+    this.host.secrets.remove(this.key(BOT_SECRET_SECRET_KEY));
+    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+    this.botId = "";
+    this.ownerUserId = "";
+    this.setStatus({ kind: "idle" });
+    return this.getConfigState();
+  }
+
+  registerIpc(): void {
+    // 伙伴自有连接不注册设置卡 IPC: 通道名固定, 第二份实例会重复注册;
+    // 它们由宿主的伙伴连接 IPC 按连接 id 分发到实例方法。
+    if (this.options.ipc === false) return;
     const runAccountScoped = <T>(operation: () => Promise<T>): Promise<T> => {
       const accountScope = this.host.accountScope;
       if (!accountScope) return operation();
@@ -158,86 +276,21 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       return accountScope.run(token, operation);
     };
 
-    this.host.ipc.handle("wecomBot:get-status", () => state());
+    this.host.ipc.handle("wecomBot:get-status", () => this.getConfigState());
     this.host.ipc.handle("wecomBot:set-config", (payload) =>
-      runAccountScoped(async () => {
-        const record = isRecord(payload) ? payload : {};
-        const botId =
-          typeof record.botId === "string" ? record.botId.trim() : "";
-        const secret =
-          typeof record.secret === "string" ? record.secret.trim() : "";
-        if (!botId || !secret) {
-          const failed: IMStatus = {
-            kind: "error",
-            reason: "Bot ID 和 Secret 不能为空",
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-        if (!this.host.secrets.isAvailable()) {
-          const failed: IMStatus = {
-            kind: "error",
-            reason: SECRET_WRITE_FAILED_REASON,
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-
-        const previousBotId = this.host.secrets.read(BOT_ID_SECRET_KEY);
-        const previousSecret = this.host.secrets.read(BOT_SECRET_SECRET_KEY);
-        const previousOwner = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
-        const botChanged = Boolean(
-          previousBotId?.trim() && previousBotId.trim() !== botId,
-        );
-        const saved =
-          this.host.secrets.write(BOT_ID_SECRET_KEY, botId) &&
-          this.host.secrets.write(BOT_SECRET_SECRET_KEY, secret);
-        if (!saved) {
-          this.restoreSecret(BOT_ID_SECRET_KEY, previousBotId);
-          this.restoreSecret(BOT_SECRET_SECRET_KEY, previousSecret);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwner);
-          const failed: IMStatus = {
-            kind: "error",
-            reason: SECRET_WRITE_FAILED_REASON,
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-        if (botChanged) {
-          this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-          this.ownerUserId = "";
-        }
-        this.botId = botId;
-        this.connect(botId, secret);
-        return state();
-      }),
+      runAccountScoped(() => this.setConfig(payload)),
     );
     this.host.ipc.handle("wecomBot:reconnect", () =>
       runAccountScoped(async () => {
-        const botId = this.host.secrets.read(BOT_ID_SECRET_KEY)?.trim() ?? "";
+        const botId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY))?.trim() ?? "";
         const secret =
-          this.host.secrets.read(BOT_SECRET_SECRET_KEY)?.trim() ?? "";
+          this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY))?.trim() ?? "";
         if (botId && secret) this.connect(botId, secret);
-        return state();
+        return this.getConfigState();
       }),
     );
     this.host.ipc.handle("wecomBot:disconnect", () =>
-      runAccountScoped(async () => {
-        this.generation += 1;
-        this.client?.disconnect();
-        this.client = null;
-        this.pendingFrames.clear();
-        this.pendingResponses.clear();
-        this.inboundTails.clear();
-        this.seenMessageIds.clear();
-        this.host.secrets.remove(BOT_ID_SECRET_KEY);
-        this.host.secrets.remove(BOT_SECRET_SECRET_KEY);
-        this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-        this.botId = "";
-        this.ownerUserId = "";
-        this.setStatus({ kind: "idle" });
-        return state();
-      }),
+      runAccountScoped(() => this.clearCredentials()),
     );
   }
 
@@ -409,7 +462,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       .filter(Boolean)
       .join("\n\n");
     const chunks = chunkWecomMarkdown(
-      visibleText || (attachments.length > 0 ? "📎 附件如下" : "_(空回复)_"),
+      visibleText || (attachments.length > 0 ? "📎 附件如下" : ""),
     );
     await this.sendFinalChunks(output.userId, chunks);
     let failedAttachmentCount = 0;
@@ -471,6 +524,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     client.on("authenticated", () => {
       if (!this.isCurrent(client, generation)) return;
       serverConflict = false;
+      this.lastAuthFailureReason = "";
       this.setStatus({ kind: "connected", appId: botId });
     });
     client.on("reconnecting", () => {
@@ -862,16 +916,18 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     if (!sender) return false;
     if (this.ownerUserId) return sender === this.ownerUserId;
     if (body.chattype !== "single") return false;
-    if (!this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, sender)) {
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), sender)) {
       this.log.warn("failed to persist first owner binding");
       return false;
     }
     this.ownerUserId = sender;
-    this.host.ipc.broadcast("wecomBot:status-changed", {
-      status: this.status,
-      botId: this.botId,
-      ownerUserId: sender,
-    });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("wecomBot:status-changed", {
+        status: this.status,
+        botId: this.botId,
+        ownerUserId: sender,
+      });
+    }
     return true;
   }
 
@@ -1116,11 +1172,13 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   private setStatus(status: IMStatus): void {
     this.status = status;
     for (const handler of this.statusHandlers) handler(status);
-    this.host.ipc.broadcast("wecomBot:status-changed", {
-      status,
-      botId: this.botId || null,
-      ownerUserId: this.ownerUserId || null,
-    });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("wecomBot:status-changed", {
+        status,
+        botId: this.botId || null,
+        ownerUserId: this.ownerUserId || null,
+      });
+    }
   }
 
   private restoreSecret(key: string, previous: string | null): void {

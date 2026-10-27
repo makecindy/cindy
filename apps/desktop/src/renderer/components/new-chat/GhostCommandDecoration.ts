@@ -31,12 +31,20 @@ import {
   parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
 import type { GhostCommandSource } from '../../../shared/ghostComposer';
+import { listGhostsByCommand } from '../../../shared/pluginIdentity';
 
 const PLUGIN_KEY = new PluginKey<GhostCommandPluginState>('ghostCommandDecoration');
 const META_KEY = 'ghostCommandDecoration';
+const SOURCE_LABELS_META_KEY = 'ghostCommandSourceLabels';
+
+/** Localized 团队共享 label; supplied by ChatInput so a locale change re-renders. */
+export interface GhostSourceLabels {
+  team: string;
+}
 
 interface GhostCommandPluginState {
   ghosts: GhostCommandSource[];
+  sourceLabels: GhostSourceLabels | null;
   decorations: DecorationSet;
 }
 
@@ -53,7 +61,9 @@ const SAFE_ICON_DATA_URL_RE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i;
 export interface GhostCommandMatch {
   /** 触发符字符的 doc 位置。 */
   from: number;
-  /** 指令词结束后的 doc 位置(decoration 区间 [from, to))。 */
+  /** 指令词(不含 `/限定符`)结束后的 doc 位置。 */
+  wordEnd: number;
+  /** 整个指令(含限定符)结束后的 doc 位置(decoration 区间 [from, to))。 */
   to: number;
   ghost: GhostCommandSource;
 }
@@ -66,7 +76,15 @@ export interface GhostCommandMatch {
 export function findGhostCommandMatch(
   doc: PMNode,
   ghosts: GhostCommandSource[],
-  options: { includeDisabled?: boolean } = {},
+  options: {
+    includeDisabled?: boolean;
+    /**
+     * 仅供放置替换使用:裸指令词同时命中多个实例(唯一时插入的裸 `$draw`,之后又装了
+     * 同名实例)仍识别为消息头指令,好让新选择替换它而不是叠在前面。胶囊与发送期
+     * 判定不传此项,歧义时照旧不亮、不展开。
+     */
+    ambiguousBareToken?: boolean;
+  } = {},
 ): GhostCommandMatch | null {
   if (ghosts.length === 0) return null;
   let paraPos = 0;
@@ -104,11 +122,19 @@ export function findGhostCommandMatch(
             const next = ci + 1 < para.childCount ? para.child(ci + 1) : null;
             if (next && next.type.name !== 'hardBreak') return null;
           }
-          const ghost = options.includeDisabled
+          const ghost = (options.includeDisabled
             ? findGhostByCommandIncludingDisabled(ghosts, token.word, token.namespace)
-            : findGhostByCommand(ghosts, token.word, token.namespace);
+            : findGhostByCommand(ghosts, token.word, token.namespace))
+            ?? (options.ambiguousBareToken && token.namespace === null
+              ? listGhostsByCommand(ghosts, token.word, !options.includeDisabled)[0]
+              : undefined);
           if (!ghost) return null;
-          return { from: childPos + i, to: childPos + after, ghost };
+          return {
+            from: childPos + i,
+            wordEnd: childPos + i + 1 + token.word.length,
+            to: childPos + after,
+            ghost,
+          };
         }
         // 全空白文本,继续找
       }
@@ -139,17 +165,63 @@ export function ghostPillAttrs(ghost: GhostCommandSource): Record<string, string
   return attrs;
 }
 
+/** 同名冲突时限定符的展示:收起 `/slug`、`/@root`,企业实例另挂「团队共享」标签。 */
+export interface GhostQualifierDisplay {
+  /** 企业实例为「团队共享」;root 实例为 null(只收起 `/@root`,不加标签)。 */
+  label: string | null;
+}
+
+/**
+ * 同一插件最多一份 root 加一份企业实例,按 namespace 即可区分:企业实例标
+ * 「团队共享」,root 不加标签(默认即个人)。$ 菜单与输入框胶囊共用这一条判定;
+ * 未冲突、标签未就绪,或当前项 / 任一同名实例的 namespace 未知(旧端、迁移中的
+ * 旧安装)时返回 null,限定符照常显示:root 不带标签,只有在每个同名实例都能被
+ * 区分时才可以收起 `/@root`,否则会和未知实例的裸指令一模一样。
+ */
+export function ghostQualifierDisplay(
+  ghost: { namespace?: string | null; manifest: { command?: string } },
+  qualified: boolean,
+  labels: GhostSourceLabels | null,
+  roster: readonly { namespace?: string | null; manifest: { command?: string } }[],
+): GhostQualifierDisplay | null {
+  if (!qualified || !labels || ghost.namespace === undefined) return null;
+  const command = ghost.manifest.command?.toLowerCase();
+  const unknownSibling = roster.some((other) =>
+    other !== ghost &&
+    other.namespace === undefined &&
+    other.manifest.command?.toLowerCase() === command);
+  if (unknownSibling) return null;
+  return { label: ghost.namespace === null ? null : labels.team };
+}
+
 /** 由匹配结果构建胶囊 decoration(未命中 → 空集)。 */
-function buildDecorations(doc: PMNode, ghosts: GhostCommandSource[]): DecorationSet {
+function buildDecorations(
+  doc: PMNode,
+  ghosts: GhostCommandSource[],
+  sourceLabels: GhostSourceLabels | null,
+): DecorationSet {
   const match = findGhostCommandMatch(doc, ghosts);
   if (!match) return DecorationSet.empty;
-  return DecorationSet.create(doc, [
+  const decorations = [
     // 触发符($ 及全角变体)只做识别不做展示:胶囊头像已点明"这是意识",
     // 字符本身渲染层隐藏(doc 里仍在,编辑/发送/复制都不受影响;改坏词
     // 导致胶囊消失时它自然重新显形)。
     Decoration.inline(match.from, match.from + 1, { class: 'ghost-cmd-sigil' }),
-    Decoration.inline(match.from + 1, match.to, ghostPillAttrs(match.ghost)),
-  ]);
+  ];
+  // 限定符是给发送期消歧的机器字符,与触发符一样只在渲染层隐藏。
+  const display = ghostQualifierDisplay(match.ghost, match.to > match.wordEnd, sourceLabels, ghosts);
+  if (display) {
+    decorations.push(
+      Decoration.inline(match.from + 1, match.wordEnd, {
+        ...ghostPillAttrs(match.ghost),
+        ...(display.label ? { 'data-ghost-cmd-origin': display.label } : {}),
+      }),
+      Decoration.inline(match.wordEnd, match.to, { class: 'ghost-cmd-qualifier' }),
+    );
+  } else {
+    decorations.push(Decoration.inline(match.from + 1, match.to, ghostPillAttrs(match.ghost)));
+  }
+  return DecorationSet.create(doc, decorations);
 }
 
 /** 词尾后面紧跟的分隔空白(不含换行——换行在 doc 里是 hardBreak,不是文本)。 */
@@ -193,11 +265,17 @@ export function applyGhostCommandBackspace(view: EditorView): boolean {
  * 推送最新意识清单(装/卸/唤醒/沉睡即时反映)。同引用去重——
  * 清单的 state 引用只在数据更新时变化。
  */
-export function setGhostCommandRoster(editor: Editor | null, ghosts: GhostCommandSource[]): void {
+export function setGhostCommandRoster(
+  editor: Editor | null,
+  ghosts: GhostCommandSource[],
+  sourceLabels: GhostSourceLabels | null = null,
+): void {
   if (!editor || editor.isDestroyed) return;
   const current = PLUGIN_KEY.getState(editor.state);
-  if (current && current.ghosts === ghosts) return;
-  editor.view.dispatch(editor.state.tr.setMeta(META_KEY, ghosts));
+  if (current && current.ghosts === ghosts && current.sourceLabels === sourceLabels) return;
+  editor.view.dispatch(
+    editor.state.tr.setMeta(META_KEY, ghosts).setMeta(SOURCE_LABELS_META_KEY, sourceLabels),
+  );
 }
 
 /** 导出供测试直接在 ProseMirror state 层实例化(同 VoiceInputDraftDecoration)。 */
@@ -207,14 +285,18 @@ export function createGhostCommandPlugin(): Plugin<GhostCommandPluginState> {
     state: {
       init(_config, state: EditorState): GhostCommandPluginState {
         // 清单由 ChatInput 挂载后经 meta 推入,首帧空集(用户尚未输入)。
-        return { ghosts: [], decorations: buildDecorations(state.doc, []) };
+        return { ghosts: [], sourceLabels: null, decorations: buildDecorations(state.doc, [], null) };
       },
       apply(tr: Transaction, old: GhostCommandPluginState): GhostCommandPluginState {
         const roster = tr.getMeta(META_KEY) as GhostCommandSource[] | undefined;
-        if (roster) return { ghosts: roster, decorations: buildDecorations(tr.doc, roster) };
+        if (roster) {
+          const labelsMeta = tr.getMeta(SOURCE_LABELS_META_KEY) as GhostSourceLabels | null | undefined;
+          const sourceLabels = labelsMeta === undefined ? old.sourceLabels : labelsMeta;
+          return { ghosts: roster, sourceLabels, decorations: buildDecorations(tr.doc, roster, sourceLabels) };
+        }
         if (!tr.docChanged) return old;
         // 只扫消息头部的指令 run,输入量级下全量重算成本可忽略(同 CjkPunct)。
-        return { ghosts: old.ghosts, decorations: buildDecorations(tr.doc, old.ghosts) };
+        return { ...old, decorations: buildDecorations(tr.doc, old.ghosts, old.sourceLabels) };
       },
     },
     props: {

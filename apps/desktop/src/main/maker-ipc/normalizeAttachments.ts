@@ -24,6 +24,8 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 import * as imageCacheStore from '../imageCacheStore.js';
+import { CHAT_FOLDER_MIME } from '../../shared/chatFolderAttachment.js';
+import { extractChatFolder } from '../file-browser/chat-folder-transfer.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
 import * as cindyMediaLedger from '../cindy-media/ledger.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
@@ -257,7 +259,7 @@ async function ensureTempPath(sessionId: string, mimeType: string | undefined): 
   return path.join(dir, `${randomUUID()}${ext}`);
 }
 
-async function writeTempFile(
+export async function writeTempFile(
   sessionId: string,
   bytes: Buffer,
   mimeType: string | undefined,
@@ -737,6 +739,12 @@ async function materializeQueuedOssAttachmentsInternal(
         });
         entry = { url, absPath: imageCacheStore.resolveSafe(url).absPath };
         addLocalPart(entry, () => imageCacheStore.removeFile(url));
+        if (mime === CHAT_FOLDER_MIME) {
+          entry.absPath = await extractChatFolder(entry.absPath);
+          // Files are consumed by path; never hand the tar's managed URL to the agent.
+          entry.url = entry.absPath;
+          localParts[localParts.length - 1]!.refs.push(entry.absPath);
+        }
       }
       byRef.set(refStr, entry);
       if (ref.ossKey) ossKeys.add(ref.ossKey);
@@ -744,7 +752,7 @@ async function materializeQueuedOssAttachmentsInternal(
     } catch (e) {
       log.warn('materialize queued oss attachment failed, leaving ref', { error: String(e) });
       if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
-      if (ref.size !== undefined) {
+      if (ref.size !== undefined || ref.mimeType === CHAT_FOLDER_MIME || mimeHint === CHAT_FOLDER_MIME) {
         throwIpcError(
           'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
           e instanceof Error ? e.message : String(e),

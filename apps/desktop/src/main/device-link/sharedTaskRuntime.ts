@@ -12,11 +12,13 @@ import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending }
 import { getAuthState, getCurrentUserId, getDeviceId, getActiveAuthRealm } from '../authManager.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { captureSharedTaskBoundaryClose, sharedTaskApi } from './sharedTaskApi.js';
+import { captureSharedTaskBoundaryClose, forgetSharedTaskList, sharedTaskApi } from './sharedTaskApi.js';
 import { SharedTaskHost, type SharedTaskCreationState } from './sharedTaskHost.js';
 import { setSharedTaskDispatchHost } from './sharedTaskDispatch.js';
 
 const log = createLogger('shared-task');
+const LOCAL_JOURNAL_REFRESH_MS = 5_000;
+const SERVER_AUTHORITY_REFRESH_MS = 30_000;
 interface Binding {
   host: SharedTaskHost;
   stop(): Promise<void>;
@@ -58,8 +60,8 @@ export function startSharedTaskRuntime(options: {
     api: sharedTaskApi, journal: createSharedTaskJournal(db.client),
     ownerAccountId, hostDeviceId: getDeviceId(), creationState, isCurrent: current,
     async readSession(sessionId) {
-      const rows = await db.client.query<{ id: string; title: string; status: string }>(
-        'SELECT id, title, status FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
+      const rows = await db.client.query<{ id: string; title: string; status: string; source: string | null }>(
+        'SELECT id, title, status, source FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
       return rows[0] ?? null;
     },
     revoke: (sharedTaskId, memberId) => {
@@ -85,19 +87,45 @@ export function startSharedTaskRuntime(options: {
     preservePeerLinks = true;
     startSharedTaskRuntime(options);
   };
+  // Server reads happen once per start or reconnect, then only while this host
+  // has a share or an unconfirmed closure. Guest arrival and the manage dialog
+  // still refresh a share immediately through the Host.
+  let syncRequested = true;
+  // The connection epoch also catches a reconnect that completed between ticks.
+  let seenConnectionEpoch: number | undefined;
+  let lastServerReadAt: number | undefined;
+  const serverReadDue = () => {
+    if (lastServerReadAt === undefined) return true;
+    const elapsed = Date.now() - lastServerReadAt;
+    // A clock set backwards must not postpone authority reads indefinitely.
+    return elapsed < 0 || elapsed >= SERVER_AUTHORITY_REFRESH_MS;
+  };
   const refresh = async () => {
     if (!current()) { rebindIfStable(); return; }
     if (refreshing || !current()) return;
     refreshing = true;
+    const online = options.client.hasServerCapability(SHARED_TASK_CAPABILITY) && options.client.getStatus() === 'online';
+    const connectionEpoch = options.client.getConnectionEpoch();
+    if (online && connectionEpoch !== seenConnectionEpoch) {
+      seenConnectionEpoch = connectionEpoch;
+      syncRequested = true;
+      lastServerReadAt = undefined;
+      // A list cached before the reconnect cannot reflect changes made while offline.
+      forgetSharedTaskList();
+    }
+    const allowNetwork = online && serverReadDue() && (syncRequested || host.needsAuthorityRefresh());
     try {
       // Local terminal records must revoke captures even while HTTP/relay is down.
-      await host.restore(options.client.hasServerCapability(SHARED_TASK_CAPABILITY) &&
-        options.client.getStatus() === 'online');
+      await host.restore(allowNetwork);
+      if (allowNetwork) syncRequested = false;
     }
-    catch { if (current()) log.debug('sharedTask authority refresh unavailable; retrying on next tick'); }
-    finally { refreshing = false; }
+    catch { if (current()) log.debug('sharedTask authority refresh unavailable; retrying later'); }
+    finally {
+      if (allowNetwork) lastServerReadAt = Date.now();
+      refreshing = false;
+    }
   };
-  const timer = setInterval(() => { void refresh(); }, 5_000);
+  const timer = setInterval(() => { void refresh(); }, LOCAL_JOURNAL_REFRESH_MS);
   timer.unref?.();
   binding = { host, dbEpoch: db.clientEpoch, database: db.client, creationState, ownerAccountId, region, current, rebindIfStable, stop() {
     stopped = true;

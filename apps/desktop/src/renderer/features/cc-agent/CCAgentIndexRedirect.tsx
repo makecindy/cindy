@@ -18,6 +18,7 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import {
@@ -42,6 +43,7 @@ export function CCAgentIndexRedirect() {
       const last = loadLastChatView();
       const sessionIdSet = new Set(sessions.map((s) => s.id));
       const routeForSession = async (session: typeof sessions[number]): Promise<string | null> => {
+        if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) return null;
         if (isOrcaLeadSession(session)) return `/cc-agent/${session.id}`;
         if (!isOrcaWorkerSession(session)) return `/cc-agent/${session.id}`;
         const workflow = await orcaWorkflowsFor(session.id)

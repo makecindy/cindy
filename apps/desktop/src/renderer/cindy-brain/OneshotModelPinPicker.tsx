@@ -6,7 +6,7 @@ import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PROVIDER_TITLE_KEY } from '@/lib/providerDisplayName';
 import { decodeCatalogModelPin } from '../../shared/catalogModelPin';
 
-/** 主侧 cindy-prefs 下发的目录钉条目(与 TextOneshotPinOption 同形)。 */
+/** 主侧下发的目录钉条目(与 TextOneshotPinOption 同形;系统辅助模型设置使用)。 */
 export interface OneshotPinOption {
   id: string;
   label: string;
@@ -65,25 +65,19 @@ export function oneshotPickerProviders(options: readonly OneshotPinOption[]): Pr
 }
 
 export function OneshotModelPinPicker({
-  value, defaultLabel, declaredLabel, legacyPinLabel, options, onChange, ariaLabel,
+  value, options, onChange, ariaLabel,
   dense, defaultOptionLabel, disabled, groupByProvider = false,
 }: {
   /** 当前钉值;undefined = 跟随默认。 */
   value?: string;
-  /** 系统默认链链首的展示文案(未声明偏好时"跟随默认"行用)。 */
-  defaultLabel: string;
-  /** 身份卡声明的偏好模型文案(声明存在时"跟随默认"行如实显示它)。 */
-  declaredLabel: string | null;
-  /** 存量轻量档位钉(目录扩展前钉下的合法档位键)的展示名;null/缺省 = 不是档位钉。 */
-  legacyPinLabel?: string | null;
   options: readonly OneshotPinOption[];
   /** null = 清除钉档(恢复跟随默认)。 */
   onChange: (pin: string | null) => void | boolean | Promise<void | boolean>;
   ariaLabel: string;
   /** 紧凑字号(设置页 12px;插件详情页 13px)。 */
   dense?: boolean;
-  /** Generic settings surfaces can supply their own automatic-route copy. */
-  defaultOptionLabel?: string;
+  /** Copy for the "no pin" row (the caller's automatic route). */
+  defaultOptionLabel: string;
   searchPlaceholder?: string;
   noResultsLabel?: string;
   unavailableLabel?: string;
@@ -97,9 +91,6 @@ export function OneshotModelPinPicker({
   const current = value ? options.find((option) => option.id === value) : undefined;
   const decoded = value ? decodeCatalogModelPin(value) : null;
   const route = current ?? (decoded ? { ...decoded, modelId: decoded.model } : null);
-  const automaticLabel = defaultOptionLabel ?? (declaredLabel
-    ? t('settings.ghosts.detail.cindyPrefs.defaultOptionDeclared', { model: declaredLabel })
-    : t('settings.ghosts.detail.cindyPrefs.defaultOption', { model: defaultLabel }));
   const providers = useMemo(() => oneshotPickerProviders(options).map((provider) => ({
     ...provider,
     name: groupByProvider && PROVIDER_TITLE_KEY[provider.id]
@@ -107,7 +98,7 @@ export function OneshotModelPinPicker({
   })), [options, groupByProvider, t]);
   const currentAgent = route && knownAgent(route.agentKind) ? route.agentKind : undefined;
   const vendor = currentAgent === 'claude-code' ? 'cc' : currentAgent;
-  const unavailable = !!value && !legacyPinLabel && (!current || current.available === false);
+  const unavailable = !!value && (!current || current.available === false);
   return <ModelSelector
     providersOverride={providers}
     modelId={route?.modelId ?? value ?? ''}
@@ -131,9 +122,9 @@ export function OneshotModelPinPicker({
     dense={dense}
     disabled={disabled}
     ariaContext={ariaLabel}
-    unknownModelLabel={() => legacyPinLabel ?? current?.modelName ?? value ?? automaticLabel}
+    unknownModelLabel={() => current?.modelName ?? value ?? defaultOptionLabel}
     sourceDisconnected={unavailable}
-    fallbackOption={{ active: value === undefined, label: automaticLabel,
+    fallbackOption={{ active: value === undefined, label: defaultOptionLabel,
       onSelect: () => value !== undefined ? onChange(null) : undefined }}
   />;
 }

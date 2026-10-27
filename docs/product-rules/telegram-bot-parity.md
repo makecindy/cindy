@@ -11,10 +11,36 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 两者是**两套架构**，不是同一份代码的两个开关。所以"统一"不等于"让两条代码路径长得
 一样"，而是：**能同源的同源；不能同源的，差异必须写在这张表里、有裁决、有理由。**
 
+2026-10-27 发图工具的聊天留存：个人 bot 的 `send_media(kind: photo, path)` 复用
+`sendFileWithImagePreview` 返回持久图片，Cindy 电脑与手机的聊天流直接展示。
+该工具仍只属于个人／伙伴 bot 的当前轮次，官方 bot 不新增直通发送入口。
+两侧工具媒体收集器都识别 `_xdt_forward_media: false`，避免把工具已发送的图片自动再发一次。
+Telegram URL / file_id 的发送保持原样；本次不新增下载或历史补发。
+
+2026-10-17 群触发与空回复：默认召唤模式下，仅提到显示名（包括句首的「Cindy 赞助」）
+不触发。个人 bot 保留显式 `@显示名` 的兼容入口；平台提及、回复 bot、命令及用户主动
+开启的全响应模式沿用原有规则。Telegram 成功轮次没有正文和附件时不补发「空回复」或
+「本轮无文本输出」，已有过程消息尽力撤回；仅有附件的结果正常发送。
+个人侧由 `im/shared/turnRunner.ts` 与 `telegram/streamingText.ts` 兑现；官方侧需配套
+`telegram-hook-server` 空结果收口修复，客户端升级不能代替服务端部署。
+
+额度说明的调用边界：IM 入口须显式传入 `surface` 才启用 bot 恢复指引；定时任务运行记录、
+通知与旁路转播未传入口时保留原有错误映射。个人渠道的 `/model` 指引只用于支持富卡的
+输出（包括个人 Telegram）；钉钉、企业微信等纯文本输出指向在 Cindy 中打开当前任务换
+供应商或模型，再回原渠道重发，不把仅影响以后新任务的默认配置当成当前任务的恢复方式。
+
 2026-09-09 多账号路由补充：官方 bot 的 hook 新任务入口保留目录／草稿中明确选中的
 供应商连接；该连接失效时走既有失败提示，不改用另一账号的同名模型。
 未指定连接仍解析默认来源。本项只调整官方 hook（及共用该入口的渠道），
 个人 bot 的独立默认配置与恢复策略不在此处改写。
+
+2026-10-13 目录来源判定边界（#5912）：目录来源只在与目录模型成对选择时才算「明确选中」。
+目录模型为空（继承 IM 默认）时，账号可用、未停用、但目录里根本不提供继承模型的残留来源
+按未指定连接忽略，按 IM 默认来源路由并记 warn。显式来源失效——账号断开／停用，或提供该
+模型但模型／运行路径被停用、退役——仍走失败提示、不换账号；路由不可用的错误附「设置 → IM
+机器人」重新选择模型的指引，失败原因写入主日志。服务端快照（主动推送与重连镜像）改动某目录
+的 Agent 或模型时，同键的配对来源一并清除；多个 Slack team 共用的 null-team 兜底来源不因
+单个 team 改路由被清，以免其它 team 静默改走默认来源。
 
 > 这张表存在的理由与 `botCommands.ts` 注册表一样：把「散落两个仓、谁也不知道差在哪」
 > 变成「表里显式登记」。**新增或修改任一 bot 的用户可见行为时，必须同步更新本表对应
@@ -67,14 +93,17 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 |---|---|---|
 | 子代理输出隔离 | `im/shared/agentEventScope.ts` + `maker-core/agents/claude-code/translator.ts` | 官方 `hook-control/turnObserver` 与个人 `im/shared/turnRunner` 在消费实时事件前过滤带 `agentMeta.parentUuid` 的子代理事件。内部正文、工具/思考、媒体旁路和终态不进入主任务的 IM 回帖，也不影响主任务收口；个人侧自动任务转播同样适用。Claude translator 为子代理工具结果保留归属，主代理流式事件不继承子代理元数据；主任务正文统计和最后消息的实质内容判定只消费主代理，子代理完整消息与流式增量都不阻断主任务 result 截断补发，也不覆盖 silent-stop 判定。整轮失败即使由子代理 API 错误引起，仍按主任务失败收口。主代理主动引用的成果正常发送，桌面完整记录不变。 |
 | 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
-| 模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。 |
+| 代输入指引（2026-10-13） | `im/shared/inputHandoffChannelNotice.ts` | 任务开出代输入卡时，在驱动该任务的聊天里发**一行固定文字**「🔐 需要你帮忙输入：<任务名> · 在 Cindy 中打开」，每个请求一次。个人 bot 由 `turnRunner` 在 `beforeProviderStart` 绑定 `im.sendText`；官方 bot 由 `session-runner` 绑定与运行时回收提示同一条独立发送（`onRuntimeRecovery`，需协商 `msg-op-v1`，未协商时不发）。卡片、界面内容与主人填写的值**两侧都不进 Telegram**——这是有意的产品边界（值只走 Cindy 加密通道），不是缺口。详见 [代输入](input-handoff.md)。 |
+| 分享供应商的新任务路由 | `im/remoteProviderRoute.ts` + `im/shared/openChannelSession.ts` | 两侧均可在 Cindy 的 bot 模型设置选择分享供应商，按授权目录校验并保存 `agentDeviceId`；新建、`/new` 与冷恢复沿用该执行位置，分享不可用时不回落本机。个人渠道默认与官方工作目录默认仍各自保存。详见 [供应商分享 §5.2](provider-sharing.md#52-供应商设置)。 |
+| 本机模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 的本机目录均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。个人分享任务的 `/model` 读取分享方授权目录，不套用本机同名供应商的开关。 |
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。耗时行末尾的当前 `N tok/s` 同源：两侧（含个人侧自动任务转播）都只经 `applyStatusTokenRate` 读 `status` 事件的 `tokenSpeed`（与桌面运行状态栏同一份读数）——无读数不显示、占位帧与 0 读数保留上一个值、`generationReliable === false` 隐藏、只随 ticker 带出不单独刷帧；凡把过程区冻结进终稿的收口（个人侧终止错误、转播收口）都经 `clearRunningIndicators` 与重试说明一起清掉。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 运行中**过程消息**的生命周期、渲染与出站失败判据（官方需双方协商 `telegram-progress-ops-v1`） | `packages/lizi-im/src/telegram/streamingText.ts`（`startTelegramProgressCarrier` 与个人 `startTelegramStreaming` 是同一个 handle 类）+ `progressFrame.ts` + `outboundPolicy.ts` + `markdown.ts` 的 `markdownToTelegramHtml` | 惰性占位、1.5s 尾沿节流、首帧 send 后续 edit、单帧上限 `TELEGRAM_PROGRESS_FRAME_MAX_CHARS = 3800`（源 markdown 字符数；官方 presenter 的 `PresenterPolicy.intermediateMaxRenderedChars` 默认值也取它）、NO_REPLY 及其前缀不落地、HTML 被拒（400）回落纯文本、`message is not modified` 视为成功、429 按 `retry_after` 全长退避后重试一次——两侧跑同一份代码。**传输不同**：个人走 Bot API（`index.ts` 的 `callSend` / `sendRenderedChunk` / `editHtml`），官方走 msg.op（`hook-control/telegramTurnCarrier.ts` 只实现 `TelegramStreamingDeps` 的 msg.op 版，并经 `telegramMsgOp.ts` 把 `msg.op.result` 的 `channelErrorCode` / `error` / `retryAfterMs` 映射成同形错误）；服务端只执行，不做转换与回落。未协商时官方仍由服务端渲染 `turn.progress`，本行对官方不成立 |
 | 成功终稿的**收口**（官方需双方协商 `telegram-final-ops-v1`） | `packages/lizi-im/src/telegram/streamingText.ts` 的 finalize（官方经 `startTelegramTurnCarrier`，与进度消息同一个 handle）+ `chunk.ts` | Rich 新发 → 明确 4xx 回落 HTML → HTML 400 回落纯文本、按 `chunkTelegramSource` 分段、终稿落地后才尽力删过程消息——两侧同一份代码。官方另有两处传输差异：终稿段经 `purpose: 'turn-final'` 登记（服务端据此写 route、在 `turn.end` 确认后提升续跑锚点、做群中继）；私聊首段挂完成特效（第三节「终稿特效」）。**只覆盖普通成功、不带附件的轮次**：失败 / 取消 / 续跑轮 / 正文恰为 NO_REPLY（ambient 判定在服务端）/ 带附件 / 私聊草稿模式都仍由服务端按 `turn.end` 发布。带附件不走本端：桌面持久出箱只存终态文本（附件字节不进 JSON 持久化），本端逐段上传附件期间退出或崩溃时，重启重放的兜底帧没有附件、服务端接管后附件会丢，所以整轮随 `turn.end` 交给服务端（与旧路径相同）。终稿必达不降级：发布前 `turn.end` 先进桌面持久出箱，没有完整确认就以 `clientFinal.complete=false` 交回服务端重发（第四节第 3 行） |
 | 执行中交互卡的**渲染与按钮排布**（官方需双方协商 `telegram-card-ops-v1`） | `packages/lizi-im/src/telegram/components.ts` 的 `layoutTelegramCard` + `cardLayout.ts` | 粗体标题 + markdown 正文 → HTML、正文上限 3800（`capRenderedText` 安全截断）、label ≤12 字两两并排——两侧同一份。**回调编码不同**：个人编成内存 ref token（`buildCardPayload`），官方由服务端铸 callback_data 并照旧回 `interaction.decision`（`hook-control/telegramCardOps.ts`）。卡片的**语义层**（选项、按钮文案来源、权限入参摘要）仍各自一份，见第三节「交互卡的语义与文案」。群里的卡改投 owner 私聊及其来源说明仍由服务端按现行规则决定。op 被明确拒绝时回落 `interaction.request`（服务端渲染） |
 | 官方 bot 的**命令菜单**（需双方协商 `telegram-commands-v1`） | `apps/desktop/src/main/im/shared/botCommands.ts` 的 `buildOfficialBotCommandMenus` | 官方菜单的命令集合、顺序、文案都取注册表（与个人菜单同一份 i18n key），desktop 按 en（默认）/ zh / ja / ko 各渲染一份经 `provider.commands.set` 下发，服务端只执行 `setMyCommands`，且只管理默认菜单与 zh / ja / ko（每次全量重写，缺席的语言写空，其它语言码含显式 `en` 一律忽略）；菜单只存服务端内存、不落库：desktop 每次握手都重发，服务端重启后到桌面重连前（以及设备离线期间）用服务端默认菜单。**语言口径沿用两侧既有差异**：官方按用户的 Telegram 语言，个人按桌面端语言。**命令分发不在这一行**：官方命令仍由服务端收入站并分发（1c 的别名差异照旧）。未协商时服务端用自己的 `TELEGRAM_COMMANDS` |
 | 渠道 `/stop` 的**明确停止** | `maker-ipc/register.ts` 的 `stopSessionTurnExplicitly` | 个人 IM 的 `/stop` / `!stop`（含微信，`im/shared/turnRunner.ts` 的 `stopActiveTurn`）与官方 hook 的 `task.cancel`（`hook-control/dispatcher.ts`，经 `stopSessionExplicitly` 注入）都走桌面 Stop 同一套清理：撤自动续跑与退避簿记、取消上下文溢出恢复、暂停 Goal、停输入队列并中止当前一轮。2026-10 之前两侧各少几步（个人不暂停 Goal、官方连自动续跑都不撤）。渠道侧只保留各自的排队收口（个人清 `sendQueue`，官方回 `turn.end(cancelled)`）。账号切换时的中止不是用户喊停，仍是普通 abort |
-| 新任务的**模型准入** | `im/shared/openChannelSession.ts` → `localDb/sessionOpening.ts` 的 `openSession` | 两侧（及共用 `sessionRepo` 的全部个人 IM 渠道）新建任务时都经桌面新建任务同一套准入：模型 / 来源 / 推理强度 / Fast 不被支持就拒绝建任务，不自动换模型；准入可能规范化来源与推理强度。**默认配置从哪读仍是有意不同**（第三节），这里只统一「读出来之后怎么校验」。复用 / 接管 / 复活既有任务不经过准入 |
+| 新任务的**模型准入** | `im/shared/openChannelSession.ts` → `localDb/sessionOpening.ts` 的 `openSession` | 两侧（及共用 `sessionRepo` 的全部个人 IM 渠道）新建任务时都经桌面新建任务同一套准入：模型 / 来源 / 推理强度 / Fast 不被支持就拒绝建任务，不自动换模型；准入可能规范化来源与推理强度。**默认配置从哪读仍是有意不同**（第三节），这里只统一「读出来之后怎么校验」；官方 hook 进准入前对残留目录来源的取舍见文首 2026-10-13 条。复用 / 接管 / 复活既有任务不经过准入 |
+| **额度类失败说明**（花费上限 / 配额 / 余额 / 套餐用量） | `im/shared/turnRetryNotice.ts` 的 `quotaFailureNotice` + `sessionProviderLabel.ts` | 入站消息失败时显示当前 bot（官方 / 个人，个人 Telegram 附 bot 名）、任务名和短 ID、实际模型与供应商。只给当前任务的恢复动作：个人富卡渠道用 `/model`，官方与纯文本渠道在 Cindy 当前任务里换模型后回原渠道重发；花费上限另提示联系工作区管理员。不附上游长原文，不夹带新任务默认设置教程，不自动换供应商。判据仍与桌面错误横幅共用；官方主日志归类 `provider-quota-exhausted` |
 | 群历史**检索实现** | `im/shared/groupHistorySearch.ts` | 真正执行查询的就是这一份：FTS（`hook_group_messages_fts` 的 MATCH）+ 中文 LIKE 兜底，**lane 条件写在 SQL 里**（MATCH 与 LIKE 用完全相同的 lane 条件，调用方没法先全局搜再事后过滤），加上结果映射（snippet / score / source）与上限（默认 8 条、最多 20 条、query 256 字）。两侧共用 |
 | 群历史检索的**逐 turn 授权租约** | `im/shared/groupHistoryAccess.ts` | 租约机制共用：`beginGroupHistoryAccess` 在 provider 真正开始这一轮之前登记作用域，终态 / 重排 / 失败时释放；`sessionInstanceId` 挡住「同一业务 session 重建后，旧 MCP 请求借用新实例权限」。**但产生 scope 的那一步各写各的**——个人是 `im/telegram/adapter.ts` 的 `groupHistoryAccessFor`，官方是 `hook-control/groupHistoryScope.ts` 的 `groupHistoryAccessForExternalKey`；群轮次两侧同为 lane-only，**私聊上给的不一样**，见第四节 2e。完整调用链：MCP 入口 `mcp-integrations/groupHistoryMcpServer.ts` 先 `readGroupHistoryAccess` 拿租约（拿不到直接 `NO_ACTIVE_TELEGRAM_SCOPE` 拒绝），再 `resolveTargetLane(scope, lane)` 定位，最后才调 `searchGroupHistory` |
 | 交互卡的**语义层**（`ask_user_question` / `plan_review` / 权限确认） | `im/shared/interactionCardModel.ts` | 选项集与决策模型两侧真跑同一份：至多 6 个选项（`MAX_OPTIONS`）、multiSelect 降级单选、只渲染第一问、plan 正文截断 1500（`MAX_PLAN_LEN`）、按钮文案的**产品级**上限 30（`BTN_LABEL_MAX`）、无选项降级时唯一按钮「继续」，以及 buttonId → 决策对象的构造与 header/body 拆分。**2026-08-19 起该模块另有一份全量视图**（顶层 `questions` 数组 + `needsAskMultiCard` 判定），只被支持卡片原地更新（`updateInteractiveCard`）的个人 IM 渠道消费——目前**仅飞书个人 bot**（`ui.cards.ask.multi` 打勾卡，多题/真多选，见 `cardBuilders.buildAskMultiCard`）；**本表对照的两个 Telegram bot 都不消费它**，上列 v1 规则对两侧与未提供 multi 文案的渠道仍逐字成立，看到飞书行为不同不要当漂移报官方那条链路由 `hook-control/interactions.ts` 直接 import 本模块（对 `@cindy/maker-core` 刻意只做 type-only 依赖，免得 hook 链路在运行期加载整个 barrel）。**渲染不在这里**——按钮文案来源、标题格式、省略号样式、尺寸上限都是各自渲染侧的事，见第三节 |
@@ -84,6 +113,14 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | **上游过载 / 限流自动重试进度** | `im/shared/turnRetryNotice.ts`（`turnRetryNotice`） | 非终止 error 翻成渠道进度的**文案与判定**两侧真跑这一份：只认过载（`(auto-retry N/M)` + `upstream-overload` / 529）、终态 429 外层重投、以及 Auto 档审阅器不可用。Pi / Claude / Codex 过载重试都走「模型服务繁忙，正在自动重试（N/M）」；其它非终止 error（普通 5xx、未分类供应商抖动）保持静默。个人侧 `turnRunner`、官方侧 `turnPresenter` 都读这一份。**载体怎么发**不在这里——个人是过程消息原地编辑；官方私聊默认普通进度消息，开启 `TELEGRAM_DM_DRAFT_ENABLED` 时使用草稿，见第三节 |
 | **工具循环与输出上限终态的渠道文案** | `im/shared/turnRetryNotice.ts`（`terminalErrorText`） | `reason=tool_use_loop_detected` 的终态事件统一按受限 `toolLoop` 生成渠道可读说明；`reason=output-limit` 共用「回复可能不完整，可发送下一条消息继续」提示；个人侧 `turnRunner` 与官方侧 `hook-control/turnObserver` 都复用这份映射，原始 `loopHint` / `missing_required_field` 等内部分类只留在本地错误上下文，不外发。 |
 | **Auto 审阅的引用证据**（用户本条回复／引用的消息与附件数） | 投影与上限：`packages/maker-shared/src/autoReviewIntent.ts` 的 `projectAutoReviewUserReferences`；两侧映射：`im/shared/autoReviewReferences.ts` | 两侧都把宿主盖章的引用事实放进 `MAIN_OWNED_SEND_CONTEXT.autoReviewReferences`，由 maker-core 挂到当前消息的审阅意图上，审阅器以独立低信任块呈现，不算用户原话、不构成授权。**数据来源各不相同**：个人只取 adapter 的 `prepareAgentTurnText` 实际交给模型的回复投影（`replyContext`；飞书被注入扫描拦下时就是占位，模型没看到的回复审阅器也看不到），附件数取本条附件（`im/shared/turnRunner.ts`，纯图引用为「[图片]」占位）；官方由 `hook-control/dispatcher.ts` 在展示截短（只留最早 20 条）之前从服务端原始 `source.threadContext` 取回复目标（触发消息带 `replyToMessageId` 时按它找父消息、找不到不猜，否则取排除当前请求后的最后一条），连同实际送达附件数交给 `hook-control/session-runner.ts`。服务端在被引消息没有文字时不下发 threadContext、且附件不区分自带与引用，所以官方纯图引用只剩「本条带 N 张图」 |
+
+官方成功终稿的客户端发布有 **120 秒交接期限**（2026-10-27）：从 `publishFinal`
+开始计时，包含在途进度、终稿分段与过程消息清理。期限内沿用共享发送判据；超时关闭
+该轮载体、取消退避，返回 `clientFinal.complete=false`，完整正文经既有 `turn.end`
+出箱交回服务端，释放同任务队列。不会截短 `retry_after` 后继续由旧载体重发，也不重新
+调用模型；实际送达仍取决于服务端与 Telegram 状态。个人 bot 没有服务端出箱，不套用
+此期限。实现与回归：`hook-control/telegramTurnCarrier.ts`、
+`__tests__/telegramTurnCarrier.test.ts`、`__tests__/dispatcher.test.ts`。
 
 ### 放在共享目录、但**只有一侧消费**的
 
@@ -136,14 +173,30 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 任务列表，随后消息路由到这个新任务；旧任务保留为历史，不得复用原任务 ID、只清 SDK
 上下文，也不得拖到下一条普通消息才落任务。新任务的 agent、模型、来源、思考强度和权限档
 均在执行 `/new` 时从各自入口的当前默认配置重新解析；当前项目目录作为 lane 偏好保留。
-个人 bot（与飞书等其它个人 IM 渠道同一套）另有「跟随渠道默认」：已有任务只要没被 `/model`、
-桌面或手机单独改过路由，渠道默认的 Agent／模型／来源／思考强度一改，就在收到下一条消息时
+个人和官方 bot 共用「跟随 bot 默认」：有跟随记录的任务只要没在 Cindy 桌面、手机或个人 bot 的
+`/model` 中单独改过路由，渠道默认的 Agent／模型／来源／思考强度一改，就在收到下一条消息时
 切到新默认（跨引擎带交接，运行中的轮次不被打断），不必 `/new`；权限档不跟随，仍在 `/new`
 时应用。判定按状态（建任务／`/new`／跟随切换时写入的 `sessions.im_default_route` 记录），
 见 `im/shared/channelDefaultRoute.ts`。切换只动路由四件套，任务单独开过的 Fast 保持不变；
 「单独改过」按选择行为判定而非取值相等——单独挑的恰与新默认相同也算改过，此后不再跟随。
-官方 bot 不受影响。
+官方按工作目录偏好与全局 IM 默认解析，个人按自己的渠道默认解析，两者配置独立。
+目录偏好迁移前，官方创建与跟随都保留派发携带的默认值；迁移后由本机正本决定。
+无法匹配任务实际目录的别名时暂不跟随，仍应用用户在任务里选择的模型。
+官方历史任务若没有跟随记录，保留当前路由，不按值猜测；新任务和 `/new` 写入跟随记录。
+不新增「跟随默认」开关或恢复入口，手动改过后要重新跟随就用 `/new`。
+两侧都应用用户在 Cindy 当前任务里选择的模型和供应商：下一条 IM 消息发送前，复用
+`acquirePendingAgentSwitchForImSend` 的切换流程；官方 hook 先应用选择，再读取任务
+meta 和绑定观察器，发送完成即释放锁。跟随切换与手动选择共用发送锁；跟随切换保持任务的权限档与 Fast。回归见 `hook-control/__tests__/session-runner.test.ts`。
 桌面 IM 默认配置与目录偏好统一使用标准模型选择器，一次保存 Harness、来源、模型和思考强度；不额外展示独立 Harness 控件，不展示无法保存的 Fast。两侧的配置归属与权限规则保持各自既有契约。
+2026-10-26：官方与个人机器人未单独选模时共用 `shared/imAutomaticModel.ts`，复用普通新任务
+的出厂默认组合与可用目录回退，不跟随输入框的最近选择。设置页显示「自动选择」和当前解析
+出的实际模型；手动固定的旧模型继续保留。目录更新后，仍跟随默认的任务在下一条消息重算，
+手动改过的任务不受影响。「恢复自动选择」不重置权限。两侧独立的配置归属、目录覆盖与权限
+策略保持不变；自动模式没有可用来源时明确失败，不再回落到写死的旧型号。
+自动候选遵守执行电脑的模型显示偏好。官方目录选择远程电脑而未固定模型时，使用那台电脑
+允许远程调用的可见目录；本机继承模型先解析，再判断残留来源。设置页自动模型随目录更新，
+迟到读取不覆盖手动保存。回归见 `remoteProviderRoute.test.ts`、`session-runner.test.ts` 与
+`ImDefaultSettingsSection.test.tsx`。
 两侧的成功提示、帮助与命令菜单都必须按这个真实结果称为「新任务」，不得沿用旧的
 「新对话／清掉上下文」说法。
 官方 bot 通过 `session-new-v1` 双向能力协商执行立即创建，滚动升级时旧 Desktop 才退回旧的
@@ -176,6 +229,12 @@ Hook 与本地 IM 共享消息级来源及上下文快照结构。本地所有�
 上下文片段，不分别实现保存或展示。没有附带上下文时不显示空折叠区。
 过去未保存的内容不可从当前群历史补造，也不可用会话级来源猜测单条消息来源。
 受保护内容仍不落库；群历史二进制附件仍只进模型，不因快照额外保留。
+群历史上下文统一带发送时间：本地群窗口（个人与官方 Telegram）与飞书历史组装器每行写
+`[发言人] MM-DD HH:mm 正文`（本机时区，共用 `im/shared/groupWindowCore.ts` 的
+`formatImHistoryTime`）；时区与上下文整理时间由块外说明 `formatImHistoryTimeNote` 一次给出，
+写「整理于」而非「当前时间」（前缀可能排队后才派发），不改块头、不进上下文快照。与整理时刻
+不同年的消息行内补年份，UTC 偏移与整理时刻不同（跨夏令时切换）的消息行内补该消息自己的偏移，保证每行都能还原绝对时间。群历史检索结果在 `sentAt` 之外附可读的 `sentAtLocal`。
+官方 Slack / X 的 `threadContext` 由服务端下发，协议条目暂无时间字段，补齐需跨仓推进协议。
 本地 IM 使用 `agentMeta.imSource`，Hook 保留原 `hookSource`，Desktop 投影到同一展示结构。
 不复用旧客户端会解释为系统卡的 Hook 标记；旧 Mobile 忽略本地新增字段，保留普通用户
 消息的完整正文、附件与操作。上下文展示本身不改模型输入，不新增实时群历史查询。
@@ -198,13 +257,21 @@ hook 侧既有的逐轮 `[渠道说明]`，两者措辞不同但都向模型说�
 适用于其它 IM 的共享合同与新增渠道接入见 [IM 权限确认](im-permission-confirmation.md)。
 两侧的 owner 权限、超时来源、提问与计划审阅差异不因此统一。
 
+2026-10-23，Dash 要求群任务运行中任意权限切换与普通任务即时生效。下表「群轮次权限档」
+保留的是**新消息准入**：个人 bot 不能仅凭任务原有的完全访问设置受理成员消息并放行工具。
+已受理轮次中主人主动切到完全访问则是对当前任务的明确授权，包括成员发起的轮次，
+不会等待轮次结束或继续套用旧策略。该新决定覆盖旧裁决对运行中切档的限制；发起人身份、
+群历史隔离及下一条消息准入规则不变，详见 [运行中切换权限](im-permission-confirmation.md#运行中切换权限)。
+
 | 差异 | 官方 | 个人 | 裁决与理由 |
 |---|---|---|---|
+| **伙伴自有 bot** | 无：官方入口的伙伴归属需要协议携带执行归属并由服务端核验，尚未接入 | 有：伙伴设置「消息平台」页直接填自己申请的 bot token 与主人 id，或一次性把 设置 → IM 机器人 里已配好的个人 bot 移过来（主人 id 与全响应群随连接带过去，个人 bot 随即清空，不共用；失败时个人 bot 原样恢复）；本机 Hermes / OpenClaw 导入能确定唯一主人 id 时也直接建成连接；每条连接一份个人 Telegram 适配器实例；主人私聊进伙伴主任务，群 / 话题 / 外部用户私聊各进一条隐藏的 `role='channel'` 专线；外部用户私聊放行（带非主人标记，命令静默丢；渠道说明写明发言人并点出「不是主人」，不按 speaker 有无误判成群）。不读设置页的人格与行为配置：表情 / 引用档位用默认值，群参与模式（仅 @ / 全响应）按连接各一份存在连接记录里，由伙伴「消息平台」页每条连接下的「群聊」小节设置；全响应消息先经辅助模型判「该不该插话」（见第四节 2k，个人 bot 同款）；伙伴「消息平台」页同样可挂企业微信 / 钉钉 / Discord 机器人（各自传输层按连接前缀隔离凭证、不注册设置卡 IPC），本表只管 Telegram；命令菜单去掉 `/project` `/model` `/permission`（渠道里会被拒，单源 `isCompanionManagedCommand`）。专线里别人的消息在任务面板卡头写出发言人与群名（`imSource.origin`），不以主人名义显示。**群轮次权限档与本表「群轮次权限档」行有意不同**：伙伴设置里的权限档是唯一开关，主人触发的轮次不挂逐轮策略，成员 / 外部用户触发的轮次只对破坏性动作强确认（`channelForceConfirmToolCall`，飞书同口径），完全访问下成员轮次同样取缔策略直接执行而不是拒跑（2026-10-16 Chris 裁决，见 `cindy-bots-runtime.md` §2）。设置 → IM 机器人 那份个人 bot 完全沿用本表其余各行 | 2026-10-15 Chris 裁决伙伴自己带 IM bot（见 `cindy-bots-runtime.md` §2）；2026-10-17 Chris 允许从个人 bot 一次性移交。这是分期差异不是架构裁决：官方侧接入前登记为缺口，不得只改设置页宣称官方群路由完成 |
 | 桌面设置入口的区域与账号可见性 | 中国大陆版与国际版的云账号均显示官方 Telegram 入口；本地模式不显示需要 Cindy 账号的官方分栏 | 中国大陆版与国际版的个人、组织及本地模式均显示个人 Telegram 入口 | 2026-09-29 按 Dash 的跨版本入口一致要求，`ImBotSection.tsx` 与 `imBotVisibility.ts` 不再按区域或个人账号隐藏两侧入口；设置搜索由 `ImBotSection.settings-search.ts` 同步。两侧仍是独立机器人，官方入口需要云账号，个人入口由用户自配凭证；这项架构差异不应再造成中国大陆版缺入口。 |
 | 已有任务的权限切换提交 | 沿现有官方入口，不改服务端权限流程 | 个人 IM 的 `/permission` 与卡片选择共用桌面本地/远程设置和插件授权的任务内提交顺序，包含运行态、保存及失败回滚 | 2026-10-01 Dash 批准：避免较早插件授权或回滚覆盖较晚的用户 Ask。确认 UI 在队列外，群轮次临时权限恢复与续跑不等待此队列；不统一两套 bot 的权限策略，也不新增持久化或后台重试。 |
 | 群轮次权限档 | 完全按用户配的走 | Auto 对渠道策略命中的动作先交 AI 三态审阅；Ask 保留逐次确认；「完全访问」只让 owner 触发的轮次按该档直接执行，非 owner 的群消息继续保留逐轮策略并 fail-closed | Chris 2026-09-04 实踩裁决：个人 bot 的群任务已经明确设成 Pi + Grok + Full access，Cindy 侧能继续对话，Telegram 却因额外挂的逐轮策略与 Full access 互斥而在模型启动前拒绝每条消息。**owner 明确选择的完全访问必须正常执行，但不能把这份授权扩给同群其他成员**；个人侧在 `bypassPermissions` 下仅对 owner 触发的 policy 通过 `turnPolicyOptionalForMode` 取缔逐轮策略，非 owner 的授权边界与群历史 lane 隔离照常保留；scheduler 的创建、修改、前置脚本安装、恢复和立即运行同样进入该逐轮策略，防止可信 MCP 绕过群轮次权限；Auto 的风险判定交 AI，只有 ask 或服务不可用才转 owner 确认。官方侧继续完全按用户配置，不改服务端行为。见 `hook-control/session-runner.ts`、`im/telegram/adapter.ts`、`im/shared/channelToolPolicy.ts` 与 `im/shared/turnRunner.ts` |
 | 私聊过程态的载体 | 默认真实进度消息；开启 `TELEGRAM_DM_DRAFT_ENABLED` 时使用 Telegram **草稿**（`sendDraft`），终稿一发草稿自然消失 | 真实消息，原地 `editMessageText` 覆盖 | 草稿只有官方路径拿得到。个人栈**不是零推送**：惰性占位让「没有真实内容就不建消息」，但**第一帧真实内容那次 `sendMessage` 会推送**，之后的编辑才不推送。`presentationCapabilities.ts` 的 `progressSilent: true` 说的是「过程帧不额外推送」，不是「整轮零推送」 |
 | `/status` | 有 | 无 | 官方 bot 经服务端中继，链路可断，所以有「关联状态」可看；个人 bot 由桌面直连 Bot API，没有等价概念。见注册表 `parityNote` |
+| **Agent 在轮次里直接用 Bot API**（2026-10-17） | 无：Bot API 连接在服务端，桌面 Agent 够不到 | 有：`cindy_telegram_bot` MCP（`mcp-integrations/telegramBotMcpServer.ts`），只挂在带 `telegramChatId` vendorOptions 的会话上（个人 bot 与伙伴自有连接的私聊、群 / topic 专线），具名工具 `send_text` / `send_media` / `send_poll` / `set_reaction` / `download_file` / `get_chat` / `pin_message` / `delete_message` 加兜底 `call_api`；每条入站消息的 `[渠道说明]` 末尾点一句「本轮可用 cindy_telegram_bot」。作用域来自逐轮租约 `im/shared/channelToolScope.ts`（provider 开始前登记、终态释放，`sessionInstanceId` 挡旧实例），不来自模型参数：具名工具只发到本轮所在 chat / topic；`call_api` 默认钉在当前 chat，只有**主人私聊**轮次可指定别的 chat_id（群轮次即使主人触发也不放开，与 2e 同一信任模型）；非主人触发只允许读取 / 发送类方法，管理动作（踢人、禁言、改群、置顶、删消息、退群、论坛话题）需主人触发；`getUpdates` / `setWebhook` / `logOut` 等干扰连接的方法任何人不开放。审批：往当前 chat 发消息 / 媒体 / 投票、表情、下载、置顶静默执行（`TRUSTED_MCP_SERVERS`），`get_chat` 只读免审，`call_api` 与 `delete_message` 按次走会话权限档。伙伴专线：`botProfileRuntime` 在 `role === 'channel'` 且带 `telegramChatId` 时强制进 MCP allowlist（与飞书出站工具同口径），伙伴主任务不带。传输层同轮补上 `my_chat_member` 订阅（被拉进群 / 移出群进群窗口一条系统行并私聊告知主人）与 `sendMedia` / `downloadFile`（`packages/lizi-im/src/telegram/index.ts`） | 个人 bot 的 Bot API 连接就在桌面进程里，直通是零成本的能力；官方 bot 要同等能力需服务端加一条「桌面经 device-link 代调 Bot API」的协议，另立项。Agent 不知道自己在 Telegram、每次摸瞎试工具是 2026-10-16 Chris 点名的痛点，所以渠道说明里直接点名工具 |
 | `/unlink` | 有 | 无 | 官方 bot 的关联由服务端持有；个人 bot 的 token 是用户自填的，解绑入口在桌面设置页 |
 | `/workspace` | 独立命令 | `/project` 的**别名** | 服务端两条菜单文案逐字相同。个人 bot 用别名表达同义拼写，不重复占一个菜单位，因此不登记为独立命令——**不是缺口** |
 | 正文累积引擎 | `finalized-segments` 引擎：`isFinal` 是**逐条** agent_message 的完成信号，按消息边界切成已定稿段，完成态投影成 normalized messages 走折叠判定，`finalText()` 取定稿段合成 | `buffer-replace` 引擎：`isFinal` 用该条全文整体替换单一缓冲，无消息投影，`finalText()` 即整段缓冲 | 两侧 `isFinal` 的含义本来就不同，presenter 按 `mode` 实例化**两个独立引擎**（`createSegmentsEngine` / `createBufferEngine`）。**改正文累积相关逻辑时两个引擎要分别核对**——它们只共享接口，不共享实现 |
@@ -254,13 +321,26 @@ hook 侧既有的逐轮 `[渠道说明]`，两者措辞不同但都向模型说�
 | 2h | **自动审批故障降级后，个人 bot 有确认入口、官方待核** | 审阅器故障（网络/服务波动，**不是**模型判定该问）时，Cindy 兜底裁决从静默 `block` 改为 `ask` 交回用户决定。个人 bot 的 Telegram / 微信 / 钉钉群轮次即使带 `turnPermissionPolicy` 也会**真正弹确认卡**（`agents/pi/index.ts` 的 Auto 审阅分支），并附一条会话级提示（`im/shared/turnRetryNotice.ts`）。桌面、手机和多数渠道建议切到「完全访问」并写明风险更高；个人微信不能使用该档。出站提示和查看微信任务时的桌面横幅、历史错误卡、手机实时/尾部/历史提示都改为直接确认，不建议切档。**Auto 三态统一**：渠道策略命中也先交 AI；allow/block 静默执行/拒绝，模型 ask 与 unavailable 都交现有渠道确认入口，不能再由静态策略把动作直接转人工或把模型 ask 改成静默拒绝。官方 bot 侧的等价路径（服务端 `session-runner` 是否把 unavailable 降级的 `ask` 送到用户面前、提示文案由谁渲染）**待核** | 待核。个人侧收口于 PR #2474；官方侧若仍静默拒绝，用户会看到「已转由你确认」却没有确认入口——与个人侧修复前是同一个矛盾 |
 | 2i | **群内回复触发与任务归属两边各写一套** | 官方 bot 的服务端正本用 `TelegramMessageRoute.botAuthored === true` 区分“消息与任务有关”和“消息由 Cindy 发出、可通过回复召唤”：回复曾触发任务的普通用户消息不会误触发，明确 `@cindyapp_bot` 仍召唤当前发言者自己的 Cindy；回复同一 principal 的 Cindy 输出可续用其历史群 lane，回复其他 principal 的 Cindy 输出只带引用上下文，任务归当前发言者，不继承原任务的 principal、设备、会话或权限。普通群与 forum topic 都适用；`/session`、interaction、取消和 reaction 继续严格校验 owner。个人 bot 则在 `packages/lizi-im/src/telegram/inbound.ts` 的 `detectGroupTrigger` 独立用 `reply_to_message.from.id === botId` 判定回复触发，且采用本地单 owner 模型；两侧没有共享代码或数据，不能因为当前触发语义相近就跳过双路核对。**纯 @（只发一句 `@bot`、没有正文）两侧同口径都算召唤**：剥离召唤标记后 `userText`/事件正文保持空串，召唤及附件投递情况作为独立事实进入模型，不回填裸 `@` 或虚构请求。个人侧通过 `invoked` 保留纯召唤，即使随附媒体下载失败、超限或不支持也继续处理；仅有不可用媒体且没有召唤、引用或正文时仍直接提示。个人侧提及判据只认平台实体——`mention` 按 username、`text_mention` 按 user id，@ 在句中、句尾都触发；显示名召唤是唯一的字面匹配兜底 | 本客户端改动统一个人 bot 入站事实及 Hook 原文存档；官方 bot 的输入组装需配套版本更新，不能把客户端实现完成视为官方已上线。两侧保持同语义，仍各自维护触发与归属判据；以后修改群回复行为必须同时核对两条路径 |
 | 2j | **入站音视频与「先发媒体、再单独 @」：个人 bot 已补齐，官方待核** | 个人：`packages/lizi-im/src/telegram/inbound.ts` 的 `collectMedia` 把 video / video_note / voice / audio 及 `video/*`、`audio/*` 文档经 `host.media.cacheMedia` 存入 cindy-media 媒体总仓（可回收暂存，消息落库时转为附件引用；不写冻结的 `cc-agent/telegram-media`），以 file block（可读路径）交给模型，Agent 自行抽帧或转写；总仓不收的格式或 host 未提供 `cacheMedia` 时标 video / audio 不支持；Bot API 只能下载 20MB 以内，超出标 `oversize`，均作为未提供原因告知模型。群里先发媒体、再单独 @bot 时，`TelegramIM` 用收到时记下的 file_id（内存池，200 条 / 24 小时，重启清空，受保护群不入池；不随轮次出池，已受理轮次由群窗口游标防重复，同一轮已随附件送达的相册成员与被引消息排除）补下载本轮群上下文实际纳入那些消息的附件（`groupWindowCore` 的 `messageIds`），名额与飞书群上下文同口径（图片 6、文件 4，最新优先，先占名额再下载），全响应（ambient）轮次不补，经 `contextAttachments` 只进模型消息、不落库（总仓内保持可回收缓存），`<group_chat_attachments>` 块写明已提供与未提供的原因。官方：服务端入站对音视频与群历史媒体的处理**未核** PDF 等非媒体文件经 `host.files` 暂存后移入按账号隔离的 `im-attachments/telegram/sessions/<任务ID>/`（随任务删除清理），与飞书、Discord、企业微信同一实现，不再写 `cc-agent/telegram-media`。| 待核官方侧；若服务端仍丢弃音视频，按同一语义跨仓补齐 |
+| 2k | **全响应（ambient）消息先经辅助模型判「该不该插话」：个人 bot 有、官方没有** | 个人：`im/shared/messageHandler.ts` 在 ack 与提前落库**之前**调 adapter 的 `ambientTurnGate`，Telegram 适配器把群窗口前缀（只读不 commit）、发言人行、被引消息与机器人身份（设置页人格 / 伙伴名字 + 简介）交给 `im/shared/ambientReplyJudge.ts`，走共享辅助模型链（与伙伴群聊分工判定同一条，单候选 5 秒 / 总预算 8 秒，只答 REPLY / SKIP）。SKIP 的消息不落库、不起轮次、游标不动（下次真正开口时仍是背景）；REPLY / 判不出来（没有辅助模型、超时、输出不合规）照旧起完整轮次，主模型仍可 NO_REPLY，所以第 2b / 2f 行的哨兵与失败收口语义不变。官方：服务端在 `controller.ts` 打 ambient 标后直接下发整轮，没有前置判定 | 待判：官方侧要省同样的钱得在服务端接同类判定；在那之前登记为缺口。个人侧判定器失败一律放行，不得把「判不出来」当 SKIP |
+| 2l | **富答案出站：个人已投影，官方待核（#6884）** | 个人 `im/shared/turnRunner.ts` 在普通轮次与后台转播的统一出站层复用 `richAnswerText`，把 `cindy-ui` 转为可读文本，覆盖流式卡片、文本终稿、建卡失败后的文本补发及错误收尾。流式投影为空时等待后续内容，组件终稿仍无可读内容时用本地化提示，绝不回退协议原文；历史保留原始组件。回归见 `turnRunnerSendOutcome.test.ts`、`turnRunnerThreadRouting.test.ts`、`messagePersistBroadcaster.test.ts` | 官方 hook 是独立架构，本次未改，其富答案出站能力待单独核验，不计为两侧已同源 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了。**两侧的「有界」各有一条明确边界、且不在同一层**：官方路径经桌面账本 `hook-control/requestLedger.ts`，客户端侧的投递时效是 `HOOK_TERMINAL_DELIVERY_TTL_MS ≈ 24h`，**规则无条件**——过线的终稿一律不再发出，不论是谁在要。覆盖的出口：持久出箱 `listPending`、ACK 退避重发、离线内存缓冲、ACK 缓冲的两个消费分支（`onConnected` 入口一次性清扫，含能力降级回落），以及 **server 显式重投**——那一支只回放 `task.ack` 后返回，不发终稿、也不把记录改回 `pending`。（重投一度有过 `origin='server-request'` 豁免，后被删除：它在持久记录里没有位置，每条路径都要手工传播，连续三轮 review 各找出一条漏掉的。）server 侧只丢掉一份它自己也已放弃发布的终稿——服务端 `OUTBOX_MAX_ATTEMPTS × OUTBOX_MAX_DELAY_MS ≈ 24h` 的发布放弃线与客户端刻意取同一个数，而结果总比请求更晚，所以它索取一份过线结果时自身 outbox 早已过放弃点；X 侧入口还另有 `x-hook-server` 的 `onMention` 陈旧守卫。**个人 bot 不经过这个账本**，既没有落盘也没有这条时效，它的边界就是「进程活着就尽力，挂了就没了」。官方协商 `telegram-final-ops-v1` 由桌面端发布终稿后**仍走这本账**：发布前先把不带 `clientFinal` 的 `turn.end` 写进出箱，崩溃重放时服务端删掉已落地的客户端终稿段并自己重发，所以官方这条保障不降级 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」。**注意两侧要判的不是同一件事**：官方已定「超过 24h 的终稿不再主动补发」，个人待定的是「要不要先落盘」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
-| 6 | ack / 排队 / 结果表情 | 个人与官方 bot 都用 👀 表示排队；开始处理时从 👨‍💻 / 🤔 / 🤓 / ✍ 中随机选一个，两种开启档位均生效，不随进度轮换。正常完成和取消清除状态、不另加 👍；失败保留 👎（生动档沿用失败变体）。个人侧复用 `im/shared/turnRunner.ts` 的 ack 句柄，迟到回应由终态接管；官方新版 server 统一管理状态，鉴权后确认但不执行 Desktop 的自动 `:ack` / `:final` / `:final-fallback` 表情，`:processing` 只触发一次处理中状态，避免旧客户端重新加上 👍。表情关闭、ambient 或群不允许时静默；两种传输均为尽力反馈。 | 两仓配套实现。新版 server 可先发，旧 Desktop 的 accepted/首帧 progress 触发处理中；新版 Desktop 连旧 server 仍兼容 msg.op，但旧 server 的独立成功表情须升级 server 才能彻底消除。无协议字段、数据库或平台配置变更。 |
+| 7 | **Bot API 更新类型两侧都只订阅一部分** | 个人：`allowed_updates = ['message', 'callback_query', 'my_chat_member']`（2026-10-17 补 `my_chat_member`：被拉进群 / 移出群进群窗口并私聊告知主人；群内升降管理员、私聊拉黑不产生动作）。仍没订阅：`edited_message`（用户改消息）、`message_reaction`（用户给 bot 消息点表情，群里还要 bot 是管理员）、`chat_member`（群成员进出）、`chat_join_request`、`channel_post`、inline / Web App / 支付 / 商业账号。出站也没有 inline 模式、Web App、支付。官方侧订阅集合**待核** | 两侧共同缺口，按需补；`message_reaction` 与 `chat_member` 对群场景价值最大，先补这两个 |
+| 6 | ack / 排队 / 结果表情 | 个人与官方 bot 都用 👀 表示排队；开始处理时从 🤔 / 🤓 / ✍ 中随机选一个，两种开启档位均生效，不随进度轮换。正常完成和取消清除状态、不另加 👍；失败保留 👎（生动档沿用失败变体）。个人侧复用 `im/shared/turnRunner.ts` 的 ack 句柄，迟到回应由终态接管；官方新版 server 统一管理状态，鉴权后确认但不执行 Desktop 的自动 `:ack` / `:final` / `:final-fallback` 表情，`:processing` 只触发一次处理中状态，避免旧客户端重新加上 👍。表情关闭、ambient 或群不允许时静默；两种传输均为尽力反馈。 | 两仓配套实现。新版 server 可先发，旧 Desktop 的 accepted/首帧 progress 触发处理中；新版 Desktop 连旧 server 仍兼容 msg.op，但旧 server 的独立成功表情须升级 server 才能彻底消除。新增可选 `hello.statusReactions` 声明客户端样式，旧 server 忽略，旧客户端沿用 server 默认；无数据库或平台配置变更。 |
+
+官方 Slack / Telegram 的状态表情样式由客户端通过 `hello.statusReactions` 下发，
+服务端只保留生命周期、实际表情清理与平台回落；重连重新声明，按原任务设备隔离。
+Telegram 个人 bot、官方旧服务端兼容回应与 hello 声明复用同一份客户端变体池。
+新旧任一端未支持时仍使用兼容默认值，不影响任务执行；两端升级后换肤色或变体只改客户端。
+
+处理中人物表情优先使用浅肤色女士：Slack 用 `female-technologist::skin-tone-2`，Discord 用 👩🏻‍💻，均保留原有
+思考、书写变体。Telegram 标准 reaction 不支持 👩‍💻，因此个人与官方 bot 均只用
+🤔 / 🤓 / ✍，基础回落为 🤔。飞书 / Lark 继续使用平台原生 `Typing` / `THINKING` /
+`SMART` / `OnIt`，不传不受支持的 Unicode 表情。
 
 官方 Desktop 连旧 `msg-op-v1` server 时，处理中变体被拒后复用既有回落表，使用独立
-`:processing-fallback` 幂等键尝试基础款 👨‍💻 一次；完成、取消或账号收口后丢弃迟到的
+`:processing-fallback` 幂等键尝试基础款 🤔 一次；完成、取消或账号收口后丢弃迟到的
 处理中回执，不在重连时补发处理中状态。新 server 成功确认 `:processing` 后不会触发此回落。
 个人渠道切换表情时，删除失败向共享 turn runner 返回错误，保留旧 token 给终态再清理，
 避免飞书／Discord 同时遗留旧排队表情和新处理中表情；最终清理仍是尽力而为。

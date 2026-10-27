@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
+const owner = vi.hoisted(() => ({ key: 'owner:1' }));
+vi.mock('../../appSessionState', () => ({ activeOwnerScopeKey: () => owner.key }));
 vi.mock('../mediaTransfer', () => ({ removeRemote }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -23,11 +25,19 @@ import {
 const D = 'dev-1';
 
 beforeEach(() => {
+  owner.key = 'owner:1';
   __resetForTests();
   removeRemote.mockClear();
 });
 
 describe('lookup / record', () => {
+  it('does not reuse warm bytes across account generations', () => {
+    recordLocal(D, 'xdt-image://s/a.png', Buffer.from('private'), 'image/png');
+    owner.key = 'other:2';
+    expect(lookup(D, 'xdt-image://s/a.png')).toBeUndefined();
+    owner.key = 'owner:3';
+    expect(lookup(D, 'xdt-image://s/a.png')).toBeUndefined();
+  });
   it('recordLocal 后 lookup 命中(同 key),不同 origUrl 不串', () => {
     recordLocal(D, 'xdt-image://s/a.png', Buffer.from([1, 2, 3]), 'image/png');
     const e = lookup(D, 'xdt-image://s/a.png');

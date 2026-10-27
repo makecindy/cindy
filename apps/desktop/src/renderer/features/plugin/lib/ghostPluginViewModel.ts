@@ -2,7 +2,7 @@
  * Plugin list/detail view models derived only from the installed Ghost contract.
  *
  * Inputs: shared Ghost manifests and install records.
- * Outputs: renderer-safe list/detail facts without marketplace or runtime invention.
+ * Outputs: renderer-safe list/detail facts, including the optional Host task settings card.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -18,17 +18,6 @@ import {
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
-
-/**
- * cindy 详单里**可钉后端**的类目 —— 详情页给每个申请到的动作渲染一行模型选择。
- *
- * 新增 cindy 能力类目时必须回到这里登记,否则那个类目在详情页**完全没有选型
- * 入口**(不是少个下拉:`cindyCapabilities` 为空时整张卡片都不渲染),插件只能
- * 吃全局默认档。2026-08-04 加 `embed` 时就漏过一次。
- *
- * `media` 有意不在其中:寄存(deposit)不经模型,没有"用哪个型号"可选。
- */
-const PINNABLE_CINDY_CATEGORIES = ['image', 'video', 'text', 'embed'] as const;
 
 export interface GhostPluginListItem {
   /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
@@ -84,9 +73,14 @@ export interface GhostPluginDetail extends GhostPluginListItem {
   permissions: GhostPermissionItem[];
   tools: readonly GhostToolDecl[];
   hasSettingsUi: boolean;
-  cindyCapabilities: readonly string[];
-  /** 新建普通任务的能力共用宿主「任务设置」，包含旧 errand 适配器。 */
+  /**
+   * 宿主「模型与任务」卡:插件的唯一模型字段(快问快答与新建任务共用)。声明了
+   * 快问快答(cindy.text 含 oneshot)或任何新建任务能力即展示;图像/视频/向量
+   * 没有逐插件选模,始终跟随系统默认。showTaskPreferences:false 仅隐藏该卡。
+   */
   hasTaskPreferences: boolean;
+  /** 能新建任务(agent.tasks / 旧 agent.errand / workspace):卡片额外展示权限与工作目录。 */
+  hasPluginTasks: boolean;
   panelMinWidth: number | null;
   installDir: string | null;
 }
@@ -309,6 +303,8 @@ export function toGhostPluginDetail(
 ): GhostPluginDetail {
   const listItem = toGhostPluginListItem(ghost, presentation);
   const { manifest } = ghost;
+  const hasPluginTasks =
+    !!manifest.workspace || manifest.agent?.errand === true || manifest.agent?.tasks === true;
   return {
     ...listItem,
     trust: listItem.trust!,
@@ -317,10 +313,10 @@ export function toGhostPluginDetail(
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],
     hasSettingsUi: Boolean(manifest.settingsHtml),
-    cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
-      (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
-    ),
-    hasTaskPreferences: !!manifest.workspace || manifest.agent?.errand === true || manifest.agent?.tasks === true,
+    hasTaskPreferences:
+      manifest.showTaskPreferences !== false &&
+      (hasPluginTasks || (manifest.cindy?.text ?? []).includes('oneshot')),
+    hasPluginTasks,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };

@@ -15,8 +15,10 @@ import { PROVIDER_RUNNING_TURNS_FIELD } from '@cindy/device-link';
 import {
   parseProviderGroupRemoteRequest,
   PROVIDER_GROUP_LOCAL_MEMBER_KEY,
+  providerGroupDeviceCount,
   providerGroupSummaryForWire,
   type ProviderGroupConfig,
+  type ProviderGroupRebalanceSuggestion,
   type ProviderGroupRemotePick,
   type ProviderGroupRemoteSessionGroup,
   type ProviderGroupRemoteUsageRow,
@@ -32,6 +34,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 export const PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS = 8 * 24 * 60 * 60_000;
 
 export interface ProviderGroupRemoteHandlerDeps {
+  bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; controllerDeviceId?: string }): Promise<void>;
   /** 当前账号的分配器与负载(每个请求开头取一次，整个请求都用这一份)。 */
   scope(): ProviderGroupOwnerScope;
   readGroup(providerId: string): ProviderGroupConfig | null;
@@ -42,6 +45,10 @@ export interface ProviderGroupRemoteHandlerDeps {
   replaceReportedUsage(controller: string, sinceDay: string | null, rows: ProviderGroupRemoteUsageRow[]): void;
   /** 这台电脑上的任务此刻归哪个组(只读本机记录，读不到为 null)。 */
   sessionGroup(sessionId: string): Promise<ProviderGroupSessionGroup>;
+  /** 手机、远程控制发下一条消息前：这台电脑上的任务要不要提议换号(provider-groups.md §6.2「任务进行中换号」)。 */
+  rebalanceSuggestion?(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
+  /** 记下用户确认的换号。 */
+  rebalanceDecision?(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
 }
 
 /** 每个账号、每台报告来的电脑最近收下的用量报告序号(乱序到达的旧份丢弃)。按账号的负载对象区分账号。 */
@@ -59,9 +66,10 @@ const pendingUsageReports = new WeakMap<object, Map<string, PendingUsageReport>>
 export const PROVIDER_GROUP_USAGE_PART_TTL_MS = 10 * 60_000;
 
 /**
- * 给同账号电脑的 `maker:provider:list` 补组摘要与运行数，都只加在仍允许被远程调用的供应商上：
- * 建了组的带 `group`；`running`(这台电脑上每个供应商正在运行一轮的任务数，localLoad.ts)给出时每个都带
- * `runningTurns`，没在跑的为 0，读不到(null)时不带。结果里已有的这两个字段一律先去掉，只有本机能产生它们。
+ * 给同账号电脑的 `maker:provider:list` 补组摘要与运行数：建了组的供应商都带 `group`，
+ * 让关闭远程调用的组仍能从设置进入管理；`running`(这台电脑上每个供应商正在运行一轮的任务数，
+ * localLoad.ts)只给仍允许被远程调用的供应商附加 `runningTurns`，没在跑的为 0，读不到(null)时不带。
+ * 结果里已有的这两个字段一律先去掉，只有本机能产生它们。
  */
 export function decorateProviderListWithGroups(
   result: unknown,
@@ -78,9 +86,10 @@ export function decorateProviderListWithGroups(
       const entry = { ...(provider as Record<string, unknown>) };
       delete entry.group;
       delete entry[PROVIDER_RUNNING_TURNS_FIELD];
-      if (entry.remoteInvocationEnabled !== true || typeof entry.id !== 'string') return entry;
+      if (typeof entry.id !== 'string') return entry;
       const config = readGroup(entry.id);
       if (config) entry.group = providerGroupSummaryForWire(config);
+      if (entry.remoteInvocationEnabled !== true) return entry;
       if (running) entry[PROVIDER_RUNNING_TURNS_FIELD] = running.get(entry.id) ?? 0;
       return entry;
     }),
@@ -89,6 +98,7 @@ export function decorateProviderListWithGroups(
 
 /**
  * 分享出去的供应商建了组时提供台数(provider-groups.md §8)，不返回组员名单；匿名状态由受邀者分配器按需提供。
+ * 台数按电脑算(2026-10-15)：同一台电脑上的几个账号算一台，与匿名状态的项数一致(sharedStatus.ts)。
  * 供应商不再允许被远程调用时分享本身就不可用，不报台数。
  */
 export function sharedProviderGroupSize(
@@ -96,7 +106,7 @@ export function sharedProviderGroupSize(
   providerId: string,
 ): number | null {
   if (!deps.isRemoteAllowed(providerId)) return null;
-  const count = deps.readGroup(providerId)?.members.length ?? 0;
+  const count = providerGroupDeviceCount(deps.readGroup(providerId)?.members ?? []);
   return count > 0 ? count : null;
 }
 
@@ -105,32 +115,82 @@ export async function handleProviderGroupRemote(
   controller: string,
   raw: unknown,
 ): Promise<
-  ProviderGroupRemotePick | ProviderGroupView | ProviderGroupUsagePartAck | ProviderGroupRemoteSessionGroup | Record<string, never>
+  | ProviderGroupRemotePick
+  | ProviderGroupView
+  | ProviderGroupUsagePartAck
+  | ProviderGroupRemoteSessionGroup
+  | ProviderGroupRebalanceSuggestion
+  | { ok: boolean }
+  | Record<string, never>
 > {
   const request = parseProviderGroupRemoteRequest(raw);
   if (request.action === 'session-group') return { group: await deps.sessionGroup(request.sessionId) };
+  if (request.action === 'rebalance-suggestion') {
+    return deps.rebalanceSuggestion ? await deps.rebalanceSuggestion(request.sessionId) : null;
+  }
+  if (request.action === 'rebalance-decision') {
+    return {
+      ok: deps.rebalanceDecision
+        ? await deps.rebalanceDecision(request.sessionId, request.memberKey, request.remember, request.clientId)
+        : false,
+    };
+  }
   const scope = deps.scope();
   switch (request.action) {
     case 'pick': {
       const { providerId } = request;
       if (!deps.isRemoteAllowed(providerId) || !deps.readGroup(providerId)) return { kind: 'none' };
-      const pick = await scope.router.pick({
-        providerId,
-        agentKind: request.agentKind,
-        model: request.model,
-        exclude: new Set(request.exclude),
-        // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
-        ...(request.exclude.length > 0 ? { fresh: true } : {}),
-        // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
-        onPicked: (memberKey) => scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
-      });
-      // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
-      if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
-      if (pick.kind === 'unavailable') return { kind: 'unavailable' };
-      const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
-      return { kind: 'member', member: { key, kind, agentDeviceId, providerId: memberProviderId }, label: pick.label };
+      const excluded = new Set(request.exclude);
+      while (true) {
+        const pick = await scope.router.pick({
+          providerId,
+          agentKind: request.agentKind,
+          model: request.model,
+          exclude: excluded,
+          ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
+          // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
+          ...(excluded.size > 0 ? { fresh: true } : {}),
+          // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
+          onPicked: (memberKey) =>
+            scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
+        });
+        // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
+        if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
+        if (pick.kind === 'unavailable')
+          return {
+            kind: 'unavailable',
+            ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+          };
+        const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
+        try {
+          await deps.bindFastPolicy?.({
+            group: providerId,
+            deviceId: kind === 'local' ? null : agentDeviceId,
+            sessionId: request.sessionId,
+            controllerDeviceId: controller,
+          });
+        } catch (error) {
+          if (!scope.isCurrent()) return { kind: 'none' };
+          if (
+            !deps.readGroup(providerId)?.autoSwitch ||
+            !/REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_UNAVAILABLE/.test(String(error))
+          )
+            throw error;
+          if (excluded.has(key)) return { kind: 'unavailable' };
+          excluded.add(key);
+          continue;
+        }
+        if (!scope.isCurrent()) return { kind: 'none' };
+        return {
+          kind: 'member',
+          member: { key, kind, agentDeviceId, providerId: memberProviderId },
+          label: pick.label,
+          ...(request.quotaRebalance ? { quotaRebalance: true as const } : {}),
+        };
+      }
     }
-    case 'cool': {
+    case 'cool':
+    case 'cool-model': {
       const config = deps.readGroup(request.providerId);
       if (!config || !config.members.some((m) => m.key === request.memberKey)) return {};
       const now = deps.now();
@@ -140,7 +200,10 @@ export async function handleProviderGroupRemote(
           now + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS,
         )
         : now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS;
-      scope.router.markCooling(request.providerId, request.memberKey, until);
+      // Old controllers cannot identify the affected model: never turn their report into a week-long account ban.
+      const model = request.cause === 'usage-limit' ? request.model : undefined;
+      scope.router.markCooling(request.providerId, request.memberKey,
+        model ? until : Math.min(until, now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS), model);
       return {};
     }
     case 'leases':
@@ -148,7 +211,9 @@ export async function handleProviderGroupRemote(
       return {};
     case 'view': {
       if (!deps.isRemoteAllowed(request.providerId)) return { providerId: request.providerId, config: null, members: [] };
-      const options = request.model !== undefined
+      const options = request.agentKind !== undefined
+        ? { model: request.model, agentKind: request.agentKind, includeGuestSupport: request.includeGuestSupport === true }
+        : request.model !== undefined
         ? request.includeGuestSupport === true
           ? { model: request.model, includeGuestSupport: true }
           : request.model

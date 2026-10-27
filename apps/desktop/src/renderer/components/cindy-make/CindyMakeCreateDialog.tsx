@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
@@ -124,7 +125,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   rows={5}
                   maxLength={MAX_REQUEST_LENGTH}
                   disabled={starting}
-                  className="min-h-[120px] resize-y placeholder:opacity-55"
+                  className="min-h-[120px] resize-y"
                   onKeyDown={(event) => {
                     if (
                       event.key === 'Enter' &&
@@ -139,9 +140,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
               )}
             </FormField>
             {failed && (
-              <p role="alert" className="text-13 text-[var(--error-fg)]">
-                {t('settings.cindyMake.create.failed')}
-              </p>
+              <ErrorNotice role="alert" message={t('settings.cindyMake.create.failed')} />
             )}
             <div className="flex flex-wrap justify-end gap-2">
               <Dialog.Close asChild>

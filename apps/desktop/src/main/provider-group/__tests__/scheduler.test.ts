@@ -1,8 +1,9 @@
 /**
- * 组策略(provider-groups.md §5)：只分给可用、未暂停、没试过的电脑；优先未满载。
+ * 组策略(provider-groups.md §5)：只分给可用、未暂停、没试过的电脑；优先未满载；最急着用的额度先用。
  */
 import { describe, expect, it } from 'vitest';
 
+import { PROVIDER_GROUP_STRATEGIES } from '../../../shared/providerGroup';
 import { pickProviderGroupMember, type SchedulableMember } from '../scheduler';
 
 const m = (key: string, patch: Partial<SchedulableMember> = {}): SchedulableMember => ({
@@ -46,21 +47,49 @@ describe('pickProviderGroupMember', () => {
     expect(pickProviderGroupMember(members, 'weight', { random: () => 0.5 })).toBe('b');
   });
 
-  it('balances current usage and spreads similar usage across idle computers', () => {
-    expect(pickProviderGroupMember([m('a', { usagePercent: 85 }), m('b', { usagePercent: 55, running: 2 })], 'usage')).toBe('b');
-    expect(pickProviderGroupMember([m('a', { usagePercent: 40, running: 2 }), m('b', { usagePercent: 45 })], 'usage')).toBe('b');
-    expect(pickProviderGroupMember([m('a', { usagePercent: 40, running: 2 }), m('b', { usagePercent: 46 })], 'usage')).toBe('a');
+  it('keeps concurrency limits ahead of quota urgency, including the all-full fallback', () => {
+    const urgent = m('urgent', { urgency: 5, running: 4 });
+    expect(pickProviderGroupMember([urgent, m('calm', { urgency: 0.5 })], 'least')).toBe('calm');
+    // 都满了时仍然先用最急的，而不是单看谁更空。
+    expect(pickProviderGroupMember([m('emptier', { urgency: 0.5, running: 4 }), { ...urgent, running: 6 }], 'least')).toBe('urgent');
+  });
+});
+
+// 2026-10-21 用户裁决：不论选哪种组策略，都先用最急着用的额度(快作废的最优先，其次各账号平均)，
+// 组策略只在一样急的几台里挑。
+describe('the most urgent quota comes first for every strategy', () => {
+  it.each(PROVIDER_GROUP_STRATEGIES)('sends %s picks to the most urgent computer', (strategy) => {
+    expect(pickProviderGroupMember([m('calm', { urgency: 1 }), m('urgent', { urgency: 4, running: 3 })], strategy, {
+      lastPicked: 'urgent', random: () => 0,
+    })).toBe('urgent');
   });
 
-  it('uses known usage first, with ordinary load balancing when no current usage is known', () => {
-    expect(pickProviderGroupMember([m('unknown'), m('known', { usagePercent: 80 })], 'usage')).toBe('known');
-    expect(pickProviderGroupMember([m('a', { running: 1 }), m('b', { usagePercent: null })], 'usage')).toBe('b');
-    expect(pickProviderGroupMember([m('a', { usagePercent: 10, usable: false })], 'usage')).toBeNull();
+  it('lets each strategy choose among computers at least 90% as urgent as the most urgent one', () => {
+    const similar = [
+      m('far', { urgency: 1.79 }),
+      m('a', { urgency: 1.9, running: 2, weight: 1 }),
+      m('b', { urgency: 2, running: 1, weight: 3 }),
+      m('c', { urgency: 1.8, weight: 1 }),
+    ];
+    expect(pickProviderGroupMember(similar, 'order')).toBe('a');
+    expect(pickProviderGroupMember(similar, 'least')).toBe('c');
+    expect(pickProviderGroupMember(similar, 'usage')).toBe('c');
+    expect(pickProviderGroupMember(similar, 'round', { lastPicked: 'a' })).toBe('b');
+    expect(pickProviderGroupMember(similar, 'round', { lastPicked: 'c' })).toBe('a');
+    expect(pickProviderGroupMember(similar, 'weight', { random: () => 0.5 })).toBe('b');
   });
 
-  it('keeps concurrency limits ahead of usage ranking, including the all-full fallback', () => {
-    const full = m('low', { usagePercent: 10, running: 4 });
-    expect(pickProviderGroupMember([full, m('high', { usagePercent: 80 })], 'usage')).toBe('high');
-    expect(pickProviderGroupMember([full, m('other', { usagePercent: 5, running: 5 })], 'usage')).toBe('low');
+  it('puts computers without readable usage after known ones, and keeps plain strategies when none is known', () => {
+    expect(pickProviderGroupMember([m('shared'), m('own', { urgency: 0.2, running: 3 })], 'order')).toBe('own');
+    expect(pickProviderGroupMember([m('a', { running: 1 }), m('b', { urgency: null })], 'order')).toBe('a');
+    expect(pickProviderGroupMember([m('a', { running: 1 }), m('b')], 'least')).toBe('b');
+  });
+
+  // 2026-10-21 用户裁决：5 小时配额快满、离重置还早的先不分新任务(刚开始就撞上限会被迫换电脑)，都是这样时照常分。
+  it('avoids a nearly full 5-hour window, even ahead of urgency and of unreadable computers, unless all are like that', () => {
+    const tight = m('tight', { urgency: 9, fiveHourTight: true });
+    expect(pickProviderGroupMember([tight, m('calm', { urgency: 1 })], 'order')).toBe('calm');
+    expect(pickProviderGroupMember([tight, m('api')], 'order')).toBe('api');
+    expect(pickProviderGroupMember([tight, m('also', { urgency: 2, fiveHourTight: true })], 'order')).toBe('tight');
   });
 });

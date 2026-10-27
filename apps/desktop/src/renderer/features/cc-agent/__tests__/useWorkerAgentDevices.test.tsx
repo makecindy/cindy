@@ -76,7 +76,7 @@ describe('useWorkerAgentDevices', () => {
     ).result.current).toEqual({ leadAgentDeviceId: null, devices: undefined });
   });
 
-  it('lists other computers and the readable share for a controlled Lead', () => {
+  it.each([null, 'share:s1'])('lists all received shares for a controlled Lead running at %s', (lead) => {
     mocks.devices = [
       { deviceId: 'host', name: 'Host', online: true },
       { deviceId: 'office', name: 'Office', online: true },
@@ -86,13 +86,14 @@ describe('useWorkerAgentDevices', () => {
       { deviceId: 'share:s2', name: 'OpenAI · Bob' },
     ];
     const { result } = renderHook(() =>
-      useWorkerAgentDevices({ controlledDeviceId: 'host', leadAgentDeviceId: 'share:s1' }),
+      useWorkerAgentDevices({ controlledDeviceId: 'host', leadAgentDeviceId: lead }),
     );
     expect(result.current).toEqual({
-      leadAgentDeviceId: 'share:s1',
+      leadAgentDeviceId: lead,
       devices: [
         { deviceId: 'office', name: 'Office' },
         { deviceId: 'share:s1', name: 'Anthropic · Alice' },
+        { deviceId: 'share:s2', name: 'OpenAI · Bob' },
       ],
     });
   });

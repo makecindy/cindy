@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupExternalLoad } from '../externalLoad';
-import { createProviderGroupGuestRelay, PROVIDER_GROUP_GUEST_INCAPABLE_MS } from '../guestRelay';
+import { createProviderGroupGuestRelay, PROVIDER_GROUP_GUEST_INCAPABLE_MS, type ProviderGroupGuestRelayDeps } from '../guestRelay';
 import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from '../remoteHandler';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, type ProviderGroupPickInput, type ProviderGroupRouter } from '../router';
 
@@ -19,7 +19,11 @@ const MINI = member('device:mini:anthropic-2', 'device', 'mini', 'anthropic-2');
 const FRIEND = member('share:s1:anthropic', 'share', 'share:s1', 'anthropic');
 const CONFIG: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [LOCAL, MINI, FRIEND] };
 
-function setup(picks: ProviderGroupMember[], config: ProviderGroupConfig = CONFIG) {
+function setup(
+  picks: ProviderGroupMember[],
+  config: ProviderGroupConfig = CONFIG,
+  extra: Partial<Pick<ProviderGroupGuestRelayDeps, 'reshareAllows' | 'noteReshareDenied' | 'reshareNeedsUpdate'>> = {},
+) {
   let now = 1_000;
   let current = true;
   const router = {
@@ -44,6 +48,7 @@ function setup(picks: ProviderGroupMember[], config: ProviderGroupConfig = CONFI
     connect: () => ({ invoke, poller: {} as never }),
     now: () => now,
     log: { warn: vi.fn() },
+    ...extra,
   });
   return {
     relay,
@@ -80,6 +85,28 @@ describe('provider group guest relay planner', () => {
     expect((await env.relay.plan(PLAN))).toMatchObject({ memberKey: MINI.key });
   });
 
+  // 转分享(provider-sharing.md §4.3)：分享来的电脑只给它的主人同意过的人；同账号电脑与本机不受影响。
+  it('skips a shared-in computer whose owner has not agreed to this shared user', async () => {
+    const allowed = new Set<string>();
+    const reshareAllows = vi.fn((agentDeviceId: string, key: string | undefined) => !!key && allowed.has(`${agentDeviceId}|${key}`));
+    const env = setup([FRIEND, MINI], CONFIG, { reshareAllows });
+    const KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    expect(await env.relay.plan({ ...PLAN, reshareKey: KEY })).toMatchObject({ memberKey: MINI.key });
+    expect(env.router.pick.mock.calls[0][0].exclude.has(FRIEND.key)).toBe(true);
+    // 不知道是谁(没有键)时一律不选分享来的电脑。
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: MINI.key });
+    allowed.add(`share:s1|${KEY}`);
+    expect(await env.relay.plan({ ...PLAN, reshareKey: KEY })).toMatchObject({ memberKey: FRIEND.key, sameAccount: false });
+    expect(await env.relay.plan({ ...PLAN, reshareKey: 'b1b2c3d4e5f60718293a4b5c6d7e8f90' })).toMatchObject({ memberKey: MINI.key });
+  });
+
+  it('passes a refusal from the shared-in computer on so consent is checked again', () => {
+    const noteReshareDenied = vi.fn();
+    const env = setup([FRIEND], CONFIG, { noteReshareDenied });
+    env.relay.noteReshareDenied?.('share:s1', 'a1b2c3d4e5f60718293a4b5c6d7e8f90');
+    expect(noteReshareDenied).toHaveBeenCalledWith('share:s1', 'a1b2c3d4e5f60718293a4b5c6d7e8f90');
+  });
+
   it('cools a computer only for problems with its account, not when it cannot be reached', async () => {
     const env = setup([MINI]);
     const mini = { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true };
@@ -88,7 +115,7 @@ describe('provider group guest relay planner', () => {
     env.relay.noteStartFailure('anthropic', mini, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
     expect(env.router.markCooling).not.toHaveBeenCalled();
     env.relay.noteStartFailure('anthropic', mini, new Error('401 unauthorized'));
-    expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number));
+    expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number), undefined);
     expect(env.router.markCooling.mock.calls[0][2]).toBeLessThan(1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
   });
 
@@ -139,8 +166,8 @@ describe('provider group guest relay planner', () => {
     // 换到哪台都一样的失败：不冷却，也不换。
     expect(env.relay.noteRunFailure('anthropic', mini, { message: 'prompt is too long', sdkError: 'invalid_request' })).toBe(false);
     expect(env.router.markCooling).not.toHaveBeenCalled();
-    expect(env.relay.noteRunFailure('anthropic', mini, { usageLimit: true, message: 'usage limit' })).toBe(true);
-    expect(env.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+    expect(env.relay.noteRunFailure('anthropic', mini, { usageLimit: true, message: 'usage limit' }, 'claude-fable-5')).toBe(true);
+    expect(env.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, 'claude-fable-5');
     // 连不上：照常换一台，但不记进组的状态。
     const cooled = env.router.markCooling.mock.calls.length;
     expect(env.relay.noteRunFailure('anthropic', mini, { reason: 'remote_agent_closed' })).toBe(true);
@@ -174,18 +201,18 @@ describe('provider group guest relay planner', () => {
       log: { warn: vi.fn() },
     });
     const mini = { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true };
-    relay.noteRunFailure('anthropic', mini, { usageLimit: true });
-    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, resetAt);
+    relay.noteRunFailure('anthropic', mini, { usageLimit: true }, 'claude-fable-5');
+    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, resetAt, 'claude-fable-5');
     resetAt = 1_000 + 30 * 24 * 60 * 60_000;
-    relay.noteRunFailure('anthropic', mini, { usageLimit: true });
-    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS);
+    relay.noteRunFailure('anthropic', mini, { usageLimit: true }, 'claude-fable-5');
+    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS, 'claude-fable-5');
   });
 
   it('still cools the computer but offers no switch when the group has automatic switching turned off', () => {
     const env = setup([MINI], { ...CONFIG, autoSwitch: false });
     const mini = { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true };
-    expect(env.relay.noteRunFailure('anthropic', mini, { usageLimit: true, message: 'usage limit' })).toBe(false);
-    expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number));
+    expect(env.relay.noteRunFailure('anthropic', mini, { usageLimit: true, message: 'usage limit' }, 'claude-fable-5')).toBe(false);
+    expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number), 'claude-fable-5');
   });
 
   it('counts the picked computer in the same step it is picked, when asked to', async () => {

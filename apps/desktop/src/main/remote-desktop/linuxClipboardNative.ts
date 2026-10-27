@@ -7,6 +7,7 @@ import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import type { RemoteClipboardContent } from '@cindy/device-link';
 import { isLinuxDesktopUnlocked } from './linuxSessionLock';
+import { CLIPBOARD_IMAGE_BYTES, CLIPBOARD_IMAGE_PIXELS } from './clipboardLimits';
 
 const exec = promisify(execFile);
 export function supportsLinuxClipboard(): boolean {
@@ -38,6 +39,13 @@ async function read(args: string[], maxBuffer: number, checkLock = true): Promis
     await assertUnlocked(checkLock);
     return result.stdout;
   } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+    )
+      throw new Error('CLIPBOARD_TOO_LONG');
     // Empty selection is distinct from failed compositor access. Never propagate
     // subprocess exceptions: they can include clipboard contents in stdout.
     if (
@@ -87,7 +95,11 @@ export async function readLinuxClipboardSnapshot(
     }
   }
   if (!primary && formats.includes('image/png')) {
-    const png = await read(['--no-newline', '--type', 'image/png'], 8 * 1024 * 1024, checkLock);
+    const png = await read(
+      ['--no-newline', '--type', 'image/png'],
+      CLIPBOARD_IMAGE_BYTES,
+      checkLock,
+    );
     if (
       png.length < 33 ||
       !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -95,7 +107,8 @@ export async function readLinuxClipboardSnapshot(
       throw new Error('CLIPBOARD_UNSUPPORTED');
     const width = png.readUInt32BE(16),
       height = png.readUInt32BE(20);
-    if (!width || !height || width * height > 4000000) throw new Error('CLIPBOARD_TOO_LONG');
+    if (!width || !height || width > CLIPBOARD_IMAGE_PIXELS / height)
+      throw new Error('CLIPBOARD_TOO_LONG');
     content.png = png.toString('base64');
   }
   return { formats, content };

@@ -507,9 +507,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
             }}
             className={cn(
               // list 组头与普通 SessionCard 共用 10px 内容边距；只有展开后的子任务
-              // 由下方 pl-3 容器额外缩进。text 模式继续沿用 SessionItem 的树形缩进。
+              // 由下方 pl-2 容器增加 8px 层级缩进。text 模式沿用 SessionItem 的树形缩进。
               'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
-              sessionVariant === 'list' ? 'px-2.5' : indented ? 'pl-[22px] pr-2' : 'pl-3 pr-2',
+              sessionVariant === 'list' ? 'px-2.5' : indented ? 'pl-5 pr-2' : 'pl-3 pr-2',
               'text-left text-sm font-medium',
               hasActiveHidden
                 ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
@@ -846,7 +846,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           </div>
         </Tip>
         {hasVisibleChildren && (
-          <div className="flex flex-col gap-0.5 pl-3">
+          <div className="flex flex-col gap-0.5 pl-2">
             {visibleSessions.map((session: Session, index) => {
               const nextSession = visibleSessions[index + 1];
               const nextHighlighted =

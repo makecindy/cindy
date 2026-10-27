@@ -414,3 +414,20 @@ describe('搬家', () => {
     expect(result).toEqual({ seeded: true, skillsMoved: false });
   });
 });
+
+describe('strict reads (cloud companions)', () => {
+  // chmod cannot make a file unreadable on Windows.
+  it.skipIf(process.platform === 'win32')('treats a missing file as empty but never an unreadable one', async () => {
+    expect((await readBotProfileFolder(root, 'bot-a', { strict: true })).identitySource).toBe('');
+    await writeBotProfileFolder(root, 'bot-a', { identitySource: SEED.identitySource });
+    const soul = path.join(botProfileDir(root, 'bot-a'), 'SOUL.md');
+    await fs.chmod(soul, 0o000);
+    try {
+      // The lenient reader still renders the settings page; the strict one refuses to report "empty".
+      expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('');
+      await expect(readBotProfileFolder(root, 'bot-a', { strict: true })).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      await fs.chmod(soul, 0o600);
+    }
+  });
+});

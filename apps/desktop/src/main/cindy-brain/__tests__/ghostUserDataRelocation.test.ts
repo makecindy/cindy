@@ -109,7 +109,7 @@ async function seedSourceResources() {
   }), { skillSourceDir: path.join(root, from) });
   fs.mkdirSync(path.join(scope.dir, 'ghost-kv'));
   fs.writeFileSync(path.join(scope.dir, 'ghost-kv', from + '.json'), JSON.stringify({ private: 'org' }));
-  cindy.writeGhostCindyOverride(from, 'image.generate', 'org-model');
+  cindy.writeGhostCindyInflightLimit(from, 3);
   errand.writePluginTaskConfig(from, { permissionMode: 'auto', workingDir: '/org-workspace' });
   errand.writeGhostErrandSessionId(from, 'org-session');
   errand.writeGhostErrandSessionId(from, 'org-keyed-session', 'draft');
@@ -136,7 +136,7 @@ it('installs a same-name root without changing legacy data or UI references', as
   expect(fs.readFileSync(path.join(scope.dir, 'ghosts-install-state', from + '.json'), 'utf8')).toBe(receiptBefore);
   expect(fs.readFileSync(path.join(scope.dir, 'ghost-kv', from + '.json'), 'utf8')).toBe(JSON.stringify({ private: 'org' }));
   expect(fs.existsSync(path.join(scope.dir, 'ghost-kv', '_root__' + from + '.json'))).toBe(false);
-  expect(cindy.readGhostCindyOverrides(from)['image.generate']).toBe('org-model');
+  expect(cindy.readGhostCindyInflightLimit(from)).toBe(3);
   expect(errand.readPluginTaskConfig(from)).toMatchObject({ permissionMode: 'auto', workingDir: '/org-workspace' });
   expect(errand.readGhostErrandSessionId(from, 'draft')).toBe('org-keyed-session');
   expect(unread.readGhostUnread(from)).toMatchObject({ summary: 'org activity', at: 100 });
@@ -192,7 +192,7 @@ it('completes source replacement and another plugin uninstall without reversing 
   const archive = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__helper';
   const service = createPluginTaskService({
     store: tasks, assertCurrent: () => {}, assertAuthorized: vi.fn(), readPermissionMode: vi.fn(),
-    resolveRoute: vi.fn(), createSession: vi.fn(), readSession: vi.fn(),
+    readModelPreference: vi.fn(), resolveRoute: vi.fn(), createSession: vi.fn(), readSession: vi.fn(), readLiveSession: vi.fn(),
     dispatch: vi.fn(), inspect: vi.fn(), cancel: vi.fn(),
   });
   let entered!: () => void, finish!: () => void;
@@ -217,14 +217,19 @@ it('completes source replacement and another plugin uninstall without reversing 
   const code = ts.transpileModule(`return (async () => { ${source.slice(start, end)} })();`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const remove = new Function('activeOwnerScopeKey', 'pluginTaskUninstaller', 'storagePart', 'manager', 'relId', 'throwUninstallError', code);
+  const remove = new Function('activeOwnerScopeKey', 'pluginTaskUninstaller', 'storagePart', 'manager', 'relId', 'throwUninstallError', 'currentPluginUsageService', 'log', 'options', code);
+  const detach = vi.fn(async () => {});
+  const log = { warn: vi.fn() };
   const removing = remove(() => scope.dir, (id: string, callback: () => Promise<void>) => service.withUninstall(id, callback),
-    '_root__other', manager, '_ns/_root/other', (failure: { reason: string }) => { throw new Error(failure.reason); });
+    '_root__other', manager, '_ns/_root/other', (failure: { reason: string }) => { throw new Error(failure.reason); },
+    () => ({ detach }), log, {});
   await new Promise<void>(resolve => setImmediate(resolve));
   finish();
   const [updated] = await Promise.all([updating, removing]);
   expect(updated).toMatchObject({ ghost: { manifest: { version: '2.0.0' } } });
   expect(manager.list().some(ghost => ghost.manifest.id === 'other')).toBe(false);
+  expect(detach).toHaveBeenCalledExactlyOnceWith('_root__other');
+  expect(log.warn).not.toHaveBeenCalled();
   expect((await tasks.get('task'))?.pluginId).toBe(archive);
 });
 

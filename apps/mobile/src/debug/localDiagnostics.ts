@@ -242,6 +242,8 @@ export function startLocalDiagnostics(): () => void {
   let lastTick = performance.now();
   let lastWallTick = Date.now();
   let lifecycleAt = lastTick;
+  let lastRenderSnapshot: string | undefined;
+  let lastRenderAt = -Infinity;
   void hydrateDiagnostics().then(() => {
     if (!stopped)
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
@@ -252,6 +254,7 @@ export function startLocalDiagnostics(): () => void {
     lastTick = performance.now();
     lastWallTick = Date.now();
     lifecycleAt = lastTick;
+    lastRenderSnapshot = undefined;
     mobileDebugLog("info", "lifecycle", `app ${next}`);
     void flushDiagnostics().catch(() => {});
   });
@@ -269,11 +272,18 @@ export function startLocalDiagnostics(): () => void {
       });
     lastTick = now;
     lastWallTick = Date.now();
-    if (enabled)
-      mobileDebugLog("debug", "performance", "render metrics", {
+    if (enabled) {
+      const metrics = {
         markdown: getMobileMarkdownRenderMetrics(),
         webViews: getMobileMessageWebViewMetrics(),
-      });
+      };
+      const snapshot = JSON.stringify(metrics);
+      if (stalled || snapshot !== lastRenderSnapshot || now - lastRenderAt >= 30_000) {
+        mobileDebugLog("debug", "performance", "render metrics", metrics);
+        lastRenderSnapshot = snapshot;
+        lastRenderAt = now;
+      }
+    }
     // Counters cover the interval since the previous line, so a line written
     // right after a stall attributes the work that ran during it.
     ticksSinceJankMetrics += 1;
@@ -294,6 +304,7 @@ export function startLocalDiagnostics(): () => void {
     } else if (timer === undefined) {
       lastTick = performance.now();
       lastWallTick = Date.now();
+      lastRenderSnapshot = undefined;
       timer = setInterval(tick, 2000);
     }
   };

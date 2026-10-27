@@ -13,14 +13,23 @@ import {
 } from "@/device-link/DeviceLinkContext";
 import { startFocusedTopicSubscription } from "@/device-link/focusedTopicSubscription";
 import { useUnresponsiveDevices } from "@/device-link/unresponsiveDevicesStore";
+import { subscribeMobileAuthOwner } from "@/auth/authOwnerGeneration";
 import type { MobileModelFavorite } from "./unifiedMobileModels";
+
+// 上次从那台电脑读到的收藏(账号 + 电脑):每次打开选择器先显示它,再在后台读最新的。
+// 只用于显示与起草改动;写入仍带 expected 交给那台电脑核对,旧快照改不坏真相。
+const lastFavorites = new Map<string, RemoteModelFavorite[]>();
+subscribeMobileAuthOwner(() => lastFavorites.clear());
+export function __resetRemoteMobileFavoritesCacheForTest(): void {
+  lastFavorites.clear();
+}
 
 export function mobileFavorite(item: RemoteModelFavorite): MobileModelFavorite {
   return {
     ...item,
     agent: item.agent === "cc" ? "claude-code" : item.agent,
     effort: item.effort ?? "",
-    fast: !!item.fast,
+    fast: item.fast ?? false,
   };
 }
 /** Convert exactly one UI action to an operation, never send a stale full table. */
@@ -61,7 +70,8 @@ export function mobileFavoriteMutation(
 export function useRemoteMobileFavorites(scope: string, visible: boolean) {
   const { invoke, connectionEpoch, status, subscribe, unsubscribe, recoveringDeviceIds } =
     useDeviceLink();
-  const deviceId = (JSON.parse(scope) as [string, string])[1];
+  const [accountId, deviceId] = JSON.parse(scope) as [string, string];
+  const cacheKey = JSON.stringify([accountId, deviceId]);
   const unavailable = useUnresponsiveDevices().has(deviceId) || recoveringDeviceIds.has(deviceId);
   const binding = JSON.stringify([scope, connectionEpoch, status, visible]);
   const current = useRef(binding);
@@ -81,6 +91,7 @@ export function useRemoteMobileFavorites(scope: string, visible: boolean) {
         await invoke(deviceId, MODEL_FAVORITES_GET, []),
       );
       if (valid() && seq.current === request) {
+        lastFavorites.set(cacheKey, items);
         setState({ binding, items });
         setError(null);
       }
@@ -114,15 +125,17 @@ export function useRemoteMobileFavorites(scope: string, visible: boolean) {
       ++seq.current;
     };
   }, [binding, invoke, subscribe, unsubscribe, unavailable]);
-  const items = state?.binding === binding ? state.items : [];
+  const cached = lastFavorites.get(cacheKey);
+  const loaded = state?.binding === binding || cached !== undefined;
+  const items = state?.binding === binding ? state.items : (cached ?? []);
   return {
-    ready: state?.binding === binding && status === "online" && !unavailable,
+    ready: loaded && status === "online" && !unavailable,
     items: items.map(mobileFavorite),
     error,
     save: async (next: MobileModelFavorite[]) => {
       const mutation = mobileFavoriteMutation(items, next);
       if (!mutation) return;
-      if (!valid() || state?.binding !== binding || status !== "online")
+      if (!valid() || !loaded || status !== "online")
         throw new Error("Favorites not ready");
       ++seq.current;
       try {

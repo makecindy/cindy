@@ -45,6 +45,7 @@ import {
 
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import { isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -55,6 +56,10 @@ export const USAGE_TODAY_SPEND_CHANGED = 'usage:today-spend-changed';
 export const USAGE_TODAY_TOKENS_CHANGED = 'usage:today-tokens-changed';
 /** IPC channel: main → renderer 推 Codex 账号订阅用量变化。 */
 export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
+/** Provider-scoped signal emitted when an independent Codex account is about to be replaced. */
+export const USAGE_CODEX_ACCOUNT_AUTH_STARTED = 'usage:codex-account-auth-started';
+/** Provider-scoped signal emitted when the current Codex account credentials are safe to reread. */
+export const USAGE_CODEX_ACCOUNT_AUTH_READY = 'usage:codex-account-auth-ready';
 /** IPC channel: main → renderer 推 xAI(SuperGrok bridge)上游限流快照变化。 */
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
 /** 独立 xAI 账号(providerId ≠ 'xai')的限流头推送:{ providerId, snapshot },与本机 hook 同形。 */
@@ -161,9 +166,11 @@ export async function readTodaySpend(): Promise<TodaySpendPayload> {
  * (cost=0, 不走 recordTurnSpend), renderer 的 useUsageHistory 以 spend/tokens push
  * 为仪表盘刷新信号, 用它通知"按模型数据有更新"(对齐 rebroadcastCodexTodayUsage)。
  */
-export async function rebroadcastTodaySpend(): Promise<void> {
+export async function rebroadcastTodaySpend(ownerScope?: DataOwnerBroadcastScope): Promise<void> {
   try {
-    broadcastTodaySpend(await readTodaySpend());
+    const payload = await readTodaySpend();
+    if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+    broadcastTodaySpend(payload);
   } catch (err) {
     log.warn(
       'rebroadcastTodaySpend failed:',
@@ -555,6 +562,20 @@ export function recordCodexAccountUsageSnapshot(snapshot: unknown, providerId?: 
 }
 export function clearCodexAccountUsageSnapshot(providerId?: string): Promise<void> {
   return codexUsageStore(providerId).clear();
+}
+/** Notify the matching renderer after the replacement Codex credentials are committed. */
+export function broadcastCodexAccountAuthReady(providerId: string): void {
+  const payload = { providerId };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(USAGE_CODEX_ACCOUNT_AUTH_READY, payload);
+  }
+}
+/** Mark only explicit account replacement as a reason to pause quota reads. */
+export function broadcastCodexAccountAuthStarted(providerId: string): void {
+  const payload = { providerId };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(USAGE_CODEX_ACCOUNT_AUTH_STARTED, payload);
+  }
 }
 export function readCodexAccountUsageSnapshot(providerId?: string): Promise<CodexAccountUsagePayload | null> {
   return codexUsageStore(providerId).read();

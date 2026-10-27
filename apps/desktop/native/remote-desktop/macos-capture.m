@@ -14,6 +14,7 @@
 #import <time.h>
 
 static _Atomic(time_t) lastRequest;
+static atomic_bool awaitingFrame;
 
 // Compatibility capture for an already logged-in macOS session. These public
 // legacy symbols are unavailable at compile time in SDK 15+, and may eventually
@@ -66,7 +67,20 @@ static NSString *standardCursorShape(NSCursor *cursor) {
   return @"default";
 }
 
-static NSDictionary *readCursor(CGDirectDisplayID display) {
+// Window-only views report the cursor relative to the window's live frame.
+static CGRect windowBounds(CGWindowID window) {
+  CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, window);
+  CGRect bounds = CGRectNull;
+  if (list && CFArrayGetCount(list) > 0) {
+    CFDictionaryRef info = CFArrayGetValueAtIndex(list, 0);
+    CFDictionaryRef raw = CFDictionaryGetValue(info, kCGWindowBounds);
+    if (!raw || !CGRectMakeWithDictionaryRepresentation(raw, &bounds)) bounds = CGRectNull;
+  }
+  if (list) CFRelease(list);
+  return bounds;
+}
+
+static NSDictionary *readCursor(CGRect bounds) {
   // Read on the main queue. currentSystemCursor returns the actual global shape,
   // including cursors supplied by other applications (not this helper's cursor).
   typedef boolean_t (*CursorVisible)(void);
@@ -86,8 +100,7 @@ static NSDictionary *readCursor(CGDirectDisplayID display) {
   if (!event) return nil;
   CGPoint point = CGEventGetLocation(event);
   CFRelease(event);
-  CGRect bounds = CGDisplayBounds(display);
-  if (bounds.size.width <= 0 || bounds.size.height <= 0) return nil;
+  if (CGRectIsNull(bounds) || bounds.size.width <= 0 || bounds.size.height <= 0) return nil;
   NSPoint hot = cursor.hotSpot;
   return @{
     @"visible": visible() && CGRectContainsPoint(bounds, point) ? @YES : @NO,
@@ -103,11 +116,21 @@ static NSDictionary *readCursor(CGDirectDisplayID display) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
-    // Overlay: <display> cursor-overlay <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded]
+    // Overlay: <display> cursor-overlay <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded | window:<id>]
     BOOL overlay = (argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay") == 0;
     if (argc != 2 && argc != 3 && !overlay) return 2;
     NSString *excluded = (overlay && argc == 8) || (!overlay && argc == 3)
       ? [NSString stringWithUTF8String:argv[argc - 1]] : @"";
+    // 代输入 live view: only this one window is captured, never the rest of the screen.
+    CGWindowID onlyWindow = 0;
+    if ([excluded hasPrefix:@"window:"]) {
+      char *windowEnd = NULL;
+      const char *digits = argv[argc - 1] + 7;
+      unsigned long id = strtoul(digits, &windowEnd, 10);
+      if (!overlay || !*digits || *windowEnd || id == 0 || id > UINT32_MAX) return 2;
+      onlyWindow = (CGWindowID)id;
+      excluded = @"";
+    }
     int fps = overlay && strcmp(argv[3], "60") == 0 ? 60 : (overlay ? 30 : 15);
     double quality = overlay ? atof(argv[4]) : 0.55;
     if (quality < 0.1 || quality > 1) return 2;
@@ -127,7 +150,7 @@ int main(int argc, const char *argv[]) {
     StartStream start = (StartStream)dlsym(RTLD_DEFAULT, "CGDisplayStreamStart");
     const CFStringRef *intervalKey = dlsym(RTLD_DEFAULT, "kCGDisplayStreamMinimumFrameTime");
     const CFStringRef *cursorKey = dlsym(RTLD_DEFAULT, "kCGDisplayStreamShowCursor");
-    if (!excluded.length && (!create || !start || !intervalKey || !cursorKey)) return 4;
+    if (!excluded.length && !onlyWindow && (!create || !start || !intervalKey || !cursorKey)) return 4;
     CGDirectDisplayID display = (uint32_t)value;
     size_t width = CGDisplayPixelsWide(display), height = CGDisplayPixelsHigh(display);
     if (!width || !height) return 2;
@@ -159,13 +182,28 @@ int main(int argc, const char *argv[]) {
     __block NSData *latest = nil;
     __block BOOL requested = NO;
     atomic_store(&lastRequest, time(NULL));
+    // The first system cursor read can block on WindowServer for many seconds.
+    // Frames never wait for it: each reply carries the latest completed read
+    // (null until one finishes) and starts the next read on the main queue.
+    __block NSDictionary *cursor = nil;
+    __block BOOL cursorReading = NO;
+    void (^refreshCursor)(void) = ^{
+      if (!separateCursor || cursorReading) return;
+      cursorReading = YES;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        NSDictionary *value = readCursor(onlyWindow ? windowBounds(onlyWindow) : CGDisplayBounds(display));
+        dispatch_async(queue, ^{
+          cursor = value;
+          cursorReading = NO;
+        });
+      });
+    };
     void (^reply)(void) = ^{
       if (!requested || !latest) return;
       requested = NO;
       NSData *data;
       if (overlay) {
-        __block NSDictionary *cursor = nil;
-        if (separateCursor) dispatch_sync(dispatch_get_main_queue(), ^{ cursor = readCursor(display); });
+        refreshCursor();
         NSDictionary *frame = @{@"jpeg": [latest base64EncodedStringWithOptions:0], @"cursor": cursor ?: [NSNull null]};
         NSMutableData *line = [[NSJSONSerialization dataWithJSONObject:frame options:0 error:NULL] mutableCopy];
         [line appendBytes:"\n" length:1];
@@ -181,6 +219,7 @@ int main(int argc, const char *argv[]) {
         if (count <= 0) _exit(0);
         bytes += count; remaining -= count;
       }
+      atomic_store(&awaitingFrame, false);
     };
     FrameHandler receiveFrame = ^(int32_t status, uint64_t timestamp, IOSurfaceRef surface, const void *update) {
         @autoreleasepool {
@@ -208,7 +247,43 @@ int main(int argc, const char *argv[]) {
           reply();
         }
       };
-    if (excluded.length) {
+    if (onlyWindow) {
+      double backing = 1;
+      CGDisplayModeRef displayMode = CGDisplayCopyDisplayMode(display);
+      if (displayMode) {
+        backing = MAX(1.0, (double)CGDisplayModeGetPixelHeight(displayMode) / MAX(1.0, (double)CGDisplayPixelsHigh(display)));
+        CGDisplayModeRelease(displayMode);
+      }
+      if (!physicalEdge) backing = 1; // the logical tier stays in points
+      [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES
+        completionHandler:^(SCShareableContent *content, NSError *error) {
+          if (error) _exit(5);
+          SCWindow *selected = nil;
+          for (SCWindow *candidate in content.windows) if (candidate.windowID == onlyWindow) selected = candidate;
+          // A window that is gone or hidden is never replaced by anything else.
+          if (!selected || selected.frame.size.width < 1 || selected.frame.size.height < 1) _exit(5);
+          SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
+          double windowWidth = selected.frame.size.width * backing, windowHeight = selected.frame.size.height * backing;
+          double fit = MIN(1.0, edgeLimit / MAX(windowWidth, windowHeight));
+          SCStreamConfiguration *config = [SCStreamConfiguration new];
+          config.width = MAX(2, (size_t)(windowWidth * fit) & ~(size_t)1);
+          config.height = MAX(2, (size_t)(windowHeight * fit) & ~(size_t)1);
+          // Fill the frame, so a point in the picture is the same fraction of the window.
+          if ([config respondsToSelector:@selector(setScalesToFit:)]) [config setValue:@YES forKey:@"scalesToFit"];
+          if ([config respondsToSelector:@selector(setPreservesAspectRatio:)]) [config setValue:@NO forKey:@"preservesAspectRatio"];
+          config.minimumFrameInterval = CMTimeMake(1, fps);
+          config.showsCursor = NO;
+          config.pixelFormat = kCVPixelFormatType_32BGRA;
+          config.queueDepth = 3;
+          PrivacyCaptureOutput *output = [PrivacyCaptureOutput new];
+          output.handler = receiveFrame;
+          output.stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:output];
+          NSError *failure = nil;
+          if (![output.stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:queue error:&failure]) _exit(5);
+          CFRetain((__bridge CFTypeRef)output);
+          [output.stream startCaptureWithCompletionHandler:^(NSError *failure) { if (failure) _exit(5); }];
+        }];
+    } else if (excluded.length) {
       NSArray<NSString *> *ids = [excluded componentsSeparatedByString:@","];
       // Explicit exclusion is mandatory: NSWindowSharingNone alone is ignored
       // by modern ScreenCaptureKit. Never fall back to an unfiltered stream.
@@ -246,14 +321,18 @@ int main(int argc, const char *argv[]) {
         (__bridge CFDictionaryRef)@{(__bridge NSString *)*intervalKey: @(1.0/fps), (__bridge NSString *)*cursorKey: separateCursor ? @NO : @YES}, queue, receiveFrame);
       if (!stream || start(stream) != kCGErrorSuccess) return 5;
     }
+    if (overlay) dispatch_async(queue, refreshCursor);
     signal(SIGPIPE, SIG_IGN);
     // stdin is a private parent pipe: one byte asks for one latest frame. EOF
     // and a stalled parent both terminate capture without retaining any pixels.
+    // A parent still waiting for its first frame gets a longer bound; it
+    // normally gives up and kills this helper first.
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
       char byte;
       while (read(STDIN_FILENO, &byte, 1) == 1) {
         if (byte != 'f') _exit(2);
         atomic_store(&lastRequest, time(NULL));
+        atomic_store(&awaitingFrame, true);
         dispatch_async(queue, ^{ requested = YES; reply(); });
       }
       _exit(0);
@@ -261,7 +340,9 @@ int main(int argc, const char *argv[]) {
     dispatch_source_t watchdog = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(watchdog, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, 0);
     dispatch_source_set_event_handler(watchdog, ^{
-      if (time(NULL) - atomic_load(&lastRequest) > 5) _exit(0);
+      // A pending frame extends the idle limit beyond the parent's cold-start
+      // wait, but never indefinitely: a parent that stopped reading is stalled.
+      if (time(NULL) - atomic_load(&lastRequest) > (atomic_load(&awaitingFrame) ? 15 : 5)) _exit(0);
     });
     dispatch_resume(watchdog);
     dispatch_main();

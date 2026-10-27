@@ -34,6 +34,12 @@ function harness() {
 const CHANNEL = 'local-db:sessions:list';
 
 describe('device-link IPC diagnostics', () => {
+  it('preserves local background admission hints through the diagnostic wrapper', async () => {
+    const h = harness();
+    await h.observed.invoke('peer', CHANNEL, [], { background: true });
+    expect(h.invoke).toHaveBeenCalledExactlyOnceWith('peer', CHANNEL, [], { background: true });
+    h.diagnostics.flush();
+  });
   it('aggregates a failure storm and successes without changing transport calls or errors', async () => {
     const h = harness();
     const error = new DeviceLinkError('BACKPRESSURE', 'private error');
@@ -58,9 +64,10 @@ describe('device-link IPC diagnostics', () => {
       'transport summary',
       expect.objectContaining({ code: 'BACKPRESSURE', completed: 1000, elapsedMs: 30_000 }),
     );
+    // The success baseline accompanies failures at INFO in one combined line.
     expect(h.emit).toHaveBeenCalledWith(
-      'transport summary',
-      expect.objectContaining({ code: 'OK', completed: 1 }),
+      'transport summary ok',
+      expect.objectContaining({ buckets: 1, completed: 1, channels: { [CHANNEL]: 1 } }),
     );
     expect(JSON.stringify(h.emit.mock.calls)).not.toContain('private');
     expect(vi.getTimerCount()).toBe(0);
@@ -68,6 +75,23 @@ describe('device-link IPC diagnostics', () => {
     await expect(h.observed.invoke('private-peer', CHANNEL, [])).rejects.toBe(error);
     expect(h.emit).toHaveBeenCalledTimes(4);
     h.diagnostics.flush();
+  });
+
+  // Log-noise regression: 3 healthy peers x several channels wrote ~6 identical-timestamp
+  // INFO lines every 30s. A healthy interval must collapse to one DEBUG line.
+  it('folds a healthy interval into one debug baseline line', async () => {
+    const h = harness();
+    for (const peer of ['peer-a', 'peer-b', 'peer-c']) {
+      await h.observed.invoke(peer, CHANNEL, []);
+      await h.observed.invoke(peer, 'maker:list-active', []);
+      await h.observed.subscribe(peer, ['private-topic']);
+    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.emit).toHaveBeenCalledExactlyOnceWith(
+      'transport summary ok',
+      { buckets: 9, completed: 9, channels: { [CHANNEL]: 3, 'maker:list-active': 3, subscribe: 3 }, elapsedMs: 30_000 },
+      'debug',
+    );
   });
 
   it('distinguishes raw causes, peers, windows and subscription operations', async () => {
@@ -89,8 +113,12 @@ describe('device-link IPC diagnostics', () => {
     const rows = h.emit.mock.calls
       .filter(([event]) => event === 'transport summary')
       .map(([, row]) => row);
-    expect(rows).toHaveLength(8);
-    expect(new Set(rows.map((row) => row.peer)).size).toBe(2);
+    expect(rows).toHaveLength(7);
+    expect(new Set(rows.map((row) => row.peer)).size).toBe(1);
+    expect(h.emit).toHaveBeenCalledWith(
+      'transport summary ok',
+      expect.objectContaining({ buckets: 1, completed: 1, channels: { unsubscribe: 1 } }),
+    );
     expect(rows.filter((row) => row.operation === 'subscribe').map((row) => row.windowId)).toEqual([
       10, 20,
     ]);

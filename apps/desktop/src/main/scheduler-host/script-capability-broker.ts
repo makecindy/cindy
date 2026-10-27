@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -12,6 +13,9 @@ import {
 } from '../cindy-brain/index.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
 import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
+import { getSessionRowSnapshotStrict, restoreArchivedSessionForSend } from '../localDb/ipc/sessions';
+import { assertReviewSessionExternalInputAllowed } from '../reviewer/reviewSessionInputPolicy';
+import { isManagedScheduledTarget } from './restore-target';
 import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
 
@@ -228,7 +232,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       model,
       providerId: explicitProviderId ?? dynamicDefaultRoute?.providerId ?? null,
       effort: schedule.effort as DispatchEffort | undefined,
-      fastMode: !!schedule.fastMode,
+      fastMode: (schedule.fastMode ?? false),
       workingDir: schedule.workingDir ?? '',
       workspaceKind: 'project' as const,
       permissionMode: 'bypassPermissions' as const,
@@ -395,13 +399,26 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           fail('INVALID_ARGS', 'bound scripts can only dispatch to their target session');
         }
         const targetSessionId = schedule.targetSessionId ?? requestedTarget;
+        const message = requireString(params, 'message');
+        // Bound owners are restored once at fire admission. A later archive must
+        // not be undone by the same run. Unbound scripts first choose their target here.
+        if (targetSessionId && !schedule.targetSessionId) {
+          const target = await getSessionRowSnapshotStrict(targetSessionId);
+          // Use the dispatcher's Review policy before any lifecycle mutation.
+          await assertReviewSessionExternalInputAllowed(targetSessionId, () => target?.source ?? null);
+          if (target && !isManagedScheduledTarget(target)) {
+            await restoreArchivedSessionForSend(targetSessionId);
+          }
+        }
         const result = await service.sendToSession({
           targetSessionId,
-          message: requireString(params, 'message'),
+          message,
           title: typeof params.title === 'string' ? params.title : undefined,
           useWorktree: false,
           // 投递到已有任务时沿用该任务自己的配置,只有新建任务才需要默认路由。
-          ...(targetSessionId ? {} : { createDefaults: await this.createDefaultsFor(schedule) }),
+          ...(targetSessionId
+            ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const }
+            : { createDefaults: await this.createDefaultsFor(schedule) }),
         });
         if (!result.ok) fail(result.errorCode, result.message);
         return {

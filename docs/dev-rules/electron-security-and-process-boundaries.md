@@ -116,13 +116,22 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
 必须区分冷启动与热打开，并确认热打开链路没有重新创建 BrowserWindow、重新加载 Renderer
 或同步等待业务数据。
 
+按内容多实例、内容回到主窗即结束的窗口（右侧栏页签弹出窗口，一扇窗承载若干页签，
+`main/sidebar-tab-window/controller.ts`）对「隐藏复用」取另一种等价形式：关窗即关闭窗内页签
+（经 renderer 走与侧边栏相同的 closeTab 流程），页签关掉或合并回侧边栏后窗口没有可复用的
+内容，随即销毁；「准备成本移出点击路径」由一扇未指派的预热 spare
+窗口承担（弹出时只做指派 → 首份内容 → `show()`），指派后再延迟补一扇。崩溃不重建 renderer，
+而是把页签交回侧边栏（侧边栏本身就是安全态），这同样满足「恢复有界」。
+
 确因透明窗口、全局热键窗口、系统级浮层等平台约束不能复用完整基线时，必须在实现前于代码
 注释和测试中写明冲突点；例外只豁免冲突项，其余预热、就绪握手、安全配置、状态清理与故障
 隔离要求仍然适用。
 
-`webviewTag` 默认关闭；受控例外目前有三处——主界面与右侧栏子窗口（内置浏览器需要），
-以及插件面板独立窗口（`main/ghost-panel-window/window.ts`，仅承载 ghost 分区面板
-webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
+`webviewTag` 默认关闭；受控例外目前只有两类——主界面与右侧栏子窗口（内置浏览器需要；
+右侧栏整栏子窗口与页签弹出窗口共用 `main/right-sidebar-window/window.ts` 的
+`createSidebarHostWindow` 工厂与 `sidebarWindowPreload`，`main/sidebar-tab-window/window.ts`
+只改启动参数、尺寸与位置记忆）。插件面板（ghost 分区 webview）不再有专属窗口：它以右侧栏
+全局页签承载，弹出时走同一扇页签窗口——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
 覆盖 Renderer 传入的全部安全选项（hardener 挂在 `web-contents-created`，对所有窗口
 全局生效，ghost 附加闸只认分区与地址、不认宿主窗口）。
 
@@ -184,6 +193,21 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 - WebView 的 partition、preload、popup、权限请求和下载行为由 Main 决定，不信任标签属性。
 - 新增加载远程内容的 session 时，必须同时设置 `setPermissionRequestHandler` 与
   `setPermissionCheckHandler`，按最小权限默认拒绝；需要放行时必须校验真实来源与权限类型。
+
+### 正文视频网站播放器
+
+YouTube 视频组件复用内置浏览器的 `BROWSER_PARTITION` 持久会话、标准 WebView
+加固与原生弹窗路由。用户从播放器登录时，在 Cindy 浏览器完成授权，登录状态保留在同一
+会话中；不得另造无痕视频分区、阻断登录跳转或复制外部浏览器 Cookie。
+共享解析器从核验的视频 ID 生成 `https://www.youtube.com/embed/<video-id>`，
+不执行模型提供的任意 iframe/HTML。点击封面后装载，卸载时销毁 guest；切换焦点或打开
+登录页不会销毁播放器。主窗口 CSP、沙箱、上下文隔离和无 Node 的浏览器基线保持不变。
+
+播放器首次加载通过 WebView `httpreferrer` 提供当前 App ID。浏览器会话的单一请求头
+listener 仅匹配 YouTube `/embed/*`：来源缺失或登录返回变成 YouTube 自身时补上 App ID，
+已有网站嵌入来源原样保留。不注册第二个同会话 listener，也不触及 default session 的
+MCP 请求钩子。此身份要求来自 YouTube 官方文档，不伪装成第三方网站或改写 User-Agent。
+普通视频文件继续走原媒体播放器，原视频外链始终保留。
 
 ## 7．CSP、协议与 Electron Fuses
 

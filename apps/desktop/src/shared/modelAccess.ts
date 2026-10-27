@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from '@cindy/model-providers';
 /**
  * modelAccess.ts — 网关凭据自动下发(model-access-server)的 main / renderer 共享类型。
  *
@@ -173,6 +174,7 @@ export interface ModelGroupPricing {
  * currently mirrors maxInputTokens),统一由 contextWindow 表达。
  */
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
+  displayPricing?: ModelDisplayPricing;
   id: string;
   /** v5 entitlement projection; missing only on persisted/legacy snapshots. */
   availability?: 'available' | 'requires_payment';

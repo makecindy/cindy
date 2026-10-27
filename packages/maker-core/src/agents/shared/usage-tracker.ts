@@ -37,7 +37,7 @@ export interface UsageSegment {
   /** Actual model for this request when the provider exposes it. */
   model?: string;
   /** Request price variant. Fast maps to the gateway priority tariff. */
-  priceVariant?: 'standard' | 'priority' | 'fast' | 'batch';
+  priceVariant?: 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
   /** 输入 token (不含 cache) */
   inputTokens: number;
   outputTokens: number;

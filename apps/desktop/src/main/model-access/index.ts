@@ -1,3 +1,4 @@
+import { cloudQuotaOwnerKey, noteQuotaCredentialStatus, setQuotaCredentialStatusReader } from './quotaCredentialState.js';
 import { createByokCache } from './byokCache.js';
 import { byokSnapshotSecretIo } from '../secrets/providerSecretStore.js';
 import { registerByokIpc } from './byokIpc.js';
@@ -5,16 +6,17 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { createByokRuntime } from './byokRuntime.js';
 import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { isProviderDisabled } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isExternalOrganizationByokUser } from './organizationManaged.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
-import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
-  prepareCodexForAuthModeChange,
+  scheduleCodexGatewayKeyRefresh,
   prepareCodexForCustomProviderHostChange,
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
@@ -24,7 +26,11 @@ import {
   markXdGatewayModelAccessUnknown,
   setXdGatewayModels,
 } from '../maker-host/active-catalog.js';
-import { migrateLegacyNamespacedModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import {
+  migrateLegacyNamespacedModelDisableOverrides,
+  onProviderDisableChange,
+  readModelDisableOverrides,
+} from '../maker-host/model-disable-store.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -36,6 +42,7 @@ import {
 } from '../../shared/modelAccess.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { installCindyGatewayKeyRejectionReporter } from './gatewayKeyRejection.js';
 import {
   createCredentialsSync,
   type CredentialsPayload,
@@ -43,6 +50,7 @@ import {
 } from './credentialsSync.js';
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
@@ -68,9 +76,8 @@ const log = createLogger('modelAccess');
  *    自动触发同步,登出复位;
  *  - serverApiFetch + 独立 base(clientEndpoints 'modelAccessApiBaseUrl'):
  *    自动带 Bearer access token + 401 refresh;
- *  - providerSecretStore('xd')写 key,值变化时复用 codex env-key 重启副作用
- *    (与 safe-storage IPC 层同一套 prepare/finalize,见 bootstrap-electron 注释)
- *    ——main 侧自动写 key 的副作用缺口在此补齐(providerSecretStore.ts 顶注预告过);
+ *  - providerSecretStore('xd')先写 key，再按 host 实际凭据登记 Codex 刷新；
+ *    忙碌或启动中的 gateway host 通过既有空闲重试机制兑现，不阻塞凭据保存；
  *  - 状态经 MODEL_ACCESS_STATUS_CHANNEL 推给所有窗口,IPC 提供
  *    get-status / retry / rotate 三个通道(仅本机设置页使用,不进 device-link
  *    allowlist)。
@@ -101,35 +108,24 @@ function rotateCredentials(): Promise<CredentialsPayload> {
 /**
  * 写 XD key(main 侧自动下发路径),带 codex env-key 重启副作用:
  * env-key spawn 的 codex app-server 把 gateway key 冻在子进程 env 里,写盘后
- * 必须重建才生效——与 renderer 手填走的 safe-storage IPC 同一套语义。
- * 非 env-key 形态零副作用(Claude 每 session 现读 key,天然跟随)。
+ * 必须重建才生效。服务端可能已经撤销旧 key，不能因进程忙碌而拒绝保存新 key。
+ * 写入同步完成，相关 host 的刷新独立登记，忙碌或启动中的 host 延后到空闲。
  */
 async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
-  const needRestart = getCodexProxyAuthInjectionState() === 'env-key';
-  if (!needRestart) {
-    const stored = getProviderSecretStore().set('xd', key);
-    if (stored) notifyXdProviderKeyChanged();
-    return stored;
-  }
-  try {
-    await prepareCodexForAuthModeChange();
-  } catch (err) {
-    log.warn('prepare codex before auto key write failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (isAppSessionBoundaryPending()) return false;
+  const ownerScope = activeOwnerScopeKey();
+  const store = getProviderSecretStore();
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
     return false;
   }
-  const ok = getProviderSecretStore().set('xd', key);
-  if (!ok) {
-    cancelCodexAuthModeChange();
-    return false;
-  }
+  const ok = store.set('xd', key);
+  if (!ok) return false;
   notifyXdProviderKeyChanged();
   try {
-    await finalizeCodexAfterAuthModeChange();
+    scheduleCodexGatewayKeyRefresh();
   } catch (err) {
-    // key 已写盘(新值有效);codex 重建失败只记日志,下次 spawn 自然用新 key。
-    log.warn('finalize codex after auto key write failed', {
+    // 已保存的 key 供所有现读调用方使用，不能把进程刷新失败伪报为存储失败。
+    log.warn('schedule codex refresh after auto key write failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -174,6 +170,11 @@ export const XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
+/**
+ * Cindy AI 列表里的 Auto 有增减时刷新企业号池（初始化时接上）。Auto 在两边之间换位置时，
+ * 只刷新一边会让进行中任务的跟随看到不一致的列表；另一边刷新后回头不再有增减，联动自然停止。
+ */
+let onXdCindyAutoModelsChanged: (() => void) | null = null;
 /**
  * 认证世代:登出或 userId / realm 变化时自增(与 credentialsSync 的 epoch 同语义)。
  * 目录请求以发起时世代为闸——旧身份的在途 /models 响应在换号或同账号跨区后
@@ -278,14 +279,22 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
+  const cindyAutoChanged = cindyAutoModelIdsChanged(getXdGatewayModels(), models);
+  const refreshPoolIfCindyAutoMoved = () => {
+    if (!cindyAutoChanged || !onXdCindyAutoModelsChanged) return;
+    log.info('Cindy Auto changed in Cindy AI models; refreshing the enterprise pool directory');
+    onXdCindyAutoModelsChanged();
+  };
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], { authenticatedUserId, authoritative: true });
     lastModelsSyncSucceededAttempt = myAttempt;
+    refreshPoolIfCindyAutoMoved();
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models, { authenticatedUserId, authoritative: true });
+  refreshPoolIfCindyAutoMoved();
   try {
     const availability = await listExecutableMediaModels([], {
       includeDisabled: true,
@@ -312,6 +321,7 @@ async function runModelsSync(
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
 function scheduleModelsSync(): void {
+  if (isProviderDisabled(readModelDisableOverrides(), 'xd')) return;
   const gen = authGeneration;
   // localDb takeover and /models run independently during startup. Capture the
   // authenticated owner here instead of asking localDb who owns the cache only
@@ -350,6 +360,7 @@ function scheduleModelsSync(): void {
 
 let syncInstance: CredentialsSync | null = null;
 let foregroundRefreshListener: (() => void) | null = null;
+let unsubscribeProviderDisable: (() => void) | null = null;
 
 /**
  * 企业 Provider 目录的刷新形态与 Cindy 自有目录一致:窗口聚焦触发 + 5 分钟节流,
@@ -399,12 +410,18 @@ function scheduleByokSync(byok: ByokRuntime, force = false): void {
 function getSync(): CredentialsSync {
   if (!syncInstance) {
     syncInstance = createCredentialsSync({
+      isProviderEnabled: () => !isProviderDisabled(readModelDisableOverrides(), 'xd'),
       fetchCredentials,
       rotateCredentials,
       readXdKey: () => getProviderSecretStore().get('xd'),
       writeXdKey: writeXdKeyWithCodexSideEffect,
       store: getModelAccessCredentialsStore(),
       onStatusChange: (status) => {
+        const auth = authManager.getAuthState();
+        noteQuotaCredentialStatus(
+          cloudQuotaOwnerKey(auth),
+          status,
+        );
         if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
           accountTier = null;
         }
@@ -510,11 +527,31 @@ function mapServerError(err: unknown): never {
  */
 export function initModelAccess(): void {
   const sync = getSync();
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = onProviderDisableChange((providerId) => {
+    if (providerId === 'xd') sync.handleProviderAccessChange();
+  });
+  setQuotaCredentialStatusReader(() => {
+    const auth = authManager.getAuthState();
+    if (auth.mode !== 'cloud' || !auth.user?.id || auth.user.id !== lastAuthUserId
+      || authManager.getActiveAuthRealm() !== lastAuthRealm) return null;
+    return sync.getStatus();
+  });
+  // 主进程各调用方遇到 Cindy 网关 401 时经此重新拉取凭据(服务端会探测并换发失效 Key)。
+  // 用静默同步:失败不降级状态、不清空模型列表(见 credentialsSync.resyncAfterKeyRejection)。
+  installCindyGatewayKeyRejectionReporter(() => getSync().resyncAfterKeyRejection());
   const byok = createByokRuntime(
     broadcastReferenceModelPricing,
     createByokCache(byokSnapshotSecretIo),
     scheduleByokCodexHostRefresh,
+    () => {
+      // 号池里的 Auto 有增减：Auto 可能换到了 Cindy AI（或从那里搬来），让 Cindy AI 列表也刷新。
+      if (!lastAuthUserId || getSync().getStatus().state !== 'ok') return;
+      log.info('Cindy Auto changed in the enterprise pool directory; refreshing Cindy AI models');
+      scheduleModelsSync();
+    },
   );
+  onXdCindyAutoModelsChanged = () => scheduleByokSync(byok, true);
 
   const noteAuthState = (
     isAuthenticated: boolean,
@@ -597,12 +634,16 @@ export function initModelAccess(): void {
 
 /** 仅测试:重置单例。 */
 export function resetModelAccessForTest(): void {
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = null;
   lastByokSyncStartedAt = 0;
   byokCodexHostRefreshQueued = false;
   if (foregroundRefreshListener) {
     app.removeListener('browser-window-focus', foregroundRefreshListener);
     foregroundRefreshListener = null;
   }
+  installCindyGatewayKeyRejectionReporter(null);
+  onXdCindyAutoModelsChanged = null;
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;

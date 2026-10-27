@@ -37,6 +37,12 @@ const runnerScriptPath = typeof process.argv[1] === 'string' ? process.argv[1] :
 const CONTROL_VERSION = 1;
 const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 const MAX_RESULT_BYTES = 256 * 1024;
+// Spawn command line budget, same values the Host enforces for its own Pi
+// launch (PI_WINDOWS_SPAWN_ARGV_BUDGET / PI_POSIX_SPAWN_ARGV_BUDGET). The
+// child's profile prompt is a hardcoded short string today; this only exists so
+// a future custom profile fails as a readable status instead of an opaque
+// spawn error.
+const SPAWN_ARGV_BUDGET = process.platform === 'win32' ? 30000 : 128000;
 const CONTROL_POLL_MS = 200;
 const STATUS_FLUSH_MS = 50;
 const HEARTBEAT_MS = 2000;
@@ -405,8 +411,8 @@ function main() {
 
   // The terminal status is the opposite case and must not reuse the path above:
   // scheduleStatus() refuses to re-arm once terminal, so a swallowed failure
-  // there is a permanent loss, and status.json is the only record the product
-  // reads back (nothing consumes result.json today) — the run would keep reading
+  // there is a permanent loss: product views still read status.json (only
+  // account-boundary recovery can use result.json), so the run keeps reading
   // as running until it aged into a stale diagnostic. Retry on a wider budget
   // instead; the runner is on its way out, so blocking here costs nothing.
   function flushTerminalStatus() {
@@ -428,9 +434,11 @@ function main() {
     }
   }
 
-  // result.json is a best-effort *attachment*, not the terminal record: nothing
-  // in the product reads it back, while status.json is what the Host converges
-  // on. So its write must never decide the run's outcome — letting it throw once
+  // result.json is a best-effort attachment; status.json remains the primary
+  // record. Account-boundary recovery can validate this independent terminal
+  // receipt if status is unreadable AND the OS confirms no runner/child remains.
+  // A signal attempt alone is not exit evidence. Its write must never decide the outcome:
+  // letting it throw once
   // turned a completed run into a published failure (the throw from the success
   // path landed in the failure handler, which rewrote state and republished),
   // and letting it throw from the failure path skipped the terminal status
@@ -824,6 +832,24 @@ function main() {
       const childArgs = Array.isArray(config.binaryPrefixArgs)
         ? config.binaryPrefixArgs.concat(args)
         : args;
+      // 两种口径不一样，不能统一：Windows CreateProcess 的命令行上限是 32767 个
+      // UTF-16 字符（按 UTF-8 字节算会把中文路径放大三倍、误拒）；POSIX 的
+      // ARG_MAX 按字节算（用字符数会漏检中文长提示词）。
+      const argvUnits = childArgs.reduce((total, arg) => {
+        const value = String(arg);
+        return total
+          + (process.platform === 'win32' ? value.length : Buffer.byteLength(value, 'utf8'))
+          + 3;
+      }, 0);
+      if (argvUnits > SPAWN_ARGV_BUDGET) {
+        task.status = 'failed';
+        task.error = 'Subagent command line exceeds the platform spawn budget ('
+          + argvUnits + ' > ' + SPAWN_ARGV_BUDGET + ').';
+        task.endedAt = Date.now();
+        scheduleStatus();
+        resolve();
+        return;
+      }
       const child = spawn(config.binary, childArgs, {
         cwd: task.cwd,
         env: childEnv,

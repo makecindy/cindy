@@ -34,6 +34,30 @@ describe('SessionActivityRelay', () => {
     vi.useRealTimers();
   });
 
+  it('keeps a silent completion through replay and ignores a superseded ownership check', async () => {
+    let resolve!: (handled: boolean) => void;
+    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: check });
+    const done = activity('s1', 'Final result', { phase: 'completed', attention: true });
+    const silent = { ...done, completionNotification: 'silent' as const };
+    relay.publish([done]);
+    await Promise.resolve();
+    const decision = relay.waitForCompletionNotification('s1');
+    const replay = vi.fn();
+    relay.replay([silent], replay);
+    expect(replay).toHaveBeenLastCalledWith(expect.objectContaining({ completionNotification: 'silent' }));
+    relay.publish([silent]);
+    expect(await decision).toBe(true);
+    resolve(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(check).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ attention: true, completionNotification: 'silent' }));
+    relay.replay([silent], replay);
+    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls.at(-1)?.[0]);
+    relay.dispose();
+  });
+
   it.each([true, false])('publishes completion and unread immediately, then only resolves notification ownership (%s)', async handled => {
     let resolve!: (handled: boolean) => void;
     const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));

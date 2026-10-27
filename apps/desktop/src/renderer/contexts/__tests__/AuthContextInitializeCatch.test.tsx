@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     beginAddAccount: vi.fn<() => Promise<DesktopLoginActionResult>>(),
     cancelAddAccount: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
+    enterLocalMode: vi.fn<() => Promise<never>>(),
   },
   logError: vi.fn(),
   unhandled: [] as unknown[],
@@ -54,6 +55,8 @@ vi.mock('@/lib/logger', () => ({
 
 import { AuthProvider, useAuth } from '../AuthContext';
 import { useLogin } from '@/hooks/useLogin';
+import { prefetchDeviceProviders, useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { prefetchDeviceCapabilities, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 
 function AuthProbe() {
   const { isInitializing, isAuthenticated, user, loginState } = useAuth();
@@ -84,6 +87,203 @@ afterEach(() => {
   process.off('unhandledRejection', onUnhandled);
   cleanup();
   vi.clearAllMocks();
+});
+
+describe('login recovery ignores abandoned IPC results', () => {
+  // 2026-10-20 黑盒验收：同一分享在换账号后残留上一成员的模型。
+  // 缓存测试未覆盖真实 AuthProvider 边界及已挂载的选择器；tier: unit。
+  it('clears mounted remote model lists at the logout boundary', async () => {
+    mocks.service.initialize.mockResolvedValue({
+      isAuthenticated: true, isCanary: false, dataOwnerId: 'member-a', ownerGeneration: 1,
+      deviceId: 'device', user: { id: 'member-a', name: 'Member A' },
+    });
+    const auth = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(auth.result.current.isInitializing).toBe(false));
+    Object.assign(window.electronAPI, { deviceLink: { invoke: vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list'
+        ? { providers: [{ id: 'openai', name: 'OpenAI', agents: ['codex'], connected: true,
+            models: { codex: [{ id: 'member-a', name: 'Member A', contextWindow: 200000, efforts: [] }] } }] }
+        : { availableModels: [{ id: 'member-a', displayName: 'Member A', contextWindow: 200000,
+            efforts: [], defaultEffort: null }], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    )) } });
+    await Promise.all([prefetchDeviceProviders('share:common'), prefetchDeviceCapabilities('share:common')]);
+    const catalog = renderHook(() => ({
+      providers: useDeviceProviders('share:common'),
+      capabilities: useAgentCapabilities('codex', 'share:common'),
+    }));
+    expect(catalog.result.current.providers.providers).toHaveLength(1);
+    expect(catalog.result.current.capabilities.capabilities?.availableModels[0].id).toBe('member-a');
+    await act(async () => { await auth.result.current.logout(); });
+    expect(mocks.service.logout).toHaveBeenCalledOnce();
+    expect(catalog.result.current.providers.providers).toEqual([]);
+    expect(catalog.result.current.capabilities.capabilities).toBeNull();
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'recovers a failed skip while the abandoned provider request later %ss',
+    async (settlement) => {
+      mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+      let finishLoad!: (result: DesktopLoginActionResult) => void;
+      let failLoad!: (error: Error) => void;
+      mocks.service.getLoginState.mockReturnValueOnce(new Promise((resolve, reject) => {
+        finishLoad = resolve;
+        failLoad = reject;
+      }));
+      const hook = renderHook(() => ({ auth: useAuth(), login: useLogin() }), {
+        wrapper: AuthProvider,
+      });
+      await waitFor(() => expect(hook.result.current.auth.isInitializing).toBe(false));
+      expect(hook.result.current.login.isLoading).toBe(true);
+      mocks.service.enterLocalMode.mockRejectedValueOnce(new Error('IPC unavailable'));
+      await act(async () => {
+        await expect(hook.result.current.login.enterLocalMode()).rejects.toThrow('IPC unavailable');
+      });
+      expect(hook.result.current.auth.loginState).toEqual({
+        step: 'error', code: 'AUTH_REQUEST_FAILED', recoverTo: 'identifier',
+      });
+      expect(hook.result.current.login.isLoading).toBe(false);
+
+      let finishRetry!: (result: DesktopLoginActionResult) => void;
+      mocks.service.dispatchLoginAction.mockReturnValueOnce(new Promise((resolve) => {
+        finishRetry = resolve;
+      }));
+      let retry!: Promise<boolean>;
+      act(() => { retry = hook.result.current.login.dispatch({ type: 'reset' }); });
+      await act(async () => {
+        if (settlement === 'resolve') finishLoad({ success: true, state: { step: 'entry' } });
+        else failLoad(new Error('late failure'));
+      });
+      expect(hook.result.current.auth.loginState?.step).toBe('error');
+      expect(hook.result.current.login.errorCode).toBeNull();
+      expect(hook.result.current.login.isLoading).toBe(true);
+      await act(async () => {
+        finishRetry({ success: true, state: { step: 'entry' } });
+        await retry;
+      });
+      expect(hook.result.current.auth.loginState?.step).toBe('entry');
+      expect(hook.result.current.login.isLoading).toBe(false);
+    },
+  );
+
+  it.each(['load', 'reset', 'add-account'] as const)(
+    'keeps the entry and the new loading state when an earlier %s finishes',
+    async (kind) => {
+      mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+      const hook = renderHook(() => ({ auth: useAuth(), login: useLogin({ autoLoad: false }) }), {
+        wrapper: AuthProvider,
+      });
+      await waitFor(() => expect(hook.result.current.auth.isInitializing).toBe(false));
+      let finishOld!: (result: DesktopLoginActionResult) => void;
+      const old = new Promise<DesktopLoginActionResult>((resolve) => {
+        finishOld = resolve;
+      });
+      const service =
+        kind === 'load'
+          ? mocks.service.getLoginState
+          : kind === 'add-account'
+            ? mocks.service.beginAddAccount
+            : mocks.service.dispatchLoginAction;
+      service.mockReturnValueOnce(old);
+      let oldAction!: Promise<unknown>;
+      act(() => {
+        oldAction =
+          kind === 'load'
+            ? hook.result.current.auth.loadLoginState()
+            : kind === 'add-account'
+              ? hook.result.current.auth.beginAddAccount()
+              : hook.result.current.login.dispatch({ type: 'reset' });
+      });
+      mocks.service.dispatchLoginAction.mockResolvedValueOnce({
+        success: true,
+        state: { step: 'entry' },
+      });
+      await act(async () => {
+        await hook.result.current.login.dispatch({ type: 'back' });
+      });
+      expect(hook.result.current.auth.loginState).toEqual({ step: 'entry' });
+      expect(hook.result.current.login.isLoading).toBe(false);
+
+      let finishNext!: (result: DesktopLoginActionResult) => void;
+      mocks.service.dispatchLoginAction.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishNext = resolve;
+        }),
+      );
+      let nextAction!: Promise<boolean>;
+      act(() => {
+        nextAction = hook.result.current.login.dispatch({ type: 'reset' });
+      });
+      await act(async () => {
+        finishOld({
+          success: false,
+          code: 'REQUEST_TIMEOUT',
+          state: { step: 'error', code: 'REQUEST_TIMEOUT', recoverTo: 'identifier' },
+        });
+        await oldAction;
+      });
+      expect(hook.result.current.auth.loginState).toEqual({ step: 'entry' });
+      expect(hook.result.current.login.errorCode).toBeNull();
+      expect(hook.result.current.login.isLoading).toBe(true);
+      await act(async () => {
+        finishNext({ success: true, state: { step: 'entry' } });
+        await nextAction;
+      });
+      expect(hook.result.current.login.isLoading).toBe(false);
+    },
+  );
+
+  it('does not reopen add-account login after it was closed', async () => {
+    mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(hook.result.current.isInitializing).toBe(false));
+    let finish!: (result: DesktopLoginActionResult) => void;
+    mocks.service.beginAddAccount.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    let begin!: Promise<DesktopLoginActionResult>;
+    act(() => {
+      begin = hook.result.current.beginAddAccount();
+    });
+    await act(async () => {
+      await hook.result.current.cancelAddAccount();
+    });
+    await act(async () => {
+      finish({
+        success: false,
+        code: 'REQUEST_TIMEOUT',
+        state: { step: 'error', code: 'REQUEST_TIMEOUT', recoverTo: 'identifier' },
+      });
+      await begin;
+    });
+    expect(hook.result.current.loginState).toBeNull();
+  });
+
+  it('preserves a usable form when skipping fails and ignores a superseded skip failure', async () => {
+    mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(hook.result.current.isInitializing).toBe(false));
+    const form = { step: 'verification-code', kind: 'email', identifier: 'test@example.invalid' } as const;
+    mocks.service.dispatchLoginAction.mockResolvedValueOnce({ success: true, state: form });
+    await act(async () => { await hook.result.current.dispatchLoginAction({ type: 'reset' }); });
+    mocks.service.enterLocalMode.mockRejectedValueOnce(new Error('skip failed'));
+    await act(async () => {
+      await expect(hook.result.current.enterLocalMode()).rejects.toThrow('skip failed');
+    });
+    expect(hook.result.current.loginState).toEqual(form);
+
+    let failSkip!: (error: Error) => void;
+    mocks.service.enterLocalMode.mockReturnValueOnce(new Promise((_, reject) => { failSkip = reject; }));
+    let skip!: Promise<void>;
+    act(() => { skip = hook.result.current.enterLocalMode(); });
+    await act(async () => { await hook.result.current.cancelAddAccount(); });
+    await act(async () => {
+      failSkip(new Error('old skip failed'));
+      await expect(skip).rejects.toThrow('old skip failed');
+    });
+    expect(hook.result.current.loginState).toBeNull();
+  });
 });
 
 describe('AuthContext initialize .catch 归一未登录', () => {

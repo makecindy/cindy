@@ -61,6 +61,8 @@ export class TunnelLinkActivity {
   private readonly pending = new Map<string, { method: string; sentAt: number }>();
   private readonly roundTrips: number[] = [];
   private httpInFlight = 0;
+  /** 现在开着的 WebSocket 连接。 */
+  private readonly openConnections = new Set<string>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -97,7 +99,11 @@ export class TunnelLinkActivity {
   /** 连接打开或关闭；关闭时这条连接上没等到的回复不会再来。 */
   connection(connId: string, closed: boolean): void {
     this.touch();
-    if (!closed) return;
+    if (!closed) {
+      this.openConnections.add(connId);
+      return;
+    }
+    this.openConnections.delete(connId);
     const prefix = `${connId}\0`;
     for (const key of [...this.pending.keys()]) if (key.startsWith(prefix)) this.pending.delete(key);
   }
@@ -130,6 +136,7 @@ export class TunnelLinkActivity {
           }
         : {}),
       httpInFlight: this.httpInFlight,
+      wsConnectionsOpen: this.openConnections.size,
     };
   }
 

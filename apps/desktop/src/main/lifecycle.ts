@@ -52,7 +52,6 @@ import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
-import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 
 /**
@@ -668,12 +667,6 @@ export function installQuitHandler(timeoutMs = 2000): void {
     if (isRsbWindowWebContentsId(webContents.id)) {
       log.warn(
         `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isGhostPanelWebContentsId(webContents.id)) {
-      log.warn(
-        `ghost panel render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

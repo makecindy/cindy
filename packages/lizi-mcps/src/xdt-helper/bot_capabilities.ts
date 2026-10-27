@@ -19,7 +19,7 @@ export interface BotCapabilityCallbacks {
     name?: string;
     description?: string;
     identitySource?: string;
-    modelChain?: { id: string; effort?: string; fastMode?: boolean }[] | null;
+    modelChain?: { id: string; effort?: string; fastMode?: boolean | 'ultrafast' }[] | null;
   }): Promise<ControlResult<{ effective: "next-turn" }, string>>;
   list(params: {
     callerSessionId: string;
@@ -51,10 +51,17 @@ export interface BotCapabilityCallbacks {
 
 export interface AppDefaultModelRoute {
   harness: 'claude' | 'codex' | 'pi'; providerId: string | null;
-  model: string; effort: string; fastMode: boolean;
+  model: string; effort: string; fastMode: boolean | 'ultrafast';
 }
 
 export interface BotControlState {
+  conversations?: {
+    scope: 'local';
+    teammateId: string;
+    connections: { channel: string; connectionId?: string; status: string }[];
+    connectionsAvailable: boolean;
+    guidance: string;
+  };
   profile: { id: string; name: string; description: string; identitySource: string; version: number };
   session: { id: string; workingDir: string | null; remoteHostId: string | null };
   model: { source: "override" | "default"; candidates: { harness: string; providerId?: string | null; model: string }[] };
@@ -70,6 +77,7 @@ export const TEAMMATE_CONTROL_GUIDANCE = [
   'For project work, set working_dir to the actual project and use_worktree=true for isolation before starting. check_session_task returns the registered directory. Shell cd/worktree creation does not relocate a Session. timeout_ms defaults to 30 minutes and supports up to 24 hours at creation; terminal follow-up inherits the original budget. Do not claim an existing deadline was extended without a verified host response.',
   'message_session_task returns queued_message_id for queued or steered input. check_session_task exposes only your own queue; optionally query queued_message_id for queued/consuming/dispatched/not-found/unavailable; queue restore errors preserve task results and cannot prove a message is missing. Dispatched means accepted into host history, not proof of model action. Use mode=edit with message or mode=withdraw for your own unconsumed item; consuming input cannot be edited or withdrawn.',
   'Control your own background tasks with `message_session_task` (mode=queue by default, mode=steer for same-turn input, mode=resume for a reversible pause) and `stop_session_task` (mode=cancel by default, request-stop for a graceful stop request, pause to hold execution and queued input). General control tools are not part of the teammate toolset. After an execution ends, inspect_session_task_route and advance_session_task_route let you decide whether to use the next already-configured model route; switching alone does not retry or replay any work. A successful queue receipt is not a steer, and pausing/requested/unconfirmed is not proof the engine stopped. Check the returned control state; unsupported engines fail explicitly. Pause preserves the same task and Session, holds timers and automatic input, and resumes without replaying completed work. If paused, resume without a message before answering a pending interaction. Only tasks owned by your teammate are controllable.',
+  'The host decides whom each turn speaks for. When the owner asked in this turn (typed it, or the host verified an owner request in a group or IM lane), act for the owner on their tasks under the task\'s ordinary permissions; the host attaches the owner\'s verified words when you relay them. An owner-created routine carries its standing instruction. Every other turn is your own initiative: host wake-ups and the built-in follow-up, teammate messages, guests, forwarded input and unavailable group verification. Then you may read, keep Todos, notify the owner, message teammates, control background tasks you started, and continue or re-route tasks already handed to you (continue_workbench_task to carry on the original goal, set_session_runtime per suggested_route). Other changes to the owner\'s tasks, and saving, deleting, running or creating routines and schedules, return NEEDS_OWNER_REQUEST: do not retry; propose the task, action and content in a Todo or notification so the owner can ask. When relaying, keep your supplement to the background the task needs; do not restate authorization or ask the task to send results back. When the host wakes you, inspect get_task_digest and report only important new facts or decisions. Check current state: long tools, pauses and recovered tasks do not need automatic nudges. Observation does not expand private-data access.',
   'Use `get_capabilities` for application features and UI guidance. It describes the product, not a permission grant or proof that every feature is available here. Use the matching live tool to act, and verify its result before claiming success.',
 ].join('\n');
 
@@ -138,7 +146,7 @@ export function registerBotCapabilityTools(
   if (deps.callbacks.inspect) registry.register({
     name: "get_teammate_state",
     category: "bots",
-    description: TEAMMATE_CONTROL_GUIDANCE,
+    description: TEAMMATE_CONTROL_GUIDANCE + '\n主人私聊中还返回本机消息平台连接与跨渠道历史检索指引。按话题接续时使用 profile.id 作为 history 工具的 teammate_id，不需要主人先点名渠道；连接不证明旧记录归属。',
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -159,7 +167,7 @@ export function registerBotCapabilityTools(
       modelChain: z.array(z.strictObject({
         id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
         effort: z.string().max(64).optional(),
-        fastMode: z.boolean().optional(),
+        fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
       })).min(1).max(5).nullable().optional().describe('Complete model chain for this teammate; null removes its override and follows the application default.'),
     },
     handler: async (input) => {

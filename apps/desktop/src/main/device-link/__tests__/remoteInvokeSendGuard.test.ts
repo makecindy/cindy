@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, type DeviceLinkClient } from '@cindy/device-link';
-import { invokeWithClosedLinkRecovery } from '../linkRecovery';
+import { DeviceLinkError, FILE_PEER_CHANNEL, type DeviceLinkClient } from '@cindy/device-link';
+import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
@@ -17,12 +17,11 @@ type PeerInvoke = (peer: string, channel: string, args: unknown[]) => Promise<un
 
 function loadRemoteInvoke(overrides: Record<string, unknown>) {
   const dependencies = {
-    DeviceLinkError, invokeWithClosedLinkRecovery,
+    DeviceLinkError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
     assertNotStandby: () => {},
     assertRemoteControlTargetEnabled: () => {},
     openLinkCloseEpochs: new Map<string, number>(),
     ensureOnlineForRequest: async () => {},
-    client: { invoke: vi.fn() },
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
     resolveRemoteInvokeTimeoutMs: () => undefined,
@@ -30,6 +29,7 @@ function loadRemoteInvoke(overrides: Record<string, unknown>) {
     closeRemoteLink: vi.fn(),
     responsivenessTracker: null,
     ...overrides,
+    client: { invoke: vi.fn(), needsLinkRecovery: () => false, ...(overrides.client as object) },
   };
   return new Function(...Object.keys(dependencies), compiled + '; return remoteInvoke;')(...Object.values(dependencies));
 }
@@ -53,7 +53,7 @@ function loadBackgroundInvoke(overrides: Record<string, unknown>) {
   return new Function(...Object.keys(dependencies), backgroundCode + '; return remoteBackgroundInvoke;')(...Object.values(dependencies));
 }
 
-it.each(['target resolution', 'link opening', 'online wait'])(
+it.each(['target resolution', 'link opening', 'online wait', 'reliable link recovery'])(
   'does not send an old account’s background request after account changes during %s', async (stage) => {
     let current = true;
     let release!: () => void;
@@ -65,7 +65,8 @@ it.each(['target resolution', 'link opening', 'online wait'])(
       return { ok: true, result: null };
     });
     const remoteInvoke = loadRemoteInvoke({
-      client: { invoke },
+      client: { invoke, needsLinkRecovery: () => stage === 'reliable link recovery' },
+      openRemoteLink: pause,
       ensureOnlineForRequest: stage === 'online wait' ? pause : async () => {},
     });
     const remoteBackgroundInvoke = loadBackgroundInvoke({
@@ -127,6 +128,22 @@ it.each(['caller cancelled', 'target disabled', 'link closed', 'still valid'])(
     expect(reopen).not.toHaveBeenCalled();
   },
 );
+
+it.each([false, true])('never reopens a link for late file cleanup (ready=%s)', async (ready) => {
+  const online = vi.fn();
+  const reopen = vi.fn();
+  const invoke = vi.fn().mockRejectedValue(new DeviceLinkError('LINK_NOT_OPEN', 'closed'));
+  const remoteInvoke = loadRemoteInvoke({
+    ensureOnlineForRequest: online,
+    client: { isLinkReady: () => ready, invoke },
+    openRemoteLink: reopen,
+  });
+  await expect(remoteInvoke('host', FILE_PEER_CHANNEL, [{ action: 'close', connection: 'old' }]))
+    .rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
+  expect(invoke).toHaveBeenCalledTimes(ready ? 1 : 0);
+  expect(online).not.toHaveBeenCalled();
+  expect(reopen).not.toHaveBeenCalled();
+});
 
 // The direct connection keeps this invoke and calls it later from timers (idle close),
 // where `void invoke(...).catch(() => {})` only absorbs rejections. A synchronous throw

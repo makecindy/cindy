@@ -127,7 +127,7 @@ it.each(['running', 'failed', 'cancelled', 'completed'])(
 );
 
 describe('Bot 流式正文呈现', () => {
-  it('preserves consecutive Claude final text blocks only after the turn seal', () => {
+  it('preserves Claude progress and folds it only after the turn seal', () => {
     let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
     const visibleProse = () => simplifyBotRenderItems(
       groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
@@ -149,9 +149,9 @@ describe('Bot 流式正文呈现', () => {
       data: { toolUseId: 'tool', result: 'ok' },
     });
     emitText('first', 'first');
-    expect(visibleProse()).toEqual([]);
+    expect(visibleProse()).toEqual(['我查一下：', 'first']);
     emitText('second', 'second');
-    expect(visibleProse()).toEqual([]);
+    expect(visibleProse()).toEqual(['我查一下：', 'first', 'second']);
     state = handleStreamEvent(state, {
       sessionId: 'claude-multi-block', type: 'text', persistId: 'second',
       data: { text: 'second', isFinal: true, isFullText: true },
@@ -162,7 +162,7 @@ describe('Bot 流式正文呈现', () => {
     expect(visibleProse()).toEqual(['first', 'second']);
   });
 
-  it('运行中从首字隐藏未封口正文与工具，不保留过程入口', () => {
+  it('运行中从首字显示未封口正文，工具留在普通工作组里', () => {
     const messages = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
@@ -174,22 +174,26 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1']);
-    expect(visible.some((item) => item.type === 'work_group')).toBe(false);
+    ).toEqual(['u1', 'a1']);
+    // 与普通任务同一个工作组：正文开始后，前面的动作段不再是运行中尾段。
+    const groups = visible.filter((item) => item.type === 'work_group');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].type === 'work_group' && groups[0].children.map((child) => child.type)).toEqual(['tool_segment']);
   });
 
   // Contracts: claude-code/translator assistant text blocks; pi/translator
   // message_end authoritative full text; codex/translator phase-marked deltas.
-  // A closed block is not a turn seal. Only a provider-marked final can stream early.
+  // A closed block is not a turn seal: progress stays visible until the final seal.
   it.each(['claude-code', 'pi', 'codex'] as const)(
-    '%s: hides intermediate text and preserves provider final through the turn seal', (source) => {
+    '%s: preserves progress and provider final through the turn seal', (source) => {
       let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
       const project = () => simplifyBotRenderItems(
         groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
       );
       const visibleProse = () => project().flatMap((item) =>
         item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
-      for (const [index, text] of ['我查一下：', '已找到线索，继续核实', '这是最终答复'].entries()) {
+      const progressTexts = ['我查一下：', '已找到线索，继续核实', '这是最终答复'];
+      for (const [index, text] of progressTexts.entries()) {
         const persistId = `answer-${index}`;
         const providerFinal = source === 'codex' && index === 2;
         state = handleStreamEvent(state, {
@@ -198,13 +202,13 @@ describe('Bot 流式正文呈现', () => {
             ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
           },
         });
-        expect(visibleProse()).toEqual(providerFinal ? ['这是'] : []);
+        expect(visibleProse()).toEqual([...progressTexts.slice(0, index), providerFinal ? '这是' : text]);
         if (providerFinal) {
           state = handleStreamEvent(state, {
             sessionId: 'bot-event-fixture', type: 'text', persistId,
             data: { text: '最终答复', isFinal: false, agentMessageId: persistId, phase: 'final_answer' },
           });
-          expect(visibleProse()).toEqual(['这是最终答复']);
+          expect(visibleProse()).toEqual(progressTexts);
         }
         state = handleStreamEvent(state, {
           sessionId: 'bot-event-fixture', type: 'text', persistId,
@@ -213,7 +217,7 @@ describe('Bot 流式正文呈现', () => {
             ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
           },
         });
-        expect(visibleProse()).toEqual(providerFinal ? ['这是最终答复'] : []);
+        expect(visibleProse()).toEqual(progressTexts.slice(0, index + 1));
         if (index < 2) {
           state = handleStreamEvent(state, {
             sessionId: 'bot-event-fixture', type: 'tool_use', persistId: `tool-${index}`,
@@ -223,7 +227,7 @@ describe('Bot 流式正文呈现', () => {
             sessionId: 'bot-event-fixture', type: 'tool_result', persistId: `result-${index}`,
             data: { toolUseId: `tool-${index}`, result: 'ok' },
           });
-          expect(visibleProse()).toEqual([]);
+          expect(visibleProse()).toEqual(progressTexts.slice(0, index + 1));
         }
       }
       const streamingFinalKey = project().find(item => item.type === 'message'
@@ -240,7 +244,10 @@ describe('Bot 流式正文呈现', () => {
         expect(project().find(item => item.type === 'message'
           && item.message.clientId === 'answer-2')?.key).toBe(streamingFinalKey);
       }
-      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(0);
+      // Intermediate prose and both tool runs fold into one normal summary group.
+      const groups = project().filter((item) => item.type === 'work_group');
+      expect(groups).toHaveLength(1);
+      expect(groups[0].key.startsWith('work-summary-')).toBe(true);
       expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
         .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
       state = { ...state, isStreaming: false };
@@ -278,7 +285,7 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1', 'dm-sent', 'dm-received']);
+    ).toEqual(['u1', 'dm-sent', 'dm-received', 'a1']);
   });
 });
 
@@ -2428,7 +2435,7 @@ it('places the same Bot task card after its introduction and keeps it through st
   const project = (streaming: boolean) => simplifyBotRenderItems(
     buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot' }).items, streaming,
   ).flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
-  expect(project(true)).toEqual(['start', 'intro', 'task-card']);
+  expect(project(true)).toEqual(['start', 'intro', 'task-card', 'done']);
   expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
 });
 

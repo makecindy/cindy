@@ -329,6 +329,7 @@ export type SmartResolveResult =
 export async function resolveLocalPathSmart(
   href: string,
   workingDir: string,
+  options: { refresh?: boolean } = {},
 ): Promise<SmartResolveResult> {
   const fallback = resolveLocalPath(href, workingDir);
   // Main-process resolver expects a native absolute/relative path, not a
@@ -343,7 +344,7 @@ export async function resolveLocalPathSmart(
     return { status: 'none', fallbackAbsPath: fallback };
   }
   try {
-    const r = await api.resolvePath({ href: lookupHref, workingDir });
+    const r = await api.resolvePath({ href: lookupHref, workingDir, ...(options.refresh ? { refresh: true } : {}) });
     if (r.status === 'unique' && r.candidates[0]) {
       return { status: 'unique', absPath: r.candidates[0], ...(r.kind ? { kind: r.kind } : {}) };
     }

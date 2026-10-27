@@ -8,6 +8,7 @@ import {
   coalesceDictionaryLearningActions,
   deleteTerms,
   dictionaryTermKey,
+  isSpeakerGateStrictness,
   materializeDictionary,
   recordLearningEvent,
   renameTerm,
@@ -111,7 +112,7 @@ export class VoiceInputDataStore {
     // 在下一次物化时被静默丢掉。词典变更一律走下面的语义化入口。
     const nextSettings = normalizeVoiceInputSettings({
       ...current.settings,
-      ...translateComposerLongPressPatch(stripDictionaryFields(patch)),
+      ...translateSpeakerFilterStrictnessPatch(translateComposerLongPressPatch(stripDictionaryFields(patch))),
     }, process.platform);
     this.replaceState({
       ...current,
@@ -954,13 +955,14 @@ function cloneSettings(settings: VoiceInputSettings): VoiceInputSettings {
  * 落盘只记录 override。运行时快照里的 `composerLongPressEnabled` / `dictionarySyncEnabled`
  * 是默认值 + override 合成的有效值;写进文件会把当时的默认钉死,未自定义的用户就跟不上
  * 后续改默认 —— 尤其是「恢复默认」后残留的旧有效值,将来默认一变就会被
- * `legacyDictionarySyncOverride()` 重新解释成显式 override。两个字段都只持久化
- * 各自的 `*Override`。
+ * `legacyDictionarySyncOverride()` 重新解释成显式 override。这几个字段(含声纹过滤
+ * 灵敏度 `speakerFilterStrictness`)都只持久化各自的 `*Override`。
  */
 function projectVoiceInputDataForPersist(state: StoredVoiceInputData): unknown {
   const settings: Record<string, unknown> = { ...state.settings };
   delete settings.composerLongPressEnabled;
   delete settings.dictionarySyncEnabled;
+  delete settings.speakerFilterStrictness;
   return { ...state, settings };
 }
 
@@ -1038,6 +1040,20 @@ function stripDictionaryFields(patch: unknown): Record<string, unknown> {
     // 展开合并的,undefined 会被现有值盖掉。
     next.dictionarySyncEnabledOverride = null;
     delete next.dictionarySyncEnabled;
+  }
+  return next;
+}
+
+/** 声纹过滤灵敏度:同样只记 override,renderer 传有效值字段;`null` = 恢复默认。 */
+function translateSpeakerFilterStrictnessPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('speakerFilterStrictness' in patch)) return patch;
+  const next = { ...patch };
+  const value = next.speakerFilterStrictness;
+  delete next.speakerFilterStrictness;
+  if (isSpeakerGateStrictness(value)) {
+    next.speakerFilterStrictnessOverride = value;
+  } else if (value === null) {
+    next.speakerFilterStrictnessOverride = null;
   }
   return next;
 }

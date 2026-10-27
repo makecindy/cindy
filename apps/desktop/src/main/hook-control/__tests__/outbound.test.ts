@@ -392,3 +392,71 @@ describe('辅助函数', () => {
     expect(guessMime('/a/b.tar.gz')).toBe('application/octet-stream');
   });
 });
+
+// X video regression: real collector input -> attachment bytes/MIME/caption.
+// Existing image and xdt-file cases did not cover managed video links (unit tier).
+describe('X managed video delivery', () => {
+  // #6447: plain-label coverage missed nested visible text (unit, collector output).
+  it.each([
+    ['**成片**', '成片'],
+    ['`clip.mp4`', 'clip.mp4'],
+    ['![封面](https://example.com/cover.png)', '封面'],
+  ])('preserves the visible caption in %s', async (label, expected) => {
+    const result = await collectOutboundAttachments(
+      `[${label}](cindy-media://blobs/clip.mp4)`, [],
+      { ...deps({ '/blobs/blobs/clip.mp4': Buffer.from('video') }), provider: 'x' },
+    );
+    expect(result.text.trim()).toBe(expected);
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('collects a video link and generated-media side channel once, with the file limit', async () => {
+    const bytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    const io = deps({ '/blobs/blobs/clip.mp4': bytes });
+    const result = await collectOutboundAttachments(
+      '完成 [视频][clip]\n\n[clip]: cindy-media://blobs/clip.mp4', ['/blobs/blobs/clip.mp4'], { ...io, provider: 'x' },
+    );
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]?.mimeType).toBe('video/mp4');
+    expect(Buffer.from(result.attachments[0]!.dataBase64, 'base64').equals(bytes)).toBe(true);
+    expect(result.text.trim()).toBe('完成 视频');
+    expect(result.skipped).toBe(0);
+  });
+
+  it('does not upload code examples and reports an unreadable managed video', async () => {
+    const io = deps({});
+    const result = await collectOutboundAttachments(
+      '`[demo](cindy-media://blobs/example.mp4)`\n[视频](cindy-media://blobs/missing.mp4)', [], { ...io, provider: 'x' },
+    );
+    expect(result.attachments).toEqual([]);
+    expect(io.readFile).toHaveBeenCalledTimes(1);
+    expect(result.skipped).toBe(1);
+    expect(result.text).not.toContain('cindy-media://blobs/missing.mp4');
+    expect(result.text).toContain('Attachment delivery incomplete');
+  });
+
+  it('keeps other channel collection unchanged', async () => {
+    const io = deps({ '/blobs/blobs/clip.mp4': Buffer.from('clip') });
+    const text = '[视频](cindy-media://blobs/clip.mp4)';
+    const result = await collectOutboundAttachments(text, [], { ...io, provider: 'telegram' });
+    expect(result.attachments).toEqual([]);
+    expect(io.readFile).not.toHaveBeenCalled();
+    expect(result.text).toBe(text);
+  });
+});
+
+// #6447: declared tool media and Markdown share the production collector.
+// Unit: a managed WebM must never reach the X transport (no transcoding contract).
+it.each(['markdown', 'tool'] as const)('X rejects unsupported WebM from %s with an explicit warning', async (source) => {
+  const url = `cindy-media://blobs/${'a'.repeat(64)}.webm`;
+  const readFile = vi.fn(async () => Buffer.from('webm'));
+  const result = await collectOutboundAttachments(source === 'markdown' ? `[clip](${url})` : 'clip',
+    source === 'tool' ? ['/blobs/clip.webm'] : [], {
+      provider: 'x', log, readFile,
+      resolveImageUrl: () => ({ absPath: '/blobs/clip.webm', mimeType: 'video/webm' }),
+    });
+  expect(result.attachments).toEqual([]);
+  expect(result.text).toContain('clip');
+  expect(result.text).toContain('Attachment delivery incomplete');
+  expect(readFile).not.toHaveBeenCalled();
+});

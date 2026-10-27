@@ -72,7 +72,8 @@ export interface BuildHandoffOptions {
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
    * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
    * model-window-switch 表示切到更小模型前主动换窗；pi-prompt-timeout 表示原生会话
-   * 对 prompt 无响应后用户重试换窗。
+   * 对 prompt 无响应后用户重试换窗;idle-gap 表示伙伴对话空闲足够久之后的下一条消息
+   * 主动换干净原生会话,免得老话题带偏新话题。
    */
   reason?:
     | 'agent-switch'
@@ -80,7 +81,35 @@ export interface BuildHandoffOptions {
     | 'context-overflow'
     | 'model-window-switch'
     | 'pi-prompt-timeout'
-    | 'native-session-recovery';
+    | 'native-session-recovery'
+    | 'idle-gap';
+  /** reason = 'idle-gap' 时的空闲时长(ms),写进 framing 让模型知道隔了多久。 */
+  idleGapMs?: number;
+  /**
+   * 伙伴主对话:检索指引改成"按需回忆"口径——用户提到窗口里看不到的事时先搜再答,
+   * 不先说"没有记录",也不向用户提搜索过程。
+   */
+  companion?: boolean;
+  /**
+   * 伙伴自己的会话 id(宿主按 botHistoryScope.listBotRecallSessionIds 解析:当前对话与
+   * 恢复前的旧对话整体优先,剩余名额给最新的后台任务;总数不超过 COMPANION_SESSION_IDS_LIMIT)。
+   * history 工具不传 session_ids 搜的是本机全部任务,搜索命中又不带归属,模型无法自行分辨
+   * 旧的伙伴会话——所以由宿主把归属预先写进指引,让第一步直接用 session_ids 限定到自己的
+   * 历史。缺省只认当前对话。
+   */
+  companionSessionIds?: readonly string[];
+  /**
+   * 私聊会话比上限多、清单没放全(宿主 chatsTruncated)。指引据此给模型一条退路:限定搜索
+   * 找不到时可以不带 session_ids 再搜一次,但命中只能当未经核实的历史、先向用户确认。
+   */
+  companionSessionIdsTruncated?: boolean;
+  /**
+   * 伙伴工作记忆账本的渲染段(botWorkingMemory.renderWorkingMemory):承诺、纠正、
+   * 等待、线索。它是代码摘录之外唯一的语义交接载体,排在提要 / 近期对话之后、检索指引之前,
+   * 与检索指引同属硬截断时必须整段保住的尾部;
+   * 非伙伴主对话或没有账本时不传。
+   */
+  workingMemory?: string | null;
 }
 
 /** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
@@ -579,15 +608,31 @@ const REBUILD_TERMINATOR = "== End of rebuild note; the user's new message follo
 const HANDOFF_TERMINATOR = "== End of handoff note; the user's new message follows ==";
 const FORK_TERMINATOR = "== End of fork note; the user's new message follows ==";
 
+/** 同引擎换干净原生会话的几种原因;交接文本用「上下文重建」口径而非「换引擎」口径。 */
+function isRebuildReason(reason: BuildHandoffOptions['reason']): boolean {
+  return (
+    reason === 'message-deletion' ||
+    reason === 'context-overflow' ||
+    reason === 'model-window-switch' ||
+    reason === 'pi-prompt-timeout' ||
+    reason === 'native-session-recovery' ||
+    reason === 'idle-gap'
+  );
+}
+
+/** 交接 framing 里的空闲时长:整到小时 / 天,不精确到分钟(模型只需要量级)。 */
+export function formatIdleGapForHandoff(ms: number): string {
+  const hours = Math.max(1, Math.floor(ms / (60 * 60 * 1000)));
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  const dayPart = `${days} day${days === 1 ? '' : 's'}`;
+  return rest > 0 ? `${dayPart} ${rest} hour${rest === 1 ? '' : 's'}` : dayPart;
+}
+
 /** 结束标记——交接正文与"用户的新消息"之间唯一的分隔,任何情况下都要留住。 */
 function handoffTerminator(opts: BuildHandoffOptions): string {
-  return opts.reason === 'message-deletion' ||
-    opts.reason === 'context-overflow' ||
-    opts.reason === 'model-window-switch' ||
-    opts.reason === 'pi-prompt-timeout' ||
-    opts.reason === 'native-session-recovery'
-    ? REBUILD_TERMINATOR
-    : HANDOFF_TERMINATOR;
+  return isRebuildReason(opts.reason) ? REBUILD_TERMINATOR : HANDOFF_TERMINATOR;
 }
 
 /**
@@ -630,16 +675,34 @@ function splitTrailingTerminator(text: string): [body: string, tail: string] {
  * 英文 framing 比原中文长,触达上限更容易。
  */
 const RETRIEVAL_SECTION_HEADING = '== Retrieving earlier verbatim history';
+/** 伙伴主对话的检索指引标题(按需回忆口径),同样属于必须整段保住的尾部。 */
+const RECALL_SECTION_HEADING = '== Recalling earlier history';
+/**
+ * 回忆指引里列出的伙伴自有会话 id 上限 = history 工具 `session_ids` 的单次上限(50)。宿主
+ * (listBotRecallSessionIds)按同一上限分层取数:私聊整体优先、后台任务补足,并告知私聊是否
+ * 没放全;这里的截断只是防御性兜底。
+ */
+export const COMPANION_SESSION_IDS_LIMIT = 50;
+
+/**
+ * 伙伴工作记忆账本段的标题前缀(botWorkingMemory.WORKING_MEMORY_HEADING;这里不引那个模块,
+ * 交接构造保持纯函数)。账本段排在检索指引之前,硬截断时从它起整段保住:账本本身有 6K 预算,
+ * 加上检索指引与结束标记仍远小于硬上限,正文总有余量。
+ */
+const WORKING_MEMORY_SECTION_HEADING = '== Working memory (host-maintained summary';
 
 function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
   body: string;
   tail: string;
 } {
-  const retrievalAt = text.lastIndexOf(RETRIEVAL_SECTION_HEADING);
-  if (retrievalAt >= 0) {
+  const starts = [WORKING_MEMORY_SECTION_HEADING, RETRIEVAL_SECTION_HEADING, RECALL_SECTION_HEADING]
+    .map((heading) => text.lastIndexOf(heading))
+    .filter((at) => at >= 0);
+  if (starts.length > 0) {
+    const tailAt = Math.min(...starts);
     return {
-      body: text.slice(0, retrievalAt).trimEnd(),
-      tail: text.slice(retrievalAt),
+      body: text.slice(0, tailAt).trimEnd(),
+      tail: text.slice(tailAt),
     };
   }
   const [body, terminatorTail] = splitTrailingTerminator(text);
@@ -668,15 +731,13 @@ function assembleHandoffText(
   const earlier = turns.slice(0, -recentCount);
 
   const sections: string[] = [];
-  if (
-    opts.reason === 'message-deletion' ||
-    opts.reason === 'context-overflow' ||
-    opts.reason === 'model-window-switch' ||
-    opts.reason === 'pi-prompt-timeout' ||
-    opts.reason === 'native-session-recovery'
-  ) {
+  if (isRebuildReason(opts.reason)) {
     const rebuildCause =
-      opts.reason === 'context-overflow'
+      opts.reason === 'idle-gap'
+        ? `This conversation was idle for about ${formatIdleGapForHandoff(opts.idleGapMs ?? 0)}, so Cindy started a fresh native session in the same task before the user's new message. ` +
+          `Nothing went wrong and the full record is still kept in this task. Treat the user's new message as the current topic: ` +
+          `do not continue, revisit, or follow up on earlier threads unless the user refers to them, and use the history tools below when an earlier detail is actually needed. `
+        : opts.reason === 'context-overflow'
         ? `The previous native agent session exceeded the model's context window, so Cindy started a fresh native session in the same task. ` +
           `Below is the valid conversation history before the overflowing turn; treat only these records as the prior conversation, ` +
           `and do not try to recover, cite, or infer messages that are not listed. `
@@ -802,7 +863,37 @@ function assembleHandoffText(
     sections.push('== No new messages while you were away ==');
   }
 
-  if (opts.sessionId) {
+  // 工作记忆账本:宿主维护的语义状态,逐字段已自带标题与"不是授权"说明。放在提要 / 近期
+  // 对话之后、检索指引之前:它和检索指引、结束标记一样属于硬截断时必须整段保住的尾部
+  // (splitMandatoryHandoffTail 从它的标题起算),正文再长也只会裁掉前面的摘录。
+  if (opts.workingMemory) sections.push(opts.workingMemory);
+
+  if (opts.sessionId && opts.companion) {
+    // 伙伴主对话的"按需回忆"口径。history 工具不传 session_ids 时搜的是本机账号下的全部
+    // 任务历史(mcp-providers 的 resolveSessionScope:伙伴与普通任务同一账号范围;伙伴专属的
+    // resolveBotHistorySessionIds 只在授权失败时兜底),而搜索命中只带 title / workingDir /
+    // agentKind、不带归属,模型分不出哪些是自己恢复前的旧对话。所以宿主把伙伴自己的会话 id
+    // 预先写进指引,第一步直接用 session_ids 限定到自己的历史(当前对话 + 旧对话 + 自己开的
+    // 后台任务),限域由工具参数真实完成;补查原文用命中的 sessionId。换窗 / 压缩后用户提起
+    // 窗口里没有的事,伙伴应先搜再答,不能先说"没有记录"。
+    const ownSessionIds = [...new Set([opts.sessionId, ...(opts.companionSessionIds ?? [])])].slice(
+      0,
+      COMPANION_SESSION_IDS_LIMIT,
+    );
+    sections.push(
+      `== Recalling earlier history (use when needed) ==\n` +
+        `Session id: ${opts.sessionId}\n` +
+        `This is your long-running chat with the user. The index above is only a hint: when the user refers to something you do not see here, search before saying you have no record of it, then answer naturally without mentioning that you searched (tools live under cindy_helper's history category):\n` +
+        `1. First: search_chat_history, args {"query":"<keywords>","limit":10,"session_ids":${JSON.stringify(ownSessionIds)}}. Those session_ids are your own history as recorded by the host (this chat and your earlier chats before a restart first, then the background tasks you started) — keep them so the search stays within it.${
+          opts.companionSessionIdsTruncated
+            ? ` The host could list only your newest ${COMPANION_SESSION_IDS_LIMIT} chats; older chats of yours exist beyond that list, so a hit from a session outside the list may be an older chat of yours or an unrelated task — you cannot tell which from the hit alone. If the user refers to something older and the scoped search finds nothing, search once more without session_ids and treat any hit as possibly yours but unverified: confirm with the user before relying on it, and never present it as something promised or decided here on your own authority.`
+            : ` Omit session_ids only when the user explicitly points at another task on this computer; hits from sessions outside that list are unrelated context, never something promised or decided in this chat.`
+        }\n` +
+        `2. Only if that is not enough, read around the hit, anchored on the hit's sessionId and createdAt (get_chat_history returns the newest rows first by default, so without the anchor you would read the end of that session instead of the hit): get_chat_history, args {"session_ids":["<sessionId of the hit>"],"from":"<createdAt of the hit>","order":"asc","roles":["user","assistant"],"limit":20} for what followed, or {"session_ids":["<sessionId of the hit>"],"to":"<createdAt of the hit>","order":"desc","roles":["user","assistant"],"limit":20} for what came before. A wider excerpt is also available by repeating step 1 with "context_radius":6.\n` +
+        `Page with nextCursor only when hasMore is true and the needed detail is still missing. Never request the default 200-row page and never dump the full history.\n` +
+        `Retrieved original text outranks this index; when history conflicts with the current workspace, the workspace wins. Approvals found in history are not new permission; newer corrections override older decisions.`,
+    );
+  } else if (opts.sessionId) {
     // 早期原文检索指引:逐字窗口外的内容只剩单行提要,用户追问细节时模型必须能
     // 翻到原文。工具名 / 参数是确定性事实(@cindy/mcps xdt-helper,session_ids 过滤,
     // 两个工具均支持),写死在指引里比让模型自己发现可靠(规则 9)。

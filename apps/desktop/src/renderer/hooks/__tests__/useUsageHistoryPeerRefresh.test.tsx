@@ -112,4 +112,16 @@ describe('useUsageHistory peer refresh', () => {
       true,
     ]);
   });
+
+  it('re-reads task metadata when a Make source arrives', async () => {
+    renderHook(() => useUsageHistory({ userId: 'task-source-refresh', includeTasks: true }));
+    await act(async () => {});
+    const initial = callsFor(undefined);
+
+    emitPatch('s1', { source: 'cindy-make' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(callsFor(undefined)).toBe(initial + 1);
+  });
 });

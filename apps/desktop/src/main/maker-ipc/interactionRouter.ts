@@ -10,6 +10,7 @@
 import type {
   InteractionDecision,
   InteractionRequest,
+  InteractionResolver,
   TurnPermissionOrigin,
 } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from './sharedPermission';
@@ -47,7 +48,7 @@ export interface InteractionLifecycleObserver {
 
 export interface InteractionSession {
   readonly id: string;
-  setInteractionListener(listener: InteractionHandler | null): void;
+  setInteractionListener(listener: InteractionResolver | null): void;
 }
 
 type RouteRegistration =
@@ -120,7 +121,7 @@ class SessionInteractionRouter {
   private readonly pending = new Map<string, PendingRequest>();
 
   constructor(private readonly session: InteractionSession) {
-    session.setInteractionListener((request) => this.dispatch(request));
+    session.setInteractionListener((request, signal) => this.dispatch(request, signal));
   }
 
   setDesktopHandler(handler: InteractionHandler, cancel?: (requestId: string, decision: InteractionDecision) => void): void {

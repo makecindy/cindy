@@ -1,3 +1,5 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -90,7 +92,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           p.devices.map((device) => (
             <NewTaskSelectionRow
               key={device.deviceId}
-              title={device.name || device.deviceId}
+              title={deviceDisplayName(device.deviceId, device.name, p.devices)}
               leading={icon(Laptop)}
               selected={device.deviceId === p.selectedDeviceId}
               disabled={p.busy}
@@ -208,17 +210,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             {p.loading ? (
               <ActivityIndicator color={colors.textSecondary} />
             ) : null}
-            {p.error ? (
-              <Text
-                style={{
-                  color: colors.errorText,
-                  fontSize: typeScale.footnote,
-                  lineHeight: lineHeight.caption,
-                }}
-              >
-                {p.error}
-              </Text>
-            ) : null}
+            {p.error ? <ErrorNotice message={p.error} /> : null}
             {!p.loading && !p.error && !p.entries.length ? (
               <Text
                 style={{

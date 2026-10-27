@@ -10,6 +10,7 @@ import {
 import {
   parseProviderShareFavoriteSource, providerShareFavoriteSource, reconcileProviderShareFavorites,
   useProviderShareFavorites, useProviderShareFavoriteCleanupFailed,
+  useProviderShareFavoriteSources,
 } from '@/state/providerShareFavorites';
 import { useModelFavoritesHost } from '@/state/useModelFavoritesHost';
 
@@ -34,6 +35,37 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('recipient-owned shared model favorites', () => {
+  it('aggregates only exact, available grants for the current account', () => {
+    const sources = renderHook(() => useProviderShareFavoriteSources());
+    expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
+    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostOnline: false }]));
+    expect(sources.result.current.size).toBe(0);
+    act(() => publish([share('s1', 'replacement')]));
+    expect(sources.result.current.has(providerShareFavoriteSource(share()))).toBe(false);
+    expect(sources.result.current.get(providerShareFavoriteSource(share('s1', 'replacement')))).toBe('share:s1');
+    act(() => { setDataOwnerGeneration('other', 2); publish([], true, 'other', 2); });
+    expect(sources.result.current.size).toBe(0);
+  });
+
+  it('projects and edits the task computer store without touching the controller copy', () => {
+    addModelFavorite(config);
+    const item = { ...config, uid: 'remote-1', providerId: providerShareFavoriteSource(share()) };
+    const home = { items: [item], store: {
+      get: vi.fn((uid: string) => uid === item.uid ? item : undefined),
+      add: vi.fn(), update: vi.fn(), remove: vi.fn(),
+    } };
+    const view = renderHook(() => useProviderShareFavorites('share:s1', useModelFavorites(), home));
+    expect(view.result.current.items).toEqual([{ ...config, uid: item.uid }]);
+    act(() => view.result.current.store.update(item.uid, { effort: 'low', fast: false }));
+    expect(home.store.update).toHaveBeenCalledWith(item.uid, { effort: 'low', fast: false });
+    expect(() => view.result.current.store.update('unknown', { effort: 'low' })).toThrow();
+    expect(listModelFavorites()).toEqual([expect.objectContaining(config)]);
+    const stale = view.result.current.store;
+    act(() => publish([share('s1', 'replacement')]));
+    expect(() => stale.remove(item.uid)).toThrow('Shared favorite source unavailable');
+    expect(home.store.remove).not.toHaveBeenCalled();
+  });
+
   it('keeps long local sources out of legacy remote replies without removing stored favorites', () => {
     const received = providerShareParsers.received({ ...share('s'.repeat(128), 'm'.repeat(128)), providerId: 'p'.repeat(256) });
     publish([received]);

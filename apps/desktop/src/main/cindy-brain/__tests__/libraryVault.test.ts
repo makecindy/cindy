@@ -136,10 +136,25 @@ describe('LibraryVault', () => {
       const parent = path.join(tmpRoot, 'picked-owner');
       const custom = path.join(parent, 'test-ghost');
       await fs.promises.mkdir(parent, { recursive: true });
-      const previous = makeVault({ rootDir: () => custom, locationKind: 'custom', ghostId: 'other-plugin' });
+      // Seed the persisted tree without a native helper: this unit tests the
+      // vault's owner comparison, not cold PowerShell startup (15s under CI load).
+      // Real held-fd init/open coverage remains in the custom-tree tests below.
+      const previous = makeVault({ rootDir: () => custom, ghostId: 'other-plugin' });
       expect(await previous.open()).toMatchObject({ ok: true, state: 'ready' });
-      const current = makeVault({ rootDir: () => custom, locationKind: 'custom' });
+      const metaFile = path.join(custom, '.cindy-library', 'meta.json');
+      const persistedMeta = await fs.promises.readFile(metaFile, 'utf8');
+      const keepFile = path.join(custom, 'keep.txt');
+      await fs.promises.writeFile(keepFile, 'private');
+      const openExistingCustom = vi.fn(async () => ({
+        ok: true as const,
+        meta: JSON.parse(await fs.promises.readFile(metaFile, 'utf8')),
+        usage: null,
+      }));
+      const current = makeVault({ rootDir: () => custom, locationKind: 'custom', openExistingCustom });
       expect(await current.open()).toMatchObject({ ok: true, state: 'unavailable', reason: 'binding-moved' });
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(await fs.promises.readFile(metaFile, 'utf8')).toBe(persistedMeta);
+      expect(await fs.promises.readFile(keepFile, 'utf8')).toBe('private');
     });
 
     it('open 建骨架并写 meta;重复 open 幂等', async () => {

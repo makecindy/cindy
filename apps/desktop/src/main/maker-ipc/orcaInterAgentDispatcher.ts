@@ -9,6 +9,7 @@ import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } fr
 import type {
   AgentInputCreateOpts,
   AgentInputQueuedMessage,
+  AgentInputSerializedFile,
 } from '../../shared/agentInputQueue.js';
 import { createLogger } from '../logger.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -25,6 +26,7 @@ import type {
   ControlSteerOutcome,
 } from './agent-input-coordinator.js';
 import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunner.js';
+import { prependHandoffToUserMessage } from './agentHandoff.js';
 
 const defaultLog = createLogger('maker-ipc');
 
@@ -38,6 +40,8 @@ export type DispatchOrcaInterAgentMessageResult =
   | {
       ok: true;
       mode: OrcaInterAgentDispatchMode;
+      /** Runtime that accepted the message; queued messages have not switched yet. */
+      agentKind?: AgentKind;
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
@@ -61,6 +65,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   workerId?: string;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
+  /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
+  imagePaths?: string[];
   /** Synchronous reserve boundary hook; must return before drain is scheduled. */
   onReserved?: () => void;
   beforeReserve?: () => Promise<void>;
@@ -92,6 +98,8 @@ export interface OrcaInterAgentSessionRowSnapshot {
   title: string | null;
   status: string | null;
   userSendAt: string | number | Date | null;
+  /** 图片附件仅支持本机 session; SSH 远端目标必须拒绝。 */
+  remoteHostId?: string | null;
 }
 
 /** register.ts 现有 sendToSessionInternal 的窄结果形状，Orca dispatcher 只消费派发语义。 */
@@ -139,6 +147,15 @@ export interface OrcaInterAgentSendToSessionInternalParams {
   origin?: AgentInputQueuedMessage['origin'];
 }
 
+/** 校验后的图片附件; host 注入的 validateImageAttachments 产出, dispatcher 只消费。 */
+export interface OrcaInterAgentImageAttachment {
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  mimeType: string;
+}
+
 /** Orca dispatcher 内部日志接口，保持测试和宿主 logger 可替换。 */
 export interface OrcaInterAgentDispatcherLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -147,11 +164,17 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  onDirectInputDispatched?: (sessionId: string) => void | Promise<void>;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
+  /** Apply a deferred route while the per-session send lock is held. */
+  applyPendingAgentSwitch?: (sessionId: string) => Promise<void>;
+  hasPendingAgentSwitch?: (sessionId: string) => boolean;
+  peekPendingHandoff?: (sessionId: string) => Promise<string | null>;
+  consumePendingHandoff?: (sessionId: string) => void;
   /** Uses the input coordinator's steer guards and preserves uncertain-delivery ownership. */
   steerControlInput?: (
     sessionId: string,
@@ -167,6 +190,13 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   withSendToSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
   prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
+  /**
+   * 校验 imagePaths(存在性 + 图片扩展名), 返回逐张附件元数据或错误消息。
+   * fs 属 host 边界, dispatcher 不直接碰文件系统。
+   */
+  validateImageAttachments?: (
+    paths: string[],
+  ) => Promise<{ ok: true; images: OrcaInterAgentImageAttachment[] } | { ok: false; message: string }>;
   buildCreateOptsForQueuedSession: (
     sessionId: string,
     meta: TSessionMeta,
@@ -360,6 +390,75 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     const buildAgentMessageText = async (): Promise<string> =>
       formatAgentMessage(params.source, params.rawContent, params.workerId, await resolveRole());
     const persistedContent = formatOrcaCommunicationMessage(params.source, params.rawContent);
+    // 图片附件: 入口处一次校验(存在性 + 图片扩展名 + 本机限定);三条投递路径共用。
+    let imageFiles: AgentInputSerializedFile[] = [];
+    if (params.imagePaths?.length) {
+      if (dbRow.remoteHostId) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure(
+              'SEND_FAILED',
+              'image attachments are only supported for local sessions; SSH remote targets are not supported',
+            ),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+      if (!deps.validateImageAttachments) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure('SEND_FAILED', 'image attachments are not supported by this host'),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+      const validated = await deps.validateImageAttachments(params.imagePaths);
+      if (!validated.ok) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure('SEND_FAILED', validated.message),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+      imageFiles = validated.images.map((image) => ({
+        id: deps.createId(),
+        name: image.name,
+        path: image.path,
+        ext: image.ext,
+        size: image.size,
+        category: 'image',
+        mimeType: image.mimeType,
+        // 图片只可能来自本机(SSH 远端在入口已拒):标记 desktop-host,
+        // 视觉桥才会桥接无视觉模型的 worker,否则原始 block 进 Pi 会抛
+        // PiImageInputUnsupportedError 整条任务失败。
+        pathOrigin: 'desktop-host',
+      }));
+    }
+    // 直发时 image block 跟在格式化文本后;排队/插话时文件挂在 entry.files,
+    // drain 由 buildMakerUserMessage 还原成同样的 block 序列。
+    const agentMessageTextWithImages = async (): Promise<UserMessage> => {
+      const text = await buildAgentMessageText();
+      if (imageFiles.length === 0) return { type: 'user', content: text };
+      return {
+        type: 'user',
+        content: [
+          { type: 'text', text },
+          ...imageFiles.map((file) => ({
+            type: 'image' as const,
+            path: file.path,
+            mimeType: file.mimeType,
+            pathOrigin: 'desktop-host' as const,
+          })),
+        ],
+      };
+    };
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
       acceptedDidRun = true;
@@ -416,6 +515,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         persistedContent,
         origin: await resolveOrigin(),
         createOpts,
+        ...(imageFiles.length ? { files: imageFiles } : {}),
       });
       if (params.onAccepted) {
         registerQueuedOrcaInterAgentAcceptedCallback(
@@ -462,6 +562,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             persistedContent,
             origin: await resolveOrigin(),
             createOpts,
+            ...(imageFiles.length ? { files: imageFiles } : {}),
           });
           if (
             deps.getLiveSession(params.targetSessionId) !== liveTurn ||
@@ -473,6 +574,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             // The message joined the running turn. Accepted/commit callbacks claim a new
             // turn's running/auto-bridge identity, so they deliberately never run here.
             return { ok: true, mode: 'steered', clientId,
+              ...(liveTurn.agentKind ? { agentKind: liveTurn.agentKind } : {}),
               dispatchOutcome: { kind: 'session-dispatch', source: params.meta.source, dispatched: true },
               ...dispatchReceipt };
           }
@@ -547,6 +649,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           return {
             ok: true,
             mode: result.wakeKind === 'queued' ? 'queued' : 'dispatched',
+            ...(result.wakeKind !== 'queued' ? { agentKind: result.agentKind } : {}),
             clientId,
             dispatchOutcome: result.wakeKind === 'queued'
               ? makeQueuedDispatchOutcome(params.meta.source)
@@ -567,17 +670,22 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         });
       };
       const dispatchLive = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
+        // Orca delivery bypasses the ordinary renderer send transaction. Apply
+        // the same deferred route boundary before reading the live session.
+        await deps.applyPendingAgentSwitch?.(params.targetSessionId);
+        // Cross-engine preparation may retain the intent without throwing. Never
+        // deliver to the old runtime, or bypass an unfinished recovery by resuming.
+        if (deps.hasPendingAgentSwitch?.(params.targetSessionId)) {
+          throw new Error('Agent switch is still pending; retry the send after recovery');
+        }
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
-        const [origin, agentMessageText] = await Promise.all([
-          resolveOrigin(),
-          buildAgentMessageText(),
-        ]);
+        const origin = await resolveOrigin();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
-          agentMessage: { type: 'user', content: agentMessageText },
+          agentMessage: await agentMessageTextWithImages(),
           clientId,
           source: params.meta.source,
           context: params.meta.context,
@@ -593,7 +701,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
               log,
             );
           }
-          return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
+          return { ok: true, mode: 'dispatched', clientId,
+            ...(live.agentKind ? { agentKind: live.agentKind } : {}),
+            dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
         }
         if (result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'SESSION_RUNNING') {
           await rollbackAcceptedForRequeue();
@@ -605,6 +715,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ? await deps.withSendToSessionLock(params.targetSessionId, dispatchLive)
         : await dispatchLive();
       if (liveResult) return liveResult;
+      // 带图 no-live(换窗/重建中)与纯文本排队语义对齐:携 files 入队,
+      // drain 经 sendToAgent 用 createOpts 重建 session 后送达,不静默丢图。
+      if (imageFiles.length > 0) {
+        return enqueueQueuedMessage('orca inter-agent message queued for no-live target with images');
+      }
       return await sendToInternal();
     } catch (err) {
       return failureResult({
@@ -783,26 +898,37 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
   const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
+  const pendingHandoff = await deps.peekPendingHandoff?.(session.id);
+  const outgoingMessage = pendingHandoff
+    ? prependHandoffToUserMessage(agentMessage, pendingHandoff) as UserMessage
+    : agentMessage;
   const result = await resolveCollabDispatchResult(
-    () => session.send(agentMessage, {
-      planMode: false,
-      throwOnStartFailure: true,
-      [AUTO_REVIEW_SOURCE_CONTENT]: '',
-      [AUTO_REVIEW_USER_INTENT]: humanIntent,
-      [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
-      onAccepted: async () => {
-        // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
-        await deps.createDbMessage(session.id, {
-          clientId,
-          role: 'user',
-          content: dbContent,
-          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
-        });
-        await deps.beginDirectTurnChangeSet(session.id, clientId);
-        turnChangeSetStarted = true;
-        await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
-      },
-    }),
+    async () => {
+      const sendResult = await session.send(outgoingMessage, {
+        planMode: false,
+        throwOnStartFailure: true,
+        [AUTO_REVIEW_SOURCE_CONTENT]: '',
+        [AUTO_REVIEW_USER_INTENT]: humanIntent,
+        [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
+        onAccepted: async () => {
+          // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
+          await deps.createDbMessage(session.id, {
+            clientId,
+            role: 'user',
+            content: dbContent,
+            agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
+          });
+          await deps.beginDirectTurnChangeSet(session.id, clientId);
+          turnChangeSetStarted = true;
+          await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
+        },
+      });
+      // Keep the handoff for retries until the target actually accepts it. It is
+      // model-only context: dbContent and any requeued message stay unchanged.
+      if (pendingHandoff && sendResult.accepted) deps.consumePendingHandoff?.(session.id);
+      if (sendResult.accepted) await deps.onDirectInputDispatched?.(session.id);
+      return sendResult;
+    },
     { source, context },
   );
   if (turnChangeSetStarted && !result.dispatched) {
@@ -854,6 +980,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   persistedContent: string;
   origin: NonNullable<AgentInputQueuedMessage['origin']>;
   createOpts: AgentInputCreateOpts;
+  files?: AgentInputSerializedFile[];
 }): AgentInputQueuedMessage {
   const createdAt = new Date().toISOString();
   return {
@@ -866,6 +993,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
     permissionMode: params.createOpts.permissionMode ?? 'bypassPermissions',
     workingDir: params.createOpts.workingDir,
     vendorOptions: params.createOpts.vendorOptions,
+    ...(params.files?.length ? { files: params.files } : {}),
     chatMessage: {
       clientId: params.clientId,
       role: 'user',

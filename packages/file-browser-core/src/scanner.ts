@@ -21,6 +21,9 @@ import { loadIgnoreMatcher, type Matcher } from './ignore.js';
 
 const log = scopedLogger('file-browser/scanner');
 
+// Reuse the locale-aware comparator across lazy directory expansions.
+const entryNameCollator = new Intl.Collator(undefined, { numeric: true });
+
 /** Hard cap on file size we'll send to the renderer. Anything larger gets
  *  truncated; renderer shows a "file truncated, open in OS to see more"
  *  banner. 2 MiB is enough for any realistic markdown/code file. */
@@ -282,8 +285,7 @@ async function hasDocDescendant(
  * List entries of one directory (single-layer, no recursion). Filtered
  * through an optional presentation matcher. Without a matcher all ordinary
  * files are listed, including hidden files and build outputs. Sort: directories before files,
- * each group case-insensitive lexicographic — same convention as VSCode
- * Explorer / Obsidian.
+ * each group case-insensitive natural order (chapter2 before chapter10).
  */
 export async function listDir(
   workdir: string,
@@ -354,10 +356,13 @@ export async function listDir(
   );
   const out: DirEntry[] = candidates.filter((e): e is DirEntry => e !== null);
 
-  // dirs first (case-insensitive a-z), then files (same)
+  // Directories first, then natural name order within each group.
   out.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-    return a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase());
+    const aName = a.name.toLocaleLowerCase();
+    const bName = b.name.toLocaleLowerCase();
+    // Keep the legacy text order for numeric ties such as 001, 01 and 1.
+    return entryNameCollator.compare(aName, bName) || aName.localeCompare(bName);
   });
 
   return out;
@@ -577,10 +582,9 @@ export async function createFolder(
  * to 都走 assertInsideWorkdir 防越界。
  *
  * 冲突策略:
- *   - 目标已存在 → 抛错(留给上层 toast)。EXCEPT 大小写仅改写的情况:
- *     NTFS / HFS+ 默认是 case-insensitive,'Foo.md' → 'foo.md' 时 access 会
- *     误报"存在",但 fs.rename 本身能正确改名。所以仅在大小写不同时跳过冲突
- *     检查。
+ *   - 目标已存在 → 抛错(留给上层 toast)。大小写仅改写时比较文件身份:
+ *     NTFS / HFS+ 默认是 case-insensitive,'Foo.md' → 'foo.md' 指向同一文件,
+ *     可以放行;case-sensitive FS 上两个名字也可能是不同文件,不能静默覆盖。
  *   - source 不存在 → fs.rename 自然抛 ENOENT,上层 toast。
  *   - 跨卷不会发生,因为 from/to 都在同一 workdir 下。
  */
@@ -609,10 +613,18 @@ export async function renameEntry(
   const absTo = path.join(workdir, toSub);
   const realFrom = await assertRealPathInsideWorkdir(workdir, absFrom);
   await assertRealParentInsideWorkdir(workdir, absTo);
-  // 大小写仅改写检查:若 normalize 后小写相同,跳过 conflict 检查 — case-only
-  // rename 在 case-insensitive FS 上需要直接 rename。
   const caseOnly = fromSub.toLowerCase() === toSub.toLowerCase();
-  if (!caseOnly) {
+  if (caseOnly) {
+    try {
+      const [fromStat, toStat] = await Promise.all([fs.stat(realFrom), fs.stat(absTo)]);
+      if (fromStat.dev !== toStat.dev || fromStat.ino !== toStat.ino) {
+        throw new Error(`目标已存在: ${toSub}`);
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw err;
+    }
+  } else {
     try {
       await fs.access(absTo);
       throw new Error(`目标已存在: ${toSub}`);

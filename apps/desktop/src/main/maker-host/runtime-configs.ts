@@ -1,3 +1,4 @@
+import { ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 /**
  * Desktop AgentRuntimeConfig 实现。
  * endpoint、行为开关与宿主资源路径由 desktop host 在这里统一注入,
@@ -8,6 +9,8 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { codexPackagePathPrepends } from '../agent-binaries/codex-cli-launcher.js';
 
 import {
   isModelDisabled,
@@ -23,12 +26,14 @@ import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
+import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 import {
   assessModelSwitchContext,
   shouldHandoffAfterContextAssessment,
@@ -37,7 +42,7 @@ import {
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, skillSourcePrecedencePrompt, agentSpecific]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
@@ -180,8 +185,11 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
       ...(ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
     }),
+    // 代输入: sudo / ssh / git password prompts of this task go to the owner.
+    taskShellEnv: inputHandoffTaskShellEnv,
     // 产品身份 + Skill 来源优先级 + Claude 专属段，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),
+    answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
     // Maker Memory 需要的 user-data 绝对路径 (maker-core 没 Electron 依赖, 必须 host 注入)。
     userDataPath: app.getPath('userData'),
     get memoryEnabled() {
@@ -300,14 +308,22 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // 附近注释),所以这里仍按 spawnMode 分流让代码自证,不依赖"远端不走本函数"
   // 这种会过期的假设(对抗式预审发现)。
   behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
+  // 代输入: sudo / ssh / git password prompts of this task go to the owner.
+  taskShellEnv: inputHandoffTaskShellEnv,
   // 产品身份 + Skill 来源优先级 + Codex 专属段。
   systemPrompt: composeHostPrompt(codexSystemPrompt),
+  answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
   // lazy getter(与 endpoint/memoryEnabled 同一惯用法,issue #1956):import 期
   // 不探测 bundled ripgrep,纯 node / vitest 环境 import 本模块不再炸;真正的
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
   // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
   get pathPrepends() {
-    return [bundledRipgrepDir()];
+    return [
+      bundledRipgrepDir(),
+      ...(process.platform === 'win32'
+        ? codexPackagePathPrepends(getCachedBinaryStatus('codex').binaryPath, process.platform)
+        : []),
+    ];
   },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {

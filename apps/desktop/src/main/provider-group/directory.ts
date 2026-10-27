@@ -25,6 +25,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
+import type { ProviderGroupCodexUsageSnapshot } from './usage.js';
 
 export interface ProviderGroupDirectoryDeps {
   /** 本机供应商(含未连接 / 停用的，便于给出原因)。 */
@@ -41,6 +42,9 @@ export interface ProviderGroupDirectoryDeps {
   localRunning?(providerId: string): Promise<number | null>;
   /** Same-account subscription snapshots only; absence/failure keeps the member usable. */
   readClaudeUsage?(member: ProviderGroupMember): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readCodexUsage?(member: ProviderGroupMember): Promise<ProviderGroupCodexUsageSnapshot | null>;
+  /** At the quick-pick deadline, include completed sources without waiting for a pending sibling. */
+  peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
   invalidateUsage?(): void;
   now(): number;
 }
@@ -63,6 +67,7 @@ export interface ResolvedProviderGroupMember {
   reportedRunning?: number;
   /** Internal only: never included in the group wire projection or shared with guests. */
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
+  codexUsage?: ProviderGroupCodexUsageSnapshot | null;
   /**
    * 选电脑时到点还没读完(那台慢或不响应)：这次按不能用算，不代表读到了离线；读取照常在后台完成、留在缓存里。
    */
@@ -78,13 +83,12 @@ export interface ResolveMembersOptions {
   enough?(resolved: ResolvedProviderGroupMember): boolean;
   /** 不用短时缓存，现读设备列表与每台的目录(试过不行之后拉最新状态)。 */
   fresh?: boolean;
-  /** 本机自用不按负载分配，可不读本机运行数，避免等待任务数据库；默认仍读取。 */
-  includeLocalRunning?: boolean;
 }
 
 const CATALOG_TTL_MS = 15_000;
 const CATALOG_FAILURE_TTL_MS = 5_000;
 const DEVICES_TTL_MS = 10_000;
+const LOCAL_LOAD_TIMEOUT_MS = 1_000;
 
 const SHARE_REASON = /^\[REMOTE_AGENT_SHARE_(PAUSED|REMOVED|UNAVAILABLE)\]/;
 
@@ -163,14 +167,25 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     return views.find((view) => view.id === providerId) ?? null;
   }
 
-  async function resolveLocal(member: ProviderGroupMember, includeRunning = true): Promise<ResolvedProviderGroupMember> {
+  async function resolveLocal(member: ProviderGroupMember): Promise<ResolvedProviderGroupMember> {
     const label = deps.localDeviceName();
     const appVersion = readProviderGroupAppVersion(deps.localAppVersion?.());
     const base = { member, label, ...(appVersion ? { appVersion } : {}) };
-    const view = await localGroupProvider(member.providerId);
-    if (!view || !view.connected || view.suspended) return { ...base, state: 'unavailable', reason: 'disconnected' };
-    const reportedRunning = includeRunning ? await deps.localRunning?.(member.providerId).catch(() => null) : undefined;
-    return { ...base, state: 'ok', view, ...(typeof reportedRunning === 'number' ? { reportedRunning } : {}) };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const running = Promise.race([
+        deps.localRunning?.(member.providerId).catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), LOCAL_LOAD_TIMEOUT_MS);
+        }),
+      ]);
+      const view = await localGroupProvider(member.providerId);
+      if (!view || !view.connected || view.suspended) return { ...base, state: 'unavailable', reason: 'disconnected' };
+      const reportedRunning = await running;
+      return { ...base, state: 'ok', view, ...(typeof reportedRunning === 'number' ? { reportedRunning } : {}) };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async function resolveDevice(
@@ -280,7 +295,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       clearTimeout(timer);
     }
     const enough = options.enough;
-    const resolved = members.map((member, index) => settled[index] ?? partial[index] ?? pendingMember(member));
+    const resolved = members.map((member, index) => {
+      if (settled[index]) return settled[index];
+      const value = partial[index];
+      if (value?.state === 'ok' && member.kind !== 'share' && value.view
+        && providerWeeklyQuotaSource(value.view) === 'codex' && deps.peekCodexUsage) {
+        return { ...value, codexUsage: deps.peekCodexUsage(member) };
+      }
+      return value ?? pendingMember(member);
+    });
     if (!enough || !resolved.some(enough)) return all;
     return resolved;
   }
@@ -300,17 +323,22 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       const deviceListPromise = needsDevices ? readDevices().catch(() => null) : Promise.resolve(null);
       // 额度补充读取可能慢于快速选路窗口：保留基础目录结果，避免已知可用的成员被误判成待定或离线。
       const partialReads = config.members.map((member) => {
-        if (member.kind === 'local') return resolveLocal(member, options?.includeLocalRunning);
+        if (member.kind === 'local') return resolveLocal(member);
         if (member.kind === 'share') return resolveShare(member);
         return deviceListPromise.then((deviceList) => resolveDevice(member, deviceList));
       });
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;
-        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth
-          || providerWeeklyQuotaSource(resolved.view) !== 'claude' || !deps.readClaudeUsage) return resolved;
-        const claudeUsage = await deps.readClaudeUsage(member).catch(() => null);
-        return { ...resolved, claudeUsage };
+        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
+        const source = providerWeeklyQuotaSource(resolved.view);
+        if (source === 'codex' && deps.readCodexUsage) {
+          return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };
+        }
+        if (source === 'claude' && deps.readClaudeUsage) {
+          return { ...resolved, claudeUsage: await deps.readClaudeUsage(member).catch(() => null) };
+        }
+        return resolved;
       });
       if (options?.quickMs === undefined) return Promise.all(reads);
       return settleQuickly(config.members, reads, partialReads, options);
@@ -366,6 +394,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
           label: share.owner.displayName,
           providerName: share.providerLabel,
           ownerName: share.owner.displayName,
+          // 同一个人从同一台电脑分享的几个账号按一台电脑展示(不显示，也不用于连接)。
+          hostDeviceId: share.hostDeviceId,
         };
         if (memberKeys.has(key)) {
           candidates.push({ ...base, blocked: 'member' });

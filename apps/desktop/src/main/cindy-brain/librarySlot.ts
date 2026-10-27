@@ -192,6 +192,8 @@ class GhostLibraryRequestCancelled extends Error {}
 
 export interface GhostLibrarySlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  /** Host work that must settle before this plugin's library request opens a root; undefined when none is due. */
+  prepareRequest?(ghostId: string): Promise<void> | undefined;
   /** 自定义位置 binding 存储(owner-scoped;生产注入)。 */
   bindingStore: LibraryBindingStore;
   /** 系统默认库根(生产 = ownerScopedUserDataPath('libraries', ghostId))。 */
@@ -205,6 +207,8 @@ export interface GhostLibrarySlotDeps {
   getDiskFreeBytes?(root: string): Promise<number | null>;
   workerScriptPath(): string;
   betterSqliteModulePath(): string;
+  /** Host-selected Electron ABI binding; never supplied by the plugin. */
+  betterSqliteNativeBinding?(): string | undefined;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -294,8 +298,7 @@ export class GhostLibrarySlot {
     this.relocationGenerations.set(ghostId, (this.relocationGenerations.get(ghostId) ?? 0) + 1);
   }
 
-  private ghostRequestTarget(ghostId: string): string | null {
-    const ghost = this.deps.getGhost(ghostId);
+  private ghostRequestTarget(ghostId: string, ghost = this.deps.getGhost(ghostId)): string | null {
     return ghost ? JSON.stringify([
       ghost.manifest.id, ghost.dir, ghost.namespace ?? null, ghost.enabled !== false,
       ghostInstallApprovalToken(ghost.approval),
@@ -312,8 +315,13 @@ export class GhostLibrarySlot {
     return !this.relocating.has(ghostId)
       && target.relocationGeneration === this.relocationGenerations.get(ghostId)
       && target.ownerScopeKey === this.deps.captureOwnerScope()
-      && this.checkEligibility(ghostId)
-      && target.ghostTarget === this.ghostRequestTarget(ghostId);
+      && this.isCurrentGhostTarget(ghostId, target.ghostTarget);
+  }
+
+  /** One lookup serves both checks: eligibility and the captured target must see the same ghost. */
+  private isCurrentGhostTarget(ghostId: string, ghostTarget: string | null): boolean {
+    const ghost = this.deps.getGhost(ghostId);
+    return this.checkEligibility(ghostId, ghost) && ghostTarget === this.ghostRequestTarget(ghostId, ghost);
   }
 
   private assertRequestCurrent(ghostId: string, target: GhostLibraryRequestTarget, session?: GhostLibrarySession): void {
@@ -435,6 +443,15 @@ export class GhostLibrarySlot {
         },
       };
     }
+    // Host work such as an unfinished reattach settles only for a request that
+    // will really open the library.
+    const preparing = this.deps.prepareRequest?.(ghostId);
+    if (preparing) {
+      await preparing;
+      if (!this.checkEligibility(ghostId)) {
+        return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
+      }
+    }
     if (isGhostLibraryStagingOp(op)) {
       if (op === 'staging.release') {
         if (this.relocating.has(ghostId)) {
@@ -541,8 +558,7 @@ export class GhostLibrarySlot {
    * 与 read 同源校验——面板与电子脑看到同一个库。
    */
   /** 资格审:装入 + 启用 + 声明 library 能力(dispatch 与面板投影共用)。 */
-  private checkEligibility(ghostId: string): boolean {
-    const ghost = this.deps.getGhost(ghostId);
+  private checkEligibility(ghostId: string, ghost = this.deps.getGhost(ghostId)): boolean {
     if (!ghost) return false;
     if (ghost.enabled === false) return false;
     if (ghost.approval && ghost.approval.state !== 'approved') return false;
@@ -556,6 +572,9 @@ export class GhostLibrarySlot {
    */
   async resolvePanelFilePath(ghostId: string, relPath: string): Promise<string | null> {
     try {
+      if (!this.checkEligibility(ghostId)) return null;
+      const preparing = this.deps.prepareRequest?.(ghostId);
+      if (preparing) await preparing;
       if (!this.checkEligibility(ghostId)) return null;
       const session = await this.getOrCreateSession(ghostId, this.deps.captureOwnerScope());
       if (session.drift !== null) return null;
@@ -649,6 +668,7 @@ export class GhostLibrarySlot {
     const sql = this.deps.createSqlService({
       workerScriptPath: this.deps.workerScriptPath,
       betterSqliteModulePath: this.deps.betterSqliteModulePath,
+      betterSqliteNativeBinding: this.deps.betterSqliteNativeBinding,
       log: this.deps.log,
     });
     const record = 'record' in resolution ? resolution.record : undefined;

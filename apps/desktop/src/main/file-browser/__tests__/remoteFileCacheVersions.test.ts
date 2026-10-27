@@ -118,6 +118,35 @@ it('distinguishes same-size sub-millisecond versions in downloads and write-thro
   );
 });
 
+it.each(['success', 'failure', 'cancel'] as const)('revalidates unchanged stat without losing the old copy on %s', async (outcome) => {
+  await putCachedContent(id, 'old');
+  const original = __cacheTesting.cachePathFor(id);
+  const started = barrier();
+  const release = barrier();
+  const controller = new AbortController();
+  const finished = barrier();
+  const executor = vi.fn(async (dest: string) => {
+    started.resolve();
+    await release.promise;
+    try {
+      if (outcome === 'failure') throw new Error('offline');
+      await fs.writeFile(dest, 'new');
+    } finally { finished.resolve(); }
+  });
+  const pending = fetchRemoteFileToCache(id, executor, vi.fn(), controller.signal, { revalidate: true });
+  const settled = pending.then(() => 'success', () => 'failure');
+  try {
+    await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+    await started.promise;
+    expect(await fs.readFile(original, 'utf8')).toBe('old');
+    if (outcome === 'cancel') controller.abort();
+  } finally { release.resolve(); }
+  expect(await settled).toBe(outcome === 'success' ? 'success' : 'failure');
+  await finished.promise;
+  await vi.waitFor(async () => expect((await fs.readdir(getRemoteFileCacheRoot())).some(name => name.endsWith('.part'))).toBe(false));
+  expect(await fs.readFile(original, 'utf8')).toBe(outcome === 'success' ? 'new' : 'old');
+});
+
 it('keeps legacy rounded copies available offline without accepting them as exact hits', async () => {
   const exact = { ...id, mtimeMs: 1000 };
   const currentPath = __cacheTesting.cachePathFor(exact);

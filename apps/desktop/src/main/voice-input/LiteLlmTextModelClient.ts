@@ -6,6 +6,7 @@ import { fetch as undiciFetch, type Agent, type Response as UndiciResponse } fro
 import type { TextModelClient } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { describeErrorWithCause, markRefinerModelOutputError } from './refinerErrorKind.js';
 import { createRefinerHttpDispatcher, resolveRefinerDispatcher } from './refinerHttpDispatcher.js';
 import { extractJsonStringFieldSnapshot } from './streamingJson.js';
@@ -196,6 +197,10 @@ export class LiteLlmTextModelClient implements TextModelClient {
       if (response.status === 401 && this.requestTargetProvider) {
         await response.arrayBuffer().catch(() => undefined);
         response = await sendRequest(true);
+      } else if (response.status === 401 && this.proxyApiKey) {
+        // The proxy-key branch sends the Cindy AI key to the Cindy gateway; the
+        // managed requestTargetProvider branch above uses Cindy voice tokens instead.
+        reportCindyGatewayKeyRejected(this.proxyApiKey);
       }
       const headersAt = performance.now();
       armIdleTimeout('response body');

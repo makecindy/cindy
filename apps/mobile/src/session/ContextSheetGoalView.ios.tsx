@@ -1,8 +1,9 @@
+import { NativeErrorNotice } from '@/components/NativeErrorNotice.ios';
 import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, DisclosureGroup, Picker, ProgressView, Text, TextField, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, pickerStyle, shapes, tag, tint } from '@expo/ui/swift-ui/modifiers';
+import { Button, DisclosureGroup, Picker, ProgressView, Section as NativeSection, Text, TextField, VStack, useNativeState } from '@expo/ui/swift-ui';
+import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, listRowBackground, listRowInsets, listRowSeparator, pickerStyle, shapes, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTheme } from '@/theme';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
 import type { ContextSheetGoalViewProps, ContextSheetGoalCreateForm as GoalCreateForm } from './ContextSheetGoalView';
@@ -34,7 +35,7 @@ export function ContextSheetGoalCreateForm({ busy, disabled = false, disabledHin
       <TextField text={text} onTextChange={setObjective} axis="vertical"
         placeholder={t('interaction.contextSheet.goalPlaceholder')}
         testID="contextSheet.goalObjectiveInput"
-        modifiers={[lineLimit({ min: 3, max: 6 }), disable(busy), accessibilityLabel(t('interaction.contextSheet.goalObjectiveAccessibility'))]} />
+        modifiers={[lineLimit({ min: 3, max: 6 }), tint(colors.inputCaret), disable(busy), accessibilityLabel(t('interaction.contextSheet.goalObjectiveAccessibility'))]} />
     </Section>
     <Section>
       <DisclosureGroup label={t('interaction.contextSheet.advancedSettings')}
@@ -46,15 +47,23 @@ export function ContextSheetGoalCreateForm({ busy, disabled = false, disabledHin
         <LimitPicker label={t('interaction.contextSheet.noProgressLimit')} value={limits.noProgressLimit} presets={[2, 3, 5]} busy={busy} onChange={value => patch({ noProgressLimit: value })} testID="contextSheet.goalNoProgressOptions" />
       </DisclosureGroup>
     </Section>
-    {error || (disabled && disabledHint) ? <Section><Text modifiers={[foregroundStyle(error ? colors.errorText : colors.textSecondary)]}>{error || disabledHint}</Text></Section> : null}
-    <Section>
+    <NativeSection modifiers={[
+      listRowBackground('clear'), listRowSeparator('hidden'),
+      listRowInsets({ top: 0, bottom: 0, leading: 0, trailing: 0 }),
+    ]}>
+      {error ? <NativeErrorNotice message={error} /> : disabled && disabledHint ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{disabledHint}</Text> : null}
       <Button onPress={submit} testID="contextSheet.goalStartButton" modifiers={[
-        ...glassStyle, frame({ maxWidth: Infinity, minHeight: 44 }),
+        ...glassStyle,
         disable(busy || disabled || !objective.trim()),
         ...(disabled && disabledHint ? [accessibilityHint(disabledHint)] : []),
         accessibilityLabel(t('interaction.contextSheet.startGoal')),
-      ]}>{busy ? <ProgressView modifiers={[tint(colors.ctaText)]} /> : <Text modifiers={[foregroundStyle(colors.ctaText)]}>{t('interaction.contextSheet.startGoal')}</Text>}</Button>
-    </Section>
+      ]}>
+        {/* Size the native label so the button's visible face fills the row too. */}
+        <VStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}>
+          {busy ? <ProgressView modifiers={[tint(colors.ctaText)]} /> : <Text modifiers={[foregroundStyle(colors.ctaText)]}>{t('interaction.contextSheet.startGoal')}</Text>}
+        </VStack>
+      </Button>
+    </NativeSection>
   </>;
 }
 
@@ -92,7 +101,7 @@ export function ContextSheetGoalView(props: ContextSheetGoalViewProps) {
       <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{t('interaction.contextSheet.goalMeta', { turns, tokens })}</Text>
       {reason ? <Text modifiers={[foregroundStyle(colors.textSecondary)]}>{reason}</Text> : null}
     </Section>
-    {error ? <Section><Text modifiers={[foregroundStyle(colors.errorText)]}>{error}</Text></Section> : null}
+    {error ? <Section><NativeErrorNotice message={error} /></Section> : null}
     <Section>
       {goal.status === 'active' ? action(t('interaction.contextSheet.pause'), props.onPauseGoal, 'contextSheet.goalPauseButton') : null}
       {['paused', 'blocked', 'usageLimited'].includes(goal.status) ? action(t('interaction.contextSheet.resume'), props.onResumeGoal, 'contextSheet.goalResumeButton') : null}

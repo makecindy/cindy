@@ -8,10 +8,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { useCindyVersionsMock } = vi.hoisted(() => ({
-  useCindyVersionsMock: vi.fn(),
-}));
-
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -45,10 +41,6 @@ vi.mock('@/hooks/useBetaChannelSettings', () => ({
   }),
 }));
 
-vi.mock('@/lib/useCindyVersions', () => ({
-  useCindyVersions: useCindyVersionsMock,
-}));
-
 vi.mock('@/hooks/useLogout', () => ({
   useLogout: () => ({ handleLogout: vi.fn() }),
 }));
@@ -64,7 +56,6 @@ vi.mock('@/components/ui/tooltip', () => ({
 import { UserInfoSection } from '@/components/sidebar/UserInfoSection';
 
 beforeEach(() => {
-  useCindyVersionsMock.mockReturnValue({ state: undefined });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -90,16 +81,10 @@ describe('UserInfoSection update flame vs rail', () => {
     expect(screen.getByRole('button', { name: 'sidebar.user.reopenUpdateBanner' })).toBeTruthy();
   });
 
-  it('shows the personal version label when the running app is personal', () => {
-    useCindyVersionsMock.mockReturnValue({
-      state: {
-        currentId: 'personal',
-      },
-    });
-
+  it('keeps the regular app version label for the personal build', () => {
     render(<UserInfoSection isCollapsed={false} />);
 
-    expect(screen.getByText('cindyMake.versions.personal')).toBeTruthy();
-    expect(screen.queryByText('1.0.0')).toBeNull();
+    expect(screen.getByText('1.0.0')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.versions.personal')).toBeNull();
   });
 });

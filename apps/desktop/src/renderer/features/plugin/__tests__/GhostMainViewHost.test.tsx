@@ -3,6 +3,8 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InstalledGhost } from '../../../../shared/ghost';
+import { CONTENT_HEADER_HEIGHT_PX, ContentHeaderSlot } from '@/components/layout/ContentHeader';
+import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -12,8 +14,13 @@ const mocks = vi.hoisted(() => ({
   registerSidebar: vi.fn(),
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
   dataOwnerId: 'owner-a' as string | null,
+  isMac: true,
+  isFullscreen: false,
 }));
 
+vi.mock('@/hooks/useMacFullscreen', () => ({
+  useMacFullscreen: () => ({ isMac: mocks.isMac, isFullscreen: mocks.isFullscreen }),
+}));
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mocks.navigate,
@@ -53,6 +60,33 @@ const manifest = {
   mainView: { html: 'main-view.html' },
 };
 
+function HeaderSlotView({
+  sidebarVisible = true,
+  isSidebarRail = false,
+  rightSidebarAvailable = false,
+}: {
+  sidebarVisible?: boolean;
+  isSidebarRail?: boolean;
+  rightSidebarAvailable?: boolean;
+} = {}) {
+  return (
+    <FeatureSidebarSlotProvider isCollapsed={!sidebarVisible}>
+      <ContentHeaderSlot
+        sidebarVisible={sidebarVisible}
+        showCollapsedActions={!sidebarVisible}
+        isSidebarRail={isSidebarRail}
+        rightSidebarAvailable={rightSidebarAvailable}
+      >
+        <GhostMainViewHost />
+      </ContentHeaderSlot>
+    </FeatureSidebarSlotProvider>
+  );
+}
+
+function renderInHeaderSlot(options: Parameters<typeof HeaderSlotView>[0] = {}) {
+  return render(<HeaderSlotView {...options} />);
+}
+
 beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.registerSidebar.mockReset();
@@ -60,6 +94,8 @@ beforeEach(() => {
   mocks.runtimeState = 'running';
   mocks.mode = 'cloud';
   mocks.dataOwnerId = 'owner-a';
+  mocks.isMac = true;
+  mocks.isFullscreen = false;
   mocks.routeCapable = [
     {
       ghostId: 'workspace',
@@ -83,10 +119,118 @@ describe('GhostMainViewHost', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
+  // Production entry: ContentHeaderSlot + routed GhostMainViewHost. Electron uses
+  // WebkitAppRegion to register drag rectangles; a second band beneath a visible
+  // header reserves an unwanted blank row. Fullscreen needs no drag owner.
+  // The previous host test rendered without the shell and missed that visible-header case.
+  // Minimal unit matrix: mac expanded/hidden, Windows visible, mac collapsed or rail,
+  // mac with the right sidebar toggle keeping the header visible, and mac fullscreen.
+  it.each([
+    {
+      name: 'mac expanded',
+      isMac: true,
+      sidebarVisible: true,
+      isSidebarRail: false,
+      rightSidebarAvailable: false,
+      dragOwner: 'band',
+    },
+    {
+      name: 'Windows expanded',
+      isMac: false,
+      sidebarVisible: true,
+      isSidebarRail: false,
+      rightSidebarAvailable: false,
+      dragOwner: 'header',
+    },
+    {
+      name: 'mac collapsed',
+      isMac: true,
+      sidebarVisible: false,
+      isSidebarRail: false,
+      rightSidebarAvailable: false,
+      dragOwner: 'header',
+    },
+    {
+      name: 'mac rail',
+      isMac: true,
+      sidebarVisible: false,
+      isSidebarRail: true,
+      rightSidebarAvailable: false,
+      dragOwner: 'header',
+    },
+    {
+      name: 'mac right sidebar',
+      isMac: true,
+      sidebarVisible: true,
+      isSidebarRail: false,
+      rightSidebarAvailable: true,
+      dragOwner: 'header',
+    },
+    {
+      name: 'mac fullscreen expanded',
+      isMac: true,
+      isFullscreen: true,
+      sidebarVisible: true,
+      isSidebarRail: false,
+      rightSidebarAvailable: false,
+      dragOwner: 'none',
+    },
+  ])(
+    'uses the expected top window drag owner for $name',
+    ({ isMac, isFullscreen, sidebarVisible, isSidebarRail, rightSidebarAvailable, dragOwner }) => {
+      mocks.isMac = isMac;
+      mocks.isFullscreen = isFullscreen ?? false;
+      const { container } = renderInHeaderSlot({
+        sidebarVisible,
+        isSidebarRail,
+        rightSidebarAvailable,
+      });
+      const header = container.querySelector('header');
+      const band = screen.queryByTestId('ghost-main-view-drag-band');
+      const owners = [header, band].filter((owner): owner is HTMLElement => owner != null);
+
+      expect(header !== null).toBe(dragOwner === 'header');
+      expect(band !== null).toBe(dragOwner === 'band');
+      expect(owners).toHaveLength(dragOwner === 'none' ? 0 : 1);
+      if (owners[0]) {
+        expect(
+          (owners[0].style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion,
+        ).toBe('drag');
+      }
+      if (band) {
+        expect(band.getAttribute('aria-hidden')).toBe('true');
+        // The replacement reserves the same row height before the webview.
+        expect(band.style.height).toBe(`${CONTENT_HEADER_HEIGHT_PX}px`);
+        expect(band.nextElementSibling).toBe(screen.getByTestId('webview'));
+      }
+      if (dragOwner === 'none') {
+        // A fullscreen window cannot be dragged; the webview should reach the top.
+        const webview = screen.getByTestId('webview');
+        expect(webview.parentElement?.firstElementChild).toBe(webview);
+      }
+    },
+  );
+
+  it('removes and restores the drag band as mac fullscreen changes in place', () => {
+    const { rerender } = renderInHeaderSlot();
+    const webview = screen.getByTestId('webview');
+    expect(screen.getByTestId('ghost-main-view-drag-band').nextElementSibling).toBe(webview);
+
+    mocks.isFullscreen = true;
+    rerender(<HeaderSlotView />);
+    expect(screen.queryByTestId('ghost-main-view-drag-band')).toBeNull();
+    expect(webview.parentElement?.firstElementChild).toBe(webview);
+
+    mocks.isFullscreen = false;
+    rerender(<HeaderSlotView />);
+    expect(screen.getByTestId('ghost-main-view-drag-band').nextElementSibling).toBe(webview);
+  });
+
   it('replaces an unavailable route with the Plugin page before mounting a webview', () => {
     mocks.routeCapable = [];
     render(<GhostMainViewHost />);
     expect(screen.queryByTestId('webview')).toBeNull();
+    expect(screen.queryByTestId('ghost-main-view-drag-band')).toBeNull();
     expect(mocks.navigate).toHaveBeenCalledWith('/plugins', { replace: true });
   });
 
@@ -168,8 +312,12 @@ describe('GhostMainViewHost', () => {
 
   it.each(['crashed', 'fused'])('reuses the existing %s recovery state', (state) => {
     mocks.runtimeState = state;
-    render(<GhostMainViewHost />);
-    expect(screen.getByTestId('error').textContent).toBe(state);
+    renderInHeaderSlot();
+    const band = screen.getByTestId('ghost-main-view-drag-band');
+    const error = screen.getByTestId('error');
+    expect(band.parentElement).toBe(error.parentElement);
+    expect(band.nextElementSibling).toBe(error);
+    expect(error.textContent).toBe(state);
     expect(screen.queryByTestId('webview')).toBeNull();
   });
 
@@ -199,5 +347,72 @@ describe('GhostMainViewHost', () => {
     rerender(<GhostMainViewFeatureLayout />);
 
     expect(screen.getByTestId('webview')).not.toBe(ownerAWebview);
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果:GhostMainViewHost 的单实例守卫;可观察的是进整页时该插件的侧栏
+//   页签被收掉、整页开着时页签出现则导航回主入口、声明 mainView.multiple 的插件两者并存。
+// - Bug / 规则依据:同一视图两份界面各自保存整份数据会互相覆盖(Mivo Canvas PR #1109 审查 P1);
+//   插件缺省单实例,自己处理好一致性的才声明 multiple。
+// - 现有覆盖缺口:整页与全局页签此前互不知晓。
+// - 最小失败输入:已有 g_workspace 页签时挂载整页。
+// - tier:unit(jsdom,localStorage 全局页签)。
+describe('GhostMainViewHost · 单实例视图守卫', () => {
+  const ghostOf = () => mocks.routeCapable[0].installedGhost as InstalledGhost;
+
+  beforeEach(async () => {
+    const { setDataOwnerGeneration } = await import('@/contexts/dataOwnerGeneration');
+    const { __resetGlobalTabsForTest } = await import('@/features/right-sidebar/globalTabs');
+    const { __resetTabGroupsForTest } = await import('@/features/right-sidebar/tabGroups');
+    window.localStorage.clear();
+    __resetGlobalTabsForTest();
+    __resetTabGroupsForTest();
+    setDataOwnerGeneration('owner-a', 1);
+  });
+
+  it('entering the page removes an existing tab; a tab appearing later makes the page yield', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    const { act } = await import('@testing-library/react');
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    expect(getGlobalTabs()).toHaveLength(1);
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(0);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    act(() => {
+      addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    });
+    expect(mocks.navigate).toHaveBeenCalledWith('/', { replace: true });
+    expect(getGlobalTabs()).toHaveLength(1);
+  });
+
+  it('does not treat a docked panel tab on a different page as the main view', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    // panel.html ≠ mainView.html:两个页面是不同界面,可以并存,整页不收页签。
+    const distinct = { ...manifest, panel: { html: 'panel.html' } };
+    mocks.routeCapable = [
+      { ...mocks.routeCapable[0], manifest: distinct, installedGhost: { ...ghostOf(), manifest: distinct } },
+    ];
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(1);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('leaves both alive when the plugin declares mainView.multiple', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    const { act } = await import('@testing-library/react');
+    const multi = { ...manifest, mainView: { html: 'main-view.html', multiple: true } };
+    mocks.routeCapable = [
+      { ...mocks.routeCapable[0], manifest: multi, installedGhost: { ...ghostOf(), manifest: multi } },
+    ];
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(1);
+    act(() => {
+      addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    });
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 });

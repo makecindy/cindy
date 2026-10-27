@@ -102,8 +102,10 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 
 // getAuthEnv 前置的共享 skills 预热会碰真实文件系统 —— 剪断(与本测试无关)。
 vi.mock('../shared-global-skills.js', () => ({
-  prepareSharedGlobalSkillLinks: async () => ({ warnings: [] }),
+  prepareSharedGlobalSkillLinks: async () => ({ warnings: [], persistentWarnings: [] }),
   prepareSharedProjectSkillLinks: async () => ({ warnings: [] }),
+  sharedGlobalSkillLinksFingerprint: async () => 'test',
+  SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE: 'sync disabled',
 }));
 
 vi.mock('../built-in-skills.js', () => ({
@@ -116,6 +118,9 @@ vi.mock('../built-in-skills.js', () => ({
 vi.mock('../anthropic-compat-proxy-host.js', () => ({
   isAnthropicCompatProxyHandleReady: () => h.proxyReady,
 }));
+
+// Load the adapter once during collection; keep cold transforms outside auth deadlines.
+import * as mod from '../auth-adapters.js';
 
 const CREDENTIAL_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -147,14 +152,13 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
 
   it('keeps the owner-scoped BYOK key readable when Cindy gateway access is disabled', async () => {
     h.canUseGateway = false;
-    const { readClaudeApiKey, readOwnerScopedXdGatewayKey } = await import('../auth-adapters.js');
+    const { readClaudeApiKey, readOwnerScopedXdGatewayKey } = mod;
 
     expect(readClaudeApiKey()).toBeNull();
     expect(readOwnerScopedXdGatewayKey()).toBe('sk-xd-gateway');
   });
 
   async function makeAdapter() {
-    const mod = await import('../auth-adapters.js');
     return new mod.DesktopClaudeAuthAdapter();
   }
 
@@ -235,7 +239,6 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
 
   it('未指定来源 + 无网关 key:非 Anthropic 模型不交给订阅,经 proxy 隐式桥(占位 key)', async () => {
     h.gatewayKey = null;
-    const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
     // 没有 authSource → maker-core 不按订阅会话起 CLI,仍设 proxy BASE_URL。
     await expect(adapter.getState({ model: 'glm-5' })).resolves.toEqual({ authenticated: true });
@@ -287,7 +290,6 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
   it('provider-oauth 模式:无网关 key / 订阅也可用,且只注入占位 key', async () => {
     h.nativeLogin = false;
     h.gatewayKey = null;
-    const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
 
     await expect(adapter.getState({ credentialMode: 'provider-oauth' })).resolves.toMatchObject({
@@ -311,7 +313,6 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
   });
 
   it('getOneShotAuth:连了订阅时 host 直连请求固定走网关 key,绝不用订阅', async () => {
-    const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
     await expect(adapter.getOneShotAuth()).resolves.toMatchObject({ apiKey: 'sk-xd-gateway' });
     h.nativeLogin = false;

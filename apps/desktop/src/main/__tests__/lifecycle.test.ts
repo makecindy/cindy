@@ -34,7 +34,6 @@ vi.mock('electron', () => ({
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
 const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
-const ghostPanelWebContentsIds = vi.hoisted(() => new Set<number>());
 const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
@@ -51,10 +50,6 @@ vi.mock('../right-sidebar-window/registry.js', () => ({
   isRsbWindowWebContentsId: (webContentsId: number) => rsbWindowWebContentsIds.has(webContentsId),
 }));
 
-vi.mock('../ghost-panel-window/registry.js', () => ({
-  isGhostPanelWebContentsId: (webContentsId: number) =>
-    ghostPanelWebContentsIds.has(webContentsId),
-}));
 
 vi.mock('../reviewer/reviewArtifactConfirmWindowRegistry.js', () => ({
   isReviewArtifactConfirmWebContentsId: (webContentsId: number) =>
@@ -591,7 +586,6 @@ describe('installQuitHandler render-process-gone', () => {
     nativePopupWebContentsIds.clear();
     resourceUsageWebContentsIds.clear();
     rsbWindowWebContentsIds.clear();
-    ghostPanelWebContentsIds.clear();
     reviewArtifactConfirmWebContentsIds.clear();
   });
 
@@ -687,21 +681,6 @@ describe('installQuitHandler render-process-gone', () => {
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('right sidebar render-process-gone'),
-      );
-    } finally {
-      restore();
-    }
-  });
-
-  it('ghost panel renderer crash does NOT shut the app down', async () => {
-    ghostPanelWebContentsIds.add(46);
-    const { handler, app, restore } = await installAndGrabHandler();
-    try {
-      handler(undefined, { id: 46, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
-      await new Promise((r) => setTimeout(r, 20));
-      expect(app.exit).not.toHaveBeenCalled();
-      expect(mocks.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('ghost panel render-process-gone'),
       );
     } finally {
       restore();

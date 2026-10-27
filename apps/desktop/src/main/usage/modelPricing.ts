@@ -26,7 +26,7 @@ import {
   noteActiveAccount,
   rememberAccountCurrency,
 } from './accountCurrencyStore.js';
-import { currentLedgerCurrency, setActiveLedgerCurrency } from './ledgerCurrency.js';
+import { currentLedgerCurrency, isLedgerCurrencyKnown, setActiveLedgerCurrency } from './ledgerCurrency.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
@@ -56,6 +56,7 @@ interface DiskCachePayload {
   fetchedAt: number;
   pricing: ModelPricingCatalog;
   accountCurrency: MoneyCurrency | null;
+  currencyConflict?: boolean;
 }
 
 let cache: ModelPricingCatalog | null = null;
@@ -64,6 +65,7 @@ let cacheAt = 0;
 let modelSyncInflight: Promise<unknown> | null = null;
 let gatewayAccountCurrency: MoneyCurrency | null = null;
 let gatewayAccountCurrencyScope: string | null = null;
+let gatewayCurrencyConflictScope: string | null = null;
 /** 上一次观察到的**生效**账本币种(含回退结果),只用于把切换打进日志。 */
 let activeLedgerCurrencySnapshot: MoneyCurrency | null = null;
 const hydratedScopes = new Set<string>();
@@ -258,6 +260,7 @@ async function writeDiskCache(
   pricing: ModelPricingCatalog,
   accountCurrency: MoneyCurrency | null,
   fetchedAt: number,
+  currencyConflict: boolean,
 ): Promise<void> {
   try {
     const file = diskCachePath();
@@ -268,6 +271,7 @@ async function writeDiskCache(
       fetchedAt,
       pricing,
       accountCurrency,
+      currencyConflict,
     };
     await fs.writeFile(file, JSON.stringify(payload), 'utf8');
     hydratedScopes.add(scope);
@@ -312,6 +316,11 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
       // 用缓存报价算出的金额当异币种丢弃 —— 等于这一段时间完全不计费。
       gatewayAccountCurrency = raw.accountCurrency;
       gatewayAccountCurrencyScope = scope;
+      gatewayCurrencyConflictScope = raw.currencyConflict === true ||
+        // Legacy v9 snapshots cannot distinguish an omitted currency from a mixed catalog.
+        (raw.currencyConflict === undefined && raw.accountCurrency === null) ||
+        new Set(Object.values(pricing.xd ?? {}).filter((quote) => !quote.currencyInferred)
+          .map((quote) => quote.currency)).size > 1 ? scope : null;
       setActiveLedgerCurrency(raw.accountCurrency);
       activeLedgerCurrencySnapshot = currentLedgerCurrency();
       rememberAccountCurrency(getCurrentDbClientUserId(), raw.accountCurrency);
@@ -364,6 +373,8 @@ export function replaceGatewayModelPricing(
   noteActiveAccount(authenticatedUserId ?? getCurrentDbClientUserId());
   gatewayAccountCurrency = resolveGatewayAccountCurrency(models);
   gatewayAccountCurrencyScope = scope;
+  gatewayCurrencyConflictScope = new Set(models.map((model) => model.currency)
+    .filter((currency) => currency === 'USD' || currency === 'CNY')).size > 1 ? scope : null;
   // 账本写入层据此判断"这一笔是不是本账号的结算币种"。目录为空(登出 / clear)或混合
   // 币种时返回 null，账本回退到「上次已知 → USD」，绝不按区域猜。
   //
@@ -389,7 +400,7 @@ export function replaceGatewayModelPricing(
   cacheScope = scope;
   cacheAt = Date.now();
   hydratedScopes.add(scope);
-  void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt);
+  void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt, gatewayCurrencyConflictScope === scope);
   broadcastPricing(pricing);
   return pricing;
 }
@@ -460,6 +471,20 @@ export async function getGatewayAccountCurrency(
   return cacheScope === scope ? gatewayLedgerCurrency(cache) : null;
 }
 
+/** Header amounts have no currency: reuse only this account's confirmed ledger currency. */
+export async function getGatewayMediaBillingCurrency(): Promise<MoneyCurrency | null> {
+  const userId = getCurrentDbClientUserId();
+  if (!userId) return null;
+  const scope = currentScope(userId);
+  noteActiveAccount(userId);
+  const declared = await getGatewayAccountCurrency(userId);
+  if (currentScope() !== scope || gatewayCurrencyConflictScope === scope) return null;
+  if (declared) return declared;
+  await hydrateAccountCurrency(userId);
+  if (currentScope() !== scope || gatewayCurrencyConflictScope === scope) return null;
+  return isLedgerCurrencyKnown() ? currentLedgerCurrency() : null;
+}
+
 /** 计费热路径只等待 `/models` 写入 XD 报价，不读取 Catalog。 */
 export async function getGatewayModelPricingForModel(): Promise<ModelPricingCatalog | null> {
   await waitForModelPricingSync();
@@ -497,6 +522,7 @@ export function __resetModelPricingCacheForTesting(): void {
   modelSyncInflight = null;
   gatewayAccountCurrency = null;
   gatewayAccountCurrencyScope = null;
+  gatewayCurrencyConflictScope = null;
   activeLedgerCurrencySnapshot = null;
   hydratedScopes.clear();
   hydrateInflightByScope.clear();

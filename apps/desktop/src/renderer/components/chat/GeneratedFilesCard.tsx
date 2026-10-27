@@ -62,6 +62,7 @@ import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
@@ -263,6 +264,7 @@ function GeneratedFileChip({
   const htmlWithSession = isHtmlFilePath(file.path) ? fileCtx.sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
+    fileName: file.path,
     getAbsPath: () => file.path,
     // HTML 左键看渲染结果；源码仍可从右键菜单进入。其它生成文件沿用原菜单。
     canOpenInBrowser: isBrowserOpenablePath(file.path),
@@ -355,7 +357,11 @@ function GeneratedFileChip({
         type="button"
         title={file.path}
         disabled={pending}
-        onClick={pending ? undefined : () => void open()}
+        onClick={pending ? undefined : (event) => ctxMenu.onActivate(event, open)}
+        onKeyDown={pending ? undefined : activateInlineLinkFromKeyboard}
+        onAuxClick={pending ? undefined : (event) => {
+          if (event.button === 1) ctxMenu.onActivate(event, open);
+        }}
         onContextMenu={pending ? undefined : ctxMenu.onContextMenu}
         className={cn(
           CHAT_FOCUS_CLASS,

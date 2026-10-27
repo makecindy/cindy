@@ -37,9 +37,46 @@ it.each([
   const assertCurrent=vi.fn();
   await apply('task',{agentKind:target,providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false},assertCurrent);
   expect(assertCurrent).toHaveBeenCalledOnce();
-  expect(set).toHaveBeenCalledWith({targetSessionId:'task',expectedGeneration:7,patch:{
+  expect(set).toHaveBeenCalledWith({targetSessionId:'task',expectedGeneration:7,beforeMutation:assertCurrent,patch:{
     ...(harness ? {harness} : {}),providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false,
   }});
+});
+
+it.each(['codex', 'cc'])('rechecks preferences after runtime admission waits for %s', async agentKind => {
+  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
+  let selectedModel = 'selected';
+  let release!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const admission = new Promise<void>(resolve => { release = resolve; });
+  const write = vi.fn();
+  const apply = compile(`return ({${property}}).setModel;`, { PluginTaskError, sessionControlService: {
+    getSessionRuntime: async () => ({ ok: true, runtime: {
+      runtimeGeneration: 7, effectiveProfile: { agentKind: 'codex' },
+    } }),
+    setSessionRuntime: async ({ beforeMutation, patch }: {
+      beforeMutation?: () => Promise<void>; patch: { model: string };
+    }) => {
+      entered();
+      await admission;
+      await beforeMutation?.();
+      write(patch.model);
+      return { ok: true, status: 'applied' };
+    },
+  } });
+  const assertCurrent = async () => {
+    if (selectedModel !== 'selected') throw new PluginTaskError('STALE_REVISION', 'preferences changed');
+  };
+  const result = apply('task', {
+    agentKind, model: 'selected', providerId: 'provider', effort: 'medium', fastMode: false,
+  }, assertCurrent);
+  const rejected = expect(result).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  await waiting;
+  selectedModel = 'new-selection';
+  release();
+  await rejected;
+  expect(write).not.toHaveBeenCalled();
 });
 
 it.each(['auto', 'acceptEdits'])('exposes independent Plan Mode alongside stored %s permission', async permissionMode => {

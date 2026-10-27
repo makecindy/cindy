@@ -358,3 +358,17 @@ describe('Claude Code translator tool output normalization', () => {
     });
   });
 });
+
+// Regression: image-only tool results used to disappear from the GUI; unit tier.
+it('retains native image-only results and their tool identity', async () => {
+  const queue = createAsyncQueue<AgentEvent>();
+  translateSdkMessage({ type: 'user', message: { content: [{ type: 'tool_result',
+    tool_use_id: 'read-image', content: [{ type: 'image', source: {
+      type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=',
+    } }],
+  }] } }, queue, createCtx());
+  expect((await drain(queue)).find(e => e.type === 'tool_result_full')?.data).toMatchObject({
+    toolUseId: 'read-image', fullText: '',
+    processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }],
+  });
+});

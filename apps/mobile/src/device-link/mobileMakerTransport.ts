@@ -1,9 +1,11 @@
+import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
   tryMobilePeerFile,
   peerMediaUri,
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
+import { getActiveMobileSessionRealm } from '@/config/env';
 import { expandGhostCommand, parseGhostCommandWord, splitGhostDirective } from '@cindy/maker-shared/ghost-command';
 import { composerPluginListSchema, isComposerPluginCatalogUnsupportedError, type ComposerPlugin } from '@/session/remoteComposerPlugins';
 import type { OrcaWorkerAgentKind, OrcaWorkerPermissionMode } from "@cindy/maker-shared/orca-team";
@@ -43,6 +45,7 @@ import {
   createDeviceFileOperations,
   exportDeviceFile,
   assertFileReadActive,
+  validFileVersion,
   type DeviceFileResult,
 } from "@cindy/device-link";
 import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
@@ -57,6 +60,7 @@ import type {
   MobileGoalStatusPayload,
   MobileCodexRateLimitResetResult,
   MobileCodexRateLimitsResult,
+  CodexResetAutoUseSettings,
   MobileSessionAgentSwitchIntent,
   MobileSessionAgentSwitchResult,
   MobileVoiceDictionaryLearningRequest,
@@ -113,7 +117,7 @@ export interface CreateSessionOptions {
   model: string;
   effort?: string;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   workspaceKind?: "project" | "dialogue";
   extraDirs?: string[];
   /**
@@ -247,6 +251,8 @@ export interface RemoteTextFilePreviewResult {
   error?: string;
   reason?: "oversize" | "not_found" | "forbidden" | "read_failed";
   data?: string;
+  /** Only returned when the caller opts into the existing file transfer path. */
+  transferRequired?: boolean;
   size: number;
   limitMb?: number;
 }
@@ -382,7 +388,7 @@ export interface MobileSessionModelPref {
   providerId: string;
   model: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /**
@@ -400,7 +406,7 @@ export type MobileNewMakerDraftPref =
       modelId: string;
       active: false;
       effort?: string;
-      fast?: boolean;
+      fast?: boolean | 'ultrafast';
     }
   | {
       agent: MobileAgentKind;
@@ -410,7 +416,7 @@ export type MobileNewMakerDraftPref =
       active: true;
       markModelChoice: boolean;
       effort?: string;
-      fast?: boolean;
+      fast?: boolean | 'ultrafast';
     };
 
 /**
@@ -514,6 +520,13 @@ export interface MobileMakerTransport {
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
+  /**
+   * 输入框开始打字时请被控端提前启动该任务的 Agent。尽力而为：旧被控端返回
+   * CHANNEL_NOT_ALLOWED，调用方忽略即可。
+   */
+  prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
+  createSideChat(sessionId: string): Promise<RemoteSession>;
+  listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
   ): Promise<ConversationSearchResponse>;
@@ -579,7 +592,7 @@ export interface MobileMakerTransport {
     sessionId: string,
     model: string,
     providerId?: string,
-    selection?: { effort: string | null; fastMode: boolean },
+    selection?: { effort: string | null; fastMode: boolean | 'ultrafast' },
   ): Promise<{ deferred?: boolean; superseded?: boolean } | undefined>;
   /**
    * 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。
@@ -592,7 +605,7 @@ export interface MobileMakerTransport {
     model: string,
     providerId: string | null,
     effort?: string,
-    fastMode?: boolean,
+    fastMode?: boolean | 'ultrafast',
     options?: { agentDeviceId?: string | null },
   ): Promise<MobileSessionAgentSwitchResult>;
   /** 读取 desktop main 的权威 pending intent，用于重连 / 重进页面恢复。 */
@@ -604,7 +617,7 @@ export interface MobileMakerTransport {
   /** 计划模式一级开关(#494 新协议,capabilities.planMode.supported 时可用);
    *  被控端武装 live 会话并持久化 planModeEnabled,一次性消耗后经 sessions:patched 回流。 */
   setPlanMode(sessionId: string, enabled: boolean): Promise<void>;
-  setFastMode(sessionId: string, enabled: boolean): Promise<void>;
+  setFastMode(sessionId: string, enabled: boolean | 'ultrafast'): Promise<void>;
   setExtraDirs(sessionId: string, dirs: string[]): Promise<void>;
   /** 被控端视角的模型单价表(只读;老被控端 CHANNEL_NOT_ALLOWED → 调用方隐藏价格)。 */
   getModelPricing(): Promise<MobileModelPricingMap | null>;
@@ -622,6 +635,7 @@ export interface MobileMakerTransport {
   ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
   /**
    * 被控端订阅账号余量快照(只读,cached-first;Claude 5h/周/分模型窗口、SuperGrok 周用量)。
    * 默认账号不传 providerId;独立账号的回包必须回显同一 providerId,否则按旧被控端处理。
@@ -743,6 +757,7 @@ export interface MobileMakerTransport {
     sourceSessionId: string,
     messageClientId: string,
   ): Promise<RemoteSession>;
+  forkStripEncrypted(sourceSessionId: string): Promise<RemoteSession>;
   rewindPreview(
     sessionId: string,
     clientId: string,
@@ -857,6 +872,7 @@ export interface MobileMakerTransport {
       opts?: { keepQueue?: boolean; pauseQueue?: boolean },
     ): Promise<InputProjection>;
     resume(sessionId: string): Promise<InputProjection>;
+    retryImageDelivery(sessionId: string, imageId: string): Promise<void>;
     retryLastError(sessionId: string): Promise<InputProjection>;
     clearError(sessionId: string): Promise<InputProjection>;
     /** 取消账号限额重置后的自动继续;老被控端没有该通道时会被拒(调用方只在投影带等待时显示入口)。 */
@@ -898,7 +914,7 @@ export interface MobileMakerTransport {
     listDir(path: string): Promise<RemoteDirectoryListResult>;
     statPath(path: string): Promise<RemotePathStatResult>;
     mkdirP(path: string): Promise<{ resolvedPath: string }>;
-    readTextFilePreview(path: string): Promise<RemoteTextFilePreviewResult>;
+    readTextFilePreview(path: string, options?: { allowFileTransfer?: boolean; signal?: AbortSignal }): Promise<RemoteTextFilePreviewResult>;
   };
   /** 完整文件浏览(workdir 相对路径语义,被控端 file-browser:remote-op 聚合通道)。 */
   fileBrowser: {
@@ -910,6 +926,7 @@ export interface MobileMakerTransport {
       beforeInvoke?: () => Promise<unknown>,
       options?: {
         stream?: boolean;
+        retainBackground?: MobileRemoteMediaFetchOptions['retainBackground'];
         /** Upload progress while the computer stages the file in cloud storage. */
         onProgress?: (uploaded: number, total: number) => void;
       },
@@ -958,7 +975,7 @@ export interface MobileOrcaEnableOptions {
   label?: string;
   model?: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   providerId?: string;
   delegateTask?: string;
   executionDeviceId?: string;
@@ -983,7 +1000,7 @@ export interface MobileOrcaCreateWorkerInput {
   agent: OrcaWorkerAgentKind;
   model?: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   providerId?: string;
   workerPermissionMode: OrcaWorkerPermissionMode;
   initialTask?: string;
@@ -1005,6 +1022,8 @@ export type SessionMetaPatch = Partial<
 >;
 
 export const MOBILE_MAKER_CHANNELS = MOBILE_REMOTE_INVOKE_CHANNELS;
+const fileReferences = new Map<string, string>();
+let fileReferencesOwner = '';
 
 export function createMobileMakerTransport({
   deviceId,
@@ -1013,8 +1032,17 @@ export function createMobileMakerTransport({
 }: MobileMakerTransportDeps): MobileMakerTransport {
   const fileOwner = getMobileAuthOwner();
   const callerIsCurrent = isCurrent;
-  isCurrent = () =>
+  const fileIsCurrent = () =>
     isMobileAuthOwnerCurrent(fileOwner) && callerIsCurrent?.() !== false;
+  isCurrent = fileIsCurrent;
+  const fileCacheOwner = JSON.stringify([getActiveMobileSessionRealm(), fileOwner.accountId]);
+  const referenceOwner = JSON.stringify([fileOwner.accountKey, fileOwner.generation]);
+  if (fileReferencesOwner !== referenceOwner) { fileReferences.clear(); fileReferencesOwner = referenceOwner; }
+  const getFileCache = async () => {
+    if (!fileOwner.accountId || !fileIsCurrent()) return null;
+    const { createPeerFileCache } = await import('./peerFileCache');
+    return createPeerFileCache(fileCacheOwner);
+  };
   const call = <T>(channel: string, args: unknown[] = []): Promise<T> => {
     if (!deviceId)
       return Promise.reject(new Error("remote device id is required"));
@@ -1053,15 +1081,36 @@ export function createMobileMakerTransport({
     fallback?: () => Promise<MobileRemoteMediaFetchResult>,
     stream = opts?.stream ?? true,
   ) => {
-    const fetch = (prepareOnly: boolean) =>
-      call<MobileRemoteMediaFetchResult>(DEVICE_LINK_MEDIA_FETCH_CHANNEL, [
+    const fetch = async (prepareOnly: boolean, metadataOnly = false) => {
+      if (!fileIsCurrent() || opts?.signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      await opts?.beforeFetch?.();
+      if (!fileIsCurrent() || opts?.signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      return call<MobileRemoteMediaFetchResult>(DEVICE_LINK_MEDIA_FETCH_CHANNEL, [
         {
           url,
           prepareOnly,
+          // Older shared hosts use a closed request-field allowlist.
+          ...(metadataOnly && !isSharedTaskPeer(deviceId) ? { metadataOnly: true } : {}),
           ...(opts?.skipCache ? { skipCache: true } : {}),
           ...(opts?.thumbnail ? { thumbnail: true } : {}),
         },
       ]);
+    };
+    const withDownload = (result: MobileRemoteMediaFetchResult): MobileRemoteMediaFetchResult => {
+      if (stream || opts?.thumbnail || !result.ossKey || !validFileVersion(result.version)) return result;
+      return { ...result, cacheDownload: async (downloadUrl) => {
+        const active = () => fileIsCurrent() && !opts?.signal?.aborted;
+        if (!active()) throw new Error('FILE_PEER_CANCELLED');
+        const cache = await getFileCache().catch(() => null);
+        const local = await cache?.download(deviceId, url, result, downloadUrl, active, opts?.signal).catch(() => null);
+        if (!active()) {
+          const uri = local && peerMediaUri(local);
+          if (uri) releasePeerMedia(uri);
+          throw new Error('FILE_PEER_CANCELLED');
+        }
+        return local ?? null;
+      } };
+    };
     // Chat thumbnails are high-volume and already covered by the list; trace full-file reads only.
     const trace = opts?.thumbnail ? 0 : nextFileTrace();
     const stage = <T>(
@@ -1106,7 +1155,27 @@ export function createMobileMakerTransport({
       "result",
       () =>
         readDeviceFile({
+          cacheFirst: stream || opts?.revalidate || opts?.skipCache || opts?.thumbnail || isSharedTaskPeer(deviceId) ? undefined : {
+            read: async () => (await getFileCache())?.readLatest(deviceId, url, () => fileIsCurrent() && !opts?.signal?.aborted) ?? null,
+            retain: async (result) => { await opts?.retainBackground?.(withDownload(result), fileIsCurrent); },
+          },
           stream,
+          inline: () => fetch(true),
+          revalidate: () => fetch(true, true),
+          inlineCache: opts?.thumbnail ? undefined : {
+            read: async (metadata) => {
+              const cache = await getFileCache();
+              if (opts?.skipCache) {
+                await cache?.invalidate(deviceId, url);
+                return null;
+              }
+              return cache?.readInline(deviceId, url, metadata, () => isCurrent() && !opts?.signal?.aborted) ?? null;
+            },
+            store: async (result) => {
+              const cache = await getFileCache();
+              if (isCurrent() && !opts?.signal?.aborted) await cache?.storeInline(deviceId, url, result);
+            },
+          },
           peerResultIsTransient: true,
           isCurrent,
           discard: (result) => {
@@ -1121,17 +1190,20 @@ export function createMobileMakerTransport({
           },
           signal: opts?.signal,
           prepare: () =>
-            stage("prepare", () => fetch(!opts?.thumbnail), describeResult),
+            stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
             metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
-                  () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined),
+                  () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
+                    opts?.skipCache ? { ...metadata, skipCache: true } : metadata, opts?.onProgress),
                   (result) => ({ hit: result !== null }),
                 )
               : Promise.resolve(null),
-          fallback: () =>
-            stage("upload", fallback ?? (() => fetch(false)), describeResult),
+          fallback: () => {
+            try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
+            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+          },
         }),
       (result) => ({
         route: peerMediaUri(result)
@@ -1141,7 +1213,7 @@ export function createMobileMakerTransport({
             : "upload",
         size: result.size,
       }),
-    );
+    ).then(withDownload);
   };
 
   return {
@@ -1164,6 +1236,10 @@ export function createMobileMakerTransport({
         },
       ]),
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
+    prewarmSession: (sessionId, createOpts) =>
+      call("maker:session:prewarm", [sessionId, createOpts]),
+    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),
     patchSessionMeta: (sessionId, patch) =>
@@ -1188,6 +1264,8 @@ export function createMobileMakerTransport({
     aroundMessagesByClientId: (sessionId, clientId, opts) =>
       call("local-db:messages:around-client-id", [sessionId, clientId, opts]),
     send: async (sessionId, message, createOpts, sendOpts) => {
+      const delivery = pendingGhostCardFormDelivery(JSON.stringify([deviceId, sessionId]));
+      if (delivery && !await delivery) throw new Error((await import('@/i18n')).i18n.t('plugins.formSyncFailed'));
       const content = typeof message === 'string' ? message : message.content;
       const first = Array.isArray(content) ? content[0] : undefined;
       const head = typeof content === 'string' ? content
@@ -1293,6 +1371,12 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
+    setCodexResetAutoUse: async (patch, accountKey, providerId) => {
+      const result = await call<MobileCodexRateLimitsResult>('maker:usage:codex-reset-auto-use', [patch, accountKey, providerId ?? 'openai']);
+      if (result.providerId !== (providerId ?? 'openai') || result.autoUse?.accountKey !== accountKey)
+        throw new Error('PRECONDITION_FAILED: Account scope changed');
+      return result;
+    },
     getSubscriptionUsage: async (kind, providerId) => {
       // 默认账号不带参数,兼容只认默认账号的老被控端。
       const scoped =
@@ -1376,6 +1460,8 @@ export function createMobileMakerTransport({
       call("maker:get-context-usage", [sessionId, createOpts]),
     fork: (sourceSessionId, messageClientId) =>
       call("maker:fork", [sourceSessionId, messageClientId]),
+    forkStripEncrypted: (sourceSessionId) =>
+      call("maker:fork-strip-encrypted", [sourceSessionId]),
     rewindPreview: (sessionId, clientId) =>
       call("maker:rewind:preview", [sessionId, clientId]),
     rewindCommit: (sessionId, clientId, opts) =>
@@ -1463,6 +1549,7 @@ export function createMobileMakerTransport({
       },
       stop: (sessionId, opts) => call("maker:input:stop", [sessionId, opts]),
       resume: (sessionId) => call("maker:input:resume", [sessionId]),
+      retryImageDelivery: (sessionId, imageId) => call("maker:images:retry", [sessionId, imageId]),
       retryLastError: (sessionId) =>
         call("maker:input:retry-last-error", [sessionId]),
       clearError: (sessionId) => call("maker:input:clear-error", [sessionId]),
@@ -1511,8 +1598,8 @@ export function createMobileMakerTransport({
       listDir: (path) => call("fs:list-dir", [{ path }]),
       statPath: (path) => call("fs:stat-path", [{ path }]),
       mkdirP: (path) => call("fs:mkdir-p", [{ path }]),
-      readTextFilePreview: (filePath) =>
-        call("text-file:read-preview", [{ filePath }]),
+      readTextFilePreview: (filePath, options) =>
+        call("text-file:read-preview", [{ filePath, ...(options?.allowFileTransfer ? { allowFileTransfer: true } : {}) }]),
     },
     fileBrowser: {
       cacheScope: JSON.stringify([fileOwner.accountKey, deviceId]),
@@ -1525,13 +1612,18 @@ export function createMobileMakerTransport({
             assertFileReadActive(signal);
             return fileOp<T>(args);
           });
+        const referenceKey = JSON.stringify([referenceOwner, deviceId, workdir, relPath]);
+        const knownUrl = fileReferences.get(referenceKey);
+        const fallback = () =>
+          exportDeviceFile(retryOp, workdir, relPath, signal, options?.onProgress);
+        const fetchOptions = { signal, beforeFetch: beforeInvoke, retainBackground: options?.retainBackground };
+        if (knownUrl && !isSharedTaskPeer(deviceId))
+          return fetchMedia(knownUrl, fetchOptions, fallback, options?.stream ?? false);
         const caps = await retryOp<{ fileRead?: boolean }>({
           op: "caps",
           workdir,
         });
         assertFileReadActive(signal);
-        const fallback = () =>
-          exportDeviceFile(retryOp, workdir, relPath, signal, options?.onProgress);
         if (!caps.fileRead) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
@@ -1546,7 +1638,8 @@ export function createMobileMakerTransport({
         assertFileReadActive(signal);
         if (!reference.ok)
           throw new Error(reference.message ?? "FILE_READ_FAILED");
-        return fetchMedia(reference.url, { signal }, fallback, options?.stream ?? false);
+        if (fileIsCurrent()) fileReferences.set(referenceKey, reference.url);
+        return fetchMedia(reference.url, fetchOptions, fallback, options?.stream ?? false);
       },
       caps: (workdir) =>
         call("file-browser:remote-op", [{ op: "caps", workdir }]),

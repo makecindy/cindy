@@ -472,6 +472,79 @@ export async function saveBotSkill(
   try { return await pending; }
   finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
 }
+/** Like readSkillFilePath, but only a missing file counts as absent; other errors propagate. */
+async function strictSkillFilePath(skillDir: string): Promise<string | null> {
+  for (const candidate of ['SKILL.md', 'skill.md']) {
+    const filePath = path.join(skillDir, candidate);
+    try {
+      if ((await fs.stat(filePath)).isFile()) return filePath;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    }
+  }
+  return null;
+}
+
+/**
+ * The skill's SKILL.md as stored, native frontmatter included (old three-field files migrated),
+ * or null when it does not exist. Read errors propagate: cloud sync must not treat an unreadable
+ * skill as a deleted one.
+ */
+export async function readBotSkillSource(userDataDir: string, botId: string, slug: string): Promise<string | null> {
+  const filePath = await strictSkillFilePath(resolveSkillDir(userDataDir, botId, slug))
+    ?? await strictSkillFilePath(resolveSkillDir(userDataDir, botId, slug, false));
+  return filePath ? readCompatibleBotSkillSource(filePath, slug) : null;
+}
+
+/** Every own skill's SKILL.md for cloud sync; a missing folder is empty, any other read error throws. */
+export async function listBotSkillSources(userDataDir: string, botId: string): Promise<Array<{ slug: string; source: string; enabled: boolean }>> {
+  const out: Array<{ slug: string; source: string; enabled: boolean }> = [];
+  for (const enabled of [true, false]) {
+    const dir = enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills');
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries.filter(item => item.isDirectory() && !item.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name))) {
+      const filePath = await strictSkillFilePath(path.join(dir, entry.name));
+      if (!filePath) continue;
+      out.push({ slug: entry.name, source: await readCompatibleBotSkillSource(filePath, entry.name), enabled });
+    }
+  }
+  return out;
+}
+
+/**
+ * Write a whole SKILL.md verbatim (cloud companions restoring a copy), so native frontmatter
+ * survives; same write queue, size limit and runtime refresh as saveBotSkill. `enabled` sets
+ * where it lives (moving the whole skill folder); omitted, it keeps its current state.
+ */
+export async function saveBotSkillSource(userDataDir: string, botId: string, slug: string, source: string,
+  options: { enabled?: boolean } = {}): Promise<void> {
+  if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill slug');
+  if (Buffer.byteLength(parseBotSkillFile(source).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
+    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
+  const key = botSkillRootDir(userDataDir, botId);
+  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const previous = await readBotSkill(userDataDir, botId, slug);
+    await ensureLayout(userDataDir, botId);
+    const enabled = options.enabled ?? previous?.enabled !== false;
+    const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
+    if (previous && (previous.enabled !== false) !== enabled) {
+      // Move the folder (scripts and templates included) to the other state.
+      await fs.mkdir(path.dirname(skillDir), { recursive: true });
+      await fs.rename(resolveSkillDir(userDataDir, botId, slug, !enabled), skillDir);
+    }
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), source, 'utf8');
+    invalidateBotSkillRuntime(key);
+  });
+  skillWrites.set(key, pending);
+  try { await pending; }
+  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
+}
+
 async function writeBotSkill(
   userDataDir: string,
   botId: string,

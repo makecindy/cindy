@@ -75,6 +75,7 @@ export interface PackedCustomMarketPlugin {
 }
 
 type CustomMarketCommitHooks = {
+  assertCurrent?: () => void;
   sourceChanged?: boolean | (() => boolean);
   expectedInstalledApproval?: string;
   beforeCommit?: () => void | Promise<void>;
@@ -248,6 +249,7 @@ export async function commitCustomMarketPlugin(
       ghostId: input.expectedGhostId,
       version: input.expectedVersion,
       consent: input.consent,
+      assertCurrent: input.assertCurrent,
       ...((typeof input.sourceChanged === 'function' ? input.sourceChanged() : input.sourceChanged)
         ? { sourceChanged: true } : {}),
       // 发现时读到的规范化 Manifest 是这次安装允许的能力上限。打包窗口

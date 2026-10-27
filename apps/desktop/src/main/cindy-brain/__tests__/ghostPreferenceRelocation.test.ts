@@ -16,8 +16,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 
 import * as locks from '../../device-link/crossProcessLock.js';
 import {
-  relocateGhostCindyPrefs, readGhostCindyOverrides, readGhostCindyInflightLimit,
-  writeGhostCindyOverride, writeGhostCindyInflightLimit,
+  relocateGhostCindyPrefs, readGhostCindyInflightLimit, writeGhostCindyInflightLimit,
 } from '../cindyPrefsStore.js';
 import {
   relocateGhostErrandPrefs, readPluginTaskConfig, readGhostErrandSessionId,
@@ -82,11 +81,6 @@ function write(file: string, value: unknown, ownerId = owner.id): string {
 }
 
 const writers = [
-  {
-    name: 'Cindy override', resource: resources[0],
-    prime: () => readGhostCindyOverrides(from),
-    write: (id: string) => writeGhostCindyOverride(id, 'image.generate', 'next-model'),
-  },
   {
     name: 'Cindy limit', resource: resources[0],
     prime: () => readGhostCindyInflightLimit(from),
@@ -305,8 +299,8 @@ describe.each(resources)('$name relocation', (resource) => {
 describe.each([
   {
     resource: resources[0],
-    read: (id: string) => [readGhostCindyOverrides(id), readGhostCindyInflightLimit(id)],
-    empty: [{}, null],
+    read: (id: string) => readGhostCindyInflightLimit(id),
+    empty: null,
   },
   {
     resource: resources[1],

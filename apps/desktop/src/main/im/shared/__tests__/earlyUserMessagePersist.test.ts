@@ -65,7 +65,13 @@ interface Harness {
   reactToMessage: ReturnType<typeof vi.fn>;
 }
 
-function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = { withPrepare: true }): Harness {
+function wire(
+  opts: {
+    withPrepare: boolean;
+    notificationSessionId?: string;
+    ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
+  } = { withPrepare: true },
+): Harness {
   const calls: string[] = [];
   const runAgentTurn = vi.fn(async () => undefined);
   const reactToMessage = vi.fn(async () => 'reaction-1');
@@ -102,6 +108,7 @@ function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = {
     threadScoped: false,
     processingEmoji: 'Eyes',
     ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
+    ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
   } as unknown as ImChannelAdapter;
 
   const attach = createMessageHandler(
@@ -242,4 +249,41 @@ it('does not persist a notification reply into the default IM session before dis
     notificationSessionId: 'original-session', scopeKey: 'om_root',
   })));
   expect(h.persistEarly).not.toHaveBeenCalled();
+});
+
+/**
+ * 全响应(ambient)前置判定: 判成 skip 的消息不留任何痕迹 —— 排在 ack 与提前落库之前,
+ * 不拼上下文、不起轮次; 判不出来 / 抛错照常走; 被召唤的消息从不经过判定。
+ */
+describe('messageHandler ambient gate', () => {
+  it('drops a judged-skip ambient message before ack, early persist and context assembly', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+    await vi.waitFor(() => expect(ambientTurnGate).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.reactToMessage).not.toHaveBeenCalled();
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(h.prepareAgentTurnText).not.toHaveBeenCalled();
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('runs the normal turn when the judge says proceed, and when it throws', async () => {
+    for (const gate of [vi.fn(async () => 'proceed' as const), vi.fn(async () => { throw new Error('judge down'); })]) {
+      const h = wire({ withPrepare: true, ambientTurnGate: gate as never });
+      h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(h.persistEarly).toHaveBeenCalledTimes(1);
+      expect(h.prepareAgentTurnText).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('never consults the judge for a summoned message', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', invoked: true }));
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(ambientTurnGate).not.toHaveBeenCalled();
+  });
 });

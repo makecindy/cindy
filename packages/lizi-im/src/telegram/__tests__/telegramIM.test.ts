@@ -94,7 +94,11 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
           signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
         });
       }
-      if (method === 'sendMessage' || method === 'sendRichMessage') {
+      if (
+        method === 'sendMessage' ||
+        method === 'sendRichMessage' ||
+        /^send(Photo|Document|Video|Audio|Voice|Animation|Sticker|VideoNote|Poll|Location|Contact|Dice)$/.test(method)
+      ) {
         sentSeq += 1;
         return {
           message_id: sentSeq,
@@ -231,6 +235,44 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const method = phase === 'startup' ? 'getMe' : 'getUpdates';
+    const rateLimit = new TelegramApiError(method, 429, 'Too Many Requests', 90);
+    if (phase === 'startup') api.failNextCall(method, rateLimit);
+    try {
+      await im.init();
+      if (phase === 'poll') api.failNextGetUpdates(rateLimit);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(2);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recover', 'offline', 'dispose', 'invalid-token'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    api.failNextCall('getMe', outcome === 'invalid-token'
+      ? new TelegramApiError('getMe', 401, 'invalid token') : new Error('network down'));
+    try {
+      await im.init();
+      if (outcome === 'offline') await im.goOffline();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.calls.filter((call) => call.method === 'getMe')).toHaveLength(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -338,7 +380,7 @@ describe('TelegramIM', () => {
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '/nonsense extra args' });
   });
 
-  it('名字召唤: 手打 "@显示名" 与句首裸名字都触发(非 username), 句中提到不触发', async () => {
+  it('手打 @显示名触发，只有名字无论句首还是句中都不触发', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
     await connect();
@@ -347,10 +389,11 @@ describe('TelegramIM', () => {
       groupMessage({ text: '@Cindy 你在?', fromId: 111, messageId: 30 }),
       groupMessage({ text: 'cindy 帮我看看这个', fromId: 222, messageId: 31 }),
       groupMessage({ text: '我问过 Cindy 了不用管', fromId: 111, messageId: 32 }),
+      groupMessage({ text: '明确召唤', fromId: 111, messageId: 34, mentionBot: true }),
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(2));
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
-    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '明确召唤' });
   });
 
   it('纯 @bot 无正文仍召唤一轮，单独传递 invoked', async () => {
@@ -497,6 +540,7 @@ describe('TelegramIM', () => {
     });
     const before = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
     api.pushUpdates([privateMessage('still there?', 222, 91)]);
+    // real-wait: cross the production cooldown window before checking that no reply is sent.
     await new Promise((r) => setTimeout(r, 200));
     const after = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
     expect(after).toBe(before); // 冷却期内不再回
@@ -788,6 +832,7 @@ describe('TelegramIM', () => {
 
     // 轮询确已停: 之后不再产生新的 getUpdates 调用。
     const pollsAtOffline = api.calls.filter((c) => c.method === 'getUpdates').length;
+    // real-wait: allow the production polling interval to elapse after disconnect.
     await new Promise((r) => setTimeout(r, 50));
     expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
   });
@@ -1206,6 +1251,7 @@ describe('TelegramIM', () => {
     });
     api.pushUpdates([member(45), member(46)]);
     // 等 settle 触发进入下载(getFile 悬住), 此时游标不得越过 45
+    // real-wait: exercise the production settle delay before inspecting the persisted cursor.
     await new Promise((r) => setTimeout(r, 1400));
     expect(events).toHaveLength(0);
     const persistedDuring = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
@@ -1243,6 +1289,7 @@ describe('TelegramIM', () => {
     // 关键断言是"三个成员合进同一个事件", 不是下载成功与否。
     expect(events[0].attachments.length + events[0].unsupported.length).toBe(3);
     // 静默窗后不再有第二个事件
+    // real-wait: cross the production media aggregation quiet window.
     await new Promise((r) => setTimeout(r, 1300));
     expect(events).toHaveLength(1);
   });
@@ -1625,7 +1672,7 @@ describe('TelegramIM', () => {
     try {
       for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
         random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
-        expect(await im.reactToMessage('111|5', '👨‍💻')).toBe(emoji);
+        expect(await im.reactToMessage('111|5', '🤔')).toBe(emoji);
         const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
         expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
         expect(sent.params.is_big).toBeUndefined();
@@ -1648,12 +1695,12 @@ describe('TelegramIM', () => {
         'setMessageReaction',
         new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
       );
-      expect(await im.reactToMessage('111|5', '👨‍💻')).toBe('👨‍💻');
+      expect(await im.reactToMessage('111|5', '🤔')).toBe('🤔');
       expect(
         api.calls
           .filter((call) => call.method === 'setMessageReaction')
           .map((call) => call.params.reaction),
-      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '👨‍💻' }]]);
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '🤔' }]]);
     } finally {
       random.mockRestore();
     }
@@ -1671,7 +1718,7 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
-    expect(await im.reactToMessage('111|5', '👨‍💻')).toBeNull();
+    expect(await im.reactToMessage('111|5', '🤔')).toBeNull();
     expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂
@@ -2391,6 +2438,7 @@ describe('TelegramIM', () => {
     expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
     // ambient 路径不消费成员命令(owner 裸命令走显式召唤通道, 另有用例)
     api.pushUpdates([groupMessage({ text: '/new', fromId: 222, messageId: 51 })]);
+    // real-wait: let the production command dispatch debounce settle before asserting no event.
     await new Promise((r) => setTimeout(r, 100));
     expect(events).toHaveLength(1);
     // NO_REPLY 哨兵: 惰性占位下从头到尾零消息(不发送、无需删除 — 真零痕迹)
@@ -2422,6 +2470,7 @@ describe('TelegramIM', () => {
     // 发出首条真实消息 → typing 循环停(不再有新的 sendChatAction)
     await im.sendText(OWNER_ID, '答复');
     const countAfterSend = api.calls.filter((c) => c.method === 'sendChatAction').length;
+    // real-wait: allow the production typing loop interval to elapse after the reply.
     await new Promise((r) => setTimeout(r, 120));
     expect(api.calls.filter((c) => c.method === 'sendChatAction').length).toBe(countAfterSend);
     // 群触发同样 typing
@@ -2683,6 +2732,7 @@ describe('TelegramIM', () => {
       await vi.waitFor(() => expect(events).toHaveLength(1));
       // 只有新鲜那条进了 turn; 陈旧那条静默消费。
       expect(events[0]).toMatchObject({ text: '刚发的' });
+      // real-wait: cross the production stale-message quiet period before checking for duplicates.
       await new Promise((r) => setTimeout(r, 200));
       expect(events).toHaveLength(1);
     });
@@ -2691,6 +2741,7 @@ describe('TelegramIM', () => {
       await connect();
       const before = api.calls.filter((c) => c.method === 'sendMessage').length;
       api.pushUpdates([privateMessage('在吗', 999, 82, 8 * 3_600)]);
+      // real-wait: cross the production stale-message rejection window before checking for output.
       await new Promise((r) => setTimeout(r, 300));
       // 隔夜再回一句拒绝语同样是诈尸 —— 一条出站都不该有。
       expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before);
@@ -3191,5 +3242,178 @@ describe('TelegramIM 群历史名额与分类一致', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('TelegramIM 宿主工具的 Bot API 直通', () => {
+  function membershipUpdate(args: {
+    updateId: number;
+    from: 'left' | 'member' | 'kicked' | 'administrator';
+    to: 'left' | 'member' | 'kicked' | 'administrator';
+    chatType?: 'supergroup' | 'private';
+  }): TgUpdate {
+    return {
+      update_id: args.updateId,
+      my_chat_member: {
+        chat:
+          args.chatType === 'private'
+            ? { id: 111, type: 'private' }
+            : { id: -100200, type: 'supergroup', title: 'Ops' },
+        from: { id: 222, is_bot: false, first_name: 'Tom' },
+        date: nowSec(),
+        old_chat_member: { status: args.from, user: BOT },
+        new_chat_member: { status: args.to, user: BOT },
+      },
+    };
+  }
+
+  it('长轮询订阅 my_chat_member', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const poll = api.calls.find((c) => c.method === 'getUpdates')!;
+    expect(poll.params.allowed_updates).toEqual(['message', 'callback_query', 'my_chat_member']);
+  });
+
+  it('被拉进群 / 移出群: 群窗口记一条系统行, 并私聊告知主人', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+    api.pushUpdates([membershipUpdate({ updateId: 300, from: 'left', to: 'member' })]);
+    await vi.waitFor(() => expect(window).toHaveLength(1));
+    expect(window[0]).toMatchObject({
+      chatId: '-100200',
+      threadId: '',
+      messageId: 'membership-300',
+      chatName: 'Ops',
+      author: { name: 'Telegram', isBot: true },
+    });
+    expect(window[0].text).toContain('加入本群');
+    expect(window[0].text).toContain('Tom');
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before + 1),
+    );
+    const notice = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(notice.params.chat_id).toBe(OWNER_ID);
+    expect(String(notice.params.text)).toContain('Ops');
+    expect(String(notice.params.text)).toContain('-100200');
+
+    api.pushUpdates([membershipUpdate({ updateId: 301, from: 'member', to: 'kicked' })]);
+    await vi.waitFor(() => expect(window).toHaveLength(2));
+    expect(window[1].text).toContain('移出本群');
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before + 2),
+    );
+  });
+
+  it('群内升为管理员、私聊拉黑这类没有进出的变化不产生任何动作', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+    api.pushUpdates([
+      membershipUpdate({ updateId: 310, from: 'member', to: 'administrator' }),
+      membershipUpdate({ updateId: 311, from: 'member', to: 'kicked', chatType: 'private' }),
+    ]);
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(1),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(window).toHaveLength(0);
+    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before);
+  });
+
+  it('sendMedia: URL 走 JSON 方法并按 lane 解码目标, 群里回流进窗口', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const originalCall = api.call;
+    api.call = (async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') {
+        api.calls.push({ method, params });
+        return { message_id: 77, chat: { id: -100200, type: 'supergroup', title: 'Ops' }, date: 1 };
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    const result = await im.sendMedia('g/-100200/9', {
+      kind: 'photo',
+      url: 'https://example.com/a.png',
+      caption: 'look <b>',
+      replyToMessageId: encodeMessageId('-100200', '55'),
+    });
+    expect(result.messageId).toBe(encodeMessageId('-100200', '77'));
+    const sent = api.calls.find((c) => c.method === 'sendPhoto')!;
+    expect(sent.params).toMatchObject({
+      chat_id: '-100200',
+      message_thread_id: 9,
+      photo: 'https://example.com/a.png',
+      caption: 'look <b>',
+      reply_parameters: { message_id: 55, allow_sending_without_reply: true },
+    });
+    expect(sent.params.parse_mode).toBeUndefined();
+    expect(window.at(-1)).toMatchObject({
+      chatId: '-100200',
+      threadId: '9',
+      messageId: '77',
+      author: { isBot: true },
+      text: 'look <b>',
+      fileNames: ['photo'],
+    });
+  });
+
+  it('sendMedia: 本地文件走 multipart, 贴纸不带说明, 缺来源直接报错', async () => {
+    await connect();
+    const file = path.join(tmpDir, 'clip.mp4');
+    fs.writeFileSync(file, 'video-bytes');
+    await im.sendMedia('111', { kind: 'video', absPath: file, caption: 'c' });
+    expect(api.calls.at(-1)?.method).toBe('sendVideo');
+    await im.sendMedia('111', { kind: 'sticker', fileId: 'CAAC123', caption: 'ignored' });
+    const sticker = api.calls.find((c) => c.method === 'sendSticker')!;
+    expect(sticker.params).toMatchObject({ chat_id: '111', sticker: 'CAAC123' });
+    expect(sticker.params.caption).toBeUndefined();
+    await expect(im.sendMedia('111', { kind: 'photo' })).rejects.toThrow('NO_SOURCE');
+    await expect(
+      im.sendMedia('111', { kind: 'document', absPath: path.join(tmpDir, 'missing.bin') }),
+    ).rejects.toThrow('NOT_FOUND');
+  });
+
+  it('downloadFile: getFile + 直链下载落盘, 同名自动加序号, 超限拒绝', async () => {
+    await connect();
+    const originalCall = api.call;
+    api.call = (async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        api.calls.push({ method, params });
+        return params.file_id === 'big'
+          ? { file_id: 'big', file_size: 21 * 1024 * 1024, file_path: 'documents/big.bin' }
+          : { file_id: params.file_id, file_size: 5, file_path: 'documents/../../etc/report.pdf' };
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('hello')));
+    try {
+      const dest = path.join(tmpDir, 'downloads');
+      const first = await im.downloadFile('f1', dest);
+      expect(first).toMatchObject({ size: 5, fileName: 'report.pdf' });
+      expect(first.absPath).toBe(path.join(dest, 'report.pdf'));
+      expect(fs.readFileSync(first.absPath, 'utf8')).toBe('hello');
+      const second = await im.downloadFile('f1', dest);
+      expect(second.fileName).toBe('report-1.pdf');
+      const named = await im.downloadFile('f1', dest, '../evil/../x.txt');
+      expect(path.dirname(named.absPath)).toBe(dest);
+      expect(named.fileName).toBe('x.txt');
+      await expect(im.downloadFile('big', dest)).rejects.toThrow('TOO_LARGE');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('resolveSendTarget / getBotId / getBotUsername 暴露连接事实', async () => {
+    expect(im.getBotId()).toBe('');
+    await connect();
+    expect(im.getBotId()).toBe(String(BOT.id));
+    expect(im.getBotUsername()).toBe(BOT.username);
+    expect(im.resolveSendTarget('111')).toEqual({ chat_id: '111' });
+    expect(im.resolveSendTarget('g/-100200/9')).toEqual({ chat_id: '-100200', message_thread_id: 9 });
+    expect(im.getBotApi()).not.toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import { assertPluginTaskResult, PluginTaskError } from '../pluginTaskService.js
 import { createOrcaLifecycleService, type OrcaLifecycleDeps } from '../orcaLifecycleService.js';
 import { startOrcaTeamWithPermissionGate } from '../orcaStartTeamPermissionGate.js';
 import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
+import { captureTaskActionGuard } from '../taskActionAuthorization.js';
 
 vi.mock('../../maker-host/codex-credential-switch.js', () => ({ isCredentialModeSwitchBusyError: () => false }));
 
@@ -78,6 +79,7 @@ describe('public start_team Full access admission', () => {
         markTeamEnded: vi.fn(), clearLeadVendorOptions: vi.fn(),
       } as unknown as OrcaLifecycleDeps);
       const bindings = {
+        captureTaskActionGuard,
         PluginTaskError, hasAcceptedUserTaskInput, startOrcaTeamWithPermissionGate,
         getCurrentDbClientSnapshot: () => epoch,
         maker: { getSession: () => null }, inputCoordinator: { getAcceptedInputProvenance: () => input },

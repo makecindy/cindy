@@ -78,10 +78,6 @@ function CompatibleSheetModal({
   const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const geometry = useAdaptiveWindow();
-  const keyboard = useMobileKeyboardState();
-  const { region, floating } = modalLayout(geometry, keyboardAvoiding && Platform.OS !== 'android' ? keyboard.height : 0);
-  const displaced = floating || geometry.regions.length > 0 || geometry.barEdge !== 'none'
-    || geometry.insets.left > 0 || geometry.insets.right > 0;
   const [contentHeight, setContentHeight] = useState(geometry.height);
   // 背板淡入 + 面板滑入共用一条 progress;关闭淡出/滑出播完后再卸载 Modal。
   // sheet 是重浮层:入场 motionDuration.enter / 退场 exit(§14.4);减弱动态效果(含未查询到的
@@ -92,6 +88,12 @@ function CompatibleSheetModal({
     outMs: reduceMotion === false ? motionDuration.exit : 0,
     onClosed,
   });
+  // Closed sheets (including each message's action menu) must not subscribe.
+  // Keep avoidance through the exit animation; Android uses native resize.
+  const keyboard = useMobileKeyboardState(keyboardAvoiding && (visible || mounted) && Platform.OS !== 'android');
+  const { region, floating } = modalLayout(geometry, keyboard.height);
+  const displaced = floating || geometry.regions.length > 0 || geometry.barEdge !== 'none'
+    || geometry.insets.left > 0 || geometry.insets.right > 0;
 
   // 快速重开的高度残留窗口:拖拽下拉 dismiss 会让 SheetSurface 内部 heightAnim 停在低位;
   // 若用户在 ~120ms 淡出播完前重新打开,children 一直没卸载,面板会卡在残高。

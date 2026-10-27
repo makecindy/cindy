@@ -65,6 +65,16 @@ it('keeps cached content and leaves recovery probing to main while a device is u
   expect(invoke).toHaveBeenCalledOnce();
 });
 
+it('marks periodic and archived reads as background while keeping initial reads foreground', async () => {
+  invoke.mockResolvedValue([]);
+  const initial = did();
+  const periodic = did();
+  await refreshRemoteDeviceSessions(initial);
+  await refreshRemoteDeviceSessions(periodic, undefined, { coalescingMode: 'weak' });
+  expect(invoke.mock.calls.find(([peer]) => peer === initial)?.[3]).toEqual({ background: false });
+  expect(invoke.mock.calls.find(([peer]) => peer === periodic)?.[3]).toEqual({ background: true });
+});
+
 it('stops an existing retry chain as soon as main opens the circuit', async () => {
   const device = did();
   invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] timeout'));
@@ -672,7 +682,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       200,
       'active',
       { includePinned: true, fresh: true },
-    ]);
+    ], { background: false });
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual([
       'recent-1',
       'recent-2',
@@ -694,7 +704,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       1000,
       'archived',
       { includePinned: true, fresh: true },
-    ]);
+    ], { background: true });
     expect(remoteProjectsStore.getDeviceSessions(d, 'active').map((s) => s.id)).toEqual([
       'active-1',
     ]);
@@ -771,7 +781,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       1000,
       'archived',
       { includePinned: true, fresh: true },
-    ]);
+    ], { background: true });
   });
 
   it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
@@ -1019,7 +1029,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       200,
       'active',
       { includePinned: true, fresh: true },
-    ]);
+    ], { background: false });
 
     invoke.mockClear();
     invoke.mockResolvedValue([]);
@@ -1031,7 +1041,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       200,
       'active',
       { includePinned: true },
-    ]);
+    ], { background: true });
   });
 
   it('同设备补跑排队时立即作废当前 snapshot,避免旧结果短暂覆盖 push 状态', async () => {
@@ -1085,6 +1095,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       'active',
       { includePinned: true, fresh: true },
     ]);
+    expect(invoke.mock.calls[1]?.[3]).toEqual({ background: false });
   });
 
   it('事件型 refresh 在途时弱周期 tick 直接复用，不补跑也不取消当前请求', async () => {

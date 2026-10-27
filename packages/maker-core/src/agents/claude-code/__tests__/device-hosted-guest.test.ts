@@ -134,7 +134,7 @@ const HOST_MODELS = ['shared/model-a', 'shared/model-b', 'other/model-c'].map((i
 
 async function startHostedSession(
   guest: boolean,
-  overrides: { guestProvider?: DeviceHostedGuestProvider | null; providerId?: string } = {},
+  overrides: { guestProvider?: DeviceHostedGuestProvider | null; providerId?: string; local?: boolean } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -160,7 +160,11 @@ async function startHostedSession(
   };
   const deps: AgentDeps = {
     auth,
-    runtimeConfig: { systemPrompt: 'GLOBAL CINDY HOST PROMPT', subagentModel: 'other/model-c' },
+    runtimeConfig: {
+      systemPrompt: 'GLOBAL CINDY HOST PROMPT',
+      subagentModel: 'other/model-c',
+      taskShellEnv: ({ sessionId }) => ({ CINDY_INPUT_HANDOFF_ROUTE: `route-${sessionId}` }),
+    },
     capabilityAdditions: { availableModels: HOST_MODELS },
     binaryPath: process.execPath,
     logger: createNoopLogger(),
@@ -195,7 +199,7 @@ async function startHostedSession(
     providerId: overrides.providerId ?? 'shared-provider',
     workingDir,
     permissionMode: 'acceptEdits',
-    deviceHosted,
+    ...(overrides.local ? {} : { deviceHosted }),
   });
   liveHandles.push(handle);
   const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as CapturedOptions | undefined;
@@ -285,5 +289,12 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b', 'other/model-c']);
     expect(options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe('other/model-c');
+  });
+
+  it('gives terminal password prompts to the owner only for tasks running on this computer', async () => {
+    expect((await startHostedSession(false)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
+    expect((await startHostedSession(true)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
+    const { options } = await startHostedSession(false, { local: true });
+    expect(options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBe('route-hosted-session');
   });
 });

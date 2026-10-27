@@ -85,12 +85,16 @@ export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
  */
 export const PI_PROXY_DERIVATION_KEY_STORAGE_KEY = 'pi_proxy_derivation_key';
 
+/** Host-only key for persisted MCP App configuration revisions, never synced. */
+export const MCP_APP_REVISION_KEY_STORAGE_KEY = 'mcp_app_revision_key';
+
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
   STORAGE_KEYS['gemini'].toLowerCase(),
   STORAGE_KEYS['openai-images'].toLowerCase(),
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY.toLowerCase(),
+  MCP_APP_REVISION_KEY_STORAGE_KEY.toLowerCase(),
 ]);
 
 /** Custom-provider runtime header blobs are main-only credential material. */

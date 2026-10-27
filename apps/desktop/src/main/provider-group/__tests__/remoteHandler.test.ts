@@ -69,6 +69,7 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
     markTried: vi.fn(() => new Set<string>()),
     triedThisTurn: vi.fn(() => new Set<string>()),
     resetTurn: vi.fn(),
+    rebalanceCandidates: vi.fn(() => []),
   } satisfies ProviderGroupRouter;
   const value = {
     scope: () => ({ router, externalLoad, isCurrent: () => ownerCurrent }),
@@ -91,6 +92,48 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  it('tries another member when the selected executor cannot acknowledge a prohibited Fast policy', async () => {
+    const bind = vi.fn().mockRejectedValueOnce(Error('[REMOTE_AGENT_PEER_TOO_OLD] update')).mockResolvedValue(undefined);
+    const d = deps({ bindFastPolicy: bind });
+    d.router.pick.mockResolvedValueOnce({ kind: 'member', member: MINI, label: 'Mini', resolved: [] })
+      .mockResolvedValueOnce({ kind: 'member', member: CONFIG.members[0], label: 'Local', resolved: [] });
+    expect(await handleProviderGroupRemote(d, 'laptop', { ...PICK, exclude: [] })).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(d.router.pick.mock.calls[1][0].exclude?.has(MINI.key)).toBe(true);
+    expect(bind).toHaveBeenLastCalledWith({ group: 'anthropic', deviceId: null, sessionId: 's1', controllerDeviceId: 'laptop' });
+  });
+  // Unit/protocol: old owners ignored the final rebalance constraints. Verify the real wire and acknowledgement.
+  it('requires the owner to acknowledge the rebalance constraint before accepting its pick', async () => {
+    const d = deps();
+    let legacy = false;
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => {
+      const result = await handleProviderGroupRemote(d, 'laptop', args[0]);
+      if (legacy && result && typeof result === 'object') delete (result as { quotaRebalance?: unknown }).quotaRebalance;
+      return { ok: true, result };
+    });
+    const input = { ...PICK, agentKind: 'claude-code' as const, quotaRebalance: 'local' };
+    expect(await client.pick('mini', input)).toMatchObject({ kind: 'member', member: { key: MINI.key } });
+    expect(d.router.pick).toHaveBeenLastCalledWith(expect.objectContaining({ quotaRebalance: 'local' }));
+    legacy = true;
+    expect(await client.pick('mini', input)).toEqual({ kind: 'none' });
+    expect(await client.pick('mini', { ...PICK, agentKind: 'claude-code' })).toMatchObject({ kind: 'member' });
+  });
+
+  it('carries the confirmed message id to the task host', async () => {
+    const rebalanceDecision = vi.fn(async () => true);
+    const d = deps({ rebalanceDecision });
+    await handleProviderGroupRemote(d, 'laptop', { action: 'rebalance-decision', sessionId: 's1', memberKey: MINI.key, remember: false, clientId: 'message-a' });
+    expect(rebalanceDecision).toHaveBeenCalledWith('s1', MINI.key, false, 'message-a');
+  });
+
+  // Unit protocol regression: the real host/client used to discard the reset at both boundaries.
+  it.each([null, 5_000_000])('preserves verified quota exhaustion across computers (reset=%s)', async (resetAtMs) => {
+    const d = deps();
+    d.router.pick.mockResolvedValueOnce({ kind: 'unavailable', resolved: [], usageLimit: { resetAtMs } } as never);
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
+    }));
+    expect(await client.pick('mini', { ...PICK, agentKind: 'claude-code' })).toEqual({ kind: 'unavailable', usageLimit: { resetAtMs } });
+  });
   it('carries the optional detail request across the same-account client and host without probing on ordinary reads', async () => {
     const d = deps();
     const invoke = vi.fn<ProviderGroupRemoteInvoke>(async (_device, _channel, args) => ({
@@ -101,6 +144,19 @@ describe('provider-group:remote', () => {
     expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { includeGuestSupport: true });
     await client.view('mini', 'anthropic');
     expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { includeGuestSupport: false });
+  });
+
+  // Unit/protocol: a bridge/Pi pre-send read must reach the owner with its harness to select WHAM.
+  // Legacy model-only reads remain valid; invalid harness values cannot become quota selectors.
+  it('carries the optional quota harness through the real client/parser/host path', async () => {
+    const d = deps();
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
+    }));
+    await client.view('mini', 'anthropic', { model: 'gpt-5.3-codex', agentKind: 'pi' });
+    expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { model: 'gpt-5.3-codex', agentKind: 'pi', includeGuestSupport: false });
+    expect(() => parseProviderGroupRemoteRequest({ action: 'view', providerId: 'openai', agentKind: 'unknown' }))
+      .toThrow();
   });
 
   it('only requests compatibility diagnostics when asked and discards a late reply after switching accounts', async () => {
@@ -165,14 +221,40 @@ describe('provider-group:remote', () => {
 
   it('cools computers for usage limits up to a bounded reset time, and briefly for other causes', async () => {
     const d = deps();
-    await handleProviderGroupRemote(d, 'laptop', { action: 'cool', providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit', resetAt: 50_000 });
-    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 50_000);
-    await handleProviderGroupRemote(d, 'laptop', { action: 'cool', providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit', resetAt: 10_000 + 365 * 86_400_000 });
-    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS);
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
+    }));
+    const input = { providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit' as const, model: 'claude-fable-5' };
+    await client.cool('owner', { ...input, resetAt: 50_000 });
+    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 50_000, input.model);
+    await client.cool('owner', { ...input, resetAt: 10_000 + 365 * 86_400_000 });
+    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS, input.model);
+    await client.cool('owner', input);
+    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, input.model);
     await handleProviderGroupRemote(d, 'laptop', { action: 'cool', providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit' });
-    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_FAILURE_COOLDOWN_MS, undefined);
     await handleProviderGroupRemote(d, 'laptop', { action: 'cool', providerId: 'anthropic', memberKey: MINI.key, cause: 'auth' });
-    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_FAILURE_COOLDOWN_MS);
+    expect(d.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 10_000 + PROVIDER_GROUP_FAILURE_COOLDOWN_MS, undefined);
+  });
+
+  it('only falls back to a short cooldown when an old owner rejects model-scoped reports', async () => {
+    const invoke = vi.fn<ProviderGroupRemoteInvoke>()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'INVALID_PARAMS', message: 'unknown provider group action' } })
+      .mockResolvedValueOnce({ ok: true, result: {} });
+    const now = Date.now();
+    await createProviderGroupRemoteClient(invoke).cool('owner', {
+      providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit', model: 'fable', resetAt: now + 86_400_000,
+    });
+    expect(invoke.mock.calls[0][2][0]).toMatchObject({ action: 'cool-model', model: 'fable' });
+    const fallback = invoke.mock.calls[1][2][0] as { action: string; resetAt: number };
+    expect(fallback.action).toBe('cool');
+    expect(fallback.resetAt).toBeGreaterThanOrEqual(now);
+    expect(fallback.resetAt).toBeLessThanOrEqual(Date.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS);
+    invoke.mockReset().mockResolvedValue({ ok: false, error: { message: 'offline' } });
+    await expect(createProviderGroupRemoteClient(invoke).cool('owner', {
+      providerId: 'anthropic', memberKey: MINI.key, cause: 'usage-limit', model: 'fable',
+    })).rejects.toThrow('offline');
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('refuses to cool computers outside the group and rejects causes it does not cool for', async () => {
@@ -522,7 +604,7 @@ describe('完整用量报告分批传输', () => {
 });
 
 describe('decorateProviderListWithGroups', () => {
-  it('adds the group summary only to providers that have a group and stay open for remote use', () => {
+  it('adds group summaries even when remote use is closed, while keeping running counts restricted', () => {
     const result = decorateProviderListWithGroups({
       providers: [
         { id: 'anthropic', remoteInvocationEnabled: true },
@@ -540,9 +622,9 @@ describe('decorateProviderListWithGroups', () => {
         { key: MINI.key, kind: 'device', agentDeviceId: 'mini', providerId: MINI.providerId, label: 'Mini', paused: false },
       ],
     });
-    // 只有本机设置能产生组摘要；没开放的不带。
+    // 只有本机设置能产生组摘要；关闭远程调用的组仍需保留管理入口。
     expect(result.providers[1]).not.toHaveProperty('group');
-    expect(result.providers[2]).not.toHaveProperty('group');
+    expect(result.providers[2].group).toEqual(result.providers[0].group);
   });
 
   it('leaves the sharer’s computer name out of shared members', () => {
@@ -585,5 +667,23 @@ describe('sharedProviderGroupSize', () => {
     expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => true }, 'anthropic')).toBe(2);
     expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => true }, 'openai')).toBeNull();
     expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => false }, 'anthropic')).toBeNull();
+  });
+
+  it('counts computers, not accounts: several accounts on one computer are one computer for guests', () => {
+    const share = (id: string, providerId: string): ProviderGroupMember => ({
+      key: `share:${id}:${providerId}`, kind: 'share', agentDeviceId: `share:${id}`, providerId,
+      hostDeviceId: 'kai-pc', limit: 4, weight: 1, paused: false,
+    });
+    const config: ProviderGroupConfig = {
+      ...CONFIG,
+      members: [
+        ...CONFIG.members,
+        { ...MINI, key: 'device:mini:anthropic-b', providerId: 'anthropic-b' },
+        share('s1', 'anthropic'),
+        share('s2', 'anthropic-x'),
+      ],
+    };
+    // 本机 + Mini(两个账号) + Kai 的那台(两个分享) = 3 台。
+    expect(sharedProviderGroupSize({ readGroup: () => config, isRemoteAllowed: () => true }, 'anthropic')).toBe(3);
   });
 });

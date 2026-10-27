@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { Button } from '@/components/ui/button';
 /**
@@ -27,7 +28,7 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useState } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { FileText, TriangleAlert, Undo2 } from 'lucide-react';
+import { FileText, Undo2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
@@ -392,25 +393,7 @@ function BodyDefault({ files }: { files: string[] }) {
 }
 
 function BodyError({ errorText }: { errorText: string }) {
-  return (
-    <div
-      className={cn(
-        'rounded-lg p-3',
-        'bg-[var(--error-bg)]',
-        'border border-[var(--error-border)]',
-        'flex items-start gap-2.5',
-      )}
-    >
-      <TriangleAlert
-        size={16}
-        strokeWidth={2}
-        className="mt-0.5 shrink-0 text-[var(--error-fg)]"
-      />
-      <div className="font-mono text-13 leading-[1.5] text-[var(--error-fg-strong)]">
-        {errorText}
-      </div>
-    </div>
-  );
+  return <ErrorNotice message={errorText} />;
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────

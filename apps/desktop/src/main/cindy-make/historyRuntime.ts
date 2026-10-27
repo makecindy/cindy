@@ -29,6 +29,7 @@ import type { CindyMakeMergeState } from '../../shared/cindyMakeMerge.js';
 import type { MakeTestContext } from './testController.js';
 import { manageCindyMakeTask } from './taskManagement.js';
 import { historyBuildRollback, rollbackUnbuiltHistory } from './buildRollback.js';
+import { recordPendingBuild } from './pendingBuild.js';
 import { makeBuildErrorDiagnostic } from './buildDiagnostic.js';
 import { actCindyMakeTest, cindyMakeTestController } from './testRuntime.js';
 import {
@@ -446,11 +447,19 @@ async function readCindyMakeHistory(
         const legacy = await readLegacyFeatureReceipts(record, git, source);
         h.check();
         for (const receipt of legacy) {
-          h.store.receipt(record.runId, receipt);
-          record.receipts.push(receipt);
           const built = record.completions.find(
             (entry) => entry.personal?.commit === receipt.commit,
           )?.personal;
+          // A legacy integration that is still unbuilt counts as pending just
+          // like a new one: the source carries it, and a failed generation could
+          // still undo it (see `pendingBuild`).
+          if (!built)
+            recordPendingBuild(makeSourceRoot(h.userData), {
+              commit: receipt.commit,
+              tree: receipt.tree,
+            });
+          h.store.receipt(record.runId, receipt);
+          record.receipts.push(receipt);
           if (built)
             h.store.version(record.runId, {
               operationId: receipt.id,
@@ -634,7 +643,8 @@ async function readCindyMakeHistory(
         !operation &&
         !taskBuilding &&
         test?.status !== 'starting' &&
-        ['unintegrated', 'changed', 'reverted'].includes(integration),
+        // An undone change is restored only by its own Restore action, never by a batch build.
+        ['unintegrated', 'changed'].includes(integration),
       canHide: !targetBusy && !['starting', 'ready'].includes(test?.status ?? ''),
     });
   }
@@ -1130,8 +1140,11 @@ export async function generateHistoryPersonalVersion(
           h.check,
           (run) => cindyMakeManager.withProject(makeSourceRoot(h.userData), run),
           {
-            ...historyBuildRollback(h.store, makeSourceCheckoutPath(h.userData), (commit) =>
-              hasPublishedPersonalVersionCommit(h.userData, commit),
+            ...historyBuildRollback(
+              h.store,
+              makeSourceCheckoutPath(h.userData),
+              (commit) => hasPublishedPersonalVersionCommit(h.userData, commit),
+              makeSourceRoot(h.userData),
             ),
             features: () =>
               h.store.list().flatMap((record) => {
@@ -1216,8 +1229,12 @@ export async function recoverHistoryBuildRollback(rollbackUnbuilt = false): Prom
         );
       };
       const published = (commit: string) => hasPublishedPersonalVersionCommit(h.userData, commit);
-      if (rollbackUnbuilt) await rollbackUnbuiltHistory(h.store, source, git, published);
-      else await historyBuildRollback(h.store, source, published).recoverRollback(git);
+      if (rollbackUnbuilt)
+        await rollbackUnbuiltHistory(h.store, source, git, published, makeSourceRoot(h.userData));
+      else
+        await historyBuildRollback(h.store, source, published, makeSourceRoot(h.userData)).recoverRollback(
+          git,
+        );
     });
   } catch {
     throw personalBuildError('cleanupFailed');

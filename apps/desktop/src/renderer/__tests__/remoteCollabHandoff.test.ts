@@ -234,6 +234,7 @@ describe('enableRemoteCollabForSession', () => {
     // 链路「可连但每个 invoke 都黑洞」:每次回查自己要走满 30s 隧道超时。只限次数的话
     // 6 次串行 ≈ 3 分钟,而这段时间 composer 是锁住的、首轮压着不发(codex P2 第五轮)。
     enableOrca.mockRejectedValue(timeoutError());
+    vi.useFakeTimers();
     listWorkersByLead.mockImplementation(
       () =>
         new Promise((_resolve, reject) => {
@@ -241,7 +242,6 @@ describe('enableRemoteCollabForSession', () => {
         }),
     );
 
-    vi.useFakeTimers();
     const pending = enableRemoteCollabForSession(params);
     const assertion = expect(pending).rejects.toThrow('DEVICE_LINK_TIMEOUT');
     // 推进远超 6×(30s+3s) 的时间,确认它早就按 deadline 停了而不是跑满次数。

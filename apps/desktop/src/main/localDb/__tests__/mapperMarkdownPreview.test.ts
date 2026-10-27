@@ -73,3 +73,12 @@ describe('sidebar Markdown preview', () => {
     expect(finalizePlainPreview(text, 'assistant')).toBe(expected);
   });
 });
+it('uses component prose instead of internal operation JSON in answer previews', () => {
+  const source = '```cindy-ui\n' + JSON.stringify({ seq: 1, op: 'create', id: 'heading', kind: 'heading', props: { text: '费用比较' } }) + '\n' + JSON.stringify({ seq: 2, op: 'create', id: 'stat', kind: 'stat', props: { label: '按年', value: 180, prefix: '¥' } }) + '\n' + JSON.stringify({ seq: 3, op: 'create', id: 'extra', kind: 'check', props: { label: '附加服务', default: false } }) + '\n```';
+  const result = extractMessagePreview(JSON.stringify(source), 'assistant');
+  expect(result).toContain('费用比较');
+  expect(result).toContain('¥180');
+  expect(result).not.toContain('"seq"');
+  expect(result).toContain('☐ 附加服务');
+  expect(result).not.toContain('false');
+});

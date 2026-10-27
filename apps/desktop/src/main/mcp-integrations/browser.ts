@@ -11,12 +11,18 @@ import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
+  browserUploadDirectory,
   setBrowserControlRuntimeConfig,
   type BrowserProxyRoute,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
+import type { BrowserMcpDeps } from '@cindy/mcps';
+
 import { createLogger } from '../logger.js';
+import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
+import { createRecipeFileBroker } from './browser-backend/rsb-webview-upload-policy.js';
+import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
@@ -29,6 +35,7 @@ import {
   type BrowserBackend,
 } from './browser-backend/index.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
+import type { RsbBrowserBridgeTabOp } from '../../shared/rsbBrowserBridge.js';
 import {
   readBrowserBackendSettings,
   writeBrowserBackendKind,
@@ -62,7 +69,10 @@ import {
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
+import { hasSecretPages, isSecretPage } from '../input-handoff/secretTaint.js';
 import {
   BrowserOpenForLoginError,
   browserOpenForLoginErrorCodeFromData,
@@ -273,10 +283,11 @@ function createRsbBackend(): RsbWebviewBackend {
       // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
       // window is available the dispatch lands cleanly, before that the request
       // rejects with `host renderer not available`.
-      getHostWebContents: () => {
+      getHostWebContents: (op) => {
         // bootstrap-electron owns mainWindowRef; we read it through the public
-        // helper to avoid a circular import.
-        const win = readMainWindowForBackend();
+        // helper to avoid a circular import. The op lets bootstrap route tab-ops
+        // for popped-out tabs to the window that actually hosts them.
+        const win = readMainWindowForBackend(op);
         return win;
       },
       // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
@@ -323,17 +334,19 @@ const browserBackendHealthService = new BrowserBackendHealthService(backendContr
  * `setMainWindowAccessorForBackend`. Without this the RsbWebviewBackend has
  * no way to reach the renderer for tab-op dispatch.
  */
-let mainWindowAccessor: () => Electron.WebContents | null = () => null;
+type HostWebContentsAccessor = (op?: RsbBrowserBridgeTabOp) => Electron.WebContents | null;
 
-function readMainWindowForBackend(): Electron.WebContents | null {
-  return mainWindowAccessor();
+let mainWindowAccessor: HostWebContentsAccessor = () => null;
+
+function readMainWindowForBackend(op?: RsbBrowserBridgeTabOp): Electron.WebContents | null {
+  return mainWindowAccessor(op);
 }
 
 /**
  * Bootstrap hook. Called from `bootstrap-electron.ts` once `mainWindowRef` is
  * known. Idempotent re-binds are safe.
  */
-export function setMainWindowAccessorForBackend(accessor: () => Electron.WebContents | null): void {
+export function setMainWindowAccessorForBackend(accessor: HostWebContentsAccessor): void {
   mainWindowAccessor = accessor;
 }
 
@@ -442,16 +455,41 @@ export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
  * BrowserControlRuntime contract so the desktop host does not depend on an
  * upstream product API or product-facing name.
  */
+function browserRecipeSecretId(key: string): string {
+  if (!['spotify', 'xiaoyuzhou'].includes(key)) throw new Error('Unknown browser recipe credential');
+  return `browser-recipe-${key}`;
+}
+
 export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
+  resolveScreenshot: NonNullable<BrowserMcpDeps['resolveScreenshot']>;
+  compressInlineImage: NonNullable<BrowserMcpDeps['compressInlineImage']>;
   setBackend(kind: BackendKind): Promise<BackendKind>;
   supportsResourceDownloads(): boolean;
   supportsSemanticQueries(): boolean;
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  recipeSecrets: { read(key: string): string | null; write(key: string, value: string): boolean };
+  recipeFiles: NonNullable<BrowserMcpDeps['recipeFiles']>;
+  pageReadsRestricted(target: { profile?: string; targetId?: string }): Promise<boolean>;
 } {
   return {
+    recipeFiles: async (sessionId) => {
+      const sessionRoots = sessionId ? await resolveSessionUploadRoots(sessionId) : [];
+      const roots = sessionId ? [
+        artifactSessionRoot(nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'), sessionId),
+        ...sessionRoots,
+      ] : [];
+      // Both backends keep invocation copies under their existing upload root.
+      // A checked path grants metadata inspection, never subsequent writes.
+      return createRecipeFileBroker(roots, sessionRoots, sessionId ? (backendController.kind === 'external'
+        ? artifactSessionRoot(browserUploadDirectory, sessionId) : roots[0]) : undefined);
+    },
+    recipeSecrets: {
+      read: (key) => genericOAuthSecretIo.readStrict(browserRecipeSecretId(key)),
+      write: (key, value) => genericOAuthSecretIo.write(browserRecipeSecretId(key), value),
+    },
     setBackend: async (kind) => {
       await setActiveBrowserBackendKind(kind);
       return backendController.getCurrentBackendKind();
@@ -465,8 +503,24 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    resolveScreenshot: (result) =>
+      resolveBrowserScreenshot(result, {
+        runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,
+      }),
+    compressInlineImage,
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
+    // 代输入: pause page-state reads on a tab still showing a page where the owner typed a secret.
+    pageReadsRestricted: async ({ profile, targetId }) => {
+      if (!hasSecretPages()) return false;
+      const listed = await backendController.call({ action: 'tabs', ...(profile ? { profile } : {}) });
+      if (!listed.ok) return true;
+      const tabs = (listed.data as { tabs?: Array<{ targetId?: unknown; url?: unknown }> } | undefined)?.tabs ?? [];
+      // Without a target the runtime acts on its last tab; check every tab conservatively.
+      return tabs
+        .filter((tab) => !targetId || tab.targetId === targetId)
+        .some((tab) => typeof tab.url === 'string' && isSecretPage(tab.url));
+    },
     logger,
   };
 }

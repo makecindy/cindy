@@ -83,8 +83,8 @@ export function controlledTaskAgentLocationReadable(input: {
  * 被控电脑上的任务(已建任务或新建任务草稿)可以让 Agent 去哪些电脑:本机的可选设备(已排除本机与
  * 手机)里去掉被控电脑本身,留下在线的,以及任务当前 / 挂着的 Agent 所在电脑(离线也保留,让用户
  * 看得到、换得回来)。
- * 分享只列任务当前 / 挂着的 Agent 所在、本机也读得到的那条(shareDevices,接在最后),让模型按钮按
- * 分享的目录显示、面板里看得到它;其他分享不作为新的落点列出。
+ * 分享按账号授予，但跨区连接启用状态按设备保存。shareDevices 接在最后，
+ * 由 useProviderShareAgentDevices 交叉核对两端名单，并保留当前 / 挂着的位置供用户换走。
  */
 export function selectControlledTaskAgentDevices(input: {
   devices: readonly { deviceId: string; name: string; online: boolean }[];

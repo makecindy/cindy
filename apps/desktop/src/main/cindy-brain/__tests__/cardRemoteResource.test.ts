@@ -4,12 +4,106 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcast
 import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
+import { buildAttachmentOssRef } from '@cindy/device-link';
+import { renderMailCard } from '../mailCards';
+import { parseMailAttachmentUpload } from '../mailAttachmentUpload';
+import { configureMailAttachmentHost, prepareMailAttachmentUpload } from '../mailAttachmentUpload';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+const uploadFixture = vi.hoisted(() => ({ materialize: vi.fn() }));
 const image = `cindy-media://blobs/${'b'.repeat(64)}.png`;
 const audio = `cindy-media://blobs/${'c'.repeat(64)}.mp3`;
 const request = { ref: { collectionId: 'plugin-results', kind: 'card', id: JSON.stringify(['s', 'c']) }, client: { protocolVersion: 1, primitives: [] } };
 const context = { controllerDeviceId: 'phone' };
 
+it('mail imports reuse task attachment cleanup and verify downloaded bytes before provider delivery', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mail-upload-test-'));
+  try {
+    const file = path.join(dir, 'plan.pdf'), bytes = Buffer.from('test attachment');
+    await fs.writeFile(file, bytes);
+    const accepted = vi.fn(), discard = vi.fn(async () => {});
+    uploadFixture.materialize.mockResolvedValue({ message: { content: [{ type: 'file', path: file }] },
+      cleanupAfterAcceptance: accepted, cleanupBeforeAcceptance: discard });
+    const upload = { name: 'plan.pdf', url: buildAttachmentOssRef({ ossKey: 'fixture', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }) };
+    configureMailAttachmentHost({ writeTempFile: vi.fn(), materializeDirectSendOssAttachments: uploadFixture.materialize });
+    const result = await prepareMailAttachmentUpload(upload, 'task');
+    expect(uploadFixture.materialize).toHaveBeenCalledWith('task', expect.objectContaining({ type: 'user' }), {});
+    expect(result.attachment).toMatchObject({ path: file, filename: 'plan.pdf', bytes: bytes.length });
+    result.accepted(); expect(accepted).toHaveBeenCalledOnce(); expect(discard).not.toHaveBeenCalled();
+    await fs.writeFile(file, 'wrong bytes');
+    await expect(prepareMailAttachmentUpload(upload, 'task')).rejects.toThrow('MAIL_ATTACHMENT_INTEGRITY');
+    expect(discard).toHaveBeenCalledOnce();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+it('projects phone attachment support and rejects local paths, oversized uploads and terminal drafts', async () => {
+  const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'self@example.test',
+    state: 'draft' as const, status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [],
+    fields: [...['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name })),
+      { name: 'attachmentItems', label: 'Files', value: '[]', kind: 'mail-attachments' as const }] };
+  let html = renderMailCard(mail);
+  const dispatch = vi.fn(async () => true);
+  const provider = createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 100 }),
+    authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch },
+  });
+  const resource = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms'] } });
+  expect(resource.blocks?.[0].data).toHaveProperty('mailUpload', true);
+  const upload = { name: 'plan.pdf', url: buildAttachmentOssRef({ ossKey: 'fixture', size: 100, sha256: 'a'.repeat(64), mimeType: 'application/pdf' }) };
+  const values = Object.fromEntries(mail.fields.map(f => [f.name, f.value]));
+  const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: `mail:attach:${mail.key}`,
+    input: { revision: resource.revision, pageId: 'page', mailAttachment: upload, formValues: values } };
+  await provider.invoke!(context, base);
+  expect(dispatch).toHaveBeenLastCalledWith('c', base.actionId, undefined, 'page', 'mail', 'phone', values, false, upload);
+  for (const invalid of [{ ...upload, url: '/private/mail.pdf' }, { ...upload, name: '../secret' },
+    { ...upload, url: buildAttachmentOssRef({ ossKey: 'large', size: 17 * 1024 * 1024, sha256: 'a'.repeat(64) }) }]) {
+    expect(parseMailAttachmentUpload(invalid)).toBeNull();
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, mailAttachment: invalid } })).rejects.toThrow();
+  }
+  html = renderMailCard({ ...mail, state: 'deleted' });
+  await expect(provider.invoke!(context, base)).rejects.toThrow();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
 describe('native mobile card actions', () => {
+  it('accepts edits across autosave revisions but rejects replaced form identities and forged actions', async () => {
+    const fields = JSON.stringify([{ name: 'body', label: 'Message', value: 'Saved' }]).replace(/"/g, '&quot;');
+    let html = `<div data-ghost-form="${fields}" data-ghost-change="change:one">Saved</div><button data-ghost-action="send:one" data-ghost-submit="true">Send</button>`;
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({ readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 100 }),
+      authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch } });
+    const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'change:one',
+      input: { revision: 'earlier-save', pageId: 'page', formChange: true, formValues: { body: 'Latest' } } };
+    await provider.invoke!(context, base);
+    expect(dispatch).toHaveBeenLastCalledWith('c', 'change:one', undefined, 'page', 'mail', 'phone', { body: 'Latest' }, true);
+    await provider.invoke!(context, { ...base, actionId: 'send:one', input: { ...base.input, formChange: false, formKey: 'change:one' } });
+    await expect(provider.invoke!(context, { ...base, actionId: 'forged' })).rejects.toThrow();
+    html = html.replaceAll(':one', ':two');
+    await expect(provider.invoke!(context, base)).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+  it('projects editable fields and rejects old-client, partial and stale submissions', async () => {
+    const form = [{ name: 'body', label: 'Message', value: 'Original', multiline: true }];
+    const html = `<div data-ghost-form="${JSON.stringify(form).replace(/"/g, '&quot;')}">Original</div><button data-ghost-action="send" data-ghost-submit="true">Send</button>`;
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({ readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'mail', html, v: 2, height: 160 }),
+      authorize: async () => {}, captureScope: () => () => true, interactions: { externalLinks: () => false, dispatch } });
+    const legacy = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions'] } });
+    expect(legacy.blocks?.find(block => block.id === 'text')?.fallbackMarkdown).toContain('Original');
+    expect(legacy.blocks?.find(block => block.id === 'actions')?.data).toEqual(expect.objectContaining({ items: [expect.objectContaining({ disabled: true })] }));
+    const resource = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms'] } });
+    expect(resource.blocks?.find(block => block.id === 'actions')?.data).toEqual(expect.objectContaining({ form }));
+    expect(resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown).not.toContain('Original');
+    const base = { client: request.client, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'send', input: { revision: resource.revision, pageId: 'page' } };
+    for (const values of [undefined, {}, { extra: 'text' }, { body: 'x'.repeat(16001) }])
+      await expect(provider.invoke!(context, { ...base, input: { ...base.input, formValues: values } })).rejects.toThrow();
+    await provider.invoke!(context, { ...base, input: { ...base.input, formValues: { body: 'Edited' } } });
+    expect(dispatch).toHaveBeenCalledWith('c', 'send', undefined, 'page', 'mail', 'phone', { body: 'Edited' });
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: 'old', formValues: { body: 'Edited' } } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
   it('projects declared buttons and approved links, preserving required text input and disabled state', () => {
     const html = '<button data-ghost-action="edit" data-ghost-prompt="Describe &amp; edit">Edit <b>image</b></button><button data-ghost-action="delete" disabled>Delete</button><a data-ghost-link="https://example.com/?a=1&amp;b=2">Visit</a>';
     expect(projectGhostCardActions(html, false)).toEqual([
@@ -33,7 +127,7 @@ describe('native mobile card actions', () => {
     await expect(provider.invoke!(context, { ...base, actionId: 'forged' })).rejects.toThrow();
     await expect(provider.invoke!(context, { ...base, input: { ...base.input, prompt: '' } })).rejects.toThrow();
     await provider.invoke!(context, base);
-    expect(dispatch).toHaveBeenCalledWith('c', 'edit', 'Change it', 'page', 'art', 'phone');
+    expect(dispatch).toHaveBeenCalledWith('c', 'edit', 'Change it', 'page', 'art', 'phone', undefined);
     html = '<p>Changed</p>';
     await expect(provider.invoke!(context, base)).rejects.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);

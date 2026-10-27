@@ -4,11 +4,14 @@ import { useTranslation } from 'react-i18next';
 import type { MobileCodexRateLimitResetCredit, MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { Button } from '@/components/ui/button';
 import { Collapse } from '@/components/ui/collapse';
+import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { formatQuotaResetAt } from './usageCardModel';
 
 /** Shared reset list for provider settings and the usage dialog. */
-export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, onReset, variant }: {
+export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, onReset, variant, providerId = 'openai', onChanged }: {
   variant: 'embedded' | 'dialog';
+  providerId?: string;
+  onChanged?: () => void;
   snapshot: MobileCodexRateLimitsResult | null;
   busy: boolean;
   canReset: boolean;
@@ -22,7 +25,7 @@ export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, 
   const panelId = useId();
   const credits = snapshot?.rateLimitResetCredits;
   const retryOnly = snapshot?.resetOffer?.retryOnly === true;
-  if (!credits && !retryOnly) return null;
+  if (!credits && !retryOnly && !snapshot?.autoUse) return null;
   const now = Date.now();
   const available = (credits?.credits ?? [])
     .filter(credit => credit.status === 'available' && credit.resetType === 'codexRateLimits'
@@ -62,7 +65,7 @@ export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, 
         </div>
       ) : null}
       {!canReset && !retryOnly && availableCount > 0 ? (
-        <p className="mt-2 text-12 text-[var(--text-secondary)]">{t('codexResets.availableAtLimit')}</p>
+        <p className="mt-2 text-12 text-[var(--text-secondary)]">{t('codexResets.detailsUnavailable')}</p>
       ) : null}
       {available.length > 0 && availableCount > 0 ? (
         <ul className="mt-2 divide-y divide-[var(--border-default)]">
@@ -101,15 +104,18 @@ export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, 
     <section className={embedded ? 'mx-4 mt-2 border-t border-[var(--border-default)] pt-3' : undefined} aria-label={t('codexResets.title')}>
       {embedded ? (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
           <button type="button" id={triggerId} aria-expanded={expanded} aria-controls={panelId}
             onClick={() => setExpanded(value => !value)}
-            className="flex min-h-7 w-full items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]">
+            className="flex min-h-8 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]">
             <span className="flex items-center gap-1.5 text-14 font-medium text-[var(--text-primary)]">
               <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${expanded ? 'rotate-90' : ''}`} aria-hidden="true" />
               {t('codexResets.title')}
             </span>
             {count}
           </button>
+          {snapshot?.autoUse && onChanged && <CodexResetAutoUseControl key={`${providerId}:${snapshot.autoUse.accountKey}`} state={snapshot.autoUse} providerId={providerId} onChanged={onChanged} />}
+          </div>
           <Collapse open={expanded} id={panelId} role="region" aria-labelledby={triggerId}>
             {content}
           </Collapse>
@@ -118,7 +124,7 @@ export function CodexResetCredits({ snapshot, busy, canReset, canRetry = false, 
         <>
           <div className="flex items-center justify-between gap-3 pr-8">
             <h3 className="text-18 font-medium text-[var(--confirm-title)]">{t('codexResets.title')}</h3>
-            {count}
+            {snapshot?.autoUse && onChanged && <CodexResetAutoUseControl key={`${providerId}:${snapshot.autoUse.accountKey}`} state={snapshot.autoUse} providerId={providerId} onChanged={onChanged} />}
           </div>
           {content}
         </>

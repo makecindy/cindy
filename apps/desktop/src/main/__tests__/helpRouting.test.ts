@@ -80,6 +80,7 @@ describe('HELP_KNOWLEDGE invariants', () => {
   // shared/helpTypes.ts). Keep in sync when the deep-link whitelist changes.
   const ALLOWED = new Set([
     'general',
+    'appearance',
     'personalization',
     'api-keys',
     'providers',

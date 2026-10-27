@@ -25,7 +25,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { isArchiveInstanceKey, isPluginInstanceKey } from '../../shared/pluginIdentity.js';
 
-function isLibraryOwnerId(value: unknown): value is string {
+export function isLibraryOwnerId(value: unknown): value is string {
   return isPluginInstanceKey(value) || isArchiveInstanceKey(value);
 }
 
@@ -76,7 +76,7 @@ async function directoryIdentity(root: string): Promise<{ dev: number; ino: numb
   }
 }
 
-async function syncDirectory(root: string): Promise<void> {
+export async function syncDirectory(root: string): Promise<void> {
   if (process.platform === 'win32') return;
   const directory = await fs.promises.open(root, 'r');
   try {
@@ -132,6 +132,7 @@ export async function assertLibraryMetaOwner(root: string, ownerId: string): Pro
 
 export async function relocateLibraryMetaOwner(
   root: string, fromId: string, toId: string, assertCurrent: () => void = () => {},
+  options: { clearOrphaned?: boolean } = {},
 ): Promise<boolean> {
   if (!isLibraryOwnerId(fromId) || !isLibraryOwnerId(toId)) {
     throw new Error('library meta relocate ids are invalid');
@@ -140,14 +141,24 @@ export async function relocateLibraryMetaOwner(
   assertCurrent();
   if (!meta) return false;
   const owner = meta.ghostId;
-  if (owner === toId) return false;
-  if (owner !== fromId) throw new Error('library meta belongs to a different plugin');
+  const clearOrphaned = options.clearOrphaned === true && meta.orphaned !== undefined;
+  if (owner === toId && !clearOrphaned) return false;
+  if (owner !== fromId && owner !== toId) throw new Error('library meta belongs to a different plugin');
+  const next: Record<string, unknown> = { ...meta, ghostId: toId };
+  if (clearOrphaned) delete next.orphaned;
   const file = path.join(root, '.cindy-library', 'meta.json');
   const temporary = file + '.' + randomUUID() + '.tmp';
   try {
-    await fs.promises.writeFile(temporary, JSON.stringify({ ...meta, ghostId: toId }), { flag: 'wx', mode: 0o600 });
+    const handle = await fs.promises.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(next), 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     assertCurrent();
     await fs.promises.rename(temporary, file);
+    await syncDirectory(path.dirname(file));
   } finally {
     await fs.promises.rm(temporary, { force: true });
   }

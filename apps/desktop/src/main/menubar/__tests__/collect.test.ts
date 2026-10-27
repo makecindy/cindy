@@ -12,6 +12,7 @@ import {
   type MenubarCollectDeps,
 } from '../collect';
 import { topModels, type MenubarSubscriptionInput } from '../snapshot';
+import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
 
 const NOW = Date.UTC(2026, 9, 11, 3, 0, 0);
 const nowSec = NOW / 1000;
@@ -102,6 +103,31 @@ describe('source mapping', () => {
 });
 
 describe('collectMenubarInputs', () => {
+  function task(sessionId: string, source?: string | null): UsageHistoryTask {
+    return {
+      taskKey: 'local:' + sessionId,
+      deviceId: 'local',
+      sessionId,
+      title: sessionId,
+      model: 'gpt-5.5',
+      providerId: null,
+      source,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: NOW,
+    };
+  }
+
+  function usage(tasks: UsageHistoryTask[]): UsageHistoryPayload {
+    const money = { amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' } as const;
+    return {
+      todayKey: '2026-10-11',
+      modelDaily: [{ day: '2026-10-11', agentKind: 'codex', model: 'gpt-5.5', tokens: 1000, money, apiMoney: money, subscriptionEstimateMoney: money }],
+      tasks,
+      taskDaily: tasks.map((entry, index) => ({ day: '2026-10-11', taskKey: entry.taskKey, tokens: 100 - index })),
+    } as UsageHistoryPayload;
+  }
+
   function deps(overrides: Partial<MenubarCollectDeps> = {}): MenubarCollectDeps {
     return {
       nowMs: NOW,
@@ -168,6 +194,90 @@ describe('collectMenubarInputs', () => {
       expect.objectContaining({ sessionId: 's1', title: 'Fix the chart', harness: 'codex', running: true, startedAtMs: NOW - 60_000 }),
     ]);
     expect(collected.usage.days).toHaveLength(90);
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('hides %s usage tasks without changing accounting totals', async (source) => {
+    const input = usage([task('hidden', source), task('ordinary', null)]);
+    const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
+
+    expect(collected.tasks.map((entry) => entry.sessionId)).toEqual(['ordinary']);
+    expect(collected.tasks[0].tokensToday).toBe(99);
+    expect(collected.usage.scopes.local.daily.at(-1)).toEqual({ money: [0, 1, 0], paid: 1, tokens: [0, 1000, 0] });
+    expect(input.taskDaily).toHaveLength(2);
+    expect(input.tasks).toHaveLength(2);
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('checks live %s sources for legacy usage and running-only tasks', async (source) => {
+    const input = usage([task('legacy'), task('ordinary')]);
+    const collected = await collectMenubarInputs(deps({
+      readUsage: async () => input,
+      activities: () => [{ sessionId: 'running-only', phase: 'running', startedAtMs: NOW - 1000 } as never],
+      sessionRow: async (sessionId) => ({ title: sessionId, model: 'gpt-5.5', agentKind: 'codex', source: sessionId === 'ordinary' ? null : source }),
+    }));
+
+    expect(collected.tasks.map((entry) => entry.sessionId)).toEqual(['ordinary']);
+  });
+
+  it('marks the source a running task draws on, and the Cindy balance for managed providers', async () => {
+    const collected = await collectMenubarInputs(
+      deps({
+        listProviders: async () => [
+          provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' } } as never),
+          provider({ id: 'anthropic' }),
+          provider({ id: 'cindy-gateway', auth: { method: 'managed' }, access: { kind: 'managed' } } as never),
+        ],
+        readBalance: async () => ({ available: 5, fullAmount: 10, burnPerDay: 1, observedAtMs: NOW, currency: 'USD', quota: null }),
+        activities: () => [
+          { sessionId: 'on-codex', phase: 'running', startedAtMs: NOW - 1000 } as never,
+          { sessionId: 'on-cindy', phase: 'running', startedAtMs: NOW - 1000 } as never,
+        ],
+        sessionRow: async (sessionId) => ({
+          title: sessionId,
+          model: 'gpt-5.5',
+          agentKind: 'codex',
+          providerId: sessionId === 'on-codex' ? 'openai' : 'cindy-gateway',
+        }),
+      }),
+    );
+    const consuming = collected.sources.filter((source) => source.consuming).map((source) => source.id);
+    expect(consuming).toEqual(['cindy', 'openai']);
+  });
+
+  it('resolves the implicit default route of a running task to the source it draws on', async () => {
+    const codexRoute = { agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'gpt-5.5', mode: 'chat' }] } };
+    const collected = await collectMenubarInputs(
+      deps({
+        listProviders: async () => [
+          provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' }, ...codexRoute } as never),
+          provider({ id: 'anthropic', agents: ['claude-code'], routing: { 'claude-code': {} }, models: {} } as never),
+        ],
+        activities: () => [{ sessionId: 'default-route', phase: 'running', startedAtMs: NOW - 1000 } as never],
+        // No explicit provider: the session runs on Codex's native default.
+        sessionRow: async () => ({ title: 'default route', model: 'gpt-5.5', agentKind: 'codex', providerId: null }),
+      }),
+    );
+    expect(collected.sources.filter((source) => source.consuming).map((source) => source.id)).toEqual(['openai']);
+  });
+
+  it('leaves every source still when nothing is running', async () => {
+    const collected = await collectMenubarInputs(
+      deps({
+        readUsage: async () => usage([task('done')]),
+        sessionRow: async () => ({ title: 'done', model: 'gpt-5.5', agentKind: 'codex', providerId: 'openai' }),
+      }),
+    );
+    expect(collected.sources.some((source) => source.consuming)).toBe(false);
+  });
+
+  it('applies the visible task limit after filtering live sources', async () => {
+    const hiddenIds = Array.from({ length: 35 }, (_, index) => 'hidden-' + index);
+    const ordinaryIds = Array.from({ length: 31 }, (_, index) => 'ordinary-' + index);
+    const collected = await collectMenubarInputs(deps({
+      activities: () => [...hiddenIds, ...ordinaryIds].map((sessionId) => ({ sessionId, phase: 'running', startedAtMs: NOW - 1000 } as never)),
+      sessionRow: async (sessionId) => ({ title: sessionId, model: 'gpt-5.5', agentKind: 'codex', source: sessionId.startsWith('hidden-') ? 'cindy-make' : null }),
+    }));
+
+    expect(collected.tasks.map((entry) => entry.sessionId)).toEqual(ordinaryIds.slice(0, 30));
   });
 });
 

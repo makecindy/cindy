@@ -96,3 +96,30 @@ export function shouldHandoffAfterContextAssessment(
 ): boolean {
   return assessment.level === 'danger' || assessment.level === 'overflow';
 }
+
+/**
+ * 不经用户确认、由 Agent 代为换的模型(伙伴跟进时的换模型建议)只接受换过去仍宽裕的路线：
+ * 目标窗口比当前小，且换过去后用量会到提醒线(warn 及以上)就不推荐，免得任务一换过去就挤满。
+ * 窗口变大、目标窗口未知时与主机切换闸门同口径放行；用户自己切换不走这里。
+ */
+export function agentSwitchKeepsContextHeadroom(input: {
+  /** null = 没有可信的当前用量：只放行不缩窗的目标。 */
+  contextTokens: number | null;
+  currentContextWindow: number | null | undefined;
+  targetContextWindow: number | null | undefined;
+}): boolean {
+  const { contextTokens, currentContextWindow, targetContextWindow } = input;
+  if (typeof targetContextWindow !== 'number' || !Number.isFinite(targetContextWindow) || targetContextWindow <= 0) {
+    return true;
+  }
+  if (
+    typeof currentContextWindow === 'number' &&
+    Number.isFinite(currentContextWindow) &&
+    currentContextWindow > 0 &&
+    targetContextWindow >= currentContextWindow
+  ) {
+    return true;
+  }
+  if (contextTokens === null) return false;
+  return assessModelSwitchContext({ contextTokens, targetContextWindow }).level === 'ok';
+}

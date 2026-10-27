@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
+import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
@@ -8,11 +9,31 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  ghostInstallTargetContext,
+  resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
+  libraryRestartRequiredReason: (): string | null => null,
 };
+
+/**
+ * findGhostForInstanceId reads an exact instance key straight from the
+ * manager. Tests that inject availableGhosts get the same answer from it.
+ */
+function instanceLookupDeps(deps: Record<string, unknown>): Record<string, unknown> {
+  const availableGhosts = deps.availableGhosts as (() => Array<Parameters<typeof installedGhostStoragePart>[0]>) | undefined;
+  if (!availableGhosts) return {};
+  return {
+    isAppSessionBoundaryPending: () => false,
+    isGhostAvailableForActiveSession: () => true,
+    getGhostManager: () => ({
+      findInstalledInstance: (key: string) =>
+        availableGhosts().find((ghost) => installedGhostStoragePart(ghost) === key),
+    }),
+  };
+}
 
 const source = fs.readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
@@ -61,7 +82,7 @@ export function createGhostProductionCallbacks<Result>(options: {
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   return (deps) => {
-    const merged = { ...productionIdentityDeps, ...deps };
+    const merged = { ...productionIdentityDeps, ...instanceLookupDeps(deps), ...deps };
     return new Function(
       'deps', 'const {' + Object.keys(merged).join(',') + '} = deps;' + compiled +
         ';return {' + names.join(',') + '};',

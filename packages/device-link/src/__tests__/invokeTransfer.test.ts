@@ -57,6 +57,25 @@ describe('invoke result transfer encoding', () => {
       .toEqual({ ok: true, result: null, transfer: { tag, notModified: true } });
   });
 
+  // Regression: UTF-16 length understates Chinese wire bytes; an otherwise useful
+  // gzip result was discarded. Unit tier, real encoder/decoder, bounded fixture.
+  it('judges Chinese compression savings by UTF-8 bytes including base64 overhead', () => {
+    let seed = 1;
+    const text = Array.from({ length: 6000 }, () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return String.fromCharCode(0x4e00 + ((seed >>> 16) % 1024));
+    }).join('');
+    const json = JSON.stringify(text);
+    const base64 = codec.gzipBase64(json);
+    expect(base64.length).toBeGreaterThan(json.length);
+    expect(base64.length).toBeLessThan(Buffer.byteLength(json) * 0.9);
+    const cache = new InvokeResultCache(codec);
+    const request = cache.prepare('desktop', { channel: 'c', args: [] });
+    const wire = encodeInvokeResultTransfer(request.payload.transfer!, { ok: true, result: text }, codec);
+    expect(wire.ok && wire.transfer?.gzipBase64).toBe(base64);
+    expect(request.decode(wire)).toEqual({ ok: true, result: text });
+  });
+
   it('controller decodes against the snapshot fixed at request time', () => {
     const cache = new InvokeResultCache(codec);
     const request = { channel: 'maker:provider:list', args: [] };

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ const CANONICAL_DOCS = [
 ];
 const CONTRIBUTING_DOCS = ["CONTRIBUTING.md", "CONTRIBUTING.en.md"];
 const CHECKED_DOCS = [...CONTRIBUTING_DOCS, ...CANONICAL_DOCS];
+const COMMAND_CHECKED_DOCS = [...CHECKED_DOCS, "apps/desktop/README.md"];
 const WORKSPACES = new Map([
 	["desktop", "apps/desktop/package.json"],
 	["mobile", "apps/mobile/package.json"],
@@ -111,14 +113,21 @@ function localMarkdownLinks(relativePath) {
 }
 
 /**
- * 需要做内链体检的全部文档:根目录规则文件 + `docs/` 下所有 markdown(递归)。
+ * 需要做内链体检的全部文档:根目录与模块 AGENTS + `docs/` 下所有 markdown(递归)。
  *
  * 覆盖面刻意做全 —— 悬空内链最容易出现在深层目录里:文档被删除时,引用它的索引
  * (如 `docs/legal/README.md`、`docs/README.md`)常常漏改。只体检 CHECKED_DOCS 那几篇
  * canonical 文档挡不住这类回归。
  */
 function listLinkCheckedDocs() {
-	const out = ["AGENTS.md", ...CONTRIBUTING_DOCS];
+	// Include newly added, unstaged module rules without traversing node_modules,
+	// runtime binaries or generated build trees. Git is already required by the runner.
+	const agentDocs = execFileSync("git", [
+		"ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
+		"AGENTS.md", ":(glob)apps/**/AGENTS.md", ":(glob)packages/**/AGENTS.md",
+	], { cwd: ROOT, encoding: "utf8" }).split("\0").filter((relativePath) =>
+		relativePath && fs.existsSync(path.join(ROOT, relativePath)));
+	const out = ["AGENTS.md", ...agentDocs, ...CONTRIBUTING_DOCS];
 	const walk = (relativeDir) => {
 		for (const entry of fs.readdirSync(path.join(ROOT, relativeDir), { withFileTypes: true })) {
 			const relativePath = path.join(relativeDir, entry.name);
@@ -132,7 +141,7 @@ function listLinkCheckedDocs() {
 
 test("developer docs only document pnpm commands that exist", () => {
 	const rootPackage = readJson("package.json");
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of COMMAND_CHECKED_DOCS) {
 		for (const line of shellLines(relativePath)) {
 			assertPnpmCommandExists(line, rootPackage);
 		}
@@ -302,26 +311,49 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
-test("client CI keeps the complete two-shard unit gate on Windows", () => {
+// A shard matrix is complete only when it lists every index 1..N and the
+// runner splits by the same N; a missing index or mismatched count would
+// silently drop part of the unit tier from the gate.
+function assertCompleteShardMatrix(job) {
+	const matrix = /^        shard: \[([\d, ]+)\]$/m.exec(job);
+	assert.ok(matrix, "unit shard job must declare a numeric shard matrix");
+	const indexes = matrix[1].split(",").map((value) => Number(value.trim()));
+	const count = indexes.length;
+	assert.ok(count >= 2, "unit shard job must split the tier across parallel jobs");
+	assert.deepEqual(indexes, Array.from({ length: count }, (_, i) => i + 1));
+	assert.match(job, new RegExp(`^      XDT_UNIT_TEST_SHARD: \\$\\{\\{ matrix\\.shard \\}\\}/${count}$`, "m"));
+	assert.match(job, /^      fail-fast: false$/m);
+}
+
+test("client CI keeps the complete sharded unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const shards = workflowJob(workflow, "windows-unit-shards");
 	assert.ok(shards, "client CI must define Windows unit shards");
 	assert.match(shards, /^    runs-on: windows-latest$/m);
-	assert.match(shards, /^      fail-fast: false$/m);
-	assert.match(shards, /^        shard: \[1, 2\]$/m);
-	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
+	assertCompleteShardMatrix(shards);
 	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
 	assert.doesNotMatch(shards, /pnpm test:unit(?:\s|$)/);
-	assert.equal([...shards.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
-	assert.match(shards, /^      - name: Run Windows test runner self-tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm test:runner$/m);
+	assert.doesNotMatch(shards, /pnpm test:runner/);
+
+	// One-off Windows checks run once, in parallel, outside the shard critical path.
+	const runnerChecks = workflowJob(workflow, "windows-runner-checks");
+	assert.ok(runnerChecks, "client CI must run Windows runner self-tests once");
+	assert.match(runnerChecks, /^    runs-on: windows-latest$/m);
+	assert.doesNotMatch(runnerChecks, /^    needs:/m);
+	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
+	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
+	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
 	assert.match(gate, /^    name: Windows unit tests$/m);
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
-	assert.match(gate, /^    needs: windows-unit-shards$/m);
+	assert.match(gate, /^      - windows-unit-shards$/m);
+	assert.match(gate, /^      - windows-runner-checks$/m);
 	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
-	assert.match(gate, /^        run: test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          WINDOWS_RUNNER_CHECKS_RESULT: \$\{\{ needs\.windows-runner-checks\.result \}\}$/m);
+	assert.match(gate, /^          test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          test "\$WINDOWS_RUNNER_CHECKS_RESULT" = "success"$/m);
 });
 
 test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
@@ -330,15 +362,20 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.ok(checks, "client CI must define independent Linux verification checks");
 	assert.doesNotMatch(checks, /^    needs:/m);
 	assert.match(checks, /^        run: pnpm test:runner$/m);
+	assert.match(
+		checks,
+		/^      - name: Run Desktop and Mobile source-contract guards\r?\n        run: pnpm test:guard$/m,
+	);
+	// engineering-conventions.md §3.2 performance budget is only binding while CI
+	// blocks on the hygiene ratchet; without this step the baseline stops mattering.
+	assert.match(checks, /^      - name: Check unit test hygiene\r?\n        run: pnpm check:test-hygiene$/m);
 	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
 
 	const shards = workflowJob(workflow, "linux-unit-shards");
 	assert.ok(shards, "client CI must define Linux unit shards");
 	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
 	assert.doesNotMatch(shards, /^    needs:/m);
-	assert.match(shards, /^      fail-fast: false$/m);
-	assert.match(shards, /^        shard: \[1, 2\]$/m);
-	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
+	assertCompleteShardMatrix(shards);
 	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
 	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);

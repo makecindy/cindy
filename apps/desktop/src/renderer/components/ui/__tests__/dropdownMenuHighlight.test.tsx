@@ -10,10 +10,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
+  DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../dropdown-menu';
-import { lockMenuWidth } from '../dropdown-menu-highlight';
+import { attachMenuHighlight, lockMenuWidth } from '../dropdown-menu-highlight';
 import * as menuStyles from '@/features/cc-agent/sidebar/menuStyles';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from '@/features/cc-agent/sidebar/SessionProjectMoveSubmenu';
@@ -130,6 +131,31 @@ describe('shared dropdown menu glide highlight', () => {
     expect(document.activeElement?.textContent).toBe('Rename');
     await key('Enter');
     expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens submenu content outside the parent menu in the document body', async () => {
+    render(
+      <DropdownMenu defaultOpen modal={false}>
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Cindy</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    const parentMenu = menu();
+    expect(screen.queryByRole('menu', { name: 'Move' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    const submenu = await screen.findByRole('menu', { name: 'Move' });
+    // A nested submenu was clipped by the parent's glass/overflow. This unit
+    // regression checks the actual SubContent DOM boundary after opening it.
+    expect(parentMenu.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
+    expect(submenu.contains(screen.getByRole('menuitem', { name: 'Cindy' }))).toBe(true);
   });
 
   it('follows the Radix highlighted item with one decorative layer per panel', async () => {
@@ -517,6 +543,35 @@ describe('shared dropdown menu glide highlight', () => {
     ])
       expect(cls).toContain(token);
     expect(Object.keys(menuStyles).sort()).toEqual(['MENU_ITEM_CLASS', 'MENU_ROW_CLASS']);
+  });
+
+  it('places the layer in layout px while the open animation scales the panel', () => {
+    // Panel laid out at 200×100, drawn at half size from (100, 50) mid-animation.
+    const panel = document.createElement('div');
+    panel.setAttribute('data-menu-panel', '');
+    const layer = document.createElement('span');
+    const row = document.createElement('div');
+    row.setAttribute('data-menu-row', '');
+    row.setAttribute('data-highlighted', '');
+    panel.append(layer, row);
+    document.body.append(panel);
+    const size = (el: HTMLElement, w: number, h: number) => {
+      Object.defineProperty(el, 'offsetWidth', { configurable: true, value: w });
+      Object.defineProperty(el, 'offsetHeight', { configurable: true, value: h });
+    };
+    size(panel, 200, 100);
+    size(row, 188, 32);
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 100, 50));
+    // Row at layout (6, 40) → drawn at (103, 70), 94×16.
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(103, 70, 94, 16));
+    const detach = attachMenuHighlight(panel, layer, {
+      current: (rows) => rows.find((r) => r.hasAttribute('data-highlighted')),
+    });
+    expect(layer.style.width).toBe('188px');
+    expect(layer.style.height).toBe('32px');
+    expect(layer.style.transform).toBe('translate(6px, 40px)');
+    detach();
+    panel.remove();
   });
 
   it('coalesces pointer moves into one update per frame and caches row geometry lookups', () => {

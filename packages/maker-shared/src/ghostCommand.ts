@@ -95,20 +95,24 @@ export function parseGhostCommandWord(text: string): string | null {
   return parseGhostCommandToken(text)?.word ?? null;
 }
 
-/** Palette / insertion token: `draw` or `draw/acme`. */
+/**
+ * Palette / insertion token. A unique command stays bare (`draw`); only a
+ * command shared with another installed instance is qualified as
+ * `draw/@root` or `draw/acme`, so the org slug is not shown without need.
+ * The roster must cover every instance send-time resolution can see; the
+ * composer also passes disabled ones so re-enabling cannot make it ambiguous.
+ */
 export function formatGhostCommandToken(ghost: {
   manifest: { command?: string };
   namespace?: string | null;
 }, roster: readonly { manifest: { command?: string }; namespace?: string | null }[] = []): string | null {
   const command = ghost.manifest.command;
   if (!command) return null;
-  if (ghost.namespace === null && roster.some((other) =>
-    other !== ghost && other.manifest.command?.toLowerCase() === command.toLowerCase())) {
-    return command + '/@root';
-  }
-  return hasDeliveryNamespace(ghost) && ghost.namespace
-    ? `${command}/${ghost.namespace}`
-    : command;
+  if (!hasDeliveryNamespace(ghost)) return command;
+  const shared = roster.some((other) =>
+    other !== ghost && other.manifest.command?.toLowerCase() === command.toLowerCase());
+  if (!shared) return command;
+  return ghost.namespace === null ? command + '/@root' : `${command}/${ghost.namespace}`;
 }
 
 export function formatGhostCommandInsertion(ghost: {

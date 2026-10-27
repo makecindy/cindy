@@ -11,6 +11,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -141,6 +144,7 @@ vi.mock('@/features/provider-group/useLocalProviderGroups', () => ({
 }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
   ensureProviderShareReceivedStarted: vi.fn(),
+  requestProviderShareFavoriteRegions: vi.fn(),
   useProviderShareReceived: () => ({ received: [], loaded: true }),
 }));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
@@ -214,6 +218,33 @@ afterEach(() => {
 });
 
 describe('模型列表里供应商组那一项的用量', () => {
+  it('远控任务的普通供应商读任务所在电脑，浏览其它电脑后仍保持归属', async () => {
+    render(
+      <ModelSelectorContent
+        modelId="opus"
+        effort="high"
+        onModelChange={vi.fn()}
+        onEffortChange={vi.fn()}
+        currentProviderId="d-solo"
+        onProviderChange={vi.fn()}
+        vendorKey="cc"
+        remoteAgent={{
+          devices: [devices[0]!],
+          selectedDeviceId: null,
+          selfDeviceId: 'desk',
+          homeDeviceId: 'device-d',
+        }}
+      />,
+    );
+    const solo = railButton('D Solo · solo@x');
+    expect(remaining(solo)).toBe('40');
+    expect(solo.getAttribute('aria-description')).toBe('周限 · 剩余 40%');
+    await act(async () => {
+      fireEvent.click(railButton(GROUP));
+    });
+    expect(remaining(railButton('D Solo · solo@x'))).toBe('40');
+  });
+
   it('任务正经组在另一台运行：读那台的账号并写明在哪台', () => {
     renderTask({ deviceId: 'device-d', providerId: 'd-open' }, true);
     const group = railButton(GROUP);

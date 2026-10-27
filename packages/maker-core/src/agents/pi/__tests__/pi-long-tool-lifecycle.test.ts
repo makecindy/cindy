@@ -90,6 +90,7 @@ vi.mock('../transport.js', async (importOriginal) => {
             return endOutput();
           }
           if (cmd.type === 'fixture_exit_with_descendant') {
+            // real-wait: the child fixture must keep its pipe open for the descendant-lifecycle test.
             const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
               // libuv's Windows job kills non-detached children on parent exit.
               // This fixture specifically needs a surviving pipe owner; production

@@ -7,6 +7,13 @@ import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainVie
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
+// #6889 unit regression: the real settings picker must wait for crop
+// confirmation; the old upload-only assertion skipped cancellation entirely.
+vi.mock('@/components/settings/avatarCropImage', () => ({
+  loadAvatarSource: async () => ({ bitmap: { close() {} }, size: { width: 800, height: 400 } }),
+  exportAvatarCrop: async () => ({ blob: new Blob(['cropped'], { type: 'image/png' }) }),
+}));
+
 vi.mock('@/state/modelVisibilityPrefs', () => ({ migrateModelVisibilityDefaults: vi.fn() }));
 
 vi.mock('@/hooks/useProviderOnboarding', () => ({
@@ -19,7 +26,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 const translate = (key: string, opts?: Record<string, unknown>) =>
   key.startsWith('settings.builtinTools.plugins.') ? String(opts?.defaultValue ?? key) : opts ? `${key}:${JSON.stringify(opts)}` : key;
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate, i18n: { language: 'en' } }) }));
 
 const mocks = vi.hoisted(() => {
   const sessionGet = vi.fn();
@@ -92,9 +99,20 @@ vi.mock('../botStore', () => ({
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
+  useBotAutonomySettings: () => null,
+  setBotSchedulerBotId: vi.fn(),
+  resetBotAutonomySettings: vi.fn(),
 }));
 vi.mock('../BotLifecycleSettings', () => ({
   BotLifecycleSettings: () => <div data-testid="bot-lifecycle-settings" />,
+}));
+vi.mock('../BotChannelsPage', () => ({
+  BotChannelsPage: ({ bot }: { bot: { id: string } }) => (
+    <div data-testid="bot-channels-page">{bot.id}</div>
+  ),
+}));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
 }));
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: ({ unifiedAgents, onUnifiedSelect, modelId, onEffortChange, onNavigateToProviders }: {
@@ -135,7 +153,13 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
+vi.mock('../voice/CompanionVoiceSettings', () => ({
+  CompanionVoiceSettings: ({ botId, sessionId }: { botId: string; sessionId?: string }) =>
+    <div data-testid="companion-voice-settings">{botId}:{sessionId}</div>,
+}));
+
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 function capabilities(overrides: Partial<BotCapabilities> = {}): BotCapabilities {
   return {
@@ -524,6 +548,23 @@ describe('Bot settings profile consolidation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
+  it('keeps todos out of the routines page now that they live in 近况', async () => {
+    // 2026-10-21：待办只在聊天头部的近况里看、在对话里改；设置里的例行任务页不再列待办。
+    const api = window.electronAPI as unknown as Record<string, Record<string, unknown>>;
+    api.routines = {
+      list: vi.fn(async () => []), sources: vi.fn(async () => []),
+      history: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined),
+    };
+    const list = vi.fn(async () => ({ items: [] }));
+    (api.localDb.bots as Record<string, unknown>).todos = { list };
+    mocks.initialSearch = 'settings=1&tab=growth';
+    render(<ConfirmDialogProvider><BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} /></ConfirmDialogProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
+    await waitFor(() => expect(api.routines.list).toHaveBeenCalled());
+    expect(screen.queryByRole('region', { name: 'teammateTodo.title' })).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
     renderSettings({}, 'settings=1&tab=growth');
     expect(screen.queryByRole('textbox')).toBeNull();
@@ -538,6 +579,24 @@ describe('Bot settings profile consolidation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
     expect(screen.getByRole('region', { name: 'bots.settingsTabs.model' })).toBeTruthy();
     expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+  });
+
+  it('lists messaging platforms after capabilities and opens it from the home row or a deep link', () => {
+    const view = renderSettings();
+    const rows = screen
+      .getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((text) => text === 'bots.capabilities.title' || text === 'bots.channels.title');
+    expect(rows).toEqual(['bots.capabilities.title', 'bots.channels.title']);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.channels.title' }));
+    expect(screen.getByTestId('bot-channels-page').textContent).toBe('bot-1');
+    expect(screen.getByRole('heading', { name: 'bots.channels.title' })).toBeTruthy();
+    view.unmount();
+
+    render(
+      <BotSettings bot={bot()} initialPage="channels" onBack={vi.fn()} onOpenSession={vi.fn()} />,
+    );
+    expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
   it('keeps the current inner page and its draft when saving before navigation fails', async () => {
@@ -680,20 +739,35 @@ describe('Bot settings unified autosave', () => {
     }
   });
 
-  it('keeps the current avatar until uploading through the shared gallery', async () => {
-    vi.useFakeTimers();
-    renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
-    expect(screen.getByRole('button', { name: 'Cindy' })).toBeTruthy();
-    expect(mocks.chooseBotAvatar).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-    expect(mocks.chooseBotAvatar).toHaveBeenCalledWith('bot-1');
-    expect(document.querySelector('img')?.getAttribute('src')).toBe(
-      `cindy-media://blobs/${'a'.repeat(64)}.png`,
-    );
+  it('keeps the local Bot avatar through crop cancellation and saves only confirmed bytes', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const source = vi.fn(async () => ({ canceled: false, previewDataUrl: 'data:image/png;base64,c2Ry' }));
+    window.electronAPI.localDb.bots.chooseAvatarSource = source;
+    window.electronAPI.profileChooseAvatar = vi.fn(async () => { throw new Error('Local mode has no account'); });
+    const previous = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    try {
+      renderSettings({ avatar: previous });
+      const upload = () => {
+        fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+        fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
+      };
+      upload();
+      await screen.findByRole('alertdialog');
+      expect(mocks.chooseBotAvatar).not.toHaveBeenCalled();
+      expect(document.querySelector('img')?.getAttribute('src')).toBe(previous);
+      fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.cancel' }));
+      expect(mocks.chooseBotAvatar).not.toHaveBeenCalled();
+      upload();
+      await screen.findByRole('alertdialog');
+      fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+      await waitFor(() => expect(mocks.chooseBotAvatar).toHaveBeenCalledExactlyOnceWith('bot-1', 'Y3JvcHBlZA=='));
+      expect(document.querySelector('img')?.getAttribute('src')).toBe(`cindy-media://blobs/${'a'.repeat(64)}.png`);
+      expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+      expect(source).toHaveBeenCalledTimes(2);
+      expect(window.electronAPI.profileChooseAvatar).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('turns memory on and off from the memory page', async () => {
@@ -716,6 +790,22 @@ describe('Bot settings unified autosave', () => {
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
       capabilities: expect.objectContaining({ memory: true }),
     });
+  });
+
+  it('edits what the teammate knows about its owner on the memory page and saves it as userContextSource', async () => {
+    vi.useFakeTimers();
+    Object.assign(window.electronAPI, {
+      localDb: { ...window.electronAPI.localDb, bots: { memory: { list: vi.fn(async () => []) } } },
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.memory.aboutMe' }), {
+      target: { value: 'Prefers tea' },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({ userContextSource: 'Prefers tea' });
   });
 });
 
@@ -1138,4 +1228,17 @@ describe('same-Bot capability updates while editing settings', () => {
     fireEvent.click(screen.getByRole('switch', { name: /Contacts/ }));
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { capabilities: { toolsets: [] }, capabilityBaseline: { toolsets: ['contacts'] } }));
   });
+});
+
+it('opens voice settings from the companion settings list and supports the dedicated entry page', async () => {
+  const companion = { ...bot(), canonicalSessionId: 'canonical-voice' };
+  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' }));
+  expect(screen.getByTestId('companion-voice-settings').textContent).toBe(`${companion.id}:canonical-voice`);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  await waitFor(() => expect(screen.queryByTestId('companion-voice-settings')).toBeNull());
+  expect(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' })).toBe(document.activeElement);
+  view.unmount();
+  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  expect(screen.getByTestId('companion-voice-settings')).toBeTruthy();
 });

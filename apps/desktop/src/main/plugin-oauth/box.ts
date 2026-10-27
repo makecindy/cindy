@@ -8,6 +8,7 @@ import {
   randomBytes,
   type KeyObject,
 } from 'node:crypto';
+import { PLUGIN_OAUTH_SEALED_MAX_BYTES, isPluginOauthBox } from '@cindy/device-link';
 
 /** Ephemeral X25519 + HKDF/AES-GCM. Relay identity routing remains a trust root. */
 export class OauthBox {
@@ -40,7 +41,7 @@ export class OauthBox {
       const cipher = createCipheriv('aes-256-gcm', key, iv);
       cipher.setAAD(Buffer.from(`cindy-plugin-oauth-v1:${id}:${direction}`));
       const body = Buffer.from(JSON.stringify(value));
-      if (body.length > 32_000) throw new Error('OAUTH_BRIDGE_INVALID');
+      if (body.length > PLUGIN_OAUTH_SEALED_MAX_BYTES[direction]) throw new Error('OAUTH_BRIDGE_INVALID');
       return Buffer.concat([iv, cipher.update(body), cipher.final(), cipher.getAuthTag()]).toString(
         'base64url',
       );
@@ -50,7 +51,7 @@ export class OauthBox {
   }
   open(peer: string, id: string, direction: 'offer' | 'callback', box: string): unknown {
     try {
-      if (!/^[A-Za-z0-9_-]{40,48000}$/.test(box)) throw 0;
+      if (!isPluginOauthBox(direction, box)) throw 0;
       const data = Buffer.from(box, 'base64url');
       const key = this.key(peer, id, direction);
       try {

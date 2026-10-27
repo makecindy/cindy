@@ -76,3 +76,12 @@ describe('executionDeviceErrorMessage', () => {
     },
   );
 });
+
+describe('remote session capacity errors', () => {
+  it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('retains %s through INTERNAL and IPC wrappers', reason => {
+    const error = new Error('Error invoking remote method: Error: [INTERNAL] [REMOTE_AGENT_BUSY] [' + reason + '] reached');
+    expect(getCollaborationStartErrorMessage(error, t)).toBe('chat.remoteError.REMOTE_AGENT_' + reason);
+    expect(getCollaborationStartErrorMessage(error, t, { continueAsSingleSession: true }))
+      .toContain('newChat.collaboration.remoteContinueNotice');
+  });
+});

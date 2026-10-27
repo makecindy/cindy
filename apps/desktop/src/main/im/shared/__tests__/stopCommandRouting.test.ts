@@ -102,6 +102,7 @@ describe('messageHandler !stop routing', () => {
     notificationSessionId?: string,
     prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText'],
     turnPermissionPolicyFor?: ImChannelAdapter['turnPermissionPolicyFor'],
+    options: { channel?: string; companionBotIdFor?: (botContextId: string) => string | null } = {},
   ): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
@@ -124,7 +125,7 @@ describe('messageHandler !stop routing', () => {
     } as unknown as ChannelIM;
 
     const adapter = {
-      channel: 'slack',
+      channel: options.channel ?? 'slack',
       ...(notificationSessionId ? {
         resolveNotificationReply: async () => notificationSessionId,
         notificationReplyText: { unavailable: 'unavailable', commands: 'topic commands' },
@@ -140,7 +141,11 @@ describe('messageHandler !stop routing', () => {
     const attach = createMessageHandler(
       adapter,
       { handleSlashCommand } as unknown as ImSlashHandlers,
-      { stopActiveTurn, runAgentTurn } as unknown as ImTurnRunner,
+      {
+        stopActiveTurn,
+        runAgentTurn,
+        ...(options.companionBotIdFor ? { companionBotIdFor: options.companionBotIdFor } : {}),
+      } as unknown as ImTurnRunner,
     );
     attach(im);
   }
@@ -220,6 +225,35 @@ describe('messageHandler !stop routing', () => {
     deliver(makeEvent({ text: '更新 Cindy' }));
     await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
     expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(false);
+  });
+
+  // 回归(PR #6289 review): 企业微信 / 钉钉 / Discord 没有 channelToolScopeFor, 伙伴专线轮次之前不登记
+  // 作用域, 伙伴技能连主人也判只读。现在登记不带 transport 的 LaneTurnScope(触发者判定与本轮同一个)。
+  it.each([
+    ['the owner', { speaker: { id: 'owner', name: 'Owner', isOwner: true } }, true],
+    ['a group member', { speaker: { id: 'guest', name: 'Guest', isOwner: false } }, false],
+  ])('gives a WeCom companion lane turn from %s a transport-less tool scope', async (_label, patch, owner) => {
+    wire(false, undefined, undefined, undefined, { channel: 'wecom', companionBotIdFor: () => 'bot-mimi' });
+    deliver(makeEvent({ text: '记住这个做法', senderId: 'group/Y2hhdA', chatId: 'chat-1', ...patch } as Partial<IMMessageEvent>));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.requesterIsOwner).toBe(owner);
+    expect(turn.channelToolScope).toEqual({
+      channel: 'wecom',
+      botId: 'bot-ctx',
+      laneUserId: 'group/Y2hhdA',
+      chatId: 'chat-1',
+      chatKind: 'group',
+      requesterIsOwner: owner,
+      companion: true,
+    });
+  });
+
+  it('gives a WeCom turn that is not handed to a teammate no tool scope', async () => {
+    wire(false, undefined, undefined, undefined, { channel: 'wecom', companionBotIdFor: () => null });
+    deliver(makeEvent({ text: '你好' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0]).not.toHaveProperty('channelToolScope');
   });
 
   it('still drops an empty event without a summon, quote or attachment', async () => {

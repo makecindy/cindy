@@ -6,7 +6,7 @@ import '../ui/button.css';
 /**
  * ChromeIconButton —— 标题栏 28px 圆形图标按钮基元。
  *
- * 统一 PanelChrome、TabBar、GhostPanelWindowLayout、SidebarWindowLayout
+ * 统一 TabBar、SidebarWindowLayout、SidebarTabWindowLayout
  * 四处的按钮视觉规格：
  *   - 28×28 圆形，透明底
  *   - 图标 14px

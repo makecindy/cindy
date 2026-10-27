@@ -238,8 +238,38 @@ describe('runtime harness selection', () => {
   );
 
   it.each([
+    { orcaRole: 'lead', running: false },
+    { orcaRole: 'lead', running: true },
+    { orcaRole: 'worker', running: false },
+    { orcaRole: 'worker', running: true },
+  ])('stages an Orca harness choice until the next send: %j', async ({ orcaRole, running }) => {
+    const h = setup(running);
+    h.pending.set('s1', { targetAgentKind: 'pi', model: 'old-choice', providerId: null });
+    const read = h.switchDeps.getSessionRow;
+    h.switchDeps.getSessionRow = async (id) => ({ ...(await read(id))!, orcaRole });
+
+    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      generation: 5,
+      effectiveProfile: h.effective,
+      pendingMutation: {
+        source: 'agent',
+        profile: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+      },
+    });
+    expect(h.pending.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+    });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { remoteHostId: 'ssh-host' },
-    { orcaRole: 'lead' },
+    { remoteHostId: 'ssh-host', orcaRole: 'lead' },
+    { remoteHostId: 'ssh-host', orcaRole: 'worker' },
     { source: 'review' },
     { status: 'deleted' },
     { status: 'archived' },
@@ -249,7 +279,10 @@ describe('runtime harness selection', () => {
     h.pending.set('s1', previous);
     const read = h.switchDeps.getSessionRow;
     h.switchDeps.getSessionRow = async (id) => ({ ...(await read(id))!, ...overrides });
-    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({ ok: false });
+    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({
+      ok: false,
+      errorCode: overrides.status === 'deleted' ? 'NOT_FOUND' : 'ROUTE_UNAVAILABLE',
+    });
     expect(h.pending.get('s1')).toBe(previous);
     expect(h.close).not.toHaveBeenCalled();
   });

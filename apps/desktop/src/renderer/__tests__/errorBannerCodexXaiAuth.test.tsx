@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
@@ -10,6 +10,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { exists: () => true },
     // 插值参数拼进返回值，让进度类文案能断言实际传入的 attempt/maxAttempts。
     t: (key: string, options?: { attempt?: number; maxAttempts?: number }) =>
       options?.attempt && options.maxAttempts
@@ -127,6 +128,44 @@ describe('ErrorBanner network retry guidance', () => {
 
 describe('ErrorBanner overload guidance', () => {
   const CAPACITY = 'Selected model is at capacity. Please try a different model.';
+
+  // Regression: a settled scheduler run drops its queue recovery to unblock the
+  // next fire. Manual continuation must still work without replaying that run.
+  it('continues a failed scheduled turn when the original retry target is gone', async () => {
+    const onRetry = vi.fn();
+    const onContinueAfterError = vi.fn(async () => {});
+    render(createElement(ErrorBanner, { error: CAPACITY, onRetry, onContinueAfterError }));
+    expect(screen.getByText('chat.errorBanner.overloadBusy')).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle')));
+    expect(onContinueAfterError).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it('keeps continuation single-flight and makes a failed send retryable again', async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, no) => { reject = no; });
+    const onContinueAfterError = vi.fn(() => pending);
+    render(createElement(ErrorBanner, { error: CAPACITY, onRetry: vi.fn(), onContinueAfterError }));
+    const retry = screen.getByTitle('chat.errorBanner.retryTitle');
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(onContinueAfterError).toHaveBeenCalledOnce();
+    await act(async () => reject(new Error('offline')));
+    expect(screen.getByText('chat.errorBanner.overloadBusy')).toBeTruthy();
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each([
+    { error: CAPACITY, isRecoverable: true },
+    { error: 'thread not found', agentKind: 'codex' as const },
+    { error: '[REMOTE_LOCAL_ONLY_PROVIDER] local provider' },
+    { error: '[DEVICE_LINK_CONTROL_DISABLED] disabled' },
+  ])('does not bypass running or configuration recovery gates: $error', (props) => {
+    render(createElement(ErrorBanner, {
+      ...props, onRetry: vi.fn(), onContinueAfterError: vi.fn(async () => {}),
+    }));
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+  });
 
   it('shows retry progress while the overload retry is still pending', () => {
     render(createElement(ErrorBanner, {

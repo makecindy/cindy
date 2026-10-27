@@ -425,6 +425,37 @@ describe('readGhostSecretTailFromIo(尾指纹读取 + 老键懒回填)', () => {
     expect(io.store.get(ghostSecretHintStorageKey('my-ghost', 'api_key'))).toBe('5678');
   });
 
+  it.each([
+    ['helper', 'api_key'],
+    ['xd-feishu', 'oauth_accounts'],
+    ['_ns__xd__xd-feishu', 'oauth_accounts'],
+    ['_ns__xd__xd-mivo', 'mivo_api_key'],
+    ['xd-mivo', 'oauth_accounts'],
+  ])('reads %s/%s without loading unrelated Mivo install facts', (instanceKey, secretKey) => {
+    const verifier = vi.fn(() => { throw new Error('Mivo install facts unavailable'); });
+    setMivoSecretAliasVerifier(verifier);
+    io.store.set(ghostSecretStorageKey(instanceKey, secretKey), 'fake-secret-value-1234');
+    try {
+      expect(readGhostSecretTailFromIo(io, instanceKey, secretKey)).toBe('1234');
+      expect(verifier).not.toHaveBeenCalled();
+    } finally {
+      setMivoSecretAliasVerifier(null);
+    }
+  });
+
+  it('rechecks Mivo alias eligibility after a successful historical-key read', () => {
+    const verifier = vi.fn(() => true);
+    setMivoSecretAliasVerifier(verifier);
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'fake-mivo-legacy-9999');
+    try {
+      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
+      verifier.mockReturnValue(false);
+      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
+    } finally {
+      setMivoSecretAliasVerifier(null);
+    }
+  });
+
   it('官方别名键(xd-mivo 老用户)同样能懒回填', () => {
     setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
     io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');

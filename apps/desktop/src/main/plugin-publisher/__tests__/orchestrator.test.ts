@@ -729,16 +729,22 @@ describe('PluginPublisherOrchestrator', () => {
     { status: 503, code: 'RATE_LIMIT_UNAVAILABLE', expected: 'RATE_LIMIT_UNAVAILABLE' },
     { status: 503, code: 'STORAGE_UNAVAILABLE', expected: 'STORAGE_UNAVAILABLE' },
     { status: 409, code: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED', expected: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' },
+    { status: 503, code: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', expected: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' },
+    { status: 409, code: 'PLUGIN_NAMESPACE_CONFIG_REQUIRED', expected: 'PLUGIN_NAMESPACE_CONFIG_REQUIRED' },
+    { status: 409, code: 'PUBLISH_GHOST_ID_INVALID', expected: 'PUBLISH_GHOST_ID_INVALID' },
+    { status: 409, code: 'PLUGIN_GHOST_ID_RESERVED', expected: 'PLUGIN_GHOST_ID_RESERVED' },
   ])('maps prepare $status/$code to $expected', async ({ status, code, expected }) => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
+    const commit = vi.fn();
+    const statusCall = vi.fn();
     const orch = createPluginPublisherOrchestrator({
       api: {
         prepare: async () => {
           throw new PluginPublisherApiError(code, status, 'redacted');
         },
-        commit: vi.fn(),
-        status: vi.fn(),
+        commit,
+        status: statusCall,
       } as unknown as PluginPublisherApi,
       inspectPackage: async () => ({ ghostId: 'demo', name: 'Demo', version: '1.0.0' }),
       confirm: async () => true,
@@ -751,5 +757,19 @@ describe('PluginPublisherOrchestrator', () => {
     if (code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED') {
       expect(failed.message).toBe('请更新 Cindy 后再发布此组织的插件');
     }
+    if (code === 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE') {
+      expect(failed.message).toBe('暂时无法确认企业身份，请稍后重试');
+    }
+    if (code === 'PLUGIN_NAMESPACE_CONFIG_REQUIRED') {
+      expect(failed.message).toBe('企业插件发布暂不可用，请稍后重试');
+    }
+    if (code === 'PUBLISH_GHOST_ID_INVALID') {
+      expect(failed.message).toBe('新插件 ID 必须以小写字母开头，请修改 ID 后重新发布');
+    }
+    if (code === 'PLUGIN_GHOST_ID_RESERVED') {
+      expect(failed.message).toBe('cindy- 开头的 ID 为官方保留，请修改 ID 后重新发布');
+    }
+    expect(commit).not.toHaveBeenCalled();
+    expect(statusCall).not.toHaveBeenCalled();
   });
 });

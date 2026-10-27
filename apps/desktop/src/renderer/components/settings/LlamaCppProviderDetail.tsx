@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -168,9 +169,7 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
         </p>
       )}
       {(error || pollError) && !failed && (
-        <p role="alert" className="text-12" style={{ color: 'var(--error-flat)' }}>
-          {t('settings.providers.llamacpp.failed')}
-        </p>
+        <ErrorNotice role="alert" message={t('settings.providers.llamacpp.failed')} />
       )}
       {(!state?.installed || installing) && (
         <LocalRuntimeInstallView

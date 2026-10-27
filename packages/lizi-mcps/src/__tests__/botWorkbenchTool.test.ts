@@ -9,66 +9,70 @@ function parse(result: { content: Array<{ type: string; text?: string }> }) {
   return JSON.parse(block.text) as Record<string, unknown>;
 }
 
-const snapshot = {
-  projects: [{ name: 'tapmon-art', path: '/w/tapmon-art', exists: true, brief: null }],
-  tasks: [
+/**
+ * 测试价值
+ * - 生产入口与可观察结果:registerBotWorkbenchTools 注册的工具经 registry.call 返回给模型的 JSON。
+ * - 规则依据:2026-10-17 放弃「项目」——工作台改为「一眼」(等你 / 在做),项目与判断工具删除;
+ *   伙伴身份只从调用方 Session 派生,工具不收 botId / 目录。
+ * - 现有覆盖缺口:旧用例覆盖的是项目增删、判断写入与候选快照,随功能删除;「一眼」投影给模型的
+ *   形状(task_id 可直接交给 get_task_digest、只在需要时出现的字段)此前没有覆盖。
+ * - 最小失败输入:离线电脑上的等待行、由别的伙伴在跟的行、撞上用量上限的在做行(phase 不能丢,兜底叫醒靠它找)、
+ *   空白消息、未绑定 Session。
+ * - tier:unit(纯工具层,宿主回调全部 mock)。
+ */
+const glance = {
+  botId: 'cindy-default',
+  scope: 'all' as const,
+  waiting: [
     {
-      taskId: 'claude:abc',
-      source: 'claude-code' as const,
-      imported: false,
-      title: '导出 Android 图标',
-      project: 'tapmon-art',
-      state: null,
-      kind: 'existing' as const,
-      lastActiveAt: '2026-10-01T00:00:00.000Z',
-      messageCount: null,
-      digest: { purpose: '导出 Android 图标', recent: [] },
-      judgment: null,
+      sessionId: 'laptop::s-9',
+      deviceId: 'laptop',
+      deviceName: 'MacBook',
+      online: false,
+      title: '修登录',
+      kind: 'waiting' as const,
+      phase: 'waiting-answer',
+      minutes: 7,
+      question: '要不要删旧表?',
+      waitingFor: 'answer' as const,
+      followerBotId: 'writer',
     },
   ],
-  items: [],
-  automations: [],
-  counts: { unfinished: 0, idea: 0, done: 0, unjudged: 1 },
-  truncated: false,
-  totalTasks: 1,
-  olderCount: 0,
+  working: [
+    {
+      sessionId: 's-1',
+      deviceId: null,
+      deviceName: null,
+      online: true,
+      title: '跑测试',
+      kind: 'working' as const,
+      phase: 'usage-limit',
+      minutes: 3,
+      question: null,
+      waitingFor: null,
+      followerBotId: 'cindy-default',
+    },
+  ],
+  lastSweepAt: Date.UTC(2026, 9, 17, 5, 0, 0),
+  doneToday: 2,
+  offlineDevices: ['MacBook'],
 };
 
 function setup(sessionId: string | null = 'bot-session', todos?:BotWorkbenchCallbacks['todos']) {
   const callbacks: BotWorkbenchCallbacks = {
     ...(todos ? {todos} : {}),
     setResponsibility: vi.fn(async ({ taskId, responsible }) => ({ ok: true as const, taskId, responsible })),
-    get: vi.fn(async () => ({ ok: true as const, workbench: snapshot })),
+    get: vi.fn(async () => ({ ok: true as const, workbench: glance })),
     read: vi.fn(async ({ taskId }: { taskId: string }) => ({
       ok: true as const,
       taskId,
-      transcript: { items: [{ role: 'user' as const, text: '导出图标', at: 1 }], truncated: false },
-    })),
-    set: vi.fn(async ({ taskId, title, verdict, next }: { taskId: string; title: string; verdict: 'unfinished' | 'idea' | 'done'; next?: string | null }) => ({
-      ok: true as const,
-      taskId,
-      judgment: { title, verdict, next: next ?? null, updatedAt: '2026-10-01T00:00:00.000Z' },
-    })),
-    setMany: vi.fn(async ({ items }: { items: Array<{ taskId: string }> }) => ({
-      ok: true as const,
-      saved: items.length,
-      results: items.map((item) => ({ taskId: item.taskId, ok: true as const })),
+      transcript: { items: [{ role: 'user' as const, text: '修登录', at: 1 }], truncated: false },
     })),
     continueTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
       ok: true as const,
       taskId,
       delivery: 'queued' as const,
       queuedMessageId: 'q-1',
-    })),
-    addProject: vi.fn(async ({ path }: { path: string }) => ({
-      ok: true as const,
-      project: { name: 'repo', path },
-      projectCount: 1,
-    })),
-    removeProject: vi.fn(async ({ path }: { path: string }) => ({
-      ok: true as const,
-      path,
-      removed: true,
     })),
   };
   const reg = new XdtHelperToolRegistry();
@@ -80,107 +84,49 @@ function setup(sessionId: string | null = 'bot-session', todos?:BotWorkbenchCall
 }
 
 describe('bot workbench tools', () => {
-  it('reads the workbench through the caller Session only', async () => {
+  it('shows the glance to the model with task ids ready for get_task_digest', async () => {
     const { reg, callbacks } = setup();
-    const result = parse(await reg.call('get_workbench', {}));
-    expect(result).toMatchObject({ ok: true, workbench: { totalTasks: 1 } });
+    expect(parse(await reg.call('get_workbench', {}))).toEqual({
+      ok: true,
+      workbench: {
+        scope: 'all',
+        waiting: [{
+          task_id: 'laptop::s-9', title: '修登录', phase: 'waiting-answer', minutes: 7, device: 'MacBook', online: false,
+          waiting_for: 'answer', question: '要不要删旧表?', followed_by: 'writer',
+        }],
+        working: [{ task_id: 's-1', title: '跑测试', phase: 'usage-limit', minutes: 3 }],
+        done_today: 2,
+        last_sweep_at: '2026-10-17T05:00:00.000Z',
+        offline_devices: ['MacBook'],
+      },
+    });
     expect(callbacks.get).toHaveBeenCalledWith({ callerSessionId: 'bot-session' });
   });
 
-  it('continues a task by id, never by a caller-supplied Bot or project', async () => {
+  it('reads and continues a task by id (local or deviceId::sessionId), never by a caller-supplied Bot', async () => {
     const { reg, callbacks } = setup();
-    expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '把剩下的导出做完' })))
-      .toMatchObject({ ok: true, task_id: 'task-1', delivery: 'queued', queued_message_id: 'q-1' });
+    expect(parse(await reg.call('read_workbench_task', { task_id: 'laptop::s-9' })))
+      .toMatchObject({ ok: true, task_id: 'laptop::s-9', transcript: { truncated: false } });
+    expect(callbacks.read).toHaveBeenCalledWith({ callerSessionId: 'bot-session', taskId: 'laptop::s-9' });
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '汇报当前进展并继续', bot_id: 'other' })).ok).toBe(false);
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '汇报当前进展并继续' })))
+      .toEqual({ ok: true, task_id: 'task-1', delivery: 'queued', queued_message_id: 'q-1' });
     expect(callbacks.continueTask).toHaveBeenCalledWith({
       callerSessionId: 'bot-session',
       taskId: 'task-1',
-      message: '把剩下的导出做完',
+      message: '汇报当前进展并继续',
     });
-  });
-
-  it('hands projects over and back through the caller Session only', async () => {
-    const { reg, callbacks } = setup();
-    expect(parse(await reg.call('add_workbench_project', { path: '/Users/me/repo' })))
-      .toMatchObject({ ok: true, project: { name: 'repo', path: '/Users/me/repo' }, project_count: 1 });
-    expect(callbacks.addProject).toHaveBeenCalledWith({ callerSessionId: 'bot-session', path: '/Users/me/repo' });
-    expect(parse(await reg.call('remove_workbench_project', { path: '/Users/me/repo' })))
-      .toMatchObject({ ok: true, path: '/Users/me/repo', removed: true });
-    expect(callbacks.removeProject).toHaveBeenCalledWith({ callerSessionId: 'bot-session', path: '/Users/me/repo' });
-  });
-
-  it('reads a candidate and records a judgment for it', async () => {
-    const { reg, callbacks } = setup();
-    expect(parse(await reg.call('read_workbench_task', { task_id: 'claude:abc' })))
-      .toMatchObject({ ok: true, task_id: 'claude:abc', transcript: { truncated: false } });
-    expect(callbacks.read).toHaveBeenCalledWith({ callerSessionId: 'bot-session', taskId: 'claude:abc' });
-    expect(
-      parse(await reg.call('set_workbench_task', { task_id: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' })),
-    ).toMatchObject({ ok: true, judgment: { verdict: 'unfinished', next: '补 xxhdpi' } });
-    expect(callbacks.set).toHaveBeenCalledWith({
-      callerSessionId: 'bot-session',
-      taskId: 'claude:abc',
-      title: '导出图标',
-      verdict: 'unfinished',
-      next: '补 xxhdpi',
-    });
-  });
-
-  it('writes a batch of judgments with optional refs in one call', async () => {
-    const { reg, callbacks } = setup();
-    const result = parse(await reg.call('set_workbench_tasks', {
-      items: [
-        { task_id: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' },
-        { task_id: 'pr:makecindy/cindy#5292', title: '工作台 PR', verdict: 'unfinished', next: '处理 review', ref: 'https://github.com/makecindy/cindy/pull/5292' },
-        { task_id: 'idea:dark-icons', title: '暗色图标', verdict: 'idea', next: '按 DESIGN.md 补一套', ref: '/w/tapmon-art/DESIGN.md', project: '/w/tapmon-art' },
-      ],
-    }));
-    expect(result).toMatchObject({ ok: true, saved: 3 });
-    expect(callbacks.setMany).toHaveBeenCalledWith({
-      callerSessionId: 'bot-session',
-      items: [
-        { taskId: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' },
-        { taskId: 'pr:makecindy/cindy#5292', title: '工作台 PR', verdict: 'unfinished', next: '处理 review', ref: 'https://github.com/makecindy/cindy/pull/5292' },
-        { taskId: 'idea:dark-icons', title: '暗色图标', verdict: 'idea', next: '按 DESIGN.md 补一套', ref: '/w/tapmon-art/DESIGN.md', project: '/w/tapmon-art' },
-      ],
-    });
-  });
-
-  it('caps the batch at 30 items before reaching the host', async () => {
-    const { reg, callbacks } = setup();
-    const items = Array.from({ length: 31 }, (_, index) => ({ task_id: `t-${index}`, title: 't', verdict: 'done' }));
-    expect(parse(await reg.call('set_workbench_tasks', { items })).ok).toBe(false);
-    expect(parse(await reg.call('set_workbench_tasks', { items: [] })).ok).toBe(false);
-    expect(callbacks.setMany).not.toHaveBeenCalled();
-  });
-
-  it('reports a background task started for a non-session entry', async () => {
-    const { reg, callbacks } = setup();
-    vi.mocked(callbacks.continueTask).mockResolvedValueOnce({
-      ok: true,
-      taskId: 'child-1',
-      delivery: 'started',
-      startedFrom: 'idea:dark-icons',
-    });
-    expect(parse(await reg.call('continue_workbench_task', { task_id: 'idea:dark-icons', message: '开始做' })))
-      .toMatchObject({ ok: true, task_id: 'child-1', started_from: 'idea:dark-icons' });
-  });
-
-  it('rejects judgments outside the schema before reaching the host', async () => {
-    const { reg, callbacks } = setup();
-    expect(parse(await reg.call('set_workbench_task', { task_id: 't', title: 'x'.repeat(41), verdict: 'done' })).ok).toBe(false);
-    expect(parse(await reg.call('set_workbench_task', { task_id: 't', title: '标题', verdict: 'maybe' })).ok).toBe(false);
-    expect(callbacks.set).not.toHaveBeenCalled();
   });
 
   it('passes host denials through with their error code', async () => {
     const { reg, callbacks } = setup();
     vi.mocked(callbacks.continueTask).mockResolvedValueOnce({
       ok: false,
-      errorCode: 'TASK_OUTSIDE_WORKBENCH',
-      message: '这件任务不在主人交给你的项目里',
+      errorCode: 'TASK_NOT_RESPONSIBLE',
+      message: '这件任务没有交给你跟进',
     });
     expect(parse(await reg.call('continue_workbench_task', { task_id: 'other', message: 'hi' })))
-      .toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+      .toMatchObject({ ok: false, errorCode: 'TASK_NOT_RESPONSIBLE' });
   });
 
   it('rejects blank messages before reaching the host', async () => {
@@ -193,18 +139,15 @@ describe('bot workbench tools', () => {
   it('requires a bound Bot session', async () => {
     const { reg, callbacks } = setup(null);
     expect(parse(await reg.call('get_workbench', {}))).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
-    expect(parse(await reg.call('add_workbench_project', { path: '/Users/me/repo' })))
-      .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
     expect(callbacks.get).not.toHaveBeenCalled();
-    expect(callbacks.addProject).not.toHaveBeenCalled();
   });
 
-  it('no longer offers the card-writing or duplicate stop tool', () => {
+  it('no longer offers project, judgment, card-writing or duplicate stop tools', () => {
     const { reg } = setup();
-    expect(reg.has('update_workbench')).toBe(false);
-    // Stopping goes through the general stop_session_turn, judged per turn by the host.
-    expect(reg.has('stop_workbench_task')).toBe(false);
-    for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'continue_workbench_task', 'add_workbench_project', 'remove_workbench_project']) {
+    for (const name of ['update_workbench', 'stop_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'add_workbench_project', 'remove_workbench_project']) {
+      expect(reg.has(name)).toBe(false);
+    }
+    for (const name of ['get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
       expect(reg.has(name)).toBe(true);
     }
   });
@@ -249,4 +192,20 @@ it('keeps older hosts usable without advertising an unavailable responsibility w
   const names = reg.list('bots').map(tool => tool.name);
   expect(names).toContain('get_workbench');
   expect(names).not.toContain('set_workbench_task_responsibility');
+});
+
+// Restored links are independently discoverable; no task responsibility callback runs when linking.
+// Minimal input: list + one project toggle with a caller session. Unit tool registry contract.
+it('exposes project discovery and changes using caller identity without claiming any tasks', async () => {
+  const { callbacks } = setup();
+  callbacks.projects = vi.fn(async () => ({ ok: true as const, projects: [{ project_id: 'a'.repeat(64), working_dir: '/project', linked: true }] }));
+  const registry = new XdtHelperToolRegistry();
+  registerBotWorkbenchTools(registry, { callbacks, getSessionContext: () => ({ sessionId: 'main', agentKind: 'codex', workingDir: '/home' }) });
+  expect(parse(await registry.call('list_teammate_projects', {}))).toMatchObject({ ok: true, projects: [{ linked: true }] });
+  await registry.call('set_teammate_project', { project_id: 'a'.repeat(64), linked: false });
+  expect(callbacks.projects).toHaveBeenLastCalledWith({ callerSessionId: 'main', projectId: 'a'.repeat(64), linked: false });
+  expect(callbacks.setResponsibility).not.toHaveBeenCalled();
+  const unbound = new XdtHelperToolRegistry();
+  registerBotWorkbenchTools(unbound, { callbacks, getSessionContext: () => ({ agentKind: 'codex', workingDir: '/home' }) });
+  expect(parse(await unbound.call('list_teammate_projects', {}))).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
 });

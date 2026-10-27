@@ -9,6 +9,7 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
  * one the user can act on (PLAN_OPEN, MEMBER_LIMIT, …), otherwise the action's fallback line.
  */
 export function botGroupActionErrorText(t: Translate, error: unknown, fallbackKey: string): string {
+  if (/\bCONVERSATION_DISSOLVED\b/.test(formatRemoteError(error))) return t('groupChat.lifecycle.dissolved');
   if (/\b(?:PRECONDITION_FAILED|REVISION_CONFLICT)\b/.test(formatRemoteError(error))) return t('groupChat.settings.conflict');
   const timeout = /\bINVOKE_TIMEOUT\b/.test(formatRemoteError(error));
   const variant = botGroupErrorVariant(timeout ? 'REQUEST_TIMEOUT' : botGroupErrorCode(error));

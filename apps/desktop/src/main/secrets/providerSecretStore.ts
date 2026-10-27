@@ -5,6 +5,7 @@ import {
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { readChunkedSecret, writeChunkedSecret } from './chunkedSecretFile.js';
 
 import { storedCustomProviderId } from '@cindy/model-providers';
@@ -25,6 +26,7 @@ import {
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
+  MCP_APP_REVISION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
@@ -37,6 +39,7 @@ import {
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('providerSecretStore');
+let mcpAppRevisionKeyCache: { path: string; key: string } | undefined;
 
 let canUseMivoAlias: ((instanceKey: string) => boolean) | null = null;
 
@@ -44,19 +47,23 @@ export function setMivoSecretAliasVerifier(verifier: ((instanceKey: string) => b
   canUseMivoAlias = verifier;
 }
 
+// Only this historical key can use the Mivo alias. Loading install facts for
+// unrelated secrets rescans the full plugin list during Renderer projection.
+function isHistoricalMivoSecret(instanceKey: string, secretKey: string): boolean {
+  return instanceKey === 'xd-mivo' && secretKey === 'mivo_api_key';
+}
+
 function approvedGhostSecretStorageKey(instanceKey: string, secretKey: string): string {
-  return ghostSecretStorageKey(instanceKey, secretKey, canUseMivoAlias?.(instanceKey) === true);
+  const allowMivoAlias = isHistoricalMivoSecret(instanceKey, secretKey) &&
+    canUseMivoAlias?.(instanceKey) === true;
+  return ghostSecretStorageKey(instanceKey, secretKey, allowMivoAlias);
 }
 
 function approvedGhostSecretHintKey(instanceKey: string, secretKey: string): string {
   // The historical hint stays on the standard key only while the same install
   // fact maps the secret onto the historical Mivo key. Otherwise the hint
   // follows the non-alias key, so read, write, and delete stay together.
-  if (
-    instanceKey === 'xd-mivo' &&
-    secretKey === 'mivo_api_key' &&
-    canUseMivoAlias?.(instanceKey) !== true
-  ) {
+  if (isHistoricalMivoSecret(instanceKey, secretKey) && canUseMivoAlias?.(instanceKey) !== true) {
     return 'ghost_hint__local__' + instanceKey + '_' + secretKey;
   }
   return ghostSecretHintStorageKey(instanceKey, secretKey);
@@ -297,6 +304,7 @@ export function createProviderSecretStore(
 ): ProviderSecretStore {
   let lastReconciledOwnerId: string | null = null;
   const notifySecretsCleared = (): void => {
+    mcpAppRevisionKeyCache = undefined;
     for (const listener of secretsClearedListeners) {
       try {
         listener();
@@ -313,6 +321,7 @@ export function createProviderSecretStore(
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
     io.remove(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
+    io.remove(MCP_APP_REVISION_KEY_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -645,6 +654,37 @@ export function writePiProxyDerivationKey(value: string): boolean {
       'write pi proxy derivation key failed',
     );
     return false;
+  }
+}
+
+/** Owner-scoped revision key: private, encrypted and stable across Host restarts. */
+export function getMcpAppRevisionKey(): string {
+  try {
+    const storageKey = resolveOwnerScopedSecretStorageKey(MCP_APP_REVISION_KEY_STORAGE_KEY);
+    if (!storageKey || isAppSessionBoundaryPending()) throw new Error('owner unavailable');
+    const filepath = path.join(secretDir(), `${storageKey}.enc`);
+    if (mcpAppRevisionKeyCache?.path === filepath) return mcpAppRevisionKeyCache.key;
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('vault unavailable');
+    let key = readPhysical(storageKey);
+    if (key === null) {
+      const created = randomBytes(32).toString('hex');
+      const encrypted = safeStorage.encryptString(created).toString('base64');
+      fs.mkdirSync(secretDir(), { recursive: true });
+      try {
+        // Concurrent instances must adopt the winner, never overwrite its key.
+        fs.writeFileSync(filepath, encrypted, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        key = created;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        key = readPhysical(storageKey);
+      }
+    }
+    if (!key || !/^[a-f0-9]{64}$/.test(key)) throw new Error('invalid revision key');
+    mcpAppRevisionKeyCache = { path: filepath, key };
+    return key;
+  } catch {
+    // Never fall back to a public hash, replace unreadable vault data or expose it.
+    throw new Error('MCP_APP_REVISION_KEY_UNAVAILABLE');
   }
 }
 

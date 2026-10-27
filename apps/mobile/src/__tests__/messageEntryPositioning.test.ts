@@ -50,6 +50,30 @@ function fixture(focused: string | null = null, saved?: object) {
 }
 
 describe('message entry lifecycle', () => {
+  // Regression: retained history can stay blank on reentry after native reveal
+  // cancellation. Existing tests never settled the native fallback as cancelled.
+  // Execute the production layout callback with that minimum native result;
+  // unit tier checks visible reveal state, including stale-generation isolation.
+  it.each([true, false])('reveals the current history when native animation settles (finished=%s)', (finished) => {
+    const h = fixture();
+    let settle!: (result: { finished: boolean }) => void;
+    h.bindings.Animated.timing = () => ({ start: (done: typeof settle) => { settle = done; }, stop: vi.fn() });
+    h.layout();
+    expect(h.state.revealed).toBe(false);
+    settle({ finished });
+    h.layout();
+    expect(h.state.revealed).toBe(true);
+    expect(h.bindings.scrollToEndProgrammatically).toHaveBeenCalledTimes(1);
+  });
+  it.each([true, false])('ignores an old native animation after changing histories (finished=%s)', (finished) => {
+    const h = fixture();
+    let settle!: (result: { finished: boolean }) => void;
+    h.bindings.Animated.timing = () => ({ start: (done: typeof settle) => { settle = done; }, stop: vi.fn() });
+    h.layout();
+    h.bindings.initialRevealGenerationRef.current++;
+    settle({ finished });
+    expect(h.state.revealed).toBe(false);
+  });
   it('positions explicit navigation first and reveals on seek completion without visiting the tail', async () => {
     const h = fixture('older');
     let finish!: () => void;

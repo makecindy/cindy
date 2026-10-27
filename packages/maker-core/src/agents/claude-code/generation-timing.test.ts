@@ -2017,7 +2017,7 @@ describe('claude live token speed', () => {
     vi.useRealTimers();
   });
 
-  it('counts main-thread deltas, pauses on non-writing tools and reports the real average at the end', async () => {
+  it('counts main-thread deltas, pauses on tools and reports the real average at the end', async () => {
     vi.useFakeTimers();
     const ctx = createTranslatorCtx();
     const queue = createAsyncQueue<AgentEvent>();
@@ -2038,7 +2038,7 @@ describe('claude live token speed', () => {
     stream({ type: 'message_delta', usage: { output_tokens: 12 } }, 2_000);
     // Subagent output is not the main thread's speed.
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x y z' } }, 5_000, 'toolu_1');
-    expect(ctx.rt.generation.tokenSpeed.snapshot(5_000)).toMatchObject({ tokens: 4, elapsedMs: 1_000 });
+    expect(ctx.rt.generation.tokenSpeed.snapshot(5_000)).toMatchObject({ tokens: 15, elapsedMs: 1_000 });
     stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 12_000);
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 12_000);
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six' } }, 12_000);
@@ -2129,15 +2129,21 @@ describe('claude live token speed', () => {
     resetClaudeGenerationTiming(ctx.rt.generation);
   });
 
-  it('counts Write tool arguments as generated output', () => {
+  it.each(['Write', 'mcp__custom_tool'])('counts %s arguments and excludes execution time', (name) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const ctx = createTranslatorCtx();
     const queue = createAsyncQueue<AgentEvent>();
     const stream = (event: Record<string, unknown>) =>
       translateSdkMessage({ type: 'stream_event', event }, queue, ctx);
     stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
-    stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_w', name: 'Write', input: {} } });
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_w', name, input: {} } });
+    vi.setSystemTime(2_000);
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"content":"a b c"}' } });
     expect(ctx.rt.generation.tokenSpeed.snapshot()?.tokens).toBeGreaterThan(0);
+    stream({ type: 'content_block_stop', index: 0 });
+    vi.setSystemTime(12_000);
+    expect(ctx.rt.generation.tokenSpeed.snapshot()?.elapsedMs).toBe(1_000);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
   });

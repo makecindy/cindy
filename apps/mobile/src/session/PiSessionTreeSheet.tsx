@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { Text } from '@/components/AppText';
+import { ErrorNotice } from '@/components/ErrorNotice';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -156,10 +158,7 @@ export function PiSessionTreeSheet({
       >
         {disabledReason ? <Text style={styles.notice}>{disabledReason}</Text> : null}
         {error ? (
-          <Pressable onPress={() => void load()} style={styles.noticeButton}>
-            <Text style={styles.error}>{error}</Text>
-            <Text style={styles.retry}>{t('session.screen.retry')}</Text>
-          </Pressable>
+          <ErrorNotice message={error} actions={<MainWindowActionButton action={{ label: t('session.screen.retry'), onPress: () => void load() }} />} />
         ) : null}
         {loading ? (
           <View style={styles.loading}><ActivityIndicator color={colors.textSecondary} /></View>

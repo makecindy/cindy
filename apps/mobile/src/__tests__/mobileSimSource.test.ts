@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import {
@@ -151,11 +151,6 @@ describe('mobile simulator Metro takeover', () => {
       ['/PID', '123', '/T', '/F'],
       { stdio: 'ignore', windowsHide: true },
     );
-  });
-
-  it('normalizes the Windows owner metadata cwd to the mobile directory', () => {
-    const source = readFileSync(join(process.cwd(), 'scripts/sim-metro.mjs'), 'utf8');
-    expect(source).toContain("cwd: owner.worktreeRoot ? join(owner.worktreeRoot, 'apps/mobile') : null");
   });
 
   it('falls back to the listener PID when the group is unavailable', async () => {

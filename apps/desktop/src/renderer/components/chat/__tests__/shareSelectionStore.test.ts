@@ -1,9 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { isShareableMessage, shareSelectionStore } from '../shareSelectionStore';
+import {
+  isShareableMessage,
+  isShareableToolMedia,
+  shareSelectionStore,
+} from '../shareSelectionStore';
 
 beforeEach(() => {
   shareSelectionStore.reset();
+});
+
+describe('isShareableToolMedia', () => {
+  it('含图片的工具产物行可选(AI 截图 / 出图要能进分享图)', () => {
+    expect(isShareableToolMedia([{ kind: 'image' }])).toBe(true);
+    expect(isShareableToolMedia([{ kind: 'video' }, { kind: 'image' }])).toBe(true);
+  });
+
+  it('只有视频 / 音频的行不可选(画不进静态图)', () => {
+    expect(isShareableToolMedia([{ kind: 'video' }, { kind: 'audio' }])).toBe(false);
+    expect(isShareableToolMedia([])).toBe(false);
+  });
 });
 
 describe('isShareableMessage', () => {

@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react';
 import { DeviceLinkError, type DeviceLinkErrorCode } from '@cindy/device-link';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
+import { localNetworkStore } from '@/device-link/localNetworkStatus';
 import {
   createDeviceResponsivenessBreaker,
   type BreakerSendSlot,
@@ -132,7 +133,9 @@ export function createDeviceSendCohort(deviceId: string): number {
  */
 let appActive = true;
 let appLifecycleEpoch = 0;
-const slotLifecycle = new WeakMap<BreakerSendSlot, { epoch: number; active: boolean }>();
+const slotLifecycle = new WeakMap<BreakerSendSlot, {
+  epoch: number; active: boolean; network: ReturnType<typeof localNetworkStore.getSnapshot>;
+}>();
 
 export function noteAppLifecycleState(state: string): void {
   const active = state === 'active';
@@ -141,9 +144,10 @@ export function noteAppLifecycleState(state: string): void {
   appLifecycleEpoch += 1;
 }
 
-function spansAppSuspension(slot: BreakerSendSlot): boolean {
+function spansLocalInterruption(slot: BreakerSendSlot): boolean {
   const issued = slotLifecycle.get(slot);
-  return issued !== undefined && (!issued.active || issued.epoch !== appLifecycleEpoch);
+  return issued !== undefined && (!issued.active || issued.epoch !== appLifecycleEpoch
+    || issued.network.status === 'unavailable' || issued.network !== localNetworkStore.getSnapshot());
 }
 
 export function acquireDeviceSendSlot(
@@ -153,7 +157,7 @@ export function acquireDeviceSendSlot(
 ): BreakerSendSlot {
   const slot = breaker.acquire(deviceId, cohort, options);
   if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
-  slotLifecycle.set(slot, { epoch: appLifecycleEpoch, active: appActive });
+  slotLifecycle.set(slot, { epoch: appLifecycleEpoch, active: appActive, network: localNetworkStore.getSnapshot() });
   return slot;
 }
 
@@ -165,9 +169,9 @@ export function settleDeviceSend(
   // 撤权竞态防护(review P1):撤权时桌面端发 link-close(revoked) 但不 resolve
   // 在途请求,它们随后超时——这不是"设备无响应",是访问被收回。已撤权设备的
   // 超时一律降级为不定论,不再计入熔断,避免 unresponsive 状态与撤权状态并存。
-  // 跨越 App 挂起的超时同理降级(见 noteAppLifecycleState)。
+  // 跨越 App 挂起或手机网络状态变化的超时同理降级；离线时发出的请求也不计数。
   const effective = outcome === 'timeout'
-    && (revokedDevicesStore.has(deviceId) || spansAppSuspension(slot))
+    && (revokedDevicesStore.has(deviceId) || spansLocalInterruption(slot))
     ? 'inconclusive'
     : outcome;
   breaker.settle(deviceId, slot, effective);

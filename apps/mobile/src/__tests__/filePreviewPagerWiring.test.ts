@@ -22,13 +22,36 @@ function readSource(rel: string): string {
 const source = readSource('app/files/preview/[sessionId].tsx');
 
 describe('remote file preview pager wiring', () => {
+  it.each(['app/files/[sessionId].tsx', 'app/files/preview/[sessionId].tsx'])('cancels the in-flight export on blur and on Cancel, including the phone download and share sheet, in %s', (path) => {
+    const routeSource = readSource(path);
+    // 失焦即取消:点进下一层 / 跳会话页时本屏留在栈中不卸载。必须走与「取消」按钮同一个
+    // 会复位忙碌提示的出口,否则回到本屏时残留一个无事可取消的忙碌底栏。
+    expect(routeSource).toContain('useFocusEffect(useCallback(() => cancelExport, [cancelExport]));');
+    expect(routeSource).toMatch(/onCancel(Notice)?[=:] ?\{? ?cancelExport/);
+    // 动态加载分享模块期间可能已取消:shareAsync 前必须再查一次。
+    expect(routeSource).toMatch(/await import\('expo-sharing'\);\n\s*if \(run\.cancelled\) return;\n\s*await sharing\.shareAsync/);
+    expect(routeSource).toMatch(/run\.abort\.abort\(\);/);
+    expect(routeSource).toMatch(/downloadRemoteMediaShareTemp\(url, mime, item\.name, run\.abort\.signal\)/);
+  });
+
+  it.each(['app/files/[sessionId].tsx', 'app/files/preview/[sessionId].tsx'])('passes the route device ID into the source gate for %s', (path) => {
+    const routeSource = readSource(path).split('export default function ')[1]?.split('\n}\n')[0] ?? '';
+    expect(routeSource).toContain('const { sessionId, deviceId } = useLocalSearchParams<');
+    expect(routeSource).toContain('deviceId={readRouteString(deviceId) ?? undefined}');
+  });
+
   it('exposes source readiness only on the visible loaded text page', () => {
     const textPage = source.slice(source.indexOf('function TextPreviewPage('), source.indexOf('function ImagePreviewPage('));
     const sourceList = textPage.match(/<FlatList\s[\s\S]*?data=\{state.lines\}[\s\S]*?testID=\{visible \? 'filePreview.sourceReady' : undefined\}/);
     expect(sourceList).not.toBeNull();
-    // Loading/error pages and prefetched neighbours must not satisfy the wait.
-    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(textPage.indexOf("if (state.status === 'loading')"));
-    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(textPage.indexOf("if (state.status === 'unavailable')"));
+    // Guard protocol: Maestro file_browser.yaml / visual_files.yaml wait for sourceReady.
+    // Loading/error pages and prefetched neighbours must not satisfy that wait.
+    // Require both branches to exist: comparing a list offset with -1 silently passed.
+    const loadingBranch = textPage.indexOf("state.status === 'loading' ? (");
+    const unavailableBranch = textPage.indexOf("state.status === 'unavailable' ? (");
+    expect(loadingBranch).toBeGreaterThanOrEqual(0);
+    expect(unavailableBranch).toBeGreaterThan(loadingBranch);
+    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(unavailableBranch);
   });
 
   it('reserves horizontal gestures for the PDF WebView', () => {
@@ -214,12 +237,15 @@ describe('HTML 生成物的渲染态接线', () => {
     expect(source).toContain('testID="filePreview.htmlError"');
     expect(source).toContain("t('files.preview.htmlSnapshotTooLarge')");
     expect(source).toContain('onPress: htmlSnapshot.retry');
-    expect(source).toContain('!htmlSnapshot.preview || !htmlSnapshot.foreground');
+    // The viewport now mounts during preparation; executable content remains gated
+    // inside the reader until a current, guarded snapshot exists.
+    expect(readSource('src/session/HtmlFileReader.tsx')).toContain('{preview ? <WebView');
+    expect(readSource('src/session/useHtmlSnapshot.ts')).toContain('const current = enabled && foreground');
   });
 
   it('downloads stop on source mode, invisibility, background, and source identity changes', () => {
     const hook = readSource('src/session/useHtmlSnapshot.ts');
-    expect(hook).toContain('if (!enabled || !foreground) return');
+    expect(hook).toContain('if (!enabled || !foreground) {');
     expect(hook).toContain('controller.abort()');
     expect(hook).toContain('preview?.close()');
     expect(hook).toContain('[absPath, enabled, foreground, prepare, epoch]');

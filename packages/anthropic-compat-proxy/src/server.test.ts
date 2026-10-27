@@ -794,6 +794,7 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     }).catch(() => 'rejected' as const);
     const result = await Promise.race([
       resultPromise,
+      // real-wait: bound the proxy request while the upstream cancellation path is under test.
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
     ]);
     controller.abort();
@@ -3176,6 +3177,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
           await Promise.race([
             seenPromise,
             new Promise<never>((_resolve, reject) => {
+              // real-wait: bound the real PI process handshake if the proxy is never reached.
               reachTimeout = setTimeout(
                 () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
                 10_000,
@@ -3201,6 +3203,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
       } finally {
         if (child && child.exitCode === null && child.signalCode === null) {
           await new Promise<void>((resolve) => {
+            // real-wait: bound child shutdown after sending SIGTERM to the real PI process.
             const timer = setTimeout(() => {
               if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
               resolve();
@@ -3675,6 +3678,84 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
   });
 
+  // 回归:Codex CLI 收到 response.completed 即断开,上游 body 往往尚未 end —— 日志里 ~97%
+  // 的 /responses 被误记成 client-aborted。终态事件后断开须按正常完成收口(仍释放上游),
+  // 只有终态前断开才是失败。
+  it.each([
+    {
+      name: 'terminal event forwarded → complete',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n',
+      waitFor: 'response.completed',
+      expected: { type: 'complete', status: 200 },
+      observerEnds: 1,
+      disconnectLogs: 0,
+    },
+    {
+      name: 'terminal event only half sent (no blank line yet) → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\n',
+      waitFor: 'response.completed',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+    {
+      name: 'no terminal event yet → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n',
+      waitFor: 'response.created',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+  ])('client close after SSE: $name', async ({ events: sse, waitFor, expected, observerEnds, disconnectLogs }) => {
+    let sawUpstreamClose!: () => void;
+    const upstreamClosed = new Promise<void>((r) => { sawUpstreamClose = r; });
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sse);
+      // 永不 end:上游在终态事件后仍保持 body 打开。
+      res.on('close', () => sawUpstreamClose());
+    });
+    upstreamClose = upstream.close;
+    const lifecycle: Array<Record<string, unknown>> = [];
+    const infoLogs: string[] = [];
+    let ends = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { info: (msg) => { infoLogs.push(msg); } },
+      routingTransform: () => ({
+        forwardLifecycle: {
+          onComplete: (status) => lifecycle.push({ type: 'complete', status }),
+          onFailure: (failure) => lifecycle.push({ type: 'failure', failure }),
+        },
+      }),
+      responseObserver: () => ({ onEnd: () => { ends += 1; } }),
+    });
+
+    const controller = new AbortController();
+    const res = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+      signal: controller.signal,
+    });
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (!received.includes(waitFor)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    controller.abort();
+    await upstreamClosed;
+    await vi.waitFor(() => expect(lifecycle).toEqual([expected]));
+    expect(ends).toBe(observerEnds);
+    expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(disconnectLogs);
+  });
+
   it('透明重试后的上游 2xx SSE 中断时,立即收口且旧 listener 不误报客户端断开', async () => {
     const errorLogs: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
     const infoLogs: string[] = [];
@@ -3730,6 +3811,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     const outcome = await Promise.race([
       operation.then(() => 'settled' as const),
       new Promise<'timeout'>((resolve) => {
+        // real-wait: watchdog the upstream abort path so a hung response cannot stall the test.
         timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
       }),
     ]);
@@ -4066,10 +4148,12 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
 
   // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
   // 因此 postAs 复用同一个 upstream + proxy。
-  async function setupSingleProxy(): Promise<void> {
+  async function setupSingleProxy(compatibilityProfiles?: string[]): Promise<void> {
     const upstream = await mintingUpstream();
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      ...(compatibilityProfiles ? { routingTransform: () => ({ upstreamOverride: upstream.url, compatibilityProfiles }) } : {}),
+    });
   }
 
   async function postAs(sessionId: string, body: unknown): Promise<string> {
@@ -4102,19 +4186,18 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).toMatch(/Bash_210_dup\d+/);
   });
 
-  it('Kimi Code 的 k3 模型 id 同样判定为 kimi 会话(codex-connector P1)', async () => {
-    await setupSingleProxy();
-    // catalog 里 moonshot-kimi-code provider 的 claude-code runtime model id 是裸 `k3`
-    // (Kimi K3), 不带 kimi 前缀 —— 修复前 isKimiRequest 对 k3 返回 false → 不接管
+  it.each(['k3', 'k3-256k', 'k3.1-pro', 'k3.1-pro-highspeed', 'future-catalog-model'])('Kimi Code 的 %s 首次工具流在 rewind 后仍去重 (#7005)', async (model) => {
+    await setupSingleProxy(model === 'future-catalog-model' ? ['kimi-tool-ids-v1'] : undefined);
+    // Coding ID 不带 kimi 前缀；小数版本也必须记录首个 streamed id。
     const r1 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '你好' }],
     });
     expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
 
     // 第二次请求(同 session, 模拟 rewind): 缓存里已有 Bash_210 → 拦截改名
     const r2 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '继续' }],
     });
     expect(r2).not.toContain('"id":"Bash_210"');

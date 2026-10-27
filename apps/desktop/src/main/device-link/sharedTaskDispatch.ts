@@ -255,7 +255,8 @@ export function assertSharedTaskInvoke(
   if (channel === 'device-link:media:fetch') {
     const request = record(args[0]);
     if (args.length !== 1 || !request || typeof request.url !== 'string' ||
-          Object.keys(request).some((key) => !['url', 'skipCache', 'thumbnail', 'prepareOnly'].includes(key)) ||
+          Object.keys(request).some((key) => !['url', 'skipCache', 'thumbnail', 'prepareOnly', 'metadataOnly'].includes(key)) ||
+        (request.metadataOnly !== undefined && typeof request.metadataOnly !== 'boolean') ||
         !capture.authorize('attachment.read')) deny();
     // The media handler validates ledger/workdir ownership before reading bytes.
     return;
@@ -339,5 +340,7 @@ export function captureSharedTaskPush(source: string, channel: string, payload: 
       sharedTaskMetadataTopic(channel, payload) !== null ||
       channel.startsWith('usage:message-') || channel === 'usage:session-spend-changed' || channel === 'usage:session-tokens-changed')) return null;
   if (channel === 'maker:event:batch' && (!Array.isArray(row.events) || row.events.some((event) => record(event)?.sessionId !== sessionId))) return null;
+  // 代输入 is the owner's own sign-in step; guests never see or answer it.
+  if (channel === 'maker:interaction-request' && record(row.request)?.kind === 'input_handoff') return null;
   return () => capture.isCurrent();
 }

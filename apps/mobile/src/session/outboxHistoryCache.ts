@@ -6,11 +6,12 @@ import { remoteSessionStore } from './remoteSessionStore';
 import type { RemoteMessage } from './types';
 
 /** A sent row can age out of the latest window; it must not become a pending bubble forever. */
-function coversMessage(snapshot: HistoryViewSnapshot<RemoteMessage>, message: RemoteMessage): boolean {
+function coversMessage(snapshot: HistoryViewSnapshot<RemoteMessage>, clientId: string, message?: RemoteMessage): boolean {
   if (!snapshot.ready) return false;
   const leaves = historyViewLeaves(snapshot.items);
   if (leaves.some(item => item.type === 'messages'
-    && item.messages.some(row => row.role === 'user' && row.clientId === message.clientId))) return true;
+    && item.messages.some(row => row.role === 'user' && row.clientId === clientId))) return true;
+  if (!message) return false;
   // User rows never fold into work. Skip leading work to find a stored boundary,
   // and use the host's (createdAt, rowid) order, not import/insertion order alone.
   const first = leaves.find(item => item.type === 'messages' && item.messages.length > 0);
@@ -31,17 +32,17 @@ export async function cacheOutboxHistory(
   if (!isCurrent()) return false;
   const messages = remoteSessionStore.getMessages(sessionId);
   const message = messages.find(row => row.clientId === clientId && row.role === 'user');
-  if (!message) return false;
   const view = findRemoteHistoryView(deviceId, sessionId);
   const snapshot = view?.getSnapshot();
   if (snapshot && isHistoryViewUnavailable(snapshot.error)) {
+    if (!message) return false;
     // Older hosts render the raw window. Do not turn a scheduled task into a long-term cache.
     if (remoteSessionStore.getSessionRetention(sessionId) !== 'regular') return true;
     // Revoke pre-handoff debounce writes before the existing serialized replacement.
     return await replaceCachedSessionMessages(deviceId, sessionId, messages) && isCurrent();
   }
   const authority = historyDiskAuthority(deviceId, sessionId);
-  if (snapshot && coversMessage(snapshot, message)) {
+  if (snapshot && coversMessage(snapshot, clientId, message)) {
     // Only status flags change during a refresh; these items already contain the confirmed row.
     const saved = await writeHistoryDisk(authority, { ...snapshot, loading: false, error: null });
     return saved && authority.current() && isCurrent();
@@ -49,5 +50,5 @@ export async function cacheOutboxHistory(
   // A mounted stale page still needs its local bubble even if disk is newer.
   if (snapshot) return false;
   const cached = await readHistoryDisk(authority);
-  return !!cached && coversMessage(cached, message) && authority.current() && isCurrent();
+  return !!cached && coversMessage(cached, clientId, message) && authority.current() && isCurrent();
 }

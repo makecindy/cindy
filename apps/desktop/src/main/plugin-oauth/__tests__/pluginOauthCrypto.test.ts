@@ -12,7 +12,11 @@ import {
   AuthenticatedOauthHost,
   OauthHostIdentity,
 } from "../authentication";
-import type { PluginOauthPeerIdentity } from "@cindy/device-link";
+import {
+  INPUT_HANDOFF_PICTURE_MAX_BYTES,
+  PLUGIN_OAUTH_SEALED_MAX_BYTES,
+  type PluginOauthPeerIdentity,
+} from "@cindy/device-link";
 const crypto: PluginOauthCrypto = {
   random: (n) => new Uint8Array(randomBytes(n)),
   encrypt: async (key, iv, body, aad) => {
@@ -72,6 +76,24 @@ describe("mobile native plugin authorization cryptography", () => {
     await expect(
       mobile.seal(desktop.publicKey, "transaction", "callback", {}),
     ).rejects.toThrow("OAUTH_BRIDGE_INVALID");
+  });
+  it("carries a full-size screenshot offer to the phone but keeps answers small", async () => {
+    const mobile = new MobileOauthBox(crypto),
+      desktop = new OauthBox();
+    const data = randomBytes(INPUT_HANDOFF_PICTURE_MAX_BYTES).toString("base64");
+    const offer = desktop.seal(mobile.publicKey, "transaction", "offer", { picture: data });
+    expect(
+      await mobile.open(desktop.publicKey, "transaction", "offer", offer),
+    ).toEqual({ picture: data });
+    // The answer direction keeps its small limit both ways.
+    await expect(
+      mobile.seal(desktop.publicKey, "transaction", "callback", {
+        value: "x".repeat(PLUGIN_OAUTH_SEALED_MAX_BYTES.callback),
+      }),
+    ).rejects.toThrow("OAUTH_BRIDGE_INVALID");
+    expect(() =>
+      desktop.open(mobile.publicKey, "transaction", "callback", offer),
+    ).toThrow();
   });
   it("verifies the actual signed Host handshake before transmitting authenticated requests", async () => {
     const identity = new OauthHostIdentity(),

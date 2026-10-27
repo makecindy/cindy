@@ -196,6 +196,12 @@ export interface RemoteDesktopCapabilities {
   windowActions?: boolean;
   workspaceNavigation?: boolean;
   omarchyMenu?: boolean;
+  /**
+   * Accepts `start` with `handoff`: a live view of only the window a pending
+   * 代输入 step is about, with input confined to that window. The host picks the
+   * window; a viewer can never name one.
+   */
+  handoffWindow?: boolean;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -222,6 +228,13 @@ export interface RemoteDesktopLease {
   viewerDisplayRequest?: { width: number; height: number };
   /** The display change kept the existing video stream; no new offer is needed. */
   videoKept?: boolean;
+  /** A 代输入 live view: the video is this one window, and input stays inside it. */
+  window?: RemoteDesktopLeaseWindow;
+}
+/** Host-verified description of the single window a 代输入 live view shows. */
+export interface RemoteDesktopLeaseWindow {
+  app: string;
+  title?: string;
 }
 export type RemoteDesktopRequest =
   | { op: "windowAction"; lease: string; action: "list" | "desktop" }
@@ -252,6 +265,8 @@ export type RemoteDesktopRequest =
       takeover?: boolean;
       control?: boolean;
       lockOnExit?: boolean;
+      /** 代输入 request id; only to hosts advertising `handoffWindow`. */
+      handoff?: string;
     }
   | { op: "heartbeat"; lease: string; lockOnExit?: boolean }
   | { op: "stop"; lease: string; lockScreen?: boolean }
@@ -324,9 +339,15 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     if (v.takeover === true && v.resume === true)
       throw new Error("INVALID_REQUEST");
+    if (
+      v.handoff !== undefined &&
+      (typeof v.handoff !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v.handoff))
+    )
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       displayId: v.displayId,
+      ...(typeof v.handoff === "string" ? { handoff: v.handoff } : {}),
       ...(v.takeover === true ? { takeover: true } : {}),
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
       ...control(),

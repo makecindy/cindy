@@ -1,109 +1,107 @@
-/**
- * SessionImportSection source-level lifecycle contract tests.
- *
- * The component calls Electron IPC through preload, so this pins the first-entry
- * scan behavior without booting renderer globals.
- */
+// @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { StrictMode, createElement } from 'react';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const sourcePath = resolve(__dirname, '..', 'components', 'settings', 'SessionImportSection.tsx');
-const source = readFileSync(sourcePath, 'utf8');
+import { SessionImportSection } from '@/components/settings/SessionImportSection';
 
-describe('SessionImportSection initial scan', () => {
-  it('runs the existing scan path once when the import settings panel mounts', () => {
-    expect(source).toContain('const initialScanStartedRef = useRef(false);');
-    expect(source).toMatch(
-      /useEffect\(\(\) => \{\s*if \(initialScanStartedRef\.current\) return;\s*initialScanStartedRef\.current = true;\s*void runScan\(\);\s*\}, \[runScan\]\);/,
-    );
+vi.mock('react-i18next', () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+// The sharing wizard is a separate entry; keep the scanned-list UI real.
+vi.mock('@/components/settings/SessionShareImportWizard', () => ({
+  SessionShareImportWizard: () => null,
+}));
+
+type ScanResult = Awaited<ReturnType<typeof window.electronAPI.localDb.sessionImport.scan>>;
+const scan = vi.fn<typeof window.electronAPI.localDb.sessionImport.scan>();
+
+function scanResult(title: string): ScanResult {
+  return {
+    sources: { codexHomes: [], claudeRoots: [] },
+    candidates: [{
+      key: 'codex:' + title,
+      source: 'codex',
+      id: title,
+      title,
+      cwd: '',
+      updatedAt: '2026-10-16T00:00:00.000Z',
+      archived: false,
+      workspaceKind: 'dialogue',
+      sidebarBucket: 'dialogue',
+      projectDir: null,
+    }],
+    rejected: { codex: 0, claude: 0, existing: 0 },
+    currentProjectDirs: [],
+  };
+}
+
+function pendingScan() {
+  let resolve!: (value: ScanResult) => void;
+  const promise = new Promise<ScanResult>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+beforeEach(() => {
+  scan.mockReset();
+  vi.stubGlobal('electronAPI', { localDb: { sessionImport: { scan } } });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+// PR #6196 / engineering-conventions §3.2: replace the old source-text checks
+// with the real component's mount and cache-reentry behavior. SettingsView's
+// tests stub this component, so they cannot catch either regression. Restore
+// this module's original unit file: mount once with a pending scan; then remount
+// after one result, while its refresh is pending. No other component shares
+// this module cache or lifecycle, so these cases cannot join its parent tests.
+describe('SessionImportSection automatic scans', () => {
+  it('scans immediately once on mount and displays the result without a click', async () => {
+    const request = pendingScan();
+    scan.mockReturnValueOnce(request.promise);
+
+    render(createElement(StrictMode, null, createElement(SessionImportSection)));
+
+    expect(scan).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect((screen.getByRole('button', { name: 'settings.sessionImport.scan' }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      request.resolve(scanResult('Found on mount'));
+      await request.promise;
+    });
+
+    expect(screen.getByText('Found on mount')).toBeTruthy();
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('button', { name: 'settings.sessionImport.scan' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('keeps the last scan result in memory so re-entering import settings renders stale data immediately', () => {
-    expect(source).toContain('let cachedSessionImportScan: ScanResult | null = null;');
-    expect(source).toContain('useState<ScanResult | null>(() => cachedSessionImportScan)');
-    expect(source).toContain('cachedSessionImportScan = result;');
-  });
+  it('keeps cached candidates visible on reentry until the automatic refresh finishes', async () => {
+    const initialScan = Promise.resolve(scanResult('Cached candidate'));
+    scan.mockReturnValueOnce(initialScan);
+    const first = render(createElement(SessionImportSection));
+    await act(async () => { await initialScan; });
+    expect(screen.getByText('Cached candidate')).toBeTruthy();
+    first.unmount();
 
-  it('keeps project groups collapsed by default, including after an automatic refresh', () => {
-    expect(source).toMatch(/const \[expanded, setExpanded\] = useState<Set<string>>\(\(\) => new Set\(\)\);/);
-    expect(source).toContain('setExpanded(new Set());');
-    expect(source).not.toContain('getDefaultExpandedProjectKeys');
-  });
+    const refresh = pendingScan();
+    scan.mockReturnValueOnce(refresh.promise);
+    render(createElement(SessionImportSection));
 
-  it('renders dialogue imports as first-level session rows instead of expandable folder groups', () => {
-    expect(source).toContain("type: 'dialogue'");
-    expect(source).toContain("item.sidebarBucket !== 'project' || !item.projectDir");
-    expect(source).toMatch(
-      /if \(listItem\.type === 'dialogue'\)[\s\S]*<SessionImportRow[\s\S]*item=\{item\}[\s\S]*checked=\{selected\.has\(item\.key\)\}/,
-    );
-  });
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Cached candidate')).toBeTruthy();
 
-  it('places project selection before the expand control and indents project child rows', () => {
-    expect(source).toContain('grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2');
-    expect(source).toContain('className="flex h-6 w-5 items-center justify-center rounded-full');
-    expect(source).toMatch(
-      /checked=\{selectedCount === group\.items\.length\}[\s\S]*onClick=\{\(\) => toggleGroup\(group\.key\)\}/,
-    );
-    expect(source).toMatch(
-      /<SessionImportRow[\s\S]*checked=\{selected\.has\(item\.key\)\}[\s\S]*onToggle=\{\(\) => toggleItem\(item\.key\)\}[\s\S]*isProjectChild/,
-    );
-    expect(source).toContain("isProjectChild ? 'pl-[40px] pr-4' : 'px-4'");
-  });
+    await act(async () => {
+      refresh.resolve(scanResult('Fresh candidate'));
+      await refresh.promise;
+    });
 
-  it('shows project basename first and full project path as secondary text', () => {
-    expect(source).toContain("import { basename, cn } from '@/lib/utils';");
-    expect(source).toContain('{groupProjectName(group.items[0], t)}');
-    expect(source).toContain("{group.items.length} {t('settings.sessionImport.sessions')} · {groupProjectPath(group.items[0], t)}");
-    expect(source).toContain('return basename(item.projectDir) || item.projectDir;');
-  });
-
-  it('offers a select-all control scoped to the visible (filtered) candidates', () => {
-    expect(source).toMatch(
-      /const toggleAllVisible = useCallback\(\(\) => \{[\s\S]*for \(const item of visibleCandidates\)/,
-    );
-    expect(source).toContain(
-      "{t('settings.sessionImport.selectAll', { count: visibleCandidates.length })}",
-    );
-    expect(source).toMatch(
-      /checked=\{visibleCandidates\.length > 0 && visibleSelectedCount === visibleCandidates\.length\}/,
-    );
-  });
-
-  it('keeps scan summary explanations visible instead of relying on pointer-only title tooltips', () => {
-    expect(source).toContain('mt-1 text-11 leading-[1.4] text-[var(--settings-section-desc)]');
-    expect(source).toMatch(/>\s*\{hint\}\s*<\/p>/);
-    expect(source).not.toContain('title={hint}');
-    expect(source).not.toContain('className="sr-only">{hint}</span>');
-  });
-
-  it('surfaces selections hidden by the current filters next to the import button', () => {
-    expect(source).toContain('const hiddenSelectedCount = selectedItems.length - visibleSelectedCount;');
-    expect(source).toMatch(
-      /\{hiddenSelectedCount > 0 && \([\s\S]*selectedOutsideFilter[\s\S]*count: hiddenSelectedCount/,
-    );
-  });
-
-  it('keeps metadata pills on one line and lets long session titles truncate instead of stretching rows', () => {
-    expect(source).toContain(
-      'shrink-0 whitespace-nowrap rounded-full border border-[var(--settings-input-border)]',
-    );
-    expect(source).toContain(
-      'min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-sublabel)]',
-    );
-  });
-
-  it('uses the sidebar time formatter for project and session-row timestamps', () => {
-    expect(source).toContain(
-      "import { formatSidebarTime, formatSidebarTimeAbsolute } from '@/features/cc-agent/lib/formatSidebarTime';",
-    );
-    expect(source).toContain('const latestUpdatedAt = group.items[0]?.updatedAt;');
-    expect(source).toContain('dateTime={latestUpdatedAt}');
-    expect(source).toContain('title={formatSidebarTimeAbsolute(latestUpdatedAt)}');
-    expect(source).toContain('{formatSidebarTime(latestUpdatedAt, t)}');
-    expect(source).toContain('dateTime={item.updatedAt}');
-    expect(source).toContain('title={formatSidebarTimeAbsolute(item.updatedAt)}');
-    expect(source).toContain('{formatSidebarTime(item.updatedAt, t)}');
+    expect(screen.getByText('Fresh candidate')).toBeTruthy();
+    expect(screen.queryByText('Cached candidate')).toBeNull();
   });
 });

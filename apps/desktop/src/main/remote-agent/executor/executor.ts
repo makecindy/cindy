@@ -25,6 +25,7 @@ import {
   rawReaddir,
   rawStat,
   rawWriteFile,
+  readExistingText,
   ReadStateTracker,
   textResult,
   type FileWriteHooks,
@@ -33,6 +34,7 @@ import {
   type ToolResult,
 } from './files';
 import type { ExecutorAction, ExecutorGate, ExecutorGateDecision, ExecutorGateMode } from './gate';
+import type { GitCredentialHistory } from './gitCredentials';
 import { piGrep, type PiGrepInput } from './search';
 import { resolveExecutorShell, runOnce, ShellSession } from './shell';
 import { fetchWebPage, WEB_FETCH_PAGE_CHARS, type GuardedFetch } from './webFetch';
@@ -46,7 +48,7 @@ export interface ExecutorCaptureHooks {
   noteOpaqueWrite(): void;
 }
 
-/** `session` 仅免除当前执行器的分享凭证确认，普通权限上限仍由 gate 判断。 */
+/** `session` 免除当前任务后续的分享凭证确认，普通权限上限仍由 gate 判断。 */
 export type ExecutorConfirmation = boolean | 'session';
 
 export interface RemoteExecutorOptions {
@@ -64,7 +66,14 @@ export interface RemoteExecutorOptions {
    * 在本机弹确认卡问本机用户(供应商分享的受邀者任务)：凭证类操作没有本机批准时用它补问，允许后
    * 默认只放行这一个操作；用户明确选择会话级允许后免除后续的分享凭证确认。缺省时直接拒绝。
    */
-  confirm?(action: ExecutorAction): Promise<ExecutorConfirmation>;
+  confirm?(action: ExecutorAction, signal: AbortSignal): Promise<ExecutorConfirmation>;
+  /** 与 confirm 一起提供：git 查看内容、打出 git 配置的命令先在本机核实，读不到凭证时不弹卡。 */
+  gitCredentials?: GitCredentialHistory;
+  /**
+   * 「本任务总是允许」的任务级记录(credentialGrants.ts，由启动方按当前原始权限档写入)：Agent 实例被系统
+   * 回收重建后据此恢复；缺省时只在本执行器内有效。
+   */
+  credentialGrant?: { remember(): void; forget(): void; watch?(revoke: () => void): () => void };
 }
 
 export class ExecutorRequestError extends Error {
@@ -117,8 +126,13 @@ export class RemoteExecutor {
   private readonly writeHooks: FileWriteHooks;
   private closed = false;
   private permissionGeneration = 0;
+  private credentialConfirmationAbort = new AbortController();
+  private credentialConfirmationTail?: Promise<void>;
+  private readonly unwatchCredentialGrant?: () => void;
 
   constructor(private readonly opts: RemoteExecutorOptions) {
+    // 任务级授权在别处被删除(如 Agent 重建期间用户改了权限档)：收回本执行器已恢复的授权。
+    this.unwatchCredentialGrant = opts.credentialGrant?.watch?.(() => this.revokeCredentialGrant());
     this.workspace = opts.workspace;
     this.gate = opts.gate;
     this.rg = createRipgrepRunner(opts.rgPath);
@@ -136,8 +150,25 @@ export class RemoteExecutor {
 
   /** 本机任务的权限档变化时更新上限档位。 */
   setGateMode(mode: ExecutorGateMode): void {
-    this.permissionGeneration += 1;
     this.gate.setMode(mode);
+    this.cancelPendingConfirmations();
+    this.opts.credentialGrant?.forget();
+  }
+
+  /** 撤销分享凭证的任务授权：与权限档变化一样清掉授权，并作废等待中的确认。 */
+  private revokeCredentialGrant(): void {
+    this.gate.setMode(this.gate.getMode());
+    this.cancelPendingConfirmations();
+  }
+
+  /**
+   * 停止、权限变化或撤权时取消已显示和排队中的确认。停止本身不撤销先前有效的任务授权。
+   */
+  cancelPendingConfirmations(): void {
+    this.permissionGeneration += 1;
+    const previous = this.credentialConfirmationAbort;
+    this.credentialConfirmationAbort = new AbortController();
+    previous.abort();
   }
 
   /** 本机用户在确认卡上允许了一个操作。 */
@@ -153,21 +184,76 @@ export class RemoteExecutor {
 
   /**
    * 凭证类操作在本机补问一次(供应商分享的受邀者任务)；本机用户允许后登记批准，调用方再检查一次即可
-   * 放行。不是凭证类、没有确认通道或任务已结束时返回 false。
+   * 放行。git 查看内容、打出 git 配置的命令在本机核实过读不到凭证时不弹卡，直接登记批准。不是凭证类、
+   * 没有确认通道或任务已结束时返回 false。
    */
   async confirm(action: ExecutorAction, signal?: AbortSignal): Promise<boolean> {
-    if (this.closed || !this.opts.confirm || !this.gate.needsCredentialConsent(action)) return false;
+    if (this.closed || signal?.aborted || !this.opts.confirm || !this.gate.needsCredentialConsent(action)) return false;
+    signal = signal
+      ? AbortSignal.any([signal, this.credentialConfirmationAbort.signal])
+      : this.credentialConfirmationAbort.signal;
     const permissionGeneration = this.permissionGeneration;
-    const allowed = await this.opts.confirm(action).catch(() => false);
-    // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
-    if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
-      || permissionGeneration !== this.permissionGeneration) return false;
-    if (allowed === 'session') {
-      this.gate.allowCredentialsForSession();
-      if (this.gate.getMode() === 'full') return true;
+    // 只有要核实的 git 命令才在弹卡前等核实结果；核实通过不弹卡，也不必排在其他确认卡后面。
+    const gitCheck = this.gitReadsCheck(action, signal);
+    if (gitCheck && await gitCheck) {
+      // 核实期间任务结束、请求被取消或权限已切换：同样不放行。
+      if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
+      this.gate.recordCredentialExemption(action);
+      return true;
     }
-    this.gate.recordApproval(action);
-    return true;
+    // 核实需要时间：期间请求被取消就不再排队(abort 事件不会重放给之后登记的监听)。
+    if (gitCheck && (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration)) return false;
+    // 同一任务可能并行调用工具。只排队确认，不排队执行；前一张卡建立任务授权后，
+    // 后续请求重新检查，避免已经弹出的多张卡仍逐一等待用户回答。
+    // 排队位置要等前一个位置放行、且自己的卡处理完才放行。
+    const previous = this.credentialConfirmationTail;
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    const slot = previous ? previous.then(() => settled) : settled;
+    this.credentialConfirmationTail = slot;
+    // 自己的请求取消后立即让出：还在排队就不再等(后面的请求仍等前一张卡)；
+    // 卡已弹出就不再挡住后面的请求，这张卡之后的回答会被丢弃。
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = () => { settle(); resolve(); };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      if (previous) await Promise.race([previous, aborted]);
+      if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
+      // 调用方仍会重新检查普通权限上限；这里只免除已授权的分享凭证确认。
+      if (!this.gate.needsCredentialConsent(action)) return true;
+      const allowed = await Promise.race([
+        this.opts.confirm(action, signal).catch(() => false),
+        aborted.then(() => false as const),
+      ]);
+      // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
+      if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
+        || permissionGeneration !== this.permissionGeneration) return false;
+      if (allowed === 'session') {
+        this.gate.allowCredentialsForSession();
+        this.opts.credentialGrant?.remember();
+        if (this.gate.getMode() === 'full') return true;
+      }
+      this.gate.recordApproval(action);
+      return true;
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
+      settle();
+      void slot.then(() => {
+        if (this.credentialConfirmationTail === slot) this.credentialConfirmationTail = undefined;
+      });
+    }
+  }
+
+  /** 要在本机核实的 git 命令返回核实结果(true = 读不到凭证)；不需要核实的返回 null。 */
+  private gitReadsCheck(action: ExecutorAction, signal?: AbortSignal): Promise<boolean> | null {
+    const history = this.opts.gitCredentials;
+    if (!history || action.kind !== 'exec') return null;
+    const reads = this.gate.credentialGitReads(action);
+    return reads ? history.provesSafe(action.command, reads, signal)
+      .then((safe) => safe && this.gate.credentialGitReads(action) !== null)
+      .catch(() => false) : null;
   }
 
   /** 检查上限；凭证类操作没有批准时先在本机问一次。 */
@@ -180,6 +266,8 @@ export class RemoteExecutor {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.cancelPendingConfirmations();
+    this.unwatchCredentialGrant?.();
     await this.shell.close();
   }
 
@@ -229,7 +317,7 @@ export class RemoteExecutor {
           const target = this.resolvePath(str(body, 'path'));
           await this.authorize({ kind: 'write', path: target }, signal);
           if (typeof body.data !== 'string') throw new ExecutorRequestError('INVALID', 'data must be a base64 string');
-          const data = this.workspace.mapInputFromAgent(Buffer.from(body.data, 'base64'));
+          const data = this.workspace.mapInputFromAgent(Buffer.from(body.data, 'base64'), await readExistingText(target));
           await this.writeHooks.beforeWrite(target);
           await rawWriteFile(target, data);
           return {};
@@ -346,7 +434,8 @@ export class RemoteExecutor {
           const content = args.content;
           if (typeof content !== 'string') return textResult('content must be a string.', true);
           await this.authorizeTool({ kind: 'write', path: target }, signal);
-          return this.mapToolResult(await ccWrite(target, this.workspace.mapTextFromAgent(content), this.readState, this.writeHooks, this.workspace.toAgentPath(target)));
+          const local = this.workspace.mapContentFromAgent(content, await readExistingText(target));
+          return this.mapToolResult(await ccWrite(target, local, this.readState, this.writeHooks, this.workspace.toAgentPath(target)));
         }
         case 'Edit': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
@@ -355,10 +444,11 @@ export class RemoteExecutor {
           }
           await this.authorizeTool({ kind: 'write', path: target }, signal);
           return this.mapToolResult(await ccEdit(target, {
-            old_string: this.workspace.mapTextFromAgent(args.old_string),
-            new_string: this.workspace.mapTextFromAgent(args.new_string),
+            old_string: args.old_string,
+            new_string: args.new_string,
             replace_all: args.replace_all === true,
-          }, this.readState, this.writeHooks, this.workspace.toAgentPath(target)));
+          }, this.readState, this.writeHooks, this.workspace.toAgentPath(target),
+          (oldString, newString, original) => this.workspace.mapEditFromAgent(oldString, newString, original)));
         }
         case 'NotebookEdit': {
           const target = this.resolvePath(str(args, 'notebook_path'), this.shell.getCwd());
@@ -369,10 +459,10 @@ export class RemoteExecutor {
           await this.authorizeTool({ kind: 'write', path: target }, signal);
           return this.mapToolResult(await ccNotebookEdit(target, {
             cell_id: optionalString(args, 'cell_id'),
-            new_source: this.workspace.mapTextFromAgent(args.new_source),
+            new_source: args.new_source,
             cell_type: cellType,
             edit_mode: editMode,
-          }, this.readState, this.writeHooks));
+          }, this.readState, this.writeHooks, (source, original) => this.workspace.mapContentFromAgent(source, original)));
         }
         case 'WebFetch':
           if (!this.opts.webFetch) return textResult(`Unknown tool: ${name}`, true);

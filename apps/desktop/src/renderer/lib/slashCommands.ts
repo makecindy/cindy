@@ -20,6 +20,7 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
+import type { BuiltInSkillDraftIntent } from './composerDraftStore';
 
 export { leadingSlashInvocation };
 
@@ -128,6 +129,33 @@ export async function rewritePiSkillMessageForSend(params: {
     : rewriteAgentSkillInvocationForDispatch(params.message, hit);
 }
 
+/** Preserve a routed built-in choice when the user changes the draft's engine or computer. */
+export async function rewriteBuiltInSkillDraftForSend(params: {
+  message: string;
+  intent: BuiltInSkillDraftIntent;
+  agentKind: AgentKind;
+  workingDir?: string | null;
+  deviceId?: string;
+  remoteHostId?: string | null;
+}): Promise<string | null> {
+  const leading = leadingSlashInvocation(params.message);
+  if (!leading || leading.name !== params.intent.commandName) return params.message;
+  // SSH has no Cindy built-in catalog. Never resolve that task against local files.
+  if (params.remoteHostId) return null;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    forceReload: true,
+  }, params.deviceId);
+  const skill = commands.find((command) => (
+    command.kind === 'agent-skill'
+    && command.builtIn === true
+    && command.enabled !== false
+    && !isSlashCommandUnavailable(command)
+    && (command.name === params.intent.name || command.name === `cindy:${params.intent.name}`)
+  ));
+  if (!skill) return null;
+  return `${params.message.slice(0, leading.start)}/${slashCommandInvocationName(skill)}${params.message.slice(leading.end)}`;
+}
+
 /**
  * Rebase persisted/render-only inline ranges after the leading slash-command
  * token grows or shrinks during runtime alias rewriting.
@@ -230,11 +258,11 @@ export function isSlashCommandRosterReady(
 /**
  * 合并三源 → UnifiedCommand[]。
  * 优先级 (同名时谁覆盖谁) : agent-skill > desktop > agent-builtin。
- *   - agent-skill (用户自定义) 排第一: 体现"用户能盖默认"的语义
+ *   - agent-skill 排第一;同名时 Main 验证过的 Cindy 内置 Skill 优先。
  *   - desktop 第二: app 内置功能 (/help, /clear)
  *   - agent-builtin 兜底: agent 自带 (/compact)
  *
- * 同一类目内按 name 字母序; 不同类目之间按上述优先级排。
+ * Skill 类目内 Cindy 内置项优先，其余按 name 字母序；不同类目按上述优先级排。
  */
 export function mergeCommands(
   desktop: UnifiedCommand[],
@@ -247,7 +275,10 @@ export function mergeCommands(
   const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
   const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
-    availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
+    availableSkills.sort((a, b) => (
+      Number(isCindyOfficialSlashCommand(b)) - Number(isCindyOfficialSlashCommand(a))
+      || a.name.localeCompare(b.name)
+    )),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
     unavailableSkills.sort((a, b) => a.name.localeCompare(b.name)),
@@ -296,10 +327,18 @@ export function filterSlashCommands(
   limit = 25,
 ): UnifiedCommand[] {
   const q = query.trim().toLowerCase();
+  const rankOf = (text: string): number => {
+    const value = text.toLowerCase();
+    return value === q ? 0 : value.startsWith(q) ? 1 : value.includes(q) ? 2 : -1;
+  };
   const filtered = commands
     .map((command, index) => {
-      const name = command.name.toLowerCase();
-      const rank = q ? (name === q ? 0 : name.startsWith(q) ? 1 : name.includes(q) ? 2 : -1) : 0;
+      // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
+      // 输入显示名算精确匹配,输入完整限定指令也照常命中。
+      const ranks = [rankOf(command.name)];
+      if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
+      const matched = ranks.filter((r) => r >= 0);
+      const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
       const officialPriority = isCindyOfficialSlashCommand(command) ? 0 : 1;
       return { command, index, rank, officialPriority };
     })

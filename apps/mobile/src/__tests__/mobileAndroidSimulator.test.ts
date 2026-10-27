@@ -1,7 +1,9 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数与注入式流程。
 import { readFileSync } from 'node:fs';
 import { resolve, win32 } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { resolvePnpmInvocation, usablePnpmExecPath } from '../../../../scripts/shared/pnpm-invocation.mjs';
 import {
   DEFAULT_ANDROID_AVD,
   ensureWindowsAndroidEmulator,
@@ -12,11 +14,51 @@ import {
 } from '../../scripts/lib/android-simulator.mjs';
 
 describe('Windows Android 模拟器参数', () => {
-  it('sim:start 使用跨平台 pnpm 调用器，不再直接 spawn pnpm', () => {
+  // Execute the actual launch tail: losing the resolver or its cmd environment
+  // makes Windows fail before Expo starts (engineering-conventions.md §3.2).
+  it.each([
+    ['available pnpm script', 'C:\\tools\\pnpm.cjs', true],
+    ['removed pnpm script', 'C:\\tools\\pnpm.cjs', false],
+    ['unrelated npm executable', 'C:\\tools\\npm-cli.js', true],
+  ])('sim:start preserves the Windows invocation for %s', async (_name, npmExecPath, present) => {
     const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
-    expect(source).toContain('resolvePnpmInvocation(args');
-    expect(source).toContain('usablePnpmExecPath(process.env.npm_execpath, existsSync)');
-    expect(source).not.toContain("spawn('pnpm'");
+    const start = source.indexOf("const args = ['exec', 'expo', 'start'");
+    if (start < 0) throw new Error('Missing sim:start launch flow');
+    const spawn = vi.fn(() => ({ once: vi.fn(), on: vi.fn() }));
+    const ensureAndroidTarget = vi.fn();
+    const node = 'C:\\Node\\node.exe';
+    const cmd = 'C:\\Windows\\cmd.exe';
+    await runInNewContext(`(async () => { ${source.slice(start)} })()`, {
+      DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: ['--clear'] },
+      portInUse: async () => false, ensureAndroidTarget, spawn,
+      console: { log: vi.fn(), error: vi.fn() },
+      process: { env: { npm_execpath: npmExecPath, KEEP: 'inherited' } },
+      resolvePnpmInvocation: (args, options) => resolvePnpmInvocation(args, { ...options, platform: 'win32', execPath: node, comSpec: cmd }),
+      usablePnpmExecPath, existsSync: (target) => present && target === npmExecPath,
+      mobileDir: 'C:\\repo\\apps\\mobile', worktreeRoot: 'C:\\repo',
+      buildEnv: { CINDY_USE_LOCAL_REGION_CONFIG: '1' }, region: 'global',
+      branch: 'test', commit: '123', sourceIdentity: 'test@123',
+    });
+    expect(ensureAndroidTarget).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
+    const [command, args, options] = spawn.mock.calls[0];
+    const expoArgs = ['exec', 'expo', 'start', '--dev-client', '--clear', '--port', '8082'];
+    if (present && npmExecPath.endsWith('pnpm.cjs')) {
+      expect(command).toBe(node);
+      expect(args).toEqual([npmExecPath, ...expoArgs]);
+      expect(options.windowsVerbatimArguments).toBeUndefined();
+    } else {
+      expect(command).toBe(cmd);
+      expect(args.slice(0, 4)).toEqual(['/d', '/s', '/v:off', '/c']);
+      expect(args[4]).toContain('%CINDY_PNPM_CMD_ARG_0%');
+      expect(Object.entries(options.env)
+        .filter(([key]) => key.startsWith('CINDY_PNPM_CMD_ARG_'))
+        .sort(([left], [right]) => Number(left.split('_').at(-1)) - Number(right.split('_').at(-1)))
+        .map(([, value]) => value)).toEqual(['pnpm', ...expoArgs]);
+      expect(options.windowsVerbatimArguments).toBe(true);
+    }
+    expect(options).toMatchObject({ cwd: 'C:\\repo\\apps\\mobile', shell: false, stdio: 'inherit',
+      env: { KEEP: 'inherited', CINDY_USE_LOCAL_REGION_CONFIG: '1', EXPO_PUBLIC_XDT_GIT_SOURCE: 'test@123' } });
   });
 
   it('Windows 默认启动 cindy-api36，且不把本地参数透传给 Expo', () => {

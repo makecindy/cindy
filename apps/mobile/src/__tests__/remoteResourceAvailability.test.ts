@@ -33,5 +33,6 @@ it('connection color is independent of a successful list reply', () => {
   expect(remoteResourceConnectionState('online', false)).toBe(false);
   expect(remoteResourceConnectionState('online', null)).toBeNull();
   expect(remoteResourceConnectionState('reconnecting', true)).toBeNull();
-  expect(remoteResourceConnectionState('stopped', true)).toBe(false);
+  expect(remoteResourceConnectionState('connecting', true)).toBeNull();
+  expect(remoteResourceConnectionState('stopped', true)).toBeNull();
 });

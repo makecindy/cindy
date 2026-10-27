@@ -221,17 +221,45 @@ describe('useRemoteSessionBackgroundTasks', () => {
     expect(result.current.stopping).toBe(false);
   });
 
-  it('慢的旧读取晚到时不覆盖更新的快照', async () => {
+  // Unit: slow device links must not accumulate another request pair every tick.
+  it('上一轮仍在途时跳过轮询,返回后恢复复查', async () => {
+    let release!: (value: { tasks: [] }) => void;
+    mocks.list.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    expect(mocks.activity).toHaveBeenCalledTimes(1);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      release({ tasks: [] });
+    });
+    mocks.activity.mockResolvedValue({ active: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mocks.activity).toHaveBeenCalledTimes(2);
+    expect(result.current.active).toBe(true);
+  });
+
+  it('旧视图的慢读取晚到时不覆盖新视图的快照', async () => {
     let releaseSlow!: (value: { active: boolean }) => void;
     mocks.activity.mockImplementationOnce(() => new Promise((resolve) => (releaseSlow = resolve)));
     mocks.activity.mockResolvedValue({ active: false });
     mocks.list.mockResolvedValue({ tasks: [] });
-    const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));
+    const { result, rerender } = renderHook(
+      ({ sid }) => useRemoteSessionBackgroundTasks(sid, 'dev-1', false),
+      { initialProps: { sid: 's1' } },
+    );
     await flush();
-    // 第二轮(更新)先返回:无后台任务。
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
-    });
+    // 切换会话后立即读新视图,旧视图的慢读取不能阻止或覆盖它。
+    rerender({ sid: 's2' });
+    await flush();
     expect(result.current.active).toBe(false);
     // 第一轮(更旧)此时才返回「有活动」,必须被丢弃。
     await act(async () => {

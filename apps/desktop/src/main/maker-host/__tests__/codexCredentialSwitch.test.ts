@@ -735,6 +735,56 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
 
 
 describe('Codex host-scoped credential coordination', () => {
+  it('soft-closes all selected gateway hosts while preserving busy siblings and history resources', async () => {
+    const sideEffect = vi.fn(async () => undefined);
+    const closeSession = vi.fn(async (sessionId: string) => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, sideEffect);
+    });
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local-custom-context:gateway:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'shared', agentKind: 'codex', isTurnRunning: () => false },
+          { id: 'isolated', agentKind: 'codex', codexHostKey: 'local-custom-context:gateway:external-auth', isTurnRunning: () => false },
+          { id: 'oauth', agentKind: 'codex', codexHostKey: 'local-account:openai:oauth', isTurnRunning: () => true },
+          { id: 'remote', agentKind: 'codex', remoteHostId: 'ssh', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual(['shared', 'isolated']);
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['shared', 'isolated']);
+    expect(sideEffect).not.toHaveBeenCalled();
+  });
+
+  it('refuses the entire key refresh before closing any selected busy host', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    await expect(prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'idle', agentKind: 'codex', codexHostKey: 'local', isTurnRunning: () => false },
+          { id: 'busy', agentKind: 'codex', codexHostKey: 'local:external-auth', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    })).rejects.toThrow(/busy/);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not close sessions when no host uses the rotated key', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: [],
+      maker: {
+        listActiveSessions: () => [{ id: 'oauth', agentKind: 'codex', isTurnRunning: () => true }],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual([]);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
   it.each(['local', 'local:external-auth'])('does not block or close a busy sibling when replacing %s', async (hostKey) => {
     const sibling = hostKey === 'local' ? 'local:external-auth' : 'local';
     const closeSession = vi.fn(async () => undefined);

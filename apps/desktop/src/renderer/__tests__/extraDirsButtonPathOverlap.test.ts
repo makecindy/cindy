@@ -102,7 +102,7 @@ describe('pickAndAddExtraDir', () => {
       system: [library],
       user: userDirs,
     });
-    expect(extraDirDisplayLabel(library)).toBe('Mivo 作品库（只读）');
+    expect(extraDirDisplayLabel(library, 'Localized library')).toBe('Localized library');
 
     vi.stubGlobal('window', {
       electronAPI: {

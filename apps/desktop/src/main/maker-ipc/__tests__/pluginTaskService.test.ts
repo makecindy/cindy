@@ -2,9 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
+import { Session } from '@cindy/maker-core';
+import { fastModeToStorage } from '@cindy/maker-shared';
+import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
+import { withParsedPluginMessageAttachments } from '../../cindy-media/pluginMessageAttachments.js';
+import { PLUGIN_ATTACHMENT_MAX_BYTES } from '../../../shared/pluginAttachments.js';
+import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
+  isTeamPlanLabelLocked,
+  isTeamPlanLabelLockedByReceipt,
   PluginTaskError,
   assertPluginTaskResult,
   readPluginTaskPlanReceipt,
@@ -12,9 +21,41 @@ import {
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
-import type { PluginTaskView } from '../../../shared/pluginTasks.js';
+import type { PluginTeamPlan, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+
+it('locks only unsettled team-plan labels for worker rename', () => {
+  const route = {} as never;
+  const plan = {
+    concurrency: 2,
+    items: [
+      { label: 'w0', workingDir: '/answer', route },
+      { label: 'w1', workingDir: '/answer', route },
+    ],
+  } as unknown as PluginTeamPlan;
+  expect(isTeamPlanLabelLocked(plan, [], ['w0'])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, [], ['w1', null])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w1'])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, [], ['other'])).toBe(false);
+  expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
+});
+
+it('releases the plan label lock only after the plugin is uninstalled', () => {
+  const route = {} as never;
+  const plan = {
+    concurrency: 1,
+    items: [{ label: 'w0', workingDir: '/answer', route }],
+  } as unknown as PluginTeamPlan;
+  const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
+  expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
+  // 插件卸载（任务归属确实撤销）后，保留的收据不再锁定改名；
+  // 停用 / 未批准仍传入 true（可恢复），继续锁定由上层保证。
+  expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);
+});
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
   const f=fixture(), task=await f.create();
@@ -37,7 +78,7 @@ it.each([false,true])('production Auto context checks uninstall after its projec
     const epoch={client:{drizzle:{select:()=>query},queryOne:async()=>({unchanged:1}),tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
     let load!:(id:string)=>Promise<unknown>;
     const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
-      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,
+      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,fastModeToStorage,
       createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
       pluginTaskServiceForCurrentOwner:()=>f.service,readPluginTaskConfig:()=>({permissionMode:'auto'}),
       readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
@@ -114,9 +155,11 @@ function fixture() {
     fastMode: false,
   };
   const execution = { instanceId: 'native', generation: 1 };
+  const live = { instanceId: execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
   const deps: PluginTaskServiceDeps = {
     store,
     readPermissionMode: () => 'auto',
+    readModelPreference: () => route,
     assertAuthorized: () => {
       if (!current) throw new Error('Owner changed');
     },
@@ -131,6 +174,7 @@ function fixture() {
       tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan' });
     }),
     readSession: async (id) => copy(tasks.get(id) ?? null),
+    readLiveSession: () => live,
     dispatch: vi.fn(async () => ({ ok: true })),
     inspect: vi.fn(async () => ({ execution: null, pending: [] })),
     cancel: vi.fn(async () => 'cancelled' as const),
@@ -160,6 +204,189 @@ function fixture() {
     },
   };
 }
+
+// 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
+// unit；现有任务测试检查任务状态，未检查宿主统计观察者收到哪些事实。
+it('records one accepted input after create and does not count receipt replay or rejected dispatch', async () => {
+  const f = fixture();
+  const accepted: string[] = [];
+  f.deps.prepareInvocation = (_pluginId, id) => id;
+  f.deps.acceptInvocation = (_pluginId, id) => { accepted.push(id); };
+  const task = await f.create();
+  expect(accepted).toEqual([]);
+  const request = { taskId: task.taskId, requestKey: 'first-input', expectedRevision: task.revision, text: 'hello' };
+  const run = await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(accepted).toEqual([run.runId]);
+  vi.mocked(f.deps.dispatch).mockResolvedValueOnce({ ok: false });
+  await f.service.send('p', { ...request, requestKey: 'rejected-input' });
+  expect(accepted).toEqual([run.runId]);
+});
+
+// Targets create in a selected project through the same service, not directly through
+// session persistence. Without its create receipt, helper tools and uninstall lose ownership.
+// Minimal regression: a Host-supplied task ID + project, then get and uninstall (unit).
+it('retains task ownership and uninstall revocation for Host-selected project creation', async () => {
+  const f = fixture();
+  const context = { taskId: 'target-project-task', workingDir: '/selected-project', assertCurrent: vi.fn() };
+  const task = await f.service.create('p', { requestKey: 'target-create', title: 'Selected project' }, context);
+  expect(task.taskId).toBe(context.taskId);
+  expect(await f.service.get('p', context.taskId)).toMatchObject({ taskId: context.taskId });
+  expect(f.rows.get(context.taskId)).toMatchObject({ operation: 'create', pluginId: 'p' });
+  expect(vi.mocked(f.deps.createSession).mock.calls[0]?.[9]).toBe(context);
+  await f.service.withUninstall('p', async () => {});
+  await expect(f.service.get('p', context.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+});
+it('rechecks Host target context after route resolution before persisting a task', async () => {
+  const f = fixture();
+  let current = true;
+  vi.mocked(f.deps.resolveRoute).mockImplementationOnce(async () => { current = false; return f.route; });
+  await expect(f.service.create('p', { requestKey: 'target-create', title: 'Selected project' }, {
+    taskId: 'target-project-task', workingDir: '/selected-project',
+    assertCurrent: () => { if (!current) throw new PluginTaskError('PERMISSION_DENIED', 'Target changed'); },
+  })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.tasks.size).toBe(0);
+  expect(f.rows.size).toBe(0);
+});
+
+it('includes message images in owned-task replay identity without persisting screenshot bytes', async () => {
+  const f = fixture(), task = await f.create();
+  const base64 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64');
+  const request = { taskId: task.taskId, requestKey: 'image', expectedRevision: task.revision,
+    text: 'context', attachments: [{ base64, name: 'window.png' }] };
+  await f.service.send('p', request);
+  await f.service.send('p', structuredClone(request));
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[4]?.[0]).toMatchObject({ mimeType: 'image/png' });
+  expect(JSON.stringify([...f.rows.values()])).not.toContain(base64);
+  await expect(f.service.send('p', { ...request, attachments: [{ base64, name: 'other.png' }] }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+// Exercise the public pipe with the real service, including its error sanitization.
+it.each(['INVALID_ATTACHMENTS', 'TASK_BUSY'] as const)('preserves %s across the public task boundary', async code => {
+  const f = fixture(), task = await f.create();
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const pending: Promise<unknown>[] = [];
+  try {
+    if (code === 'TASK_BUSY') {
+      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES);
+      png.copy(large);
+      const attachments = [{ base64: large.toString('base64') }];
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
+    }
+    const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
+      manifest: { agent: { tasks: true } } } as InstalledGhost;
+    const result = await handlePluginTaskRequest('p', {
+      type: 'tasks-request', kind: 'send', taskId: task.taskId, requestKey: 'attachment-error',
+      expectedRevision: task.revision, text: 'context',
+      attachments: [{ base64: (code === 'TASK_BUSY' ? png : Buffer.from('not an image')).toString('base64') }],
+    }, {
+      getGhost: () => ghost, isCurrent: () => true,
+      handler: (pluginId, request) => {
+        if (request.kind !== 'send') throw new Error('Unexpected operation');
+        return f.service.send(pluginId, request);
+      },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code, retryable: code === 'TASK_BUSY' } });
+    expect(f.deps.dispatch).not.toHaveBeenCalled();
+    expect([...f.rows.values()].some(row => row.operation === 'send')).toBe(false);
+  } finally {
+    release();
+    await Promise.all(pending);
+  }
+});
+
+describe('plugin dispatch uses live Plan execution authority', () => {
+  it.each(['send', 'accept'] as const)('%s rejects consumed Pi intent while execution is active, unknown or switching', async entry => {
+    const f = fixture(), task = await f.create();
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto', planModeEnabled: false });
+    let executionPlan: boolean | null = false;
+    let releaseEvents!: () => void, releaseSwitch!: () => void;
+    const eventsClosed = new Promise<void>(resolve => { releaseEvents = resolve; });
+    const switching = new Promise<void>(resolve => { releaseSwitch = resolve; });
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: task.taskId, sessionInstanceId: f.execution.instanceId,
+      agentKind: 'pi', workDir: '/answer', permissionMode: 'auto', logger,
+      capabilities: { planMode: { supported: true } } as never,
+      handle: { id: 'pi', agentKind: 'pi', model: 'test',
+        async *events() { await eventsClosed; }, async close() { releaseEvents(); }, setInteractionResolver() {},
+        getPlanMode: () => false, getExecutionPlanMode: () => executionPlan,
+        setPlanMode: async () => { await switching; },
+      } as never,
+    });
+    f.deps.readLiveSession = () => session;
+    const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'live-plan', text: 'continue' };
+    const queued = entry === 'accept' ? await f.service.send('p', request) : undefined;
+    vi.mocked(f.deps.dispatch).mockClear();
+    const invoke = () => entry === 'send' ? f.service.send('p', request)
+      : f.service.accept(task.taskId, { clientId: queued!.inputMessageId }, f.execution);
+    try {
+      for (const value of [true, null]) {
+        executionPlan = value;
+        expect(session.getPlanMode()).toBe(false);
+        await expect(invoke()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      }
+      executionPlan = false;
+      const pending = session.setPlanMode(true);
+      expect(session.stablePlanModeState).toBeNull();
+      await expect(invoke()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+      releaseSwitch();
+      await pending;
+      // Native/Host recovery to a stable non-plan state restores the same API.
+      if (entry === 'send') await expect(invoke()).resolves.toMatchObject({ status: 'queued' });
+      else await expect(invoke()).resolves.toBeUndefined();
+    } finally {
+      releaseSwitch();
+      await session.close();
+    }
+  });
+
+  it.each(['send', 'accept'] as const)('%s rechecks the same live session after async route and receipt work', async entry => {
+    for (const point of ['route', 'receipt', 'instance', 'generation']) {
+      const f = fixture(), task = await f.create();
+      Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto', planModeEnabled: false });
+      let live = { instanceId: f.execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
+      f.deps.readLiveSession = () => live;
+      const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'async-plan', text: 'continue' };
+      const queued = entry === 'accept' ? await f.service.send('p', request) : undefined;
+      vi.mocked(f.deps.dispatch).mockClear();
+      const change = () => {
+        if (point === 'instance') live = { ...live };
+        else if (point === 'generation') live.stablePlanModeState.generation++;
+        else live.stablePlanModeState.enabled = true;
+      };
+      if (point === 'receipt') {
+        const method = entry === 'send' ? 'insert' : 'save';
+        const original = f.deps.store[method];
+        f.deps.store[method] = async row => { await original(row); change(); };
+      } else f.deps.resolveRoute = async () => { change(); return f.route; };
+      const result = entry === 'send' ? f.service.send('p', request)
+        : f.service.accept(task.taskId, { clientId: queued!.inputMessageId }, f.execution);
+      if (entry === 'send' && point === 'receipt') await expect(result).resolves.toMatchObject({ status: 'failed' });
+      else await expect(result).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('allows cold tasks to queue but requires the accepting live instance', async () => {
+    const f = fixture();
+    f.deps.readLiveSession = () => undefined;
+    const run = await f.send();
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    f.deps.readLiveSession = () => ({ instanceId: 'replacement', stablePlanModeState: { enabled: false, generation: 0 } });
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    const live = { instanceId: f.execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
+    f.deps.readLiveSession = () => live;
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution)).resolves.toBeUndefined();
+  });
+});
 
 it('serializes source archival behind creation and keeps old tasks inaccessible to the replacement', async () => {
   const fixtureState = fixture();
@@ -948,6 +1175,169 @@ it('does not apply a model after the task changes while route admission is pendi
   expect(f.deps.setModel).not.toHaveBeenCalled();
 });
 
+it('rechecks plugin defaults for the same task on every request without resetting unchanged tasks', async () => {
+  const f = fixture();
+  let preference = { ...f.route, model: 'grok' };
+  f.deps.readModelPreference = () => preference;
+  f.deps.resolveRoute = vi.fn(async (_plugin, requested) => requested ?? { ...preference });
+  // First install: creation already respects the saved preference.
+  let task = await f.create();
+  expect(task.resolvedConfig.model).toBe('grok');
+  f.deps.setModel = vi.fn(async (id, route, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  });
+  const sync = async () => {
+    const result = await f.service.setModel('p', {taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default'});
+    task = result.task;
+    return result.status;
+  };
+  expect(await sync()).toBe('unchanged');
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  for (const model of ['astra', 'grok']) {
+    preference = {...preference, model};
+    expect(await sync()).toBe('applied');
+    const run = await f.service.send('p', {taskId:task.taskId, expectedRevision:task.revision, requestKey:model, text:'translate'});
+    expect(run.acceptedConfig.model).toBe(model);
+  }
+  expect(f.tasks.size).toBe(1);
+  expect(f.deps.setModel).toHaveBeenCalledTimes(2);
+  expect(await sync()).toBe('unchanged');
+  preference = {...preference, effort:'low', fastMode:true, providerId:'other-source'};
+  expect(await sync()).toBe('applied');
+  expect(task.resolvedConfig).toEqual(preference);
+  f.deps.resolveRoute = async () => {throw new PluginTaskError('ROUTE_UNAVAILABLE', 'Unavailable selection');};
+  await expect(sync()).rejects.toMatchObject({code:'ROUTE_UNAVAILABLE'});
+  expect(f.deps.setModel).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  { model: 'new-model' }, { providerId: 'new-provider' },
+  { agentKind: 'pi' as const }, { effort: 'low' }, { fastMode: true },
+])('rejects preferences changed during async route admission: %j', async patch => {
+  const f = fixture(), task = await f.create();
+  const preference = { ...f.route };
+  f.deps.readModelPreference = () => preference;
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  f.deps.resolveRoute = async () => { const captured = { ...preference }; entered(); await gate; return captured; };
+  f.deps.setModel = vi.fn(async (id, route, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' as const };
+  const pending = f.service.setModel('p', request);
+  await started;
+  Object.assign(preference, patch);
+  const rejected = expect(pending).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  finish(); await rejected;
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  expect((await f.service.get('p', task.taskId)).revision).toBe(task.revision);
+  // No stale input was accepted; retry resolves and applies the newly saved choice.
+  f.deps.resolveRoute = async () => ({ ...preference });
+  const next = await f.service.setModel('p', request);
+  expect(next.task.resolvedConfig).toEqual(preference);
+});
+
+it('rechecks saved preferences at the runtime mutation boundary', async () => {
+  const f = fixture(), task = await f.create();
+  let preference = { ...f.route, model: 'chosen' };
+  f.deps.readModelPreference = () => preference;
+  f.deps.resolveRoute = async () => ({ ...preference });
+  const apply = vi.fn();
+  f.deps.setModel = async (_id, _route, assertCurrent) => {
+    preference = { ...preference, model: 'newer' };
+    await assertCurrent(); apply(); return { status: 'applied' };
+  };
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' }))
+    .rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(apply).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['provider', 'reset'], ['provider', 'partial'],
+  ['mutation', 'reset'], ['mutation', 'partial'],
+  ['provider', 'explicit'],
+] as const)('checks inherited defaults through production adapters during %s (%s)', async (phase, mode) => {
+  const f = fixture(), task = await f.create();
+  const config = mode === 'explicit' ? { ...f.route, model: 'next' }
+    : mode === 'partial' ? { effort: 'high' } : {};
+  const selected = { harness: 'codex' as const, model: 'next', providerId: f.route.providerId,
+    effort: 'high' as const, fastMode: false };
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  let waited = false;
+  const wait = async (point: string) => {
+    if (phase === point && !waited) { waited = true; entered(); await gate; }
+  };
+  const resolver = createSessionExecutionResolver({
+    captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); },
+    readDefault: () => ({ agentKind: selected.harness, model: selected.model,
+      providerId: selected.providerId, effort: selected.effort, fastMode: selected.fastMode }),
+    availableAgents: () => ['codex'],
+    availableModels: () => ['model', 'next', 'latest'].map(id => ({ id, efforts: ['high'] })),
+    hasCindyAiApiKey: () => true,
+    readProviderRouting: async () => {
+      await wait('provider');
+      return { availability: { 'claude-code': [], pi: [],
+        codex: [{ id: f.route.providerId, name: 'provider', models: ['model', 'next', 'latest'] }] },
+        resolveDefaultProviderIdForModel: () => f.route.providerId };
+    },
+  });
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const preferenceStart = source.indexOf('      readModelPreference:');
+  const preference = source.slice(preferenceStart, source.indexOf('      readPermissionMode:', preferenceStart));
+  const resolveStart = source.indexOf('    const resolveRoute = async');
+  const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
+  const deps = { readPluginTaskConfig: () => config, getSelectedNewMakerRoute: () => selected,
+    activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
+    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
+  const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const adapter = new Function(...Object.keys(deps), js)(...Object.values(deps));
+  f.deps.readModelPreference = adapter.readModelPreference;
+  f.deps.resolveRoute = adapter.resolveRoute;
+  const write = vi.fn();
+  f.deps.setModel = async (id, route, assertCurrent) => {
+    await wait('mutation');
+    await assertCurrent();
+    write(route);
+    f.tasks.set(id, { ...f.tasks.get(id)!, revision: task.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' as const };
+  const result = f.service.setModel('p', request);
+  const assertion = mode === 'explicit'
+    ? expect(result).resolves.toMatchObject({ status: 'applied', task: { resolvedConfig: { model: 'next' } } })
+    : expect(result).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  await started;
+  selected.model = 'latest';
+  finish();
+  await assertion;
+  if (mode !== 'explicit') {
+    expect(write).not.toHaveBeenCalled();
+    expect((await f.service.get('p', task.taskId)).revision).toBe(task.revision);
+    const retry = await f.service.setModel('p', request);
+    expect(retry.task.resolvedConfig.model).toBe('latest');
+    expect(write).toHaveBeenCalledOnce();
+  }
+});
+
+it('does not reject explicit routes when unrelated plugin preferences change', async () => {
+  const f = fixture(), task = await f.create();
+  f.deps.readModelPreference = () => { throw Error('Explicit route must not read preferences'); };
+  f.deps.setModel = vi.fn(async (_id, _route, assertCurrent) => { await assertCurrent(); return { status: 'applied' }; });
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: f.route }))
+    .resolves.toMatchObject({ status: 'applied' });
+});
+
 it('keeps taskless plans immutable instead of retroactively granting scope', async () => {
  const f=fixture(),task=await f.create();
  const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
@@ -977,4 +1367,80 @@ it('registers a complete scope once and permits only identical replays', async (
  await f.service.setTeamPlan('p',task.taskId,plan);
  await expect(f.service.setTeamPlan('p',task.taskId,{...plan,task:'Publish'})).rejects.toThrow('immutable');
  await expect(f.service.setTeamPlan('p',task.taskId,{...plan,items:[{...plan.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
+});
+
+describe('background tasks', () => {
+  const declaredFixture = () => {
+    const f = fixture();
+    let declared = true;
+    f.deps.assertHiddenTasksAllowed = () => {
+      if (!declared) throw new PluginTaskError('PERMISSION_DENIED', 'Background tasks require agent.hiddenTasks');
+    };
+    f.deps.createSession = vi.fn(async (_p, taskId, title, resolvedConfig, _isolated, _requested, onPersistenceStarted, _callId, hidden) => {
+      onPersistenceStarted();
+      f.tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan', hidden: hidden === true });
+    });
+    f.deps.setHidden = vi.fn(async (taskId: string, hidden: boolean, assertAllowed: () => void) => {
+      assertAllowed();
+      f.tasks.set(taskId, { ...f.tasks.get(taskId)!, hidden });
+    });
+    return { ...f, undeclare: () => { declared = false; } };
+  };
+
+  it('creates a hidden task in the same creation call and reports hidden in get/list snapshots', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true });
+    expect(task.hidden).toBe(true);
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Background', f.route, undefined, undefined, expect.any(Function), undefined, true);
+    expect((await f.service.get('p', task.taskId)).hidden).toBe(true);
+    expect((await f.service.list('p')).items.map(item => item.hidden)).toEqual([true]);
+    // Exact replay reads the same task; the hidden flag is part of the request fingerprint.
+    expect((await f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true })).taskId).toBe(task.taskId);
+    await expect(f.service.create('p', { requestKey: 'bg', title: 'Background' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('keeps visible creation unchanged: hidden=false snapshot and the legacy fingerprint', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'plain', title: 'Plain', hidden: false });
+    expect(task.hidden).toBe(false);
+    expect((await f.service.create('p', { requestKey: 'plain', title: 'Plain' })).taskId).toBe(task.taskId);
+    // Views without the field (older readers) are normalized to a boolean.
+    const legacy = fixture();
+    expect((await legacy.create()).hidden).toBe(false);
+  });
+
+  it('switches only its own task, rechecks the declaration and skips no-op writes', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'own', title: 'Own' });
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: true })).hidden).toBe(true);
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: true })).hidden).toBe(true);
+    expect(f.deps.setHidden).toHaveBeenCalledTimes(1);
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: false })).hidden).toBe(false);
+    await expect(f.service.setHidden('other', { taskId: task.taskId, hidden: true })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    await expect(f.service.setHidden('p', { taskId: 'missing', hidden: true })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    f.undeclare();
+    await expect(f.service.setHidden('p', { taskId: task.taskId, hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(f.service.create('p', { requestKey: 'later', title: 'Later', hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(f.deps.setHidden).toHaveBeenCalledTimes(2);
+  });
+
+  it('denies background tasks when the host has no declaration check wired', async () => {
+    const f = fixture();
+    await expect(f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(f.deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('reveals background tasks before revoking ownership on uninstall, and aborts when reveal fails', async () => {
+    const f = declaredFixture();
+    const order: string[] = [];
+    f.deps.revealPluginTasks = vi.fn(async () => { order.push('reveal'); });
+    const revoke = vi.spyOn(f.deps.store, 'revokePlugin').mockImplementation(async () => { order.push('revoke'); });
+    await f.service.withUninstall('p', async () => { order.push('remove'); });
+    expect(order).toEqual(['reveal', 'revoke', 'remove']);
+    f.deps.revealPluginTasks = vi.fn(async () => { throw new Error('db'); });
+    const remove = vi.fn(async () => {});
+    await expect(f.service.withUninstall('p', remove)).rejects.toThrow('db');
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+  });
 });

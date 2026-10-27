@@ -189,8 +189,10 @@
   .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary); font-weight: 400; }
   .status .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
   .person[data-state="paused"] .status .d { background: var(--tertiary); }
-  .person[data-state="paused"] .who, .person[data-state="paused"] .usage { opacity: .7; }
-  .breakdown { padding: 0 16px 14px 60px; }
+  /* 暂停分享：头像与名字变淡，用量照常(用量是这段时间真实发生的)。 */
+  .person[data-state="paused"] > .row > .avatar, .person[data-state="paused"] .who { opacity: .7; }
+  /* 明细与头像左缘对齐：16 + 展开按钮 20 + 间距 12 = 48px。 */
+  .breakdown { margin: 0 12px 14px 48px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
   .breakdown table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .breakdown th { text-align: left; font-weight: 500; color: var(--secondary); padding: 6px 0; border-bottom: 1px solid var(--border); }
   .breakdown td { padding: 7px 0; border-bottom: 1px solid var(--border); }
@@ -268,8 +270,6 @@
 
   @media (max-width: 760px) {
     .rail { display: none; }
-    .breakdown { padding-left: 16px; }
-    .person .usage { display: none; }
     .appside { display: none; }
   }
 
@@ -329,6 +329,61 @@
   .framecard { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
   .framecard .plist { padding: 8px 10px; }
   @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+
+  /* ---------- 远程与分享页：用量与分享合并(2026-10-16) ---------- */
+  .sdesc { margin: -2px 0 12px; font-size: 12px; line-height: 1.5; color: var(--secondary); }
+  .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .summary div { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 8px; background: var(--chip); }
+  .summary b { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .summary span { font-size: 12px; color: var(--secondary); }
+  /* 窄窗口整行换行，用量与 ··· 不藏起来(与客户端一致)。 */
+  .person > .row { flex-wrap: wrap; }
+  .person > .row:hover { background: var(--hover); }
+  /* 名字旁的「你 / 分享的人」是普通的次要文字，不是标签胶囊(与客户端一致)。 */
+  .row .line1 .tag { height: auto; padding: 0; border-radius: 0; background: none; font-size: 12px; font-weight: 400; color: var(--secondary); white-space: normal; }
+  .person .usage { min-width: 108px; }
+  .person .usage .bar, .breakdown .bar { display: block; height: 4px; border-radius: 9999px; background: var(--bar); overflow: hidden; }
+  .person .usage .bar { width: 64px; margin: 6px 0 0 auto; }
+  .person .usage .bar i, .breakdown .bar i { display: block; height: 100%; border-radius: 9999px; background: var(--secondary); }
+  /* 有分享的人时每行都留 ··· 一列：你自己那一行放等宽占位，右侧用量才能对齐成列。 */
+  .person .ph { width: 28px; height: 28px; flex-shrink: 0; }
+  .reshares { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px 92px; }
+  .reshares .t { font-size: 12px; color: var(--tertiary); }
+  .reshares .item { display: flex; align-items: center; gap: 8px; }
+  .reshares .item .nm { flex: 1; min-width: 0; }
+  .reshares .item small { margin-left: 8px; font-size: 12px; color: var(--secondary); }
+  .reshares .item[data-state="rejected"] .avatar, .reshares .item[data-state="rejected"] .nm { opacity: .7; }
+  .avatar.sm { width: 28px; height: 28px; font-size: 12px; }
+  .btn.secondary.danger-tone { color: var(--danger); }
+  .breakdown tbody + tbody { border-top: 1px solid var(--border); }
+  .breakdown td { border-bottom: 0; padding: 4px 0; }
+  .breakdown tr.computer td { padding-top: 10px; font-weight: 500; }
+  .breakdown tr.model td { color: var(--secondary); }
+  .breakdown tr.model td:first-child { padding-left: 22px; }
+  .breakdown tbody.unused tr.computer td { color: var(--tertiary); font-weight: 400; }
+  .breakdown .cname { display: flex; align-items: center; gap: 8px; }
+  .breakdown .cname small { font-size: 12px; font-weight: 400; color: var(--secondary); }
+  .breakdown .pct { margin-left: auto; padding-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-weight: 400; color: var(--secondary); }
+  .breakdown .pct .bar { width: 48px; }
+  .breakdown .est { margin: 8px 0 0; font-size: 12px; }
+  .pair { font-weight: 500; letter-spacing: .06em; font-variant-numeric: tabular-nums; color: var(--text); }
+  .menu { position: absolute; z-index: 20; min-width: 160px; padding: 4px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-menu); }
+  .menu button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 14px; text-align: left; }
+  .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+  .menu button.danger { color: var(--danger); }
+  /* 组内电脑：点名称展开这台的配额；分享来的电脑展开后逐人列出主人是否同意(转分享)。 */
+  .member-wrap + .member-wrap { border-top: 1px solid var(--border); }
+  .namebtn { display: block; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+  .namebtn .line1 svg { color: var(--secondary); transition: transform 150ms; }
+  .namebtn[aria-expanded="true"] .line1 svg { transform: rotate(90deg); }
+  .mdetail { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px 60px; font-size: 12px; color: var(--secondary); }
+  .mdetail p { margin: 0; }
+  .mdetail .rs-title { font-weight: 500; }
+  .mdetail .guest { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+  .mdetail .guest .nm { flex: 1; }
+  .mdetail .guest[data-state="pending"] .avatar, .mdetail .guest[data-state="pending"] .nm { opacity: .7; }
+  @media (prefers-reduced-motion: reduce) { .namebtn .line1 svg, .chev { transition: none; } }
+  @media (max-width: 760px) { .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .reshares, .mdetail { padding-left: 16px; } .breakdown { margin-left: 16px; } }
 </style>
 </head>
 <body>
@@ -410,12 +465,19 @@
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
         模型供应商
       </button>
-      <div class="mhead">
+      <!-- 标题已经说明这页是什么；这台电脑的名字由组内本机那一行承载。生成分享链接放在标题右侧，分享前要知道的在申请弹窗的同意说明里。 -->
+      <div class="mhead" style="align-items:center">
         <span class="mark" style="width:36px;height:36px;border-radius:12px">A</span>
-        <!-- 标题已经说明这页是什么；这台电脑的名字由本机那行与下方「分享」说明承载，不在这里重复。 -->
         <div class="grow">
           <h1>Anthropic · 远程与分享</h1>
         </div>
+        <button type="button" class="btn cta sm">生成分享链接</button>
+      </div>
+
+      <!-- 待处理紧跟标题：新的分享申请，以及别人想经他自己的供应商组转用你的供应商(转分享，逐人同意)。 -->
+      <div class="section" id="pending-wrap">
+        <h3 class="section-title">待处理</h3>
+        <div class="card" id="pending"></div>
       </div>
 
       <div class="section">
@@ -441,36 +503,16 @@
 
       <div class="section">
         <h3 class="section-title usage-head">用量<span class="grow"></span>
-          <span class="seg" role="group" aria-label="用量维度">
-            <button type="button" data-dim="consumer" aria-pressed="true">按使用方</button>
-            <button type="button" data-dim="member" aria-pressed="false">按组内电脑</button>
-          </span>
           <span class="seg" role="group" aria-label="用量时间段">
             <button type="button" data-range="7d" aria-pressed="false">近 7 天</button>
             <button type="button" data-range="month" aria-pressed="true">本月</button>
             <button type="button" data-range="all" aria-pressed="false">全部</button>
           </span>
         </h3>
+        <p class="sdesc">按人统计 Anthropic 的用量，展开后按组内每台电脑分开。你自己的用量从这次更新后开始记录。</p>
+        <div class="summary" id="usage-summary"></div>
+        <!-- 2026-10-16：分享的人不在「分享」里另列一份——状态、加入时间、关闭与删除都在这个人的用量这一行。 -->
         <div class="card" id="usage"></div>
-        <p class="est" style="margin:8px 0 0;font-size:12px">金额按本地单价估算，不代表供应商实际账单。两个维度的合计相同。</p>
-      </div>
-
-      <div class="section">
-        <h3 class="section-title">分享 <span class="count">2</span><span class="grow"></span>
-          <button type="button" class="btn cta sm">生成分享链接</button>
-        </h3>
-        <div class="card">
-          <div class="row">
-            <span class="avatar">王</span>
-            <div class="who"><div class="line1">王一 <span class="status"><span class="d"></span>正常 · 1 个任务运行中</span></div><div class="line2">9月28日加入 · 最近使用：刚刚</div></div>
-            <div class="actions"><button type="button" class="btn secondary sm">关闭分享</button><button type="button" class="btn danger-text sm">删除</button></div>
-          </div>
-          <div class="row">
-            <span class="avatar">K</span>
-            <div class="who"><div class="line1">Kai Chen <span class="status"><span class="d"></span>正常</span></div><div class="line2">10月2日加入 · 最近使用：3 天前</div></div>
-            <div class="actions"><button type="button" class="btn secondary sm">关闭分享</button><button type="button" class="btn danger-text sm">删除</button></div>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -600,7 +642,7 @@
           <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
             <span>你的项目文件和命令仍在你自己的电脑上执行<small>由你的任务权限把关</small></span></li>
           <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-            <span>对话内容和 Agent 读取的文件内容会经过 Lizi 的电脑，并保存在实际运行任务的那台电脑上<small>Lizi 只会看到你的昵称和头像</small></span></li>
+            <span>对话内容和 Agent 读取的文件内容会经过 Lizi 的电脑，并保存在实际运行任务的那台电脑上<small>Lizi 和需要同意你使用的其他电脑主人只会看到你的昵称和头像</small></span></li>
           <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             <span>发送申请后，需要 Lizi 同意才会生效<small>Lizi 可以随时关闭或删除这个分享</small></span></li>
         </ul>
@@ -609,7 +651,18 @@
           <button type="button" class="btn secondary" data-close-dialog>取消</button>
         </div>
       </div>
+
+      <div class="modal narrow" data-dialog="remove" role="alertdialog" aria-modal="true" aria-labelledby="remove-title" hidden>
+        <h2 id="remove-title"></h2>
+        <p class="desc" id="remove-desc"></p>
+        <div class="footer">
+          <button type="button" class="btn danger" id="remove-confirm">删除分享</button>
+          <button type="button" class="btn secondary" data-close-dialog>取消</button>
+        </div>
+      </div>
     </div>
+
+    <div class="menu" id="menu" role="menu" hidden></div>
 
     <div class="toast" id="toast" role="status" hidden>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>
@@ -624,13 +677,19 @@
 
   /* ---------- 模拟数据 ---------- */
   let hasGroup = true;
+  /*
+   * 组内电脑。分享来的电脑只用分享者的昵称称呼(「Magi 的电脑」)，不写对方的电脑名。
+   * reshare：这台的主人是否同意你分享出去的人经组用它(转分享，provider-sharing §4.3)；没同意的人，任务不会分到这台。
+   */
   const members = [
     /* state 为 on 时状态词由运行数决定(空闲 / N 个任务运行中)，不再单独写「可用」。 */
-    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4 },
-    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4 },
-    { id: 'mini', name: "Magi's Mac Mini", sub: '来自 Magi 的分享', state: 'on', running: 2, limit: 4 },
-    { id: 'pc', name: 'Studio-PC', sub: '来自 Kai 的分享', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复' },
-    { id: 'imac', name: 'Office-iMac', sub: '来自 王一 的分享', state: 'off', running: 0, limit: 2, status: '不在线' },
+    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4, quota: '5 小时：已用 38%，16:20 重置 · 每周：已用 52%，周一重置' },
+    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4, quota: '5 小时：已用 12%，17:05 重置 · 每周：已用 31%，周三重置' },
+    { id: 'magi', name: 'Magi 的电脑', sub: '来自 Magi 的分享', owner: 'Magi', state: 'on', running: 2, limit: 4,
+      guests: [['王', '王一', 'approved'], ['K', 'Kai Chen', 'pending'], ['M', 'Mia', 'approved']] },
+    { id: 'ryo', name: 'Ryo 的电脑', sub: '来自 Ryo 的分享', owner: 'Ryo', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复',
+      guests: [['王', '王一', 'approved'], ['K', 'Kai Chen', 'approved'], ['M', 'Mia', 'approved']] },
+    { id: 'imac', name: 'Office-iMac', sub: '我的其他电脑', state: 'off', running: 0, limit: 2, status: '不在线' },
   ];
   const strategyDesc = {
     least: '给最闲的那台',
@@ -638,37 +697,59 @@
     order: '排前面的优先',
     weight: '按权重比例',
   };
-  /* 每行：[名称, 说明, 头像, [[模型, 轮次, 输入, 输出, 估算金额]]]；两个维度合计相同。 */
-  const base = {
-    consumer: [
-      ['本机', '这台电脑上的任务', 'H', [['Claude Opus 5.5', 52, 880000, 120000, 21.4], ['Claude Sonnet 5', 30, 300000, 52000, 2.6]]],
-      ["Lizi's MacBook Pro", '我的其他电脑', 'L', [['Claude Opus 5.5', 41, 620000, 90000, 15.2]]],
-      ['王一', '分享的人', '王', [['Claude Sonnet 5', 64, 710000, 101000, 5.9], ['Claude Haiku 4.5', 12, 88000, 15000, 0.2]]],
-      ['Kai Chen', '分享的人', 'K', [['Claude Haiku 4.5', 22, 150000, 31000, 0.4]]],
-    ],
-    member: [
-      ['本机', 'Home Mac Studio', 'H', [['Claude Opus 5.5', 30, 500000, 70000, 12.2], ['Claude Haiku 4.5', 12, 88000, 15000, 0.2]]],
-      ["Lizi's MacBook Pro", '我的其他电脑', 'L', [['Claude Opus 5.5', 38, 580000, 84000, 14.1], ['Claude Haiku 4.5', 22, 150000, 31000, 0.4]]],
-      ["Magi's Mac Mini", '来自 Magi 的分享', 'M', [['Claude Opus 5.5', 25, 420000, 56000, 10.3], ['Claude Sonnet 5', 70, 760000, 113000, 6.3]]],
-      ['Studio-PC', '来自 Kai 的分享', 'K', [['Claude Sonnet 5', 24, 250000, 40000, 2.2]]],
-      ['Office-iMac', '来自 王一 的分享', '王', []],
-    ],
-  };
-  const scale = (rows, k) => rows.map(([n, s, a, models]) => [n, s, a, models.map((m) => [m[0], Math.round(m[1] * k), Math.round(m[2] * k), Math.round(m[3] * k), m[4] * k])]);
-  const usageData = {
-    consumer: { '7d': scale(base.consumer, 0.3), month: base.consumer, all: scale(base.consumer, 2.6) },
-    member: { '7d': scale(base.member, 0.3), month: base.member, all: scale(base.member, 2.6) },
-  };
-  let dim = 'consumer', range = 'month', strategy = 'least';
+  /*
+   * 「用量」按人：你自己在第一行，然后是分享的人。每人在每台组内电脑上的用量：[模型, 消息, 输入, 输出, 估算金额]，
+   * 以本月为基准，近 7 天 / 全部按比例缩放。member：分享的人这一行同时管分享本身(2026-10-16)。
+   * reshares：这个人把你的供应商放进他自己的组、又分享给了别人，你处理过的那几位(已同意可撤回，未同意可改为同意)。
+   */
+  let people = [
+    { key: 'self', name: 'Lizi', tag: '你', avatar: 'L', last: '14 分钟前', usage: {
+      self: [['Claude Opus 5.5', 52, 880000, 120000, 21.4], ['Claude Sonnet 5', 30, 300000, 52000, 2.6]],
+      mbp: [['Claude Opus 5.5', 41, 620000, 90000, 15.2]],
+      magi: [['Claude Sonnet 5', 12, 160000, 22000, 1.4]] } },
+    { key: 'wang', name: '王一', tag: '分享的人', avatar: '王', last: '刚刚',
+      member: { status: 'active', running: 1, joined: '9月28日' }, usage: {
+      self: [['Claude Sonnet 5', 40, 450000, 61000, 3.8]],
+      magi: [['Claude Sonnet 5', 24, 260000, 40000, 2.1], ['Claude Haiku 4.5', 12, 88000, 15000, 0.2]] } },
+    { key: 'kai', name: 'Kai Chen', tag: '分享的人', avatar: 'K', last: '3 天前',
+      member: { status: 'active', running: 0, joined: '10月2日', reshares: [
+        { id: 'carol', avatar: 'C', name: 'Carol', state: 'approved' },
+        { id: 'erin', avatar: 'E', name: 'Erin', state: 'rejected' },
+      ] }, usage: { ryo: [['Claude Haiku 4.5', 22, 150000, 31000, 0.4]] } },
+    { key: 'mia', name: 'Mia', tag: '分享的人', avatar: 'M', last: null,
+      member: { status: 'paused', running: 0, joined: '10月8日' }, usage: {} },
+  ];
+  let pending = [
+    { id: 'dana', kind: 'apply', avatar: 'D', name: 'Dana', code: '4827', time: '2 分钟前' },
+    { id: 'frank', kind: 'reshare', avatar: 'F', name: 'Frank', owner: 'Kai Chen', time: '5 分钟前' },
+  ];
+  const rangeScale = { '7d': 0.3, month: 1, all: 2.6 };
+  let range = 'month', strategy = 'least', shareVariant = 'shared';
   const open = new Set();
+  const openMembers = new Set();
 
-  const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.round(n / 1000) + 'K';
+  const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n > 0 ? Math.round(n / 1000) + 'K' : '0';
   const fmtUsd = (n) => '$' + n.toFixed(2);
   const check = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>';
   /* 组内电脑用设备图标；人像头像留给「用量」与「分享」里真实的人。 */
   const monitor = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
   const dots = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+  const chevR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>';
+  const pauseIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 15V9m4 6V9"/></svg>';
+  const playIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4z"/></svg>';
+  const trashIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg>';
   const chevron = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+
+  const sharing = () => shareVariant === 'shared';
+
+  /* 转分享：这台的主人对你分享出去的人逐人同意的情况，一句话接在状态后面，不另占一行。 */
+  function reshareSummary(m) {
+    const waiting = m.guests.filter((g) => g.at(2) === 'pending').length;
+    const rejected = m.guests.filter((g) => g.at(2) === 'rejected').length;
+    if (waiting) return `${waiting} 位分享的人等待 ${m.owner} 同意`;
+    if (rejected) return `${m.owner} 未同意 ${rejected} 位分享的人`;
+    return '分享的人可以用';
+  }
 
   function renderMembers() {
     $('#member-count').textContent = members.length + ' 台';
@@ -679,52 +760,165 @@
       const load = m.state === 'on'
         ? (m.running > 0 ? run : '空闲')
         : `${m.status}${m.running > 0 ? ` · ${run}` : ''}`;
+      // 只在这个供应商分享给了别人时才说转分享(没有分享的人就无所谓同不同意)。
+      const reshare = m.guests && sharing() ? ` · <span>${reshareSummary(m)}</span>` : '';
       // 参与分配对所有来源都是同一个开关(同一个 paused 布尔值)，不按来源分叉成「开关 / 暂停分配按钮」。
       // 「移出组」罕用且不可逆，收进行内 ··· 菜单；本机不能移出，留等宽占位。
       const more = m.id === 'self'
         ? '<span class="ph" aria-hidden="true"></span>'
         : `<button type="button" class="icon-btn" aria-label="${m.name} 的更多操作">${dots}</button>`;
+      const isOpen = openMembers.has(m.id);
+      const guests = m.guests && sharing() ? `
+          <p class="rs-title">分享的人能否用这台电脑</p>
+          <p>需要 ${m.owner} 逐人同意。没同意的人，任务不会分到这台电脑。</p>
+          ${m.guests.map(([a, n, st]) => `<div class="guest" data-state="${st}"><span class="avatar sm">${a}</span><span class="nm">${n}</span><span class="status"><span class="d${st === 'approved' ? '' : ' gray'}"></span>${{ approved: '已同意', pending: '等待同意', rejected: '未同意' }[st]}</span></div>`).join('')}` : '';
+      const detail = !isOpen ? '' : `
+        <div class="mdetail" id="mdetail-${m.id}">
+          <p>${m.guests ? '别人分享的电脑不显示配额' : m.state === 'off' ? '不在线，读不到配额' : m.quota}</p>${guests}
+        </div>`;
       return `
-      <div class="row member" data-state="${m.state}">
-        <span class="avatar" aria-hidden="true">${monitor}</span>
-        <div class="who">
-          <div class="line1">${m.name} <span class="src">${m.sub}</span></div>
-          <div class="line2"><span class="status">${dot}${load}</span></div>
-        </div>
-        <div class="actions">
-          <span class="sel">上限 ${m.limit}${chevron}</span>
-          <button type="button" class="switch" role="switch" aria-checked="${m.state !== 'off'}" aria-label="给 ${m.name} 分配任务"></button>
-          ${more}
-        </div>
+      <div class="member-wrap">
+        <div class="row member" data-state="${m.state}">
+          <span class="avatar" aria-hidden="true">${monitor}</span>
+          <div class="who">
+            <button type="button" class="namebtn" data-member-toggle="${m.id}" aria-expanded="${isOpen}" aria-controls="mdetail-${m.id}">
+              <span class="line1">${m.name} <span class="src">${m.sub}</span>${chevR}</span>
+            </button>
+            <div class="line2"><span class="status">${dot}${load}</span>${reshare}</div>
+          </div>
+          <div class="actions">
+            <span class="sel">上限 ${m.limit}${chevron}</span>
+            <button type="button" class="switch" role="switch" aria-checked="${m.state !== 'off'}" aria-label="给 ${m.name} 分配任务"></button>
+            ${more}
+          </div>
+        </div>${detail}
       </div>`;
     }).join('');
     $('#strategy-desc').textContent = strategyDesc[strategy];
   }
 
+  const sumModels = (models) => models.reduce((a, r) => ({ turns: a.turns + r[1], input: a.input + r[2], output: a.output + r[3], usd: a.usd + r[4] }), { turns: 0, input: 0, output: 0, usd: 0 });
+  const scaled = (models) => models.map((r) => [r[0], ...[r[1], r[2], r[3]].map((v) => Math.round(v * rangeScale[range])), r[4] * rangeScale[range]]);
+
   function renderUsage() {
-    const rows = usageData[dim][range];
-    $('#usage').innerHTML = rows.map(([name, sub, avatar, models], i) => {
-      const key = dim + i;
-      const tokens = models.reduce((s, r) => s + r[2] + r[3], 0);
-      const cost = models.reduce((s, r) => s + r[4], 0);
-      const isOpen = open.has(key);
+    const list = sharing() ? people : people.filter((p) => !p.member);
+    const rows = list.map((p) => {
+      const byComputer = members.map((m) => [m, scaled(p.usage[m.id] || [])]);
+      const all = byComputer.flatMap(([, models]) => models);
+      const t = sumModels(all);
+      return { p, byComputer, tokens: t.input + t.output, usd: t.usd, models: all };
+    });
+    const total = rows.reduce((sum, r) => sum + r.tokens, 0);
+    const usd = rows.reduce((sum, r) => sum + r.usd, 0);
+    const usedParties = rows.filter((r) => r.tokens > 0).length;
+    const modelCount = new Set(rows.flatMap((r) => r.models.map((m) => m[0]))).size;
+    $('#usage-summary').innerHTML = [[fmtTok(total), '总用量'], [fmtUsd(usd), '估算金额'], [usedParties, '使用方'], [modelCount, '模型']]
+      .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+    // 有分享的人时每行都留 ··· 一列，右侧用量才能对齐成列；只有你自己时不留。
+    const actionColumn = rows.some((r) => r.p.member);
+    $('#usage').innerHTML = rows.map(({ p, byComputer, tokens, usd: amount }) => {
+      const isOpen = open.has(p.key);
+      const m = p.member;
+      const usedOn = byComputer.filter(([, models]) => models.length).length;
+      const last = p.last ? `最近使用：${p.last}` : '还未使用';
+      const status = !m ? '' : `<span class="status"><span class="d${m.status === 'paused' ? ' gray' : ''}"></span>${
+        m.status === 'paused' ? '已暂停' : m.running > 0 ? `正常 · ${m.running} 个任务运行中` : '正常'}</span>`;
+      const share = tokens && total ? Math.max(3, Math.round((tokens / total) * 100)) : 0;
+      const more = !actionColumn ? ''
+        : m ? `<button type="button" class="icon-btn" data-menu="${p.key}" aria-haspopup="menu" aria-label="${p.name} 的更多操作">${dots}</button>`
+          : '<span class="ph" aria-hidden="true"></span>';
+      const reshares = !(m && m.reshares && m.reshares.length) ? '' : `
+        <div class="reshares">
+          <span class="t">经 ${p.name} 的供应商组使用</span>
+          ${m.reshares.map((r) => `<div class="item" data-state="${r.state}">
+            <span class="avatar sm">${r.avatar}</span>
+            <span class="nm">${r.name}<small>${r.state === 'approved' ? '已同意' : '未同意'}</small></span>
+            <button type="button" class="btn secondary sm${r.state === 'approved' ? ' danger-tone' : ''}" data-reshare="${p.key}:${r.id}"
+              aria-label="${r.state === 'approved' ? `撤回对 ${r.name} 的同意` : `同意 ${r.name} 使用`}">${r.state === 'approved' ? '撤回同意' : '同意'}</button>
+          </div>`).join('')}
+        </div>`;
+      const breakdown = !isOpen ? '' : `
+        <div class="breakdown" id="breakdown-${p.key}"><table>
+          <thead><tr><th>电脑 / 模型</th><th class="num">消息</th><th class="num">输入</th><th class="num">输出</th><th class="num">估算金额</th></tr></thead>
+          ${byComputer.map(([c, models]) => {
+            const t = sumModels(models);
+            const used = models.length > 0;
+            const pct = used && tokens ? Math.round(((t.input + t.output) / tokens) * 100) : null;
+            return `<tbody class="${used ? '' : 'unused'}">
+              <tr class="computer"><td><span class="cname">${c.name}<small>${c.sub}</small>${pct === null ? '' : `<span class="pct"><span class="bar"><i style="width:${Math.max(pct, 2)}%"></i></span>${pct}%</span>`}</span></td>
+                <td class="num">${used ? t.turns : '—'}</td><td class="num">${used ? fmtTok(t.input) : '—'}</td><td class="num">${used ? fmtTok(t.output) : '—'}</td><td class="num">${used ? fmtUsd(t.usd) : '—'}</td></tr>
+              ${models.map((r) => `<tr class="model"><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${fmtTok(r[2])}</td><td class="num">${fmtTok(r[3])}</td><td class="num">${fmtUsd(r[4])}</td></tr>`).join('')}
+            </tbody>`;
+          }).join('')}
+        </table><p class="est">金额按本地单价估算，不代表供应商实际账单。</p></div>`;
       return `
-      <div class="person" data-open="${isOpen}">
+      <div class="person" data-open="${isOpen}" data-state="${m && m.status === 'paused' ? 'paused' : ''}">
         <div class="row">
-          <button type="button" class="expand" data-toggle="${key}" aria-expanded="${isOpen}" aria-label="${isOpen ? '收起' : '展开'} ${name} 的模型用量">
+          <button type="button" class="expand" data-toggle="${p.key}" aria-expanded="${isOpen}" aria-controls="breakdown-${p.key}" aria-label="${isOpen ? '收起' : '展开'} ${p.name} 的用量明细">
             <svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
           </button>
-          <span class="avatar">${avatar}</span>
-          <div class="who"><div class="line1">${name}</div><div class="line2">${sub}</div></div>
-          <div class="usage"><b>${tokens ? fmtTok(tokens) + ' tokens' : '没有用量'}</b>${tokens ? '约 ' + fmtUsd(cost) : ''}</div>
-        </div>
-        ${isOpen ? `
-        <div class="breakdown"><table>
-          <thead><tr><th>模型</th><th class="num">轮次</th><th class="num">输入</th><th class="num">输出</th><th class="num">估算金额</th></tr></thead>
-          <tbody>${models.map((r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${fmtTok(r[2])}</td><td class="num">${fmtTok(r[3])}</td><td class="num">${fmtUsd(r[4])}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">这段时间没有用量</td></tr>'}</tbody>
-        </table></div>` : ''}
+          <span class="avatar">${p.avatar}</span>
+          <div class="who">
+            <div class="line1">${p.name} <span class="tag">${p.tag}</span>${status}</div>
+            <div class="line2">${m ? `${m.joined}加入 · ` : ''}${last}${usedOn > 0 ? ` · 用了 ${usedOn} 台电脑` : ''}</div>
+          </div>
+          <div class="usage"><b>${fmtTok(tokens)} tokens</b>${amount ? '约 ' + fmtUsd(amount) : ''}${share ? `<span class="bar"><i style="width:${share}%"></i></span>` : ''}</div>
+          ${more}
+        </div>${reshares}${breakdown}
       </div>`;
     }).join('');
+  }
+
+  function renderPending() {
+    const list = sharing() ? pending : [];
+    $('#pending-wrap').hidden = list.length === 0;
+    $('#pending').innerHTML = list.map((r) => `
+      <div class="row">
+        <span class="avatar">${r.avatar}</span>
+        <div class="who">
+          <div class="line1">${r.name} <span class="tag">${r.kind === 'apply' ? '申请使用' : `想经 ${r.owner} 的供应商组使用`}</span></div>
+          <div class="line2">${r.kind === 'apply'
+            ? `配对码 <span class="pair">${r.code}</span> · ${r.time}申请 · 24 小时内未处理将自动失效`
+            : `${r.time}请求 · 同意后，${r.name} 的任务可以在这台电脑上运行，用量算在 ${r.owner} 名下`}</div>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn secondary sm" data-pending="${r.id}:reject">拒绝</button>
+          <button type="button" class="btn primary sm" data-pending="${r.id}:approve">同意</button>
+        </div>
+      </div>`).join('');
+  }
+
+  /* ---------- 分享的人一行的 ··· 菜单 ---------- */
+  let menuFor = null, removing = null;
+  function closeMenu() { $('#menu').hidden = true; menuFor = null; }
+  function openMenu(btn) {
+    const p = people.find((x) => x.key === btn.dataset.menu);
+    menuFor = p.key;
+    const menu = $('#menu');
+    const paused = p.member.status === 'paused';
+    menu.innerHTML = `<button type="button" role="menuitem" data-menu-act="pause">${paused ? playIco : pauseIco}${paused ? '恢复分享' : '关闭分享'}</button>`
+      + `<button type="button" role="menuitem" class="danger" data-menu-act="remove">${trashIco}删除</button>`;
+    menu.hidden = false;
+    const w = $('#window').getBoundingClientRect(), b = btn.getBoundingClientRect();
+    menu.style.top = (b.bottom - w.top + 4) + 'px';
+    menu.style.left = (b.right - w.left - menu.offsetWidth) + 'px';
+    menu.querySelector('button').focus();
+  }
+  function menuAct(act) {
+    const p = people.find((x) => x.key === menuFor);
+    closeMenu();
+    if (!p) return;
+    if (act === 'pause') {
+      const paused = p.member.status === 'paused';
+      p.member.status = paused ? 'active' : 'paused';
+      renderUsage();
+      toast(paused ? `已恢复对 ${p.name} 的分享` : `已关闭对 ${p.name} 的分享，可随时恢复`);
+      return;
+    }
+    removing = p.key;
+    $('#remove-title').textContent = `删除对 ${p.name} 的分享？`;
+    $('#remove-desc').textContent = `${p.name} 将立即无法使用 Anthropic，正在运行的任务会停止。之后要再分享，需要重新生成链接。用量记录会保留。`;
+    openDialog('remove');
   }
 
   function renderSettings() {
@@ -738,9 +932,9 @@
   /* ---------- 添加电脑 ---------- */
   const mine = [
     { name: "Lizi's MacBook Pro", note: '我的其他电脑 · 已在组里', state: 'in' },
-    { name: "Magi's Mac Mini", note: '来自 Magi 的分享 · 已在组里', state: 'in' },
+    { name: 'Magi 的电脑', note: '来自 Magi 的分享 · 已在组里', state: 'in' },
     { name: 'Office Mac mini', note: '我的其他电脑 · 在线', state: 'pick' },
-    { name: "Ann's MacBook Air", note: '来自 Ann 的分享 · 在线', state: 'pick' },
+    { name: 'Ann 的电脑', note: '来自 Ann 的分享 · 在线', state: 'pick' },
     { name: 'Home-NUC', note: '我的其他电脑 · 不在线', state: 'disabled' },
   ];
   const picked = new Set(['Office Mac mini']);
@@ -797,18 +991,57 @@
     setTimeout(() => focusTarget && focusTarget.focus(), 0);
   }
   function closeDialog() { $('#scrim').hidden = true; $$('[data-dialog]').forEach((d) => { d.hidden = true; }); }
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#scrim').hidden) closeDialog(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('#menu').hidden) { const key = menuFor; closeMenu(); const b = key && $(`[data-menu="${key}"]`); if (b) b.focus(); return; }
+    if (!$('#scrim').hidden) closeDialog();
+  });
   /* 点击遮罩不关闭弹窗（DESIGN.md §4 Dialog：只通过自身按钮或 Esc 关闭）。 */
   document.addEventListener('click', (e) => {
     const t = e.target.closest('button, [data-pick]');
+    if (!$('#menu').hidden && !e.target.closest('#menu') && !(t && t.dataset.menu)) closeMenu();
     if (!t) return;
+    if (t.dataset.menu) { menuFor === t.dataset.menu ? closeMenu() : openMenu(t); return; }
+    if (t.dataset.menuAct) { menuAct(t.dataset.menuAct); return; }
+    if (t.id === 'remove-confirm') {
+      const p = people.find((x) => x.key === removing);
+      closeDialog();
+      if (p) { people = people.filter((x) => x !== p); renderUsage(); toast(`已删除对 ${p.name} 的分享`); }
+      return;
+    }
+    if (t.dataset.memberToggle) { const id = t.dataset.memberToggle; openMembers.has(id) ? openMembers.delete(id) : openMembers.add(id); renderMembers(); return; }
+    if (t.dataset.reshare) {
+      const [pk, rid] = t.dataset.reshare.split(':');
+      const owner = people.find((x) => x.key === pk);
+      const r = owner.member.reshares.find((x) => x.id === rid);
+      r.state = r.state === 'approved' ? 'rejected' : 'approved';
+      renderUsage();
+      toast(r.state === 'approved' ? `已同意 ${r.name} 经 ${owner.name} 的供应商组使用 Anthropic` : `已撤回对 ${r.name} 的同意，正在运行的任务已停止`);
+      return;
+    }
+    if (t.dataset.pending) {
+      const [id, decision] = t.dataset.pending.split(':');
+      const r = pending.find((x) => x.id === id);
+      pending = pending.filter((x) => x !== r);
+      if (decision === 'approve' && r.kind === 'apply') {
+        // 同意后这个人出现在上方「用量」里，和其他分享的人同一种行。
+        people.push({ key: r.id, name: r.name, tag: '分享的人', avatar: r.avatar, last: null, member: { status: 'active', running: 0, joined: '今天' }, usage: {} });
+      }
+      if (decision === 'approve' && r.kind === 'reshare') {
+        people.find((x) => x.name === r.owner).member.reshares.push({ id: r.id, avatar: r.avatar, name: r.name, state: 'approved' });
+      }
+      renderUsage(); renderPending();
+      toast(decision === 'approve'
+        ? (r.kind === 'apply' ? `已同意分享 Anthropic 给 ${r.name}` : `已同意 ${r.name} 经 ${r.owner} 的供应商组使用 Anthropic`)
+        : `已拒绝 ${r.name} 的${r.kind === 'apply' ? '申请' : '请求'}`);
+      return;
+    }
     if (t.matches('[data-close-dialog]')) closeDialog();
     if (t.dataset.openDialog) { openDialog(t.dataset.openDialog); if (t.dataset.addTab) showAdd(t.dataset.addTab); }
     else if (t.dataset.addTab) showAdd(t.dataset.addTab);
     if (t.dataset.goto) setScene(t.dataset.goto);
     if (t.dataset.toggle) { open.has(t.dataset.toggle) ? open.delete(t.dataset.toggle) : open.add(t.dataset.toggle); renderUsage(); }
     if (t.dataset.range) { range = t.dataset.range; $$('[data-range]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderUsage(); }
-    if (t.dataset.dim) { dim = t.dataset.dim; $$('[data-dim]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderUsage(); }
     if (t.dataset.strategy) { strategy = t.dataset.strategy; $$('[data-strategy]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderMembers(); }
     if (t.dataset.pick && t.getAttribute('aria-disabled') !== 'true') { picked.has(t.dataset.pick) ? picked.delete(t.dataset.pick) : picked.add(t.dataset.pick); renderMine(); }
     if (t.dataset.addGo) showAdd(t.dataset.addGo);
@@ -819,12 +1052,13 @@
   let scene = 'settings', othersVariant = 'normal';
   const notes = {
     settings: '供应商详情在「允许被远程调用」下方增加「供应商组」一行。供应商组不依赖远程调用：只给本机用时也可以建组。两处按钮都进入同一个「远程与分享」页。',
-    page: '原「分享 {供应商}」管理页扩成三块：供应商组、用量、分享。用量可按使用方或按组内电脑查看，两种合计相同；按人的用量从「已分享的人」移到这里。',
+    page: '「远程与分享」页：标题右侧生成分享链接，待处理申请紧跟标题；下面是供应商组与和设置页一致的用量。用量按人列出，你自己在第一行，筛选支持使用方、组内电脑、时间范围和某一天，另有每日柱图、热力图、按电脑和按模型。分享的人状态、加入时间、关闭与删除并在这个人的用量那一行(收进行尾 ···)。审批弹窗说明 Agent 的运行位置与用量归属；有组时写「由供应商组选一台电脑运行 Agent」。',
     add: '添加电脑与模型列表里的远程供应商同一个来源：你的其他电脑和别人分享给你的放在一个列表里直接勾选；还不能用的别人的电脑，粘贴分享链接走申请与配对码。链接的供应商不一致（订阅账号按品牌、自定义供应商按名称判断）或属于自己账号时不发送申请。',
     others: '任务正常时固定在第一次分到的电脑上，头部写明在哪台运行。那台撞到用量上限、登录失效或离线时，自动交接到组里下一台继续这一轮，消息流显示一行活动记录；每台最多试一次，全部失败才报错并逐台列出原因，有撞上限的就等最早恢复的那台自动继续。同账号其他电脑的模型列表标题写「供应商组」。',
     apply: '受邀者申请弹窗不论有没有组都写「Agent 在 Lizi 的电脑或 Lizi 安排的其他电脑上运行」，内容保存在实际运行的那台电脑上。之后建组、加减电脑都不再打扰受邀者，受邀者那边也不显示组内电脑的名称。',
   };
   const variants = {
+    page: { label: '分享', get: () => shareVariant, set: (v) => { shareVariant = v; closeMenu(); renderMembers(); renderUsage(); renderPending(); }, opts: [['shared', '已分享给 3 人'], ['none', '还没分享']] },
     settings: { label: '供应商组', get: () => (hasGroup ? 'on' : 'off'), set: (v) => { hasGroup = v === 'on'; renderSettings(); }, opts: [['off', '未设置'], ['on', '已设置']] },
     add: { label: '弹窗状态', get: () => addVariant, set: (v) => { openDialog('add'); showAdd(v); }, opts: [['mine', '已经能用的'], ['link', '分享链接'], ['wait', '等待同意'], ['mismatch', '供应商不一致'], ['self', '自己账号的链接']] },
     others: { label: '运行状态', get: () => othersVariant, set: (v) => {
@@ -846,6 +1080,7 @@
     const page = { settings: 'settings', page: 'page', add: 'page', others: 'others', apply: 'app' }[next];
     $$('[data-page]').forEach((p) => { p.hidden = p.dataset.page !== page; });
     closeDialog();
+    closeMenu();
     if (next === 'add') variants.add.set(addVariant);
     if (next === 'apply') openDialog('apply');
     $('#scene-note').textContent = notes[next];
@@ -860,7 +1095,7 @@
   $$('[data-theme]').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
   setTheme(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 
-  renderSettings(); renderMembers(); renderUsage(); renderMine(); setScene('settings');
+  renderSettings(); renderMembers(); renderUsage(); renderPending(); renderMine(); setScene('settings');
 </script>
 </body>
 </html>

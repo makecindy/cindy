@@ -208,7 +208,7 @@ export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none';
  * 'default' = 显式 standard 档:关 Fast 后 server 在 thread/settings/updated 通知里
  * 实际回带的就是这个值 (实测 0.142.0, 切到不支持 fast 的模型时 serviceTier→'default')。
  */
-export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex';
+export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex' | 'ultrafast';
 
 export interface ThreadStartParams {
   /** 缺省走 server 端 config 的默认 model。 */
@@ -1182,6 +1182,12 @@ export interface GuardianWarningServerNotification {
   params: GuardianWarningNotification;
 }
 
+/** User-facing warning (v2 WarningNotification); threadId is set when it targets a thread. */
+export interface WarningNotification {
+  method: 'warning';
+  params: { message: string; threadId?: string | null };
+}
+
 /**
  * v2 ThreadItem 的 envelope — 至少有 id / type, 余字段按 type narrow。
  * 完整 union 在 v2.rs ThreadItem (太大, 不在 Phase 1 全列)。translator 用
@@ -1213,6 +1219,7 @@ export type ServerNotification =
   | ItemGuardianApprovalReviewStartedServerNotification
   | ItemGuardianApprovalReviewCompletedServerNotification
   | GuardianWarningServerNotification
+  | WarningNotification
   | ErrorNotification;
 
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
@@ -1240,6 +1247,8 @@ export const Method = {
   ConfigRead: 'config/read',
   /** EXPERIMENTAL. Register a remote exec-server as a named environment. */
   EnvironmentAdd: 'environment/add',
+  /** EXPERIMENTAL. Read a named environment's status without starting or recovering it. */
+  EnvironmentStatus: 'environment/status',
   ExperimentalFeatureList: 'experimentalFeature/list',
   ExperimentalFeatureEnablementSet: 'experimentalFeature/enablement/set',
   MemoryReset: 'memory/reset',

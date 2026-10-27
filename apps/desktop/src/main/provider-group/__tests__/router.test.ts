@@ -195,22 +195,27 @@ describe('provider group details capability reader lifetime', () => {
 });
 
 describe('own tasks and incoming tasks', () => {
-  it.each(['least', 'order', 'round', 'weight'] as const)('keeps own tasks local under %s even when paused and full', async (strategy) => {
-    const config: ProviderGroupConfig = { strategy, autoSwitch: true, members: [SHARE_A, { ...LOCAL, paused: true }] };
-    const router = harness({ [LOCAL.key]: 8 }, {}, [], config);
+  it.each(['least', 'order', 'round', 'weight'] as const)('assigns own tasks by %s like incoming tasks, letting them use a paused local computer', async (strategy) => {
     const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL };
-    expect(await router.pick({ ...input, localTask: true })).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
-    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
-    expect(config.members[1].paused).toBe(true);
+    // 本机满载：本机任务也按并发上限分到别的电脑，不再固定留在本机。
+    const full: ProviderGroupConfig = { strategy, autoSwitch: true, members: [SHARE_A, { ...LOCAL, paused: true }] };
+    const fullRouter = harness({ [LOCAL.key]: 8 }, {}, [], full);
+    expect(await fullRouter.pick({ ...input, localTask: true })).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
+    // 本机暂停对外分配：外部任务不分过来，本机任务照常可以选它。
+    const paused: ProviderGroupConfig = { strategy, autoSwitch: true, members: [{ ...LOCAL, paused: true }, SHARE_A] };
+    const pausedRouter = harness({}, {}, [], paused);
+    expect(await pausedRouter.pick({ ...input, localTask: true })).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
+    expect(await pausedRouter.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
+    expect(paused.members[0].paused).toBe(true);
   });
 
-  it('does not reset incoming round-robin allocation when an own task stays local', async () => {
+  it('lets own tasks take their turn in round-robin allocation', async () => {
     const config: ProviderGroupConfig = { strategy: 'round', autoSwitch: true, members: [SHARE_A, SHARE_B, LOCAL] };
     const router = harness({}, {}, [], config);
     const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL };
     expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
-    expect(await router.pick({ ...input, localTask: true })).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
-    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_B.key } });
+    expect(await router.pick({ ...input, localTask: true })).toMatchObject({ kind: 'member', member: { key: SHARE_B.key } });
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
   });
 
   it.each(['cooling', 'excluded'] as const)('falls back to the group when this computer is %s', async (reason) => {
@@ -297,7 +302,7 @@ describe('provider group quick picks with busy usable computers', () => {
   const FAST = member('device:fast:anthropic', 'device', 'fast');
   const SLOW = member('device:slow:anthropic', 'device', 'slow');
 
-  function quickRouter(localLoad: number | Promise<number | null>, fastLoad: number | null, localView = view('anthropic')) {
+  function quickRouter(localLoad: number | Promise<number | null>, fastLoad: number | null, localView = view('anthropic'), localGroupLoad = 0) {
     const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [LOCAL, FAST, SLOW] };
     const devices = ['fast', 'slow'].map((deviceId): DeviceLinkDeviceView => ({
       deviceId, name: deviceId, platform: 'win32', appVersion: '1.0.0', lastSeenAt: null,
@@ -319,73 +324,76 @@ describe('provider group quick picks with busy usable computers', () => {
     });
     const router = createProviderGroupRouter({
       directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
-      externalRunning: (_providerId, key) => key === FAST.key ? fastLoad ?? 0 : 0,
+      externalRunning: (_providerId, key) => key === FAST.key ? fastLoad ?? 0 : key === LOCAL.key ? localGroupLoad : 0,
       now: () => 1_000, random: () => 0,
     });
     return { router, config, localRunning, readDeviceProviders };
   }
 
-  it('does not wait for remote catalogs when this computer can run its own task', async () => {
-    vi.useFakeTimers();
-    try {
-      const { router, config } = quickRouter(8, null);
-      config.members[0] = { ...LOCAL, paused: true };
-      expect(await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
-        .toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([
+    { fastLoad: null, expected: LOCAL.key },
+    { fastLoad: 1, expected: FAST.key },
+  ].flatMap((scenario) => [false, true].map((own) => ({ ...scenario, own }))))(
+    'keeps local availability and group counts when its load read stalls (fast load=$fastLoad, own task=$own)',
+    async ({ fastLoad, expected, own }) => {
+      vi.useFakeTimers();
+      try {
+        const localLoad = new Promise<number | null>(() => undefined);
+        const { router, config } = quickRouter(localLoad, fastLoad, view('anthropic'), 2);
+        config.strategy = 'least';
+        const done = vi.fn();
+        void router.pick({
+          providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, ...(own ? { localTask: true as const } : {}),
+        }).then(done);
+        await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_PICK_QUICK_MS - 1);
+        expect(done).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(done).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'member', member: expect.objectContaining({ key: expected }),
+        }));
+        const resolved = done.mock.calls[0][0].resolved as ResolvedProviderGroupMember[];
+        const local = resolved.find((member) => member.member.key === LOCAL.key);
+        expect(local).toMatchObject({ state: 'ok' });
+        expect(local?.reportedRunning).toBeUndefined();
+        expect(router.running('anthropic', LOCAL.key)).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-  it.each([false, true])('does not query stalled local load for its own task (fresh=%s)', async (fresh) => {
-    vi.useFakeTimers();
-    try {
-      const { router, config, localRunning, readDeviceProviders } = quickRouter(new Promise(() => undefined), null);
-      config.members[0] = { ...LOCAL, paused: true };
-      const done = vi.fn();
-      void router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true, fresh }).then(done);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(done).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        kind: 'member', member: expect.objectContaining({ key: LOCAL.key }),
-      }));
-      expect(localRunning).not.toHaveBeenCalled();
-      expect(readDeviceProviders).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it.each(['disconnected', 'wrong-model'] as const)('falls back within the quick window without reading local load when local is %s', async (reason) => {
+  it.each(['disconnected', 'wrong-model'] as const)('falls back within the quick window for an own task when local is %s', async (reason) => {
     vi.useFakeTimers();
     try {
       const localView = view('anthropic');
       if (reason === 'disconnected') localView.connected = false;
       else localView.models = { 'claude-code': [] };
-      const { router, localRunning } = quickRouter(new Promise(() => undefined), 0, localView);
+      const { router } = quickRouter(new Promise(() => undefined), 0, localView);
       const done = vi.fn();
       void router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }).then(done);
       await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_PICK_QUICK_MS);
       expect(done).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         kind: 'member', member: expect.objectContaining({ key: FAST.key }),
       }));
-      expect(localRunning).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
+  // 本机任务与外部任务走同一条快速选择(本机任务只是不受本机的对外暂停限制)。
   it.each([
     { label: 'a full local computer while both remote catalogs stall', localLoad: 4, fastLoad: null, expected: LOCAL.key },
     { label: 'a free computer before a full one, despite order strategy', localLoad: 4, fastLoad: 1, expected: FAST.key },
     { label: 'the least busy computer when every resolved computer is full', localLoad: 6, fastLoad: 4, expected: FAST.key },
-  ])('finishes within the quick window with $label', async ({ localLoad, fastLoad, expected }) => {
+  ].flatMap((c) => [false, true].map((own) => ({ ...c, own }))))('finishes within the quick window with $label (own task=$own)', async ({ localLoad, fastLoad, expected, own }) => {
     vi.useFakeTimers();
     try {
-      const { router } = quickRouter(localLoad, fastLoad);
+      const { router, config } = quickRouter(localLoad, fastLoad);
+      if (own) config.members[0] = { ...LOCAL, paused: true };
       const done = vi.fn();
-      void router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL }).then(done);
+      void router.pick({
+        providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, ...(own ? { localTask: true as const } : {}),
+      }).then(done);
       await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_PICK_QUICK_MS - 1);
       expect(done).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);

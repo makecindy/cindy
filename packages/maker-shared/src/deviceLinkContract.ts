@@ -228,6 +228,8 @@ export interface MobileCodexRateLimitResetOffer {
 
 /** Full read-only Codex quota view plus an optional manually redeemable reset offer. */
 export interface MobileCodexRateLimitsResult {
+  /** Absent on older hosts. Settings belong to this computer and exact ChatGPT account. */
+  autoUse?: CodexResetAutoUseState;
   /** Echoed account scope; custom-account clients reject unscoped legacy responses. */
   providerId?: string;
   account: MobileCodexRateLimitAccount;
@@ -238,6 +240,23 @@ export interface MobileCodexRateLimitsResult {
     credits: MobileCodexRateLimitResetCredit[] | null;
   } | null;
   resetOffer: MobileCodexRateLimitResetOffer | null;
+}
+
+export interface CodexResetAutoUseSettings {
+  enabled: boolean;
+  lowQuota: boolean;
+  /** Inclusive days until the weekly quota resets; zero means no time condition. */
+  minimumDays: number;
+  expiring: boolean;
+  expiryMinutes: number;
+}
+
+export interface CodexResetAutoUseState {
+  /** Opaque account binding, never an auth credential. Required when saving. */
+  accountKey: string;
+  settings: CodexResetAutoUseSettings;
+  customized: boolean;
+  lastUsedAt: number | null;
 }
 
 /** Stable terminal result for one desktop-issued reset offer. */
@@ -254,7 +273,7 @@ export interface MobileSessionAgentSwitchIntent {
   model: string;
   providerId: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /** desktop 登记 / 取消跨 Agent 意图后的稳定结果。 */
@@ -325,6 +344,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
+  'maker:usage:codex-reset-auto-use',
   // 订阅账号余量快照(只读;Claude / SuperGrok)与 cc 默认路由会话的生效计费路由。
   // 老被控端 CHANNEL_NOT_ALLOWED → 任务菜单保留「暂未获取账号配额」。
   'maker:usage:claude-subscription',
@@ -349,6 +369,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:goal:resume',
   'maker:goal:update',
   'maker:fork',
+  'maker:side-chat:v1',
+  'maker:side-chat:list:v1',
+  'maker:fork-strip-encrypted',
   'maker:get-session-tree',
   'maker:navigate-session-tree',
   'maker:rewind:preview',
@@ -499,10 +522,11 @@ export function relayStatusHint(status: DeviceLinkRelayStatus, lastSyncedAt: num
 /**
  * 镜像 @cindy/device-link 的 DeviceLinkConnectionIssueKind。
  * maker-shared 保持零运行时依赖(与 DeviceLinkRelayStatus 同款处理),两边字面量
- * 必须一致;drift 会被 desktop/mobile 消费处的 TS 赋值检查拦下。
+ * 必须一致;deviceLinkContract.test.ts 校验两处字面量，避免消费端迁移后静默漂移。
  */
 export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
+  | 'device-removed'
   | 'replaced'
   | 'too-many-connections'
   | 'version-mismatch'
@@ -513,6 +537,8 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
   switch (kind) {
     case 'auth-failed':
       return '登录已失效';
+    case 'device-removed':
+      return '设备已移除';
     case 'replaced':
       return '连接被顶替';
     case 'too-many-connections':
@@ -529,6 +555,8 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
   switch (kind) {
     case 'auth-failed':
       return '登录状态已过期，请退出后重新登录。';
+    case 'device-removed':
+      return '请退出后重新登录，以重新加入设备列表。';
     case 'replaced':
       return '本设备的连接被另一处相同设备顶替，正在重新连接。';
     case 'too-many-connections':

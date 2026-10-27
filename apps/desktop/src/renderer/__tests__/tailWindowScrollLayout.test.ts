@@ -22,17 +22,19 @@ const code = ts.transpileModule(`return (${initializer.arguments[0].getText(sour
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
+const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
+
 function fixture(following: boolean, delta: number, distance = 0, coversEnd = true) {
   const setFirstVisibleItemKey = vi.fn();
   const setAnchoredForwardItems = vi.fn();
-  const setUnreadCount = vi.fn();
+  const setUnreadKeys = vi.fn();
   const onLoadMore = vi.fn();
   const expandWindow = vi.fn();
   const isNearBottomRef = { current: following };
   const bindings = {
     scrollRef: { current: { scrollTop: 10_000, scrollHeight: 10_600 + distance, clientHeight: 600 } },
     prevScrollTopRef: { current: 10_000 - delta },
-    isNearBottomRef, setIsNearBottom: vi.fn(), setUnreadCount,
+    isNearBottomRef, setIsNearBottom: vi.fn(), setUnreadKeys, NO_UNREAD_KEYS,
     restoringRef: { current: false }, scrollbarDragStartTopRef: { current: null },
     programmaticScrollRef: { current: false }, isLoadingMore: false,
     prevScrollHeightRef: { current: 0 }, saveRafRef: { current: 1 },
@@ -47,7 +49,7 @@ function fixture(following: boolean, delta: number, distance = 0, coversEnd = tr
     bumpSendFollowCancelGeneration: vi.fn(), sessionId: 'restored-tail',
   };
   const scroll = new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as () => void;
-  return { scroll, isNearBottomRef, setFirstVisibleItemKey, setAnchoredForwardItems, setUnreadCount, onLoadMore, expandWindow };
+  return { scroll, isNearBottomRef, setFirstVisibleItemKey, setAnchoredForwardItems, setUnreadKeys, onLoadMore, expandWindow };
 }
 
 describe('tail window during layout scrolls', () => {
@@ -65,7 +67,7 @@ describe('tail window during layout scrolls', () => {
     state.scroll();
     expect(state.isNearBottomRef.current).toBe(true);
     expect(state.setFirstVisibleItemKey).toHaveBeenCalledExactlyOnceWith(null);
-    expect(state.setUnreadCount).toHaveBeenCalledExactlyOnceWith(0);
+    expect(state.setUnreadKeys).toHaveBeenCalledExactlyOnceWith(NO_UNREAD_KEYS);
   });
   it('does not shrink history when scrolling up close to the tail', () => {
     const state = fixture(false, -40, 40);

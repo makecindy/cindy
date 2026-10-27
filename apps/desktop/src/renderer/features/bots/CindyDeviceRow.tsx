@@ -56,26 +56,39 @@ export function CindyDeviceRow({
         className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         aria-label={`${bot.name} · ${current.label}`}
       />
-      <span className="pointer-events-none relative shrink-0">
+      <span className="pointer-events-none relative flex shrink-0">
         <BotAvatar bot={bot} size="md" />
         <BotConnectionStatus
-          online={'deviceId' in bot && bot.connectionKnown === false ? null : current.online}
+          online={current.online}
+          connectionKnown={'deviceId' in bot ? bot.connectionKnown : undefined}
           deviceName={current.label}
         />
       </span>
-      <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_2.5rem] items-center gap-x-2.5 gap-y-0.5">
+      <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5">
         <span className="flex min-w-0 items-center gap-2">
           {'pinnedAt' in bot && bot.pinnedAt ? (
             <Pin size={11} aria-label={t('bots.list.pinned')} className="shrink-0" />
           ) : null}
           <span
             className={cn(
-              'min-w-0 flex-1 truncate text-14 leading-5',
+              'min-w-0 truncate text-14 leading-5',
               current.unread && 'font-medium',
             )}
           >
             {bot.name}
           </span>
+          <CindyDevicePicker
+            options={options}
+            current={current}
+            onSelect={onSelect}
+            className={cn(
+              'pointer-events-auto min-w-0 shrink px-1 text-11 text-inherit focus-visible:ring-inset',
+              '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
+              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
+              selected &&
+                'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
+            )}
+          />
           {'needsAttention' in bot && bot.needsAttention ? (
             <AlertTriangle
               size={13}
@@ -84,19 +97,7 @@ export function CindyDeviceRow({
             />
           ) : null}
         </span>
-        <span className={cn('min-h-4 justify-self-end text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-        <CindyDevicePicker
-          options={options}
-          current={current}
-          onSelect={onSelect}
-          className={cn(
-            'pointer-events-auto col-span-2 -ml-2 justify-self-start text-12 text-inherit focus-visible:ring-inset',
-            '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
-            'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
-            selected &&
-              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
-          )}
-        />
+        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
           title={typeof subtitle === 'string' ? subtitle : undefined}

@@ -20,7 +20,7 @@ import { readRemoteDeviceFile } from '../device-link/fileAccess';
  * watcherManager;远程 watch 桥接见 remote-watch.ts。
  */
 
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, type WebContents } from 'electron';
 import {
   createFile,
   createFolder,
@@ -54,6 +54,8 @@ import {
   isInsideCacheDir,
   putCachedContent,
   sweepCacheOnStartup,
+  stageLocalFileToCache,
+  cleanupOwnedUnpersistedStagedChatAttachments,
 } from './remote-file-cache.js';
 import {
   fetchChatFile,
@@ -62,7 +64,7 @@ import {
   type ChatFileFetchArgs,
   buildDevicePathUrl,
 } from './chat-file.js';
-import { createFileTransferProgressReporter } from './transfer-progress.js';
+import { createFileTransferProgressReporter, fileTransferRequestId } from './transfer-progress.js';
 import { downloadChatEntry, type ChatDownloadDeps } from './chat-download.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
@@ -71,7 +73,11 @@ import { getRemoteWatchRegistry } from './remote-watch.js';
 import { throwRemoteFsIpcError } from './remote.js';
 import { watcherManager, type FileTreeEvent } from './watcher.js';
 import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
+import { statSshPreviewMetadata } from './html-preview-read.js';
 import { toWorkdirRel } from '../../shared/workdirPath.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { uploadChatFolder, type ChatFolderUploadArgs } from './chat-folder-transfer.js';
+import { parseSharedTaskPeer } from '@cindy/device-link';
 
 const log = createLogger('file-browser/ipc');
 
@@ -106,6 +112,9 @@ export const FILE_BROWSER_INVOKE = {
   CHAT_FILE_STAT: 'maker:chat-file:stat',
   /** 远程文件 / 文件夹下载到系统「下载」文件夹(见 chat-download.ts)。 */
   CHAT_FILE_DOWNLOAD: 'maker:chat-file:download',
+  /** 取消进行中的聊天文件取回 / 下载(按发起时的 requestId)。 */
+  CHAT_FILE_CANCEL: 'maker:chat-file:cancel',
+  CHAT_FOLDER_UPLOAD: 'maker:chat-folder:upload',
 } as const;
 
 export const FILE_BROWSER_PUSH = {
@@ -135,6 +144,8 @@ interface ListDirArgs extends RemoteRoutedArgs {
   hideMetaFiles?: boolean;
   /** Doc mode: only `.md` files + dirs that contain `.md` descendants. */
   docMode?: boolean;
+  /** 用户开关「显示被忽略的目录」——列出依赖 / 构建产物 / 缓存目录。默认 false。 */
+  showIgnoredDirs?: boolean;
 }
 
 interface ReadFileArgs extends RemoteRoutedArgs {
@@ -167,6 +178,8 @@ interface StatArgs extends RemoteRoutedArgs {
 interface WatchArgs extends RemoteRoutedArgs {
   workdir: string;
   hideMetaFiles?: boolean;
+  /** 与 listDir 同源:开关变了要带新 matcher 重建 watcher。 */
+  showIgnoredDirs?: boolean;
 }
 
 /**
@@ -174,8 +187,11 @@ interface WatchArgs extends RemoteRoutedArgs {
  * ({ok,result}|{ok:false,error}),handler 的真实返回值在 result 里——renderer
  * 通路由 ipc.ts 解包,main 直调必须自己解,否则读信封字段恒错(真机实踩)。
  */
-async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>): Promise<T> {
-  const payload = await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
+async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const options = signal ? { preSend: () => signal.throwIfAborted() } : undefined;
+  const payload = options
+    ? await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs], options)
+    : await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
   if (!payload.ok) {
     throw new Error(`[${payload.error.code}] ${payload.error.message}`);
   }
@@ -194,6 +210,8 @@ async function fetchRemoteBigFile(
     mtimeMs: number;
     remoteHostId?: string | null;
     deviceId?: string | null;
+    /** HTML background reads must validate beyond the outer size/mtime cache key. */
+    revalidate?: boolean;
   },
   onProgress: (received: number, total: number, phase?: 'upload' | 'download') => void,
   signal?: AbortSignal,
@@ -224,6 +242,8 @@ async function fetchRemoteBigFile(
           remoteInvoke,
           {
             // Cache fills are shared: closing one preview must not cancel another consumer.
+            // This fill is keyed by the caller's stat; never relabel stale bytes as that version.
+            cacheFirst: false,
             workdir: args.workdir,
             relPath: args.relPath,
             maxBytes: Math.max(1, args.size),
@@ -330,6 +350,7 @@ async function fetchRemoteBigFile(
       },
       onProgress,
       signal,
+      { revalidate: args.revalidate },
     );
   }
   if (args.remoteHostId) {
@@ -353,6 +374,7 @@ async function fetchRemoteBigFile(
       ),
       onProgress,
       signal,
+      { revalidate: args.revalidate },
     );
   }
   throw new Error('fetch-remote requires remoteHostId or deviceId');
@@ -363,23 +385,55 @@ async function fetchRemoteBigFile(
  * during bootstrap. The handlers themselves are stateless beyond the
  * watcherManager singleton.
  */
+/** 进行中的聊天文件取回 / 下载:发起窗口 + requestId → 中止器(供提示条上的「取消」)。 */
+const chatTransfers = new Map<string, AbortController>();
+
+/** requestId 与进度事件同一判据(非空且 ≤64 字符),不合格时不登记、不可取消。 */
+function chatTransferKey(wc: WebContents, requestId: unknown): string | null {
+  const id = fileTransferRequestId(requestId);
+  return id ? `${wc.id}:${id}` : null;
+}
+
+/** 用户取消、发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。 */
+function beginChatTransfer(wc: WebContents, requestId: unknown) {
+  const abort = new AbortController();
+  const key = chatTransferKey(wc, requestId);
+  if (key) chatTransfers.set(key, abort);
+  const onGone = () => abort.abort();
+  wc.once('destroyed', onGone);
+  wc.once('render-process-gone', onGone);
+  return {
+    signal: abort.signal,
+    end: () => {
+      if (key && chatTransfers.get(key) === abort) chatTransfers.delete(key);
+      wc.removeListener('destroyed', onGone);
+      wc.removeListener('render-process-gone', onGone);
+    },
+  };
+}
+
 export function registerFileBrowserIpc(): void {
   // file-browser-core 是宿主无关的共享包(也跑在远端 file-service daemon 里),
   // 日志设施由宿主注入——desktop 侧接统一 logger(规则 12),scope 与抽包前一致。
   setFileBrowserCoreLoggerFactory(createLogger);
   registerHtmlPreviewIpc({
-    stat: async (args, root, relPath) => {
+    cached: (args, root, relPath) => {
+      if (args.origin.kind === 'local') return Promise.resolve(null);
+      return findStaleCached({
+        transport: args.origin.kind,
+        endpointId: args.origin.kind === 'device' ? args.origin.deviceId : args.origin.remoteHostId,
+        workdir: root,
+        relPath,
+      });
+    },
+    stat: async (args, root, relPath, signal) => {
+      signal?.throwIfAborted();
       if (args.origin.kind === 'device') {
         return deviceOpInvoke<import('@cindy/file-browser-core').FileStat>(args.origin.deviceId, {
           op: 'stat', workdir: root, relPath,
-        });
+        }, signal);
       }
-      if (args.origin.kind !== 'ssh') throw new Error('BAD_ARGS');
-      await getRemoteFileBrowser().request(args.origin.remoteHostId, 'stat', {
-        workdir: args.workdir,
-        relPath: toWorkdirRel(args.workdir, args.absPath)!,
-      });
-      return getRemoteFileBrowser().request(args.origin.remoteHostId, 'stat', { workdir: root, relPath });
+      return statSshPreviewMetadata(getRemoteFileBrowser(), args, root, relPath, signal);
     },
     read: async (args, root, entry, signal) => {
       if (signal?.aborted) throw new Error('PREVIEW_CANCELLED');
@@ -389,6 +443,7 @@ export function registerFileBrowserIpc(): void {
           relPath: entry.relPath,
           size: entry.size,
           mtimeMs: entry.mtimeMs,
+          revalidate: true,
           deviceId: args.origin.kind === 'device' ? args.origin.deviceId : undefined,
           remoteHostId: args.origin.kind === 'ssh' ? args.origin.remoteHostId : undefined,
         },
@@ -479,13 +534,16 @@ export function registerFileBrowserIpc(): void {
   };
   ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_FETCH, async (event, args: ChatFileFetchArgs) => {
     const wc = event.sender;
+    const transfer = beginChatTransfer(wc, args?.requestId);
     const onProgress = createFileTransferProgressReporter(
       { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
       (progress) => {
         if (!wc.isDestroyed()) wc.send(FILE_BROWSER_PUSH.TRANSFER, progress);
       },
     );
-    const result = await fetchChatFile(args, onProgress, chatFileDeps);
+    const result = await fetchChatFile(args, onProgress, chatFileDeps, transfer.signal).finally(
+      transfer.end,
+    );
     if (!result.ok) {
       log.warn('chat-file fetch failed', {
         code: result.code,
@@ -568,11 +626,7 @@ export function registerFileBrowserIpc(): void {
       // 会把远端内容写进用户的下载文件夹:只接受 Cindy 自有页面发起(与 HTML 预览同一判据)。
       assertTrustedAppRendererEvent(event);
       const wc = event.sender;
-      // 发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。
-      const abort = new AbortController();
-      const onGone = () => abort.abort();
-      wc.once('destroyed', onGone);
-      wc.once('render-process-gone', onGone);
+      const transfer = beginChatTransfer(wc, args?.requestId);
       // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
       const onProgress = createFileTransferProgressReporter(
         { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
@@ -584,11 +638,8 @@ export function registerFileBrowserIpc(): void {
         args,
         onProgress,
         chatDownloadDeps,
-        abort.signal,
-      ).finally(() => {
-        wc.removeListener('destroyed', onGone);
-        wc.removeListener('render-process-gone', onGone);
-      });
+        transfer.signal,
+      ).finally(transfer.end);
       if (!result.ok) {
         log.warn('chat-file download failed', {
           code: result.code,
@@ -599,6 +650,46 @@ export function registerFileBrowserIpc(): void {
       return result;
     },
   );
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_CANCEL, (event, requestId: unknown) => {
+    // 会中止主进程里的传输:与下载同一来源判据,只接受 Cindy 自有页面发起。
+    assertTrustedAppRendererEvent(event);
+    const key = chatTransferKey(event.sender, requestId);
+    if (key) chatTransfers.get(key)?.abort();
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FOLDER_UPLOAD, async (event, args: ChatFolderUploadArgs) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = activeOwnerScopeKey();
+    const ownerId = getActiveAppSession().dataOwnerId;
+    const transfer = beginChatTransfer(event.sender, args?.requestId);
+    const assertCurrent = () => {
+      assertTrustedAppRendererEvent(event);
+      if (event.sender.isDestroyed() || isAppSessionBoundaryPending() ||
+          owner !== activeOwnerScopeKey()) throw new Error('CANCELLED');
+    };
+    const progress = createFileTransferProgressReporter({
+      workdir: '', relPath: args?.sourcePath ?? '', requestId: args?.requestId,
+    }, value => {
+      if (!event.sender.isDestroyed()) event.sender.send(FILE_BROWSER_PUSH.TRANSFER, value);
+    });
+    try {
+      if (!ownerId || !fileTransferRequestId(args?.requestId) || !args?.deviceId ||
+          parseSharedTaskPeer(args.deviceId)) throw new Error('REMOTE_UNSUPPORTED');
+      const prepared = await uploadChatFolder(args, {
+        tempRoot: () => app.getPath('temp'), assertCurrent,
+        stage: params => stageLocalFileToCache({ ...params, ownerId }),
+        discard: filePath => cleanupOwnedUnpersistedStagedChatAttachments({ ownerId, filePaths: [filePath] }),
+        op: (deviceId, request) => deviceOpInvoke(deviceId, request),
+      }, progress, transfer.signal);
+      return { ok: true as const, ...prepared };
+    } catch (error) {
+      return { ok: false as const, code: String(error).includes('REMOTE_UNSUPPORTED')
+        ? 'REMOTE_UNSUPPORTED' as const : 'TRANSFER_FAILED' as const };
+    } finally {
+      transfer.end();
+    }
+  });
 
   // chip 点亮预检:远端精确 stat,verdict 见 statChatFile 注释。查询型接口,
   // 任何异常都折叠进 verdict(unknown),不 throw。
@@ -691,6 +782,7 @@ export function registerFileBrowserIpc(): void {
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
           includeIgnored: args.includeIgnored,
+          showIgnoredDirs: args.showIgnoredDirs === true,
         });
         return entries;
       } catch (err) {
@@ -698,12 +790,15 @@ export function registerFileBrowserIpc(): void {
         throwRemoteFsIpcError(err);
       }
     }
+    // includeIgnored 是完全绕过展示过滤（手机 HTML 快照枚举用）；showIgnoredDirs
+    // 只放行可放行层（依赖 / 构建产物 / 缓存），VCS / OS 垃圾仍隐藏。前者优先。
     const matcher =
       args.includeIgnored === true
         ? null
         : await loadIgnoreMatcher(args.workdir, {
             hideMetaFiles: args.hideMetaFiles ?? true,
             honorVcsIgnore: false,
+            showIgnoredDirs: args.showIgnoredDirs === true,
           });
     return listDir(args.workdir, args.relPath ?? '', matcher, {
       docMode: args.includeIgnored === true ? false : args.docMode,
@@ -887,7 +982,7 @@ export function registerFileBrowserIpc(): void {
           window,
           args.remoteHostId,
           args.workdir,
-          { hideMetaFiles: args.hideMetaFiles ?? true },
+          { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
           (fsEvent) => {
             if (window.isDestroyed()) return;
             window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
@@ -901,7 +996,7 @@ export function registerFileBrowserIpc(): void {
     await watcherManager.start(
       window,
       args.workdir,
-      { hideMetaFiles: args.hideMetaFiles ?? true },
+      { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
       (fsEvent: FileTreeEvent) => {
         if (window.isDestroyed()) return;
         window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);

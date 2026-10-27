@@ -41,9 +41,11 @@ import {
   BOT_GROUP_REMOTE_RESOURCE_KIND,
   type BotGroupDetail,
   type BotGroupFailure,
+  type BotGroupMessageView,
   type BotGroupRemoteActionId,
   type BotGroupRemoteChatData,
   type BotGroupSummary,
+  type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
@@ -105,6 +107,20 @@ const COPY = {
     ja: '{name}さんがグループに参加しました',
     ko: '{name} 님이 그룹에 참여했습니다',
   },
+  sharedReplyYou: {
+    en: 'You shared a thread reply',
+    'zh-CN': '你贴回了一条话题回复',
+    'zh-TW': '你貼回了一則話題回覆',
+    ja: 'スレッドの返信を共有しました',
+    ko: '스레드 답글을 공유했습니다',
+  },
+  sharedReply: {
+    en: '{name} shared a thread reply',
+    'zh-CN': '{name} 贴回了一条话题回复',
+    'zh-TW': '{name} 貼回了一則話題回覆',
+    ja: '{name} がスレッドの返信を共有しました',
+    ko: '{name} 님이 스레드 답글을 공유했습니다',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -139,6 +155,11 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
   if (!last) return undefined;
   if (last.authorKind === 'system' && last.noticeCode === 'member-joined')
     return localized(COPY.memberJoined, { name: last.authorName });
+  // A share names who posted it; the card's own text is never quoted here.
+  if (last.threadShare) {
+    return last.authorKind === 'user' && last.isSelf !== false
+      ? localized(COPY.sharedReplyYou) : localized(COPY.sharedReply, { name: last.authorName.trim() });
+  }
   return last.authorKind === 'bot' && last.authorName
     ? localized(COPY.lastMessage, { name: last.authorName, text: last.preview })
     : last.preview;
@@ -178,6 +199,15 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
   };
 }
 
+function withoutPaths(attachments: BotGroupMessageView['attachments']): BotGroupMessageView['attachments'] {
+  return attachments.map((attachment) => ({ ...attachment, path: null }));
+}
+
+/** A shared reply carries its own attachments, downloaded to this computer. */
+function shareWithoutPaths(share: BotGroupThreadShareView): BotGroupThreadShareView {
+  return share.attachments.length > 0 ? { ...share, attachments: withoutPaths(share.attachments) } : share;
+}
+
 /** Host paths stay on the computer; the phone gets the folder name and attachment names only. */
 export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteChatData {
   return {
@@ -186,10 +216,14 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
     plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
     // Older phones consume message views only; derive from this read's state here.
-    messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => (message.attachments.length > 0
-      ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment, path: null })) }
-      : message)),
+    messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => {
+      const view = message.attachments.length > 0 ? { ...message, attachments: withoutPaths(message.attachments) } : message;
+      return view.threadShare ? { ...view, threadShare: shareWithoutPaths(view.threadShare) } : view;
+    }),
+    ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
+      .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    supportsReadReceipts: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
   };
@@ -286,7 +320,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
       const scope = captureDataOwnerBroadcastScope();
       const result = await requireService().listGroups();
       if (!result.ok) refuse(result);
-      const groups = await visibleGroups(result.groups);
+      const groups = await visibleGroups(result.groups.filter(group => !group.archived));
       if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
       const query = request.query?.trim().toLocaleLowerCase() ?? '';
       const matched = query
@@ -352,6 +386,14 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         ? request.resourceRef.id
         : null;
       if (!groupId) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+      // Personal state is authorized by the account's historical membership, even after leave.
+      if (actionId === 'hide') {
+        const server = ownerService().chatServer;
+        if (!server) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'LIFECYCLE_UNAVAILABLE');
+        const hidden = await server.manage({ groupId, action: { type: 'hide' } });
+        if (!hidden.ok) refuse(chatGroupFailure(new Error(hidden.errorCode)));
+        return { result: { listState: hidden.listState }, effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+      }
       // Every action re-checks that the phone may still see this group, and any teammate it names.
       const visibleGroup = await readVisibleGroup(groupId);
       // New controllers bind a write to the snapshot they edited. Older controllers
@@ -389,9 +431,17 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
             mentions: input.mentions,
             clientId: input.clientId,
             division: input.division === true,
+            ...(input.quote !== undefined ? { quote: input.quote } : {}),
             ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
           }, { controllerDeviceId: context.controllerDeviceId });
           break;
+        case 'read': {
+          if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'read', messageId: input.messageId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [] };
+        }
         case 'continue':
           result = await current.continueRound(groupId);
           break;
@@ -423,6 +473,18 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'add-member':
           result = await current.setMembers({ groupId, botIds: [input.botId as string], addOnly: true });
           break;
+        case 'dissolve':
+        case 'leave': {
+          if (!visibleGroup.serverBacked || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'LIFECYCLE_UNAVAILABLE');
+          const self = visibleGroup.members.find(member => member.isSelf);
+          if (actionId === 'leave' && !self?.actorId) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'NOT_FOUND');
+          const receipt = await current.chatServer.manage({ groupId, action: actionId === 'dissolve'
+            ? { type: 'dissolve', expectedRevision: input.expectedRevision as number }
+            : { type: 'member', action: 'leave', actorId: self!.actorId! } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
         case 'delete':
           if (visibleGroup.serverBacked && input.expectedRevision !== undefined) {
             if (!current.chatServer || !visibleGroup.members.some(member => member.isOwned && member.role === 'owner'))

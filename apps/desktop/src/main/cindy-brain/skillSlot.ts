@@ -94,10 +94,44 @@ export async function removeGhostSkillLinksForRoots(
   managedRoots: readonly string[],
   homeDir?: string,
   additionalSkillDirs: readonly string[] = [],
+  withSharedRootsLock?: <T>(task: () => Promise<T>) => Promise<T>,
 ): Promise<{ changed: boolean; warnings: string[]; blockers: string[] }> {
+  const paths = sharedGlobalSkillsPaths(homeDir);
+  const sharedDirs = [paths.claudeSkillsDir, paths.codexSkillsDir, paths.sharedSkillsDir];
+  // The caller holds this instance's owner boundary. Other instances cannot
+  // publish its private projections, and current builds never create shared
+  // Ghost links. An empty legacy sweep is read-only and must not wait for an
+  // unrelated instance's shared-root writer (which may be unresponsive).
+  // Actual shared mutations still re-scan and revalidate under the same lock
+  // used by older builds; an unreadable directory remains a boundary blocker.
+  const inspected = withSharedRootsLock
+    ? await sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, false)
+    : null;
+  const shared = withSharedRootsLock && inspected?.managedLinksPresent
+    ? await withSharedRootsLock(() =>
+      sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, true))
+    : inspected ?? await sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, true);
+  const privateLinks = await sweepGhostSkillLinksForRoots(
+    managedRoots, homeDir, additionalSkillDirs, true,
+  );
+  return {
+    changed: shared.changed || privateLinks.changed,
+    warnings: [...new Set([...shared.warnings, ...privateLinks.warnings])],
+    blockers: [...new Set([...shared.blockers, ...privateLinks.blockers])],
+  };
+}
+
+/** Use identical ownership checks for the read-only legacy probe and locked removal. */
+async function sweepGhostSkillLinksForRoots(
+  managedRoots: readonly string[],
+  homeDir: string | undefined,
+  skillDirs: readonly string[],
+  removeLinks: boolean,
+): Promise<{ changed: boolean; managedLinksPresent: boolean; warnings: string[]; blockers: string[] }> {
   const warnings: string[] = [];
   const blockers: string[] = [];
   let changed = false;
+  let managedLinksPresent = false;
   const paths = sharedGlobalSkillsPaths(homeDir);
   const lexicalRoots = [...new Set(managedRoots.map(normalizeForCompare))];
   const resolvedRoots: string[] = [];
@@ -119,9 +153,9 @@ export async function removeGhostSkillLinksForRoots(
       }
     }
   }
-  if (lexicalRoots.length === 0) return { changed, warnings, blockers };
+  if (lexicalRoots.length === 0) return { changed, managedLinksPresent, warnings, blockers };
 
-  for (const dir of [paths.claudeSkillsDir, paths.codexSkillsDir, paths.sharedSkillsDir, ...additionalSkillDirs]) {
+  for (const dir of skillDirs) {
     let entries: Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -181,6 +215,8 @@ export async function removeGhostSkillLinksForRoots(
         } catch { /* An unprovable/user-owned dangling link is left untouched. */ }
       }
       if (!managed) continue;
+      managedLinksPresent = true;
+      if (!removeLinks) continue;
       try {
         const stat = await fsp.lstat(linkPath);
         if (!stat.isSymbolicLink()) {
@@ -214,7 +250,7 @@ export async function removeGhostSkillLinksForRoots(
       }
     }
   }
-  return { changed, warnings, blockers };
+  return { changed, managedLinksPresent, warnings, blockers };
 }
 
 interface ReconcileOptions {

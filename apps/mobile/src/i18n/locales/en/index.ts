@@ -1,3 +1,4 @@
+import mcpApps from './mcpApps.json';
 import plugins from './plugins.json';
 import taskTags from './taskTags.json';
 /**
@@ -28,6 +29,7 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  mcpApps,
   plugins,
   taskTags,
   remoteDesktop,

@@ -199,3 +199,95 @@ describe("native plugin configuration exchange", () => {
     ).toEqual([]);
   });
 });
+
+describe("代输入 screenshot step on the phone", () => {
+  // Distinctive base64 so a plaintext leak in the tunnel would be visible.
+  const picture = { mime: "image/jpeg" as const, width: 800, height: 600, data: "c3ludGhldGljLXBpY3R1cmUtYnl0ZXM=" };
+  const presentation = {
+    requestId: "card",
+    revision: 0,
+    purpose: "Sign in",
+    source: { app: "Game" },
+    command: null,
+    controls: [],
+    picture: true,
+    qr: false,
+  };
+  const inputAction = { requestId: "card", actionId: "step", expectedRevision: 0 };
+  function pictureHost() {
+    const answered = vi.fn(),
+      requests: unknown[] = [];
+    const host = new OauthTransactions({
+      owner: () => "account",
+      available: () => true,
+      bind: async () => ({ ghostId: "cindy-input-handoff", current: () => true }),
+      run: () => {
+        const remote = getRemoteOauthContext()!;
+        void (async () => {
+          try {
+            const state = randomBytes(32).toString("base64url");
+            answered(await remote.submitInput!({ kind: "input-entry", state, presentation, picture }));
+            remote.finish(true);
+          } catch {
+            remote.finish(false);
+          }
+        })();
+        return true;
+      },
+    });
+    return {
+      answered,
+      requests,
+      invoke: async (request: Parameters<OauthTransactions["request"]>[1]) => {
+        requests.push(request);
+        return host.request("phone", request);
+      },
+    };
+  }
+
+  it("shows the sealed picture and returns the owner's tap on the same exchange", async () => {
+    const h = pictureHost();
+    const shown = vi.fn();
+    const tap = { expectedRevision: 0, values: {}, action: { kind: "tap" as const, x: 0.5, y: 0.5 } };
+    await runMobilePluginAuthorization({
+      crypto,
+      action: inputAction,
+      kind: "input",
+      invoke: h.invoke,
+      assertCurrent: () => {},
+      pause: async () => {},
+      clearInput: () => {},
+      inputPresentation: presentation,
+      inputPicture: async (received) => {
+        shown(received);
+        return tap;
+      },
+      showAuthorization: async () => {
+        throw Error("No browser expected");
+      },
+    });
+    expect(shown).toHaveBeenCalledWith(picture);
+    expect(h.answered).toHaveBeenCalledWith(tap);
+    expect(JSON.stringify(h.requests)).not.toContain(picture.data);
+  });
+
+  it("never hands a picture to a prepared form answer", async () => {
+    const h = pictureHost();
+    await expect(
+      runMobilePluginAuthorization({
+        crypto,
+        action: inputAction,
+        kind: "input",
+        invoke: h.invoke,
+        assertCurrent: () => {},
+        pause: async () => {},
+        clearInput: () => {},
+        inputPresentation: presentation,
+        inputSubmission: { expectedRevision: 0, values: {}, action: { kind: "submit" } },
+        showAuthorization: async () => {},
+      }),
+    ).rejects.toThrow("OAUTH_BRIDGE_UNAVAILABLE");
+    expect(h.answered).not.toHaveBeenCalled();
+    expect(h.requests.at(-1)).toMatchObject({ op: "cancel" });
+  });
+});

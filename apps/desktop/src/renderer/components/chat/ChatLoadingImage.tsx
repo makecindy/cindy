@@ -1,6 +1,7 @@
 import { useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Spinner } from '@/components/ui/spinner';
+import { SHARE_EXCLUDE_ATTR, SHARE_PENDING_IMAGE_ATTR } from '@/lib/shareConversationImage';
 import { cn } from '@/lib/utils';
 
 /** Keep a visible frame until the browser has received and decoded the image. */
@@ -16,6 +17,7 @@ function ImageLoad({ onLoad, style, className, ...props }: ComponentProps<'img'>
     <>
       {!loaded && (
         <span
+          {...{ [SHARE_EXCLUDE_ATTR]: '' }}
           role="status"
           aria-label={t('chat.imageMissing.loading')}
           className="inline-flex min-h-[180px] w-[280px] max-w-full self-start items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-tertiary)]"
@@ -25,6 +27,8 @@ function ImageLoad({ onLoad, style, className, ...props }: ComponentProps<'img'>
       )}
       <img
         {...props}
+        // 分享图自己读图片字节,不必等这里加载完:克隆时去掉占位、显示这张图。
+        {...(loaded ? {} : { [SHARE_PENDING_IMAGE_ATTR]: '' })}
         className={cn(
           className,
           loaded && 'motion-safe:animate-fade-in',

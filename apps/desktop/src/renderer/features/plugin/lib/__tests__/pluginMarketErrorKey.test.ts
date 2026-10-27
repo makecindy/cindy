@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import i18n from '../../../../i18n';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../../../../shared/ghost';
-import { pluginMarketErrorKey } from '../pluginMarketErrorKey';
+import {
+  pluginMarketErrorKey,
+  pluginMarketOrganizationAccessErrorKey,
+} from '../pluginMarketErrorKey';
 
 function serializedIpcError(code: string): Error {
   return new Error(`Error invoking remote method: Error: [${code}] internal detail`);
@@ -20,6 +23,10 @@ describe('pluginMarketErrorKey', () => {
     ['GHOST_DOWNLOAD_TIMEOUT', 'downloadTimeout'],
     ['GHOST_DOWNLOAD_FAILED', 'downloadFailed'],
     ['GHOST_BROKER_REDIRECT_PORT_REQUIRED', 'brokerRedirectPortRequired'],
+    ['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'namespaceClientRequired'],
+    ['PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'organizationContextUnavailable'],
+    ['PLUGIN_NAMESPACE_CONFIG_REQUIRED', 'namespaceConfigRequired'],
+    ['PLUGIN_LIST_CHANGED', 'listChanged'],
   ])('maps %s to localized market copy', (code, suffix) => {
     expect(pluginMarketErrorKey(serializedIpcError(code))).toBe(
       `settings.ghosts.market.errors.${suffix}`,
@@ -30,6 +37,29 @@ describe('pluginMarketErrorKey', () => {
     expect(pluginMarketErrorKey(serializedIpcError('GHOST_HOST_UNSUPPORTED'))).toBe(
       'settings.ghosts.errors.hostUnsupported',
     );
+  });
+
+  it('maps an unknown organization access code to the generic enterprise hint', () => {
+    expect(pluginMarketOrganizationAccessErrorKey('PLUGIN_FUTURE_REASON')).toBe(
+      'settings.ghosts.market.errors.organizationUnavailable',
+    );
+    expect(pluginMarketOrganizationAccessErrorKey(null)).toBeNull();
+  });
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('has organization access copy in %s', (locale) => {
+    for (const code of [
+      'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+      'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+      'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+      'PLUGIN_LIST_CHANGED',
+    ]) {
+      const key = pluginMarketErrorKey(serializedIpcError(code));
+      expect(i18n.getResource(locale, 'common', key)).toEqual(expect.any(String));
+      expect(i18n.getFixedT(locale)(key)).not.toBe(key);
+    }
+    const generic = 'settings.ghosts.market.errors.organizationUnavailable';
+    expect(i18n.getResource(locale, 'common', generic)).toEqual(expect.any(String));
+    expect(i18n.getFixedT(locale)(generic)).not.toBe(generic);
   });
 
   it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('has download error copy in %s', (locale) => {

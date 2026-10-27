@@ -21,7 +21,7 @@ A session can run inside its own **git worktree** — a separate working copy of
 - Created on first agent turn that needs files.
 - Survives across app restarts as long as the session is around. Transient closes (`/clear`, reconnecting, quitting the app) do **not** remove it.
 - The folder is removed only when you explicitly **delete or archive** the session; the **branch is preserved** (no force-delete), so you can keep the work or merge / cherry-pick from it later.
-- Uncommitted changes inside the worktree are **auto-stashed** before the folder is removed, so nothing is silently lost. Removal is also skipped if you leave a `.worktree-keep` file in it or another live session is still using it.
+- Uncommitted changes and new files inside the worktree are **saved in Git** before the folder is removed, and come back when the session is restored. Files ignored by `.gitignore` (dependencies such as `node_modules`, build output, caches) and Git repositories cloned or initialised inside the worktree are **not kept**; reinstall, rebuild or clone them again after restoring. Restored files go through Git's usual line-ending and symlink handling, like a normal checkout. Removal is skipped if you leave a `.worktree-keep` file in it or another live session is still using it.
 
 **When the option is disabled:**
 

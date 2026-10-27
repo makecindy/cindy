@@ -3,6 +3,10 @@ export interface SessionDrawerRouteTarget {
   deviceName: string;
   sessionId: string;
   focusClientId?: string;
+  resourceCollectionId?: string;
+  resourceKind?: string;
+  resourceId?: string;
+  resourceHistorySessionId?: string;
 }
 
 export interface SessionRouteParamsNavigation {
@@ -27,5 +31,11 @@ export function switchDrawerSessionInPlace(
     deviceName: target.deviceName,
     sessionId: target.sessionId,
     ...(target.focusClientId ? { focusClientId: target.focusClientId } : {}),
+    ...(target.resourceId ? {
+      resourceCollectionId: target.resourceCollectionId,
+      resourceKind: target.resourceKind,
+      resourceId: target.resourceId,
+      resourceHistorySessionId: target.resourceHistorySessionId,
+    } : {}),
   });
 }

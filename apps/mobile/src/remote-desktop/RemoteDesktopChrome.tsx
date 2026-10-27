@@ -41,6 +41,7 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft,
   onWorkspaceRight,
   onOmarchyMenu,
+  windowOnly,
 }: {
   landscape: boolean;
   canControl: boolean;
@@ -53,6 +54,8 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft?: () => void;
   onWorkspaceRight?: () => void;
   onOmarchyMenu?: () => void;
+  /** 代输入 window view: no desktop to navigate, so only keyboard and settings. */
+  windowOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -100,12 +103,16 @@ export function RemoteDesktopToolbar({
       selected: operations,
     },
   ];
+  // 代输入 window view: no desktop to navigate, so only keyboard and settings.
+  const shown = windowOnly
+    ? actions.filter(({ key }) => key === "keyboard" || key === "operations")
+    : actions;
   return (
     <View
       style={[styles.toolbar, landscape && styles.rail]}
       testID="remoteDesktop.toolbar"
     >
-      {(landscape ? [...actions].reverse() : actions).map(
+      {(landscape ? [...shown].reverse() : shown).map(
         ({ key, icon: Icon, press, selected, disabled }) => (
           <RemoteDesktopActionButton
             key={key}

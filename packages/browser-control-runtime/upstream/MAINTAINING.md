@@ -9,6 +9,18 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+登录持久性还依赖两点：host 的 `buildManagedConfig` 在两种 profile、直连及代理路径都传
+`--restore-last-session`，否则 Chrome 正常退出后不会恢复会话 Cookie（仅有固定目录不够）；
+退出必须等待子进程的 `exitCode` / `signalCode`，不能把 `ChildProcess.killed`（已发信号）
+或 CDP 不可达当成已退出，否则立即跟上的 SIGKILL 会打断登录数据落盘。
+Windows 的 SIGTERM 也会强杀进程，因此先通过 CDP `Browser.close` 请求正常关闭，
+发现、握手、命令和后续等待共用原有宽限期，只有期限耗尽才 SIGKILL；POSIX 保留 SIGTERM。
+退出修正由 `sync.mjs` 的 LOCAL_PATCH 保留，回归见 `src/__tests__/chrome-stop.test.ts`。
+
+「使用我的浏览器登录态」目前是**每次冷启动重新复制**，不是首次导入：只在 Agent 浏览器
+里新增或续期的 Cookie 会被来源覆盖，站点 Local Storage / IndexedDB 也不跨快照保留。
+这与默认专用 profile 的长期保留不同，修复退出及会话恢复不改变这项既有行为。
+
 工具支持 `browser({action:"setBackend", backend:"rsb-webview"|"external"})`,由 MCP 层调用宿主注入的 `setBackend`,复用设置页的 `setActiveBrowserBackendKind`。这是全局持久选择,影响其他任务,可能中断旧浏览器操作;不迁移 Cookie、标签页或元素引用。`status.data.backend` 明确返回实际模式。切换后重新获取状态和标签页,不能把 `start` 当成切换。非 Desktop 宿主可以不提供此能力,工具会明确返回不支持。
 
 用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `.../Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。Cookies 缺失或复制失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。Login Data、Login Data For Account、Web Data 是可选的密码/自动填充库,锁定、权限或其它复制失败时跳过并清除目标中的旧副本,不阻止 Cookies 复用。SQLite 备份先取得读事务,可选库不等待锁;不直接复制活跃数据库及 WAL 文件。每次重拍快照会清掉 dest `Default` 里上一份来源留下的站点数据(Local Storage、站点 IndexedDB、Service Worker 等),但**扩展状态归 Agent 浏览器自己**,必须跨快照保留:`Default` 下名字含 `Extension` 的全部条目(`Extensions`、`Local Extension Settings`、`DNR Extension Rules`、`Extension Cookies` 及其 SQLite 边车等,按词匹配而非枚举,避免漏掉新存储)、`Secure Preferences`(扩展登记与 MAC)、`IndexedDB/chrome-extension_*`,以及 dest `Preferences` 的 `extensions` 子树(其余键仍从来源刷新);来源的扩展状态永不拷入。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 暴露 `{ enabled, applied, source, warnings? }`,warnings 仅包含可选库名称与受控原因(locked / permission-denied / copy-failed),不暴露路径或原始错误。启动及隐式启动的工具结果附面向 Agent 的非阻塞诊断，指示继续执行且仅在实际登录需要协助时告知用户；设置页仍显示普通打开成功提示，不展示复制细节。快照状态跟本进程是否仍有已套用真实登录快照的托管浏览器走，不跟原操作的 ok：没有 live 浏览器时不得发布 applied / warnings；隐式 open/tabs/snapshot 拉起 Chrome 后即使失败或抛错，只要 status 仍是本进程 live pid 就必须发布。内部 stop 返回成功、或 vendored status 为 running:false 时都不得清除这些字段：readiness 下降不代表进程退出，证明 gone 是外层 resolveLiveness 的职责。诊断保留到下一次启动准备看不到本进程 live occupancy 为止。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`；chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
@@ -158,7 +170,13 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 
 ## 9. 提效能力(network / extract / recipe / sitemap)
 
-在"自启动 Chrome + CDP"之上加的一层"高效原语 + 站点知识",目标是把盲探的 token/步数打下来。全部增量、不改 `_generated/`。
+在"自启动 Chrome + CDP"之上加的一层"高效原语 + 站点知识",目标是把盲探的 token/步数打下来。生成层行为通过 `sync.mjs` 的 LOCAL_PATCH 保留，禁止手改 `_generated/`。
+
+- **标签页别名**：`act` 路由在选择目标页后，经 `shim/browser-action-targets.ts` 将顶层及嵌套动作的同一别名换成真实 ID；不同目标仍拒绝。不能拿 label 与真实 ID 直接比较，否则工具推荐的 label 会在 click/wait 时误报不一致。
+- **本机大文件**：Playwright `connectOverCDP` 只有在既有 runtime state 证明该端点属于本进程启动且未退出的 Chrome、连接端点仍匹配同一 loopback 地址时才传 `isLocal:true`。复用 Playwright 本地路径上传，避免错误触发远程传输的 50 MB 限制；远程、attach-only 和仅 loopback 但没有托管进程证据的连接不启用。路径校验及交互导航守卫不变。连接判定见 `shim/cdp-locality.ts`。
+- **`afterSnapshot`（L2 MCP）**：`act`（不含 close）/ `open` / `navigate` / `upload` 可选择一次返回动作与后置快照，默认 compact、正文 4000 字符，支持 selector/frame 局部读取（自动用 role refs）。真实 Google Play 验证发现底层 role snapshot 忽略 maxChars，因此 L2 额外限制正文并移除截断部分的 refs，返回 truncated 提示；refs 等元数据不计入正文预算。不带参数的旧调用保持原行为；后置读失败保留动作成功，模型只能补读、不能重放写操作。沿用登录墙提示和代输入后的读取限制，不增加重试、缓存或持久状态。后置快照不保证 SPA 已加载完，缺少验收内容仍须等待后补读。
+- **历史复现对照**：`node --import tsx scripts/browser-history-replay.mjs --mode=baseline|optimized --out=<报告路径>`。使用隔离真实 Chrome 和本地重建页面，覆盖 Google Play/AWS 历史请求形状、64 MB/2 GB 文件选择回读及问卷步骤。baseline 需在修改前执行，optimized 在修改后执行；只切换 mode 不代表切换产品版本。比较结果字符数、模型侧工具调用次数和操作结果，不把它说成真实商店重发布、模型 token/缓存率或线上耗时对比。
+- **实际页面对照**：`scripts/browser-live-history-compare.mjs` 按 `--source-root` 加载指定 checkout 的真实 MCP/runtime，用 attach-only 连接已授权的 Cindy 专用浏览器，不启停 Chrome 或复制登录态。页面计划中的 role/name/href/selector 必须来自当次侦察；每步校验 URL 与实际业务信息，加载未完成的等待和补读计入指标。登录、重置起始页面、独立 alias 探测不计入流程；原始步骤与结果落到显式 `--out` 路径。只用于已授权的只读导航，不把线上提交、上传或发布塞进比较计划。
 
 - **`requests` / `responseBody`(L1 runtime)**:接的是 vendored **已存在但原先没接线**的两条路由(`GET /requests`、`POST /response/body`,见 `_generated/.../pw-tools-core.activity.ts` / `pw-tools-core.responses.ts`)。runtime 复用 per-page 自动捕获缓冲(上限 500、page 关闭自动清),`runtime.ts` 的 `planDispatch` 加两个 case 即可,无新监听、无泄漏。语义:很多页面背后是 JSON API,读接口比扒 DOM 又稳又省。`responseBody` 在 chrome-mcp 接管态返 501,但默认 managed profile 不触发。
 - **`extract`(L2 MCP,`extract.ts`)**:纯组合现有 `act:evaluate`。`buildExtractFnSource(spec)` 是**纯函数**,把字段 schema 编译成注入 JS(选择器一律 `JSON.stringify` 注入,防注入),handler 改写成 `act:{kind:'evaluate',fn}`。不碰 runtime 包。**报错教模型(对齐上游 `SELECTOR_UNSUPPORTED_MESSAGE` 范式)**:生成的 fn 给 `querySelector` 包 try/catch,非法选择器 → 返回 `{ok:false, error, hint}`(`EXTRACT_FIELD_HINT` 教正确字段格式);handler 跑前用 `collectSelectors` 预检 selector 含 `@`(观察到模型爱写 `h3 a@title`)→ 直接返回教学报错,不空跑。**不加 `@attr` 语法糖**(上游无此约定)。
@@ -178,6 +196,14 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - ⚠️ **`responseBody` 是"等待下一个匹配响应"语义**(`pw-tools-core.responses.ts`:`page.on("response")` + 20s 超时),**不读历史**。顺序工具调用的 agent 很难"先 arm 再触发",所以读 GET JSON 接口的可靠姿势是**直接 navigate 到该 URL + extract/evaluate 读 body**;`requests` 才是读已发生请求清单的那个(buffered)。rules 已据此修正(实测踩过:navigate 后再 responseBody 会"not found")。
 
 > 加新 action 改了 `browser` 工具 schema → 会话启动一次性注册(`maker-core/.../claude-code/index.ts:713`),一次性失效缓存前缀、稳态不降;按规则 10 实测。新增 action 要两端同步:runtime `types.ts` 的 `BrowserControlAction` ⇄ `tools.ts` 的 `ACTIONS`(exhaustive switch 会强制对齐)。
+
+### 配方按使用维护与等待条件（2026-10-23）
+
+- `recipe` 支持 `site + recipeDraft` 内存试跑；`saveRecipe` 仅接受同一 MCP 会话已通过验证的相同内容。正常检查不请求模型，不定时后台刷新；失败交给当前任务模型观察、同 id 一轮修订，失败回普通操作。修复预算为会话内状态，MCP 会话重建后重新计数；暂停状态写进配方，跨重启保留。
+- 新保存配方的交互/读取步骤须有完整 URL 和可选唯一可见 CSS 元素/文本 `guard`；末步 `expect` 检查数量、必需顶层字段与业务值。extract 将 guard 与读取合成同一次 evaluate；写动作前独立 guard，不能把它当事务或幂等保证。工具不重放步骤，后置失败须先核对写入是否已成功。
+- 本地每站 `recipes/<id 的 SHA-256>.json` 支持多个流程，原子替换复用 Desktop 工具；loader 兼容 `recipe.json`、新文件优先。旧配方保留执行兼容，实际失败后暂停；新建/修订必须经过新验证。失败不把候选覆盖到正式配方。跨任务并发修改同一配方仍是最后写入优先，不新增锁/版本管理系统。
+- `wait.fn` 补丁在 `sync.mjs`：host 只编译函数，页面执行；传真实 function 给 `waitForFunction`，避免函数源码被当 truthy、重复 eval 被 Trusted Types 拦截。timeout 放第三参数。异步 predicate 明确拒绝，避免 Promise 假成功；evaluate 仍支持 async。
+- 验证入口：`recipe-runner.test.ts`、`browserMcpServer.test.ts`、Desktop browser-recipes tests、`interaction-proxy-policy.test.ts`；真实只读对照 `scripts/browser-live-recipe-compare.mjs` 的 `guarded` 模式与 `--maintenance-checks=true`。宿主运行版不会因源码修改自动更新。
 
 ## 10. 相关文档
 

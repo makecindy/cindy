@@ -9,7 +9,7 @@ import { createContext, useContext } from 'react';
  *   chat-main 仅被视觉收起(0 宽裁切,保持挂载),与 RSB maximize 隐藏主区的
  *   既有先例同一档语义。
  * - 会话级瞬时态,不持久化:重启回到常规布局(撑满是"临时看大图"式的查看态)。
- * - 状态由 LayoutRoot 持有并下发;标准头(PanelChrome)凭 panelKind 消费,
+ * - 状态由 LayoutRoot 持有并下发;面板标准头凭 panelKind 消费,
  *   面板作者无感 —— 系统按钮由引擎统一长出,不进面板自绘区。
  */
 export interface PanelMaximizeState {

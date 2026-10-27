@@ -67,6 +67,12 @@ const captured = vi.hoisted(() => ({
   closed: false,
 }));
 
+/** 追加提示词走 configHome 内的文件(见 pi/index.ts 的 --append-system-prompt),argv 不再内联长文本。 */
+const readAppendedSystemPrompt = (): string => {
+  const index = captured.args.indexOf('--append-system-prompt');
+  return index >= 0 ? readFileSync(captured.args[index + 1]!, 'utf8') : '';
+};
+
 vi.mock('../transport.js', () => ({
   createPiStdioTransport: (opts: {
     args: string[];
@@ -628,9 +634,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
     await start();
     expect(captured.args).not.toContain('--system-prompt');
-    const idx = captured.args.indexOf('--append-system-prompt');
-    expect(idx).toBeGreaterThan(-1);
-    expect(captured.args[idx + 1]).toBe('You are Cindy.');
+    expect(captured.args).toContain('--append-system-prompt');
+    expect(readAppendedSystemPrompt()).toBe('You are Cindy.');
     expect(captured.args).not.toContain('--tools');
     expect(captured.env.PI_OFFLINE).toBe('1');
     expect(captured.env.PI_CACHE_RETENTION).toBe('long');
@@ -688,6 +693,23 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(behaviorFlags).toHaveBeenCalledWith(expect.objectContaining({ spawnMode: mode }));
     expect(captured.env[mode === 'remote' ? 'CINDY_TEST_ROUTE' : 'VITEST_MAX_THREADS'])
       .toBe(mode === 'remote' ? 'remote' : '2');
+    await handle.close();
+  });
+
+  it.each(['local', 'remote'] as const)('gives only a local task\'s shell the 代输入 askpass variables (%s)', async (mode) => {
+    const deps = buildDeps();
+    const remoteTransport = deps.getRemotePiTransport!;
+    deps.getRemotePiTransport = async (host, options) => {
+      captured.env = options.env;
+      return remoteTransport(host, options);
+    };
+    deps.runtimeConfig.taskShellEnv = ({ sessionId }) => ({ CINDY_INPUT_HANDOFF_ROUTE: `route-${sessionId}` });
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'askpass', workingDir: cwd, model: 'm',
+      ...(mode === 'remote' ? { remoteHostId: 'remote-1' } : {}),
+    });
+    // A remote computer's prompts must not reach this computer's owner.
+    expect(captured.env.CINDY_INPUT_HANDOFF_ROUTE).toBe(mode === 'local' ? 'route-askpass' : undefined);
     await handle.close();
   });
 
@@ -813,6 +835,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     const pollCount = () => scan.mock.calls.filter(([root]) => root.startsWith(agentHome + path.sep)).length;
     let handle: PiTestSessionHandle | undefined;
+    let settleMockRun: (() => void) | undefined;
     try {
       handle = await start();
       // Wait for the initial filesystem iterator to finish before sampling cadence.
@@ -838,11 +861,16 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       mkdirSync(runDir, { recursive: true });
       writeFileSync(path.join(runDir, 'runner.cjs'), '');
       writeFileSync(path.join(runDir, 'config.json'), '{}');
-      writeFileSync(path.join(runDir, 'status.json'), JSON.stringify({
+      const status = {
         version: 1, runId, taskId: 'poll-wake', parentSessionId: 's1',
         runtimeOwnerId: captured.env.CINDY_PI_SUBAGENT_OWNER_ID,
         runnerInstanceId: `launch-pending-${runId}`, state: 'queued',
         startedAt: now, updatedAt: now, tasks: [],
+      };
+      const statusFile = path.join(runDir, 'status.json');
+      writeFileSync(statusFile, JSON.stringify(status));
+      settleMockRun = () => writeFileSync(statusFile, JSON.stringify({
+        ...status, state: 'stopped', updatedAt: Date.now(), endedAt: Date.now(),
       }));
       fireSubagentRunnerRequest('poll-launch', 'launch', runId);
       await waitForResponse('poll-launch');
@@ -865,8 +893,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally {
       holdScan = false; releaseScan?.();
       clock.mockRestore();
-      await handle?.close();
-      interval.mockRestore(); scan.mockRestore();
+      try {
+        // No real runner consumes stop in this fixture. Retire its synthetic
+        // run before account-boundary close, rather than spending the 4s grace
+        // inside a 5s test and leaking these mocks into the next parameter case.
+        try { settleMockRun?.(); }
+        finally { await handle?.close(); }
+      } finally {
+        interval.mockRestore(); scan.mockRestore();
+      }
     }
   });
 
@@ -3163,8 +3198,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
 
-      const promptIndex = captured.args.indexOf('--append-system-prompt');
-      const appendedPrompt = promptIndex >= 0 ? captured.args[promptIndex + 1] : '';
+      const appendedPrompt = readAppendedSystemPrompt();
       expect(appendedPrompt).not.toContain('PRIVATE ROSTER');
       expect(appendedPrompt).not.toContain('PRIVATE USER PROMPT');
 
@@ -3222,6 +3256,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     deps.resolvePiGlobalContextHome = vi.fn(() => { throw new Error('Bot must not read user context'); });
     deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
     deps.runtimeConfig.memoryEnabled = false;
+    deps.runtimeConfig.answerDeliveryPrompt = 'DELIVERY PROTOCOL';
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'bot-read-only-session',
       workingDir: cwd,
@@ -3255,15 +3290,19 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
-      const promptIndex = captured.args.indexOf('--append-system-prompt');
-      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
-      expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');
-      expect(captured.args[promptIndex + 1]).not.toContain('You are Cindy.');
-      expect(captured.args[promptIndex + 1]).not.toContain('GLOBAL USER PROMPT');
-      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
-      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
-      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
-        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      // 本 PR 把追加提示词写进 configHome 文件而非 spawn argv（argv 有上限，
+      // 顶穿会让 pi 启动失败），所以按 readAppendedSystemPrompt() 读文件断言，
+      // 不能沿用 argv 下标口径 —— 那正是本 PR 移除的写法。
+      const botPrompt = readAppendedSystemPrompt();
+      expect(botPrompt).toContain('BOT SOUL');
+      expect(botPrompt).toContain('DELIVERY PROTOCOL');
+      expect(botPrompt).not.toContain('BOT ROSTER');
+      expect(botPrompt).not.toContain('You are Cindy.');
+      expect(botPrompt).not.toContain('GLOBAL USER PROMPT');
+      expect(botPrompt).toContain('frozen memory');
+      expect(botPrompt).toContain('Call the user Chris');
+      expect(botPrompt.indexOf('frozen memory')).toBeLessThan(
+        botPrompt.indexOf('Call the user Chris'),
       );
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
@@ -3281,6 +3320,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // 真实事故：伙伴的 teammate-guide + 记忆索引让 --append-system-prompt 逼近 3 万字符，
+  // 内联进 argv 就会顶穿 Windows 的 spawn 命令行上限，整个会话起不来。
+  it('把超长的伙伴提示词写进 configHome 文件，argv 只带路径', async () => {
+    const deps = buildDeps();
+    const botProfileContextPrompt = '## teammate-guide\n' + 'Todo discipline. '.repeat(3000);
+    expect(botProfileContextPrompt.length).toBeGreaterThan(30_000);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-long-prompt-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      botProfileContextPrompt,
+      botRuntimeProfile: {
+        botId: 'bot-long-prompt',
+        profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      },
+    });
+    try {
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(promptIndex).toBeGreaterThan(-1);
+      const promptPath = captured.args[promptIndex + 1]!;
+      expect(promptPath.length).toBeLessThan(200);
+      expect(promptPath).toContain(path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'append-system-prompt.md'));
+      expect(readFileSync(promptPath, 'utf8')).toContain(botProfileContextPrompt.slice(0, 64));
+      // 整条命令行必须留在平台上限内（30k / 128k）。
+      expect(captured.args.reduce((total, arg) => total + arg.length + 3, 0))
+        .toBeLessThanOrEqual(process.platform === 'win32' ? 30_000 : 128_000);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('把 session 花名册快照追加到 Pi system prompt', async () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
@@ -3290,8 +3364,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       workingDir: cwd,
       model: 'm',
     });
-    const idx = captured.args.indexOf('--append-system-prompt');
-    expect(captured.args[idx + 1]).toContain('GHOST ROSTER PROMPT');
+    expect(readAppendedSystemPrompt()).toContain('GHOST ROSTER PROMPT');
     expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd });
     await handle.close();
   });
@@ -4521,6 +4594,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(JSON.stringify(review.mock.calls[0]?.[0])).not.toContain('PRIVATE_FILE_BODY');
     expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description).executionEvidence)
       .toMatchObject({ kind: 'file-write', path: input.path, resolvedPath: input.path, resolvedWritableRoots: [cwd] });
+    // The same active policy must follow the owner's live choice, then resume
+    // normal confirmation when the owner tightens back to Ask.
+    await handle.setPermissionMode!('bypassPermissions');
+    firePermissionRequest('policy-full-access', 'write', input);
+    expect(await waitForResponse('policy-full-access')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.setPermissionMode!('ask');
+    firePermissionRequest('policy-ask-restored', 'write', input);
+    expect(await waitForResponse('policy-ask-restored')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
   });
 
   it('reviews MCP operations when turn policy cannot classify them', async () => {
@@ -4558,6 +4642,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('delivers Auto-Review ask to the channel on policy turns', async () => {
     const handle = await start('auto', async () => ({
       verdict: 'ask' as const,
+      reason: 'Writes outside the project.',
     }));
     await handle.send(
       { type: 'user', content: 'Touch an outside file.' },
@@ -4581,6 +4666,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolver).toHaveBeenCalledOnce();
+    // The channel card explains why Auto asked.
+    expect((resolver.mock.calls as unknown as Array<[{ metadata?: Record<string, unknown> }]>)[0]?.[0].metadata)
+      .toMatchObject({ autoReviewReason: 'Writes outside the project.' });
   });
 
   it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {
@@ -5106,11 +5194,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    * 已经失效的卡。此前 resolver 只挂在卡上、切档不会唤醒它,工具调用会一直卡住(codex P1)。
    * 与 Claude / Codex 的 dismissAllPending 同口径,并发 interaction_dismissed 让 UI 收卡。
    */
-  it('settles an in-flight permission card when the mode widens to Full access', async () => {
+  it.each([false, true])('settles an in-flight permission card when the mode widens to Full access (IM policy=%s)', async (imPolicy) => {
     const handle = await start('ask', undefined, false, {
       serverNames: ['cindy_browser'],
       // prompt(非 prompt-each-time)→ 放宽档位时接受替用户放行。
       policy: () => 'prompt',
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Open the page.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {

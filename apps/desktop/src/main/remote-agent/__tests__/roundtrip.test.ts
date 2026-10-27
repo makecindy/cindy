@@ -17,13 +17,16 @@ import type {
   SendOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
+import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
+import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
+import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const CONTROLLER = 'controller-device-1';
@@ -150,11 +153,11 @@ function fakeHostedAgent(input: HostedStartInput, credentialPaths?: string[]): A
   };
 }
 
-function makeDeps(host: ReturnType<typeof createRemoteAgentHost>): StartRemoteAgentDeps {
+function makeDeps(host: ReturnType<typeof createRemoteAgentHost>, controller = CONTROLLER): StartRemoteAgentDeps {
   return {
     invoke: async (args) => {
       // JSON 往返模拟设备互联的序列化。
-      const result = await host.handle(CONTROLLER, JSON.parse(JSON.stringify(args[0])));
+      const result = await host.handle(controller, JSON.parse(JSON.stringify(args[0])));
       return JSON.parse(JSON.stringify(result ?? null));
     },
     rgPath: RG,
@@ -182,8 +185,12 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function createHost() {
+function createHost(
+  readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_AGENT_LIMITS,
+  log?: StartRemoteAgentDeps['log'],
+) {
   return createRemoteAgentHost({
+    readLimits,
     isAgentAvailable: () => true,
     startHosted: async (input) => {
       hostInputs.push(input);
@@ -193,10 +200,192 @@ function createHost() {
     captureOwner: () => 'owner',
     isOwnerCurrent: () => true,
     runsRoot: hostRoot,
+    log,
   });
 }
 
 describe('remote agent round trip', () => {
+  // 测试价值：真实两端启动入口的诊断协议；此前 24 秒创建等待无阶段记录。
+  // 原覆盖只验证执行结果，未保护成功/失败计时及内容不入日志。最小输入：一次启动或 MCP 拒绝。
+  // tier: unit，沿用本文件 loopback fixture，不启动真实 Agent、不做真实等待。
+  // 本机单文件 Vitest 5.62s（既有 19 项共用 fixture，collect 3.29s；本次两项不另开测试文件）。
+  it('reports controller, transport and host startup stages without configuration contents', async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const host = createHost(undefined, log);
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession(
+        'codex',
+        {
+          sessionId: 'startup-timing-task',
+          workingDir: project,
+          model: 'm',
+          userPrompt: 'private user instruction',
+        },
+        { ...makeDeps(host), log },
+      );
+      expect(handle.id).toBe('sdk-session-1');
+      const fields = log.debug.mock.calls.map(([, data]) => data);
+      expect(fields).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ side: 'controller', stage: 'mcp-prepare', status: 'ok' }),
+          expect.objectContaining({ side: 'controller', stage: 'personal-config', status: 'ok' }),
+          expect.objectContaining({
+            side: 'controller',
+            stage: 'capability-handshake',
+            status: 'ok',
+          }),
+          expect.objectContaining({
+            side: 'transport',
+            stage: 'session-ready',
+            status: 'ok',
+            sessionRef: 'startup-',
+          }),
+          expect.objectContaining({
+            side: 'host',
+            stage: 'agent-session',
+            status: 'ok',
+            sessionRef: 'startup-',
+          }),
+        ]),
+      );
+      const transport = fields.find((data) => data.side === 'transport' && data.stage === 'total');
+      expect(fields.find(data => data.side === 'host' && data.stage === 'total')?.execServer).toEqual({
+        shortcutEnabled: true, ancestorLevels: 0, connections: 0, answered: 0, forwarded: 0,
+      });
+      expect(fields).toContainEqual(
+        expect.objectContaining({
+          side: 'host',
+          stage: 'total',
+          status: 'ok',
+          runRef: transport.runRef,
+        }),
+      );
+      const serialized = JSON.stringify(log.debug.mock.calls);
+      for (const secret of [
+        project,
+        'private user instruction',
+        Buffer.from('# rules').toString('base64'),
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      await handle?.close();
+      await host.dispose();
+    }
+  });
+
+  it('attributes failed MCP preparation without changing or logging its original error', async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const host = createHost();
+    const failure = new Error('private endpoint credential');
+    try {
+      await expect(
+        startRemoteAgentSession(
+          'codex',
+          {
+            sessionId: 'startup-failure-task',
+            workingDir: project,
+            model: 'm',
+          },
+          {
+            ...makeDeps(host),
+            log,
+            prepareMcp: async () => {
+              throw failure;
+            },
+          },
+        ),
+      ).rejects.toBe(failure);
+      const fields = log.debug.mock.calls.map(([, data]) => data);
+      expect(fields).toContainEqual(
+        expect.objectContaining({ stage: 'mcp-prepare', status: 'failed' }),
+      );
+      expect(fields).toContainEqual(
+        expect.objectContaining({ side: 'controller', stage: 'total', status: 'failed' }),
+      );
+      expect(fields.some((data) => data.stage === 'capability-handshake')).toBe(false);
+      expect(JSON.stringify(log.debug.mock.calls)).not.toContain(failure.message);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  // provider-sharing §9：走 HTTP → 执行器 → Session → 真实交互路由，检查取消卡片及迟到授权。
+  // 现有往返用例没有挂起确认后取消；最小输入是一次 .env 读取，tier: unit(仅 loopback)。
+  it.each(['request', 'stop', 'permission', 'close'])('dismisses a shared-provider credential card on %s cancellation', async (end) => {
+    fs.writeFileSync(path.join(project, '.env'), 'INVALID_FIXTURE=one');
+    const host = createHost();
+    const grant = credentialGrantFor(`cancel-${end}`, 'share:fixture');
+    const handle = await startRemoteAgentSession('claude-code', {
+      sessionId: `cancel-${end}`, workingDir: project, model: 'm', permissionMode: 'bypassPermissions',
+    }, { ...makeDeps(host), credentialConsent: { description: 'fixture', grant } });
+    const noop = () => {};
+    const logger = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop, child: () => logger };
+    const session = new Session({ id: `cancel-${end}`, agentKind: 'claude-code', workDir: project, handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    let answer!: (value: InteractionDecision) => void;
+    let requestId = '';
+    const cancel = vi.fn();
+    installDesktopInteractionHandler(session, (request) => {
+      requestId = request.requestId;
+      return new Promise((resolve) => { answer = resolve; });
+    }, cancel);
+    const abort = new AbortController();
+    const tunnel = hostInputs[0].tunnel;
+    const response = fetch(`${tunnel.url}/exec/fs.read`, {
+      method: 'POST', signal: abort.signal,
+      headers: { authorization: `Bearer ${tunnel.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ path: '.env' }),
+    });
+    void response.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(requestId).not.toBe(''));
+      if (end === 'request') abort.abort();
+      else if (end === 'stop') await handle.abort();
+      else if (end === 'permission') await handle.setPermissionMode!('ask');
+      else await handle.close({ reason: 'navigation' });
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledWith(requestId, expect.objectContaining({ behavior: 'deny' })), { timeout: 1000 });
+      answer({ kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] });
+      await response.then((value) => value.arrayBuffer(), () => undefined);
+      expect(grant.restore(JSON.stringify(['bypassPermissions', false]))).toBe(false);
+    } finally {
+      abort.abort();
+      answer?.({ kind: 'permission', behavior: 'deny' });
+      await session.close();
+      host.dispose();
+      forgetCredentialGrants(`cancel-${end}`);
+    }
+  });
+
+  it('enforces limits through the controller and releases capacity after close', async () => {
+    let limits = { perDevice: 1, total: 2 };
+    const host = createHost(() => limits);
+    const opened: AgentSessionHandle[] = [];
+    const open = async (controller: string) => {
+      const handle = await startRemoteAgentSession('claude-code', {
+        sessionId: randomUUID(), workingDir: project, model: 'm',
+      }, makeDeps(host, controller));
+      opened.push(handle);
+      return handle;
+    };
+    try {
+      const first = await open('a');
+      await expect(open('a')).rejects.toThrow('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT]');
+      await open('b');
+      await expect(open('c')).rejects.toThrow('[REMOTE_AGENT_BUSY] [TOTAL_LIMIT]');
+      limits = { perDevice: 1, total: 1 };
+      expect(host.limitUsage().total).toBe(2);
+      await first.close({ reason: 'navigation' });
+      await expect(open('c')).rejects.toThrow('[TOTAL_LIMIT]');
+      limits = { perDevice: 2, total: 3 };
+      await open('a');
+      expect(host.limitUsage()).toEqual({ total: 2, devices: 2, largestDevice: 1 });
+    } finally {
+      await Promise.all(opened.map(handle => handle.close({ reason: 'navigation' })));
+      await host.abortAll();
+      host.dispose();
+    }
+  });
   it('keeps a shared-provider credential grant on this computer across turns and resets it on reopen', async () => {
     const env = path.join(project, '.env');
     const production = path.join(project, '.env.production');
@@ -258,6 +447,151 @@ describe('remote agent round trip', () => {
       host.dispose();
     }
   });
+  it.each([false, true])('skips the shared-provider credential card only while trust is enabled (task grant wired: %s)', async (withTaskGrant) => {
+    const env = path.join(project, '.env');
+    fs.writeFileSync(env, 'TOKEN=one');
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input, [env]),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const opts = { sessionId: 'credentials-skip', workingDir: project, model: 'm', permissionMode: 'bypassPermissions' as const };
+    let skip = true;
+    const deps = {
+      ...makeDeps(host),
+      credentialConsent: {
+        description: 'Only this task; content passes through the sharer.',
+        skip: () => skip,
+        ...(withTaskGrant ? { grant: credentialGrantFor(opts.sessionId, 'share:skip') } : {}),
+      },
+    };
+    let localConfirmations = 0;
+    const run = async (handle: AgentSessionHandle) => {
+      handle.setInteractionResolver(async (request) => {
+        if (request.requestId !== 'forged') localConfirmations += 1;
+        return { kind: 'permission', behavior: 'allow' };
+      });
+      const reader = (async () => {
+        const results: string[] = [];
+        for await (const event of handle.events()) {
+          if (event.type === 'text') results.push((event.data as { text: string }).text);
+          if (event.type === 'done') return results;
+        }
+        return results;
+      })();
+      await handle.send({ type: 'user', content: 'read credentials' });
+      expect(await reader).toEqual(['credential:200']);
+    };
+    const handle = await startRemoteAgentSession('pi', opts, deps);
+    try {
+      // 受邀者在设置里打开了「信任 {分享者}」：读 .env 不弹卡、直接放行。
+      await run(handle);
+      expect(localConfirmations).toBe(0);
+      // 运行中关掉：下一次凭证操作就要确认。
+      skip = false;
+      await run(handle);
+      expect(localConfirmations).toBe(1);
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
+
+  it('restores a task-level credential grant when the agent is rebuilt with the same share and permission mode', async () => {
+    const env = path.join(project, '.env');
+    fs.writeFileSync(env, 'TOKEN=one');
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input, [env]),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const sessionId = `grant-${randomUUID()}`;
+    const full = { sessionId, workingDir: project, model: 'm', permissionMode: 'bypassPermissions' as const };
+    let skip = false;
+    const depsFor = (deviceId: string) => ({
+      ...makeDeps(host),
+      credentialConsent: {
+        description: 'Only this task.',
+        skip: () => skip,
+        grant: credentialGrantFor(sessionId, deviceId),
+      },
+    });
+    let localConfirmations = 0;
+    // 打开一次 Agent、跑一轮、关闭(相当于 Orca Worker 一轮结束后被回收)。
+    const openRunClose = async (
+      opts: Omit<typeof full, 'permissionMode'> & { permissionMode: 'bypassPermissions' | 'default' | 'ask' },
+      deviceId = 'share:a',
+      between?: (handle: AgentSessionHandle) => Promise<void>,
+    ) => {
+      const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
+      try {
+        handle.setInteractionResolver(async (request) => {
+          if (request.requestId !== 'forged') localConfirmations += 1;
+          return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
+        });
+        const reader = (async () => {
+          for await (const event of handle.events()) if (event.type === 'done') return;
+        })();
+        await handle.send({ type: 'user', content: 'read credentials' });
+        await reader;
+        await between?.(handle);
+      } finally {
+        await handle.close({ reason: 'navigation' });
+      }
+    };
+    try {
+      await openRunClose(full);
+      expect(localConfirmations).toBe(1);
+      // 同一任务、同一分享、权限档未变：重建后不再确认。
+      await openRunClose(full);
+      expect(localConfirmations).toBe(1);
+      // 重建期间暂时打开分享级信任：恢复任务级授权不能因此丢失。
+      skip = true;
+      await openRunClose(full);
+      expect(localConfirmations).toBe(1);
+      skip = false;
+      await openRunClose(full);
+      expect(localConfirmations).toBe(1);
+      // 另一个分享不沿用。
+      await openRunClose(full, 'share:b');
+      expect(localConfirmations).toBe(2);
+      // 回收期间权限档变了：作废，换回原权限档也要重新确认。
+      await openRunClose({ ...full, permissionMode: 'default' });
+      expect(localConfirmations).toBe(3);
+      await openRunClose(full);
+      expect(localConfirmations).toBe(4);
+      // 运行中切换权限档：作废，重建后也不恢复。
+      await openRunClose(full, 'share:a', async (handle) => {
+        await handle.setPermissionMode?.('default');
+        await handle.setPermissionMode?.('bypassPermissions');
+      });
+      expect(localConfirmations).toBe(4);
+      await openRunClose(full);
+      expect(localConfirmations).toBe(5);
+      // 比较原始权限档：default 与 ask 归并后同为 normal，回收期间这样改也要重新确认。
+      await openRunClose({ ...full, permissionMode: 'default' });
+      expect(localConfirmations).toBe(6);
+      await openRunClose({ ...full, permissionMode: 'ask' });
+      expect(localConfirmations).toBe(7);
+      await openRunClose({ ...full, permissionMode: 'ask' });
+      expect(localConfirmations).toBe(7);
+      // 回收期间切走又切回(设置入口调用 forgetCredentialGrants)：所有分享上的授权都作废。
+      forgetCredentialGrants(sessionId);
+      await openRunClose({ ...full, permissionMode: 'ask' });
+      expect(localConfirmations).toBe(8);
+      await openRunClose(full, 'share:b');
+      expect(localConfirmations).toBe(9);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it('runs a turn on the other computer while files, commands and confirmations stay here', async () => {
     const host = createHost();
     const handle = await startRemoteAgentSession('pi', {
@@ -364,8 +698,8 @@ describe('remote agent round trip', () => {
       await reader;
       expect(texts[0]).toBe('read:from-controller');
     }));
-    // 六个任务同时进行，拉取始终最多两个在途，不会挤占设备互联的其它请求。
-    expect(peakPolls).toBeLessThanOrEqual(2);
+    // 六个任务同时进行，拉取最多两个长等待加一个给新任务的补位，不会挤占设备互联的其它请求。
+    expect(peakPolls).toBeLessThanOrEqual(3);
     expect(peakAll).toBeLessThan(12);
     await Promise.all(handles.map((handle) => handle.close({ reason: 'navigation' })));
     expect(host.runCount()).toBe(0);
@@ -389,6 +723,99 @@ describe('remote agent round trip', () => {
     await expect(startRemoteAgentSession('claude-code', { sessionId: 's2', workingDir: project, model: 'm' }, makeDeps(host)))
       .rejects.toMatchObject({ name: 'AgentNotAuthenticatedError', message: 'Claude Code is not signed in' });
     host.dispose();
+  });
+
+  // 2026-10-22 远程供应商调查：慢启动期间任务被删除，控制端不再等了，对方却在几分钟后仍启动 Agent 并跑完
+  // 这一轮(供应商组还会换电脑接着启动)。删除或归档时要让对方结束这个任务，迟到完成的启动也立刻关掉。
+  // #6844 review：旧用例只覆盖远端已开始启动；MCP 准备是更早的异步等待，删除后不得发出 open，已准备资源要释放。
+  it('does not open a remote run after the task was removed while preparing MCP', async () => {
+    const host = createHost();
+    const base = makeDeps(host);
+    let finishPrepare!: () => void;
+    const prepareGate = new Promise<void>((resolve) => { finishPrepare = resolve; });
+    const dispose = vi.fn();
+    const prepareMcp = vi.fn(async () => {
+      await prepareGate;
+      return { servers: new Map(), dispose };
+    });
+    const invoke = vi.fn(base.invoke);
+    const sessionId = randomUUID();
+    const starting = startRemoteAgentSession('claude-code', { sessionId, workingDir: project, model: 'm' }, {
+      ...base, invoke, prepareMcp,
+    });
+    void starting.catch(() => undefined);
+    let handle: AgentSessionHandle | undefined;
+    try {
+      expect(prepareMcp).toHaveBeenCalledTimes(1);
+      cancelPendingRemoteStart(sessionId);
+      finishPrepare();
+      const result = await starting.then((value) => { handle = value; return null; }, (error: unknown) => error);
+      expect(result).toBeInstanceOf(Error);
+      expect(String(result)).toContain('[REMOTE_AGENT_EXPIRED]');
+      expect(invoke).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(host.limitUsage().total).toBe(0);
+    } finally {
+      finishPrepare();
+      await handle?.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
+
+  it('ends the run on the other computer when the task is removed while it is still starting', async () => {
+    let finishStart!: () => void;
+    const startGate = new Promise<void>((resolve) => { finishStart = resolve; });
+    const closed = vi.fn();
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        await startGate;
+        const agent = fakeHostedAgent(input);
+        return { ...agent, async close() { closed(); await agent.close(); } };
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const sessionId = randomUUID();
+    const starting = startRemoteAgentSession('claude-code', { sessionId, workingDir: project, model: 'm' }, makeDeps(host));
+    void starting.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(hostInputs).toHaveLength(1));
+      expect(host.limitUsage().total).toBe(1);
+      cancelPendingRemoteStart(sessionId);
+      await expect(starting).rejects.toThrow('[REMOTE_AGENT_EXPIRED]');
+      expect(host.limitUsage().total).toBe(0);
+      finishStart();
+      await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+      expect(hostSends).toEqual([]);
+    } finally {
+      finishStart();
+      host.dispose();
+    }
+  });
+
+  // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.
+  it('sends the persisted image clear generation when opening a remote run', async () => {
+    const host = createHost();
+    const base = makeDeps(host);
+    const opened: Array<Record<string, unknown>> = [];
+    const invoke: StartRemoteAgentDeps['invoke'] = async (args) => {
+      const request = args[0] as { op?: string; payload?: { json?: Record<string, unknown> } };
+      if (request.op === 'open' && request.payload?.json) opened.push(request.payload.json);
+      return base.invoke(args);
+    };
+    try {
+      for (const epoch of [0, 456]) {
+        const handle = await startRemoteAgentSession('codex', { sessionId: 'image-task', workingDir: project, model: 'm' }, {
+          ...base, invoke, readImageDeliveryEpoch: async (sessionId) => { expect(sessionId).toBe('image-task'); return epoch; },
+        });
+        expect(opened.at(-1)).toMatchObject({ imageDeliveryEpoch: epoch, acceptsImageDeliveryReceipts: true });
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { host.dispose(); }
   });
 
   it('declares provider group switch support and brings back the token after a handoff', async () => {

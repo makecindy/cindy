@@ -1,6 +1,7 @@
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { withRemoteOauthContext, type RemoteOauthContext } from '../../plugin-oauth/context.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostOauthAccountManager } from '../ghostOauthAccounts.js';
@@ -195,5 +196,53 @@ describe('Credential protocol wiring through actual index callbacks', () => {
     expect(target.store).not.toHaveBeenCalled();
     expect(target.emit).not.toHaveBeenCalled();
     expect(target.notice).not.toHaveBeenCalled();
+  });
+});
+
+// The production callback and real account manager must keep a phone-owned exchange
+// on the remote path even when its controller rejects or cancels authorization.
+describe('Original settings OAuth remote routing', () => {
+  it.each(['denied', 'cancelled'] as const)('never opens the Host browser after remote %s', async (outcome) => {
+    const openExternal = vi.fn();
+    const fetchImpl = vi.fn();
+    const store = vi.fn(() => true);
+    const manager = new GhostOauthAccountManager({
+      vault: { read: () => null, store, remove: vi.fn() },
+      openExternal,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      captureConnectTarget: () => ({ revision: 'approved-settings-target' }),
+      isConnectTargetCurrent: () => true,
+    });
+    const connect = vi.spyOn(manager, 'connectAccount');
+    const remote: RemoteOauthContext = {
+      scope: 'settings-request', peer: 'phone', assertCurrent: vi.fn(), finish: vi.fn(),
+      authorize: vi.fn(async (offer) => {
+        if (outcome === 'cancelled') throw new Error('CONTROLLER_CANCELLED');
+        return { state: offer.state, error: 'access_denied' };
+      }),
+    };
+    const decl = { authorizeUrl: 'https://accounts.example.com/authorize', tokenUrl: 'https://accounts.example.com/token', clientId: 'fake-public-client', scopes: ['read'] };
+    const handler = loadCallback('setGhostOauthHandler', {
+      findGhostForInstanceId: () => ({ manifest: { network: { hosts: ['api.example.com'], secrets: [{ key: 'account', source: 'oauth', oauth: decl }] } } }),
+      handleGhostOauthRequest,
+      getGhostOauthAccountManager: () => manager,
+      isGhostTokenBrokerAuthorized: () => false,
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
+      getGhostSetupChangeBus: () => ({ emit: vi.fn() }),
+      broadcastGhostsChanged: vi.fn(), getGhostManager: () => ({ list: () => [] }),
+      log: { warn: vi.fn() },
+    });
+    const result = await withRemoteOauthContext(remote, () => handler({
+      ghostId: 'settings-helper', method: 'POST', pathname: '/oauth/account/connect',
+      readBodyText: async () => '{"remote":{"scope":"forged"}}', isCurrent: () => true,
+    }));
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.body!)).toMatchObject({ ok: false, error: outcome === 'cancelled' ? 'CANCELLED' : 'CALLBACK_INVALID' });
+    expect(connect).toHaveBeenCalledExactlyOnceWith('settings-helper', 'account', decl, expect.objectContaining({ remote, assertCurrent: expect.any(Function) }));
+    expect(remote.authorize).toHaveBeenCalledTimes(1);
+    expect(remote.finish).toHaveBeenCalledWith(false);
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
   });
 });

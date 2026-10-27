@@ -92,6 +92,16 @@ describe('collectRemoteProviderGroups', () => {
     expect(result.hidden.size).toBe(0);
     expect(result.groups.size).toBe(0);
   });
+
+  it('can retain a closed group for settings management without changing the default remote list', () => {
+    const result = collectRemoteProviderGroups([
+      { deviceId: 'mini', providers: [
+        provider('anthropic', { remoteInvocationEnabled: false, group: group([{ kind: 'device', agentDeviceId: 'studio', providerId: 'anthropic' }]) }),
+      ] },
+    ], {}, { includeDisabledGroups: true });
+    expect(result.groups.has(remoteProviderEntryKey('mini', 'anthropic'))).toBe(true);
+    expect(result.hidden.has(remoteProviderEntryKey('studio', 'anthropic'))).toBe(true);
+  });
 });
 
 describe('providerGroupMemberOfRoute', () => {

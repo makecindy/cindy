@@ -54,6 +54,8 @@ export interface SlackHookConfigState {
   telegramEnabled: boolean;
   /** X (Twitter) provider 独立开关。 */
   xEnabled: boolean;
+  /** Explicit companion assignment; absent preserves ordinary X tasks. */
+  xCompanionBotId?: string | null;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
   urlOverride: string | null;
   /** 别名 -> 本地绝对路径。 */
@@ -110,6 +112,7 @@ export interface HookConnectionConfig {
   name: string;
   url: string;
   enabled: boolean;
+  companionBotId?: string | null;
   workspaces: Record<string, string>;
   createdAt: number;
 }
@@ -190,6 +193,7 @@ export interface SlackHookStore {
     provider: 'telegram' | 'x',
     alias: string | null,
   ): SlackHookConfigState;
+  setXCompanionBotId(botId: string | null): SlackHookConfigState;
 }
 
 export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
@@ -208,6 +212,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     };
     x: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -366,6 +371,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       },
       x: {
         enabled: x.enabled === true,
+        companionBotId: typeof x.companionBotId === 'string' && x.companionBotId.length <= 200
+          ? x.companionBotId : null,
         bindingCache: parseProviderBindingCache(x.bindingCache),
         // 成员关系不在这里卡: 解析时 workspaces 还没读进来。留给 viewOf 复核,
         // 那里才同时握有两者。
@@ -540,6 +547,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       enabled: account.slack.enabled,
       telegramEnabled: account.telegram.enabled,
       xEnabled: account.x.enabled,
+      xCompanionBotId: account.x.companionBotId ?? null,
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
       bindingsCache: account.slack.bindingsCache.map((entry) => ({ ...entry })),
@@ -631,6 +639,14 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       }
       return mutateAccount((account) => {
         account[provider].defaultWorkspace = normalized;
+      });
+    },
+    setXCompanionBotId(botId) {
+      if (botId !== null && (typeof botId !== 'string' || !botId.trim() || botId.length > 200)) {
+        throw new HookConnectionValidationError('invalid companion id');
+      }
+      return mutateAccount((account) => {
+        account.x.companionBotId = botId;
       });
     },
   };

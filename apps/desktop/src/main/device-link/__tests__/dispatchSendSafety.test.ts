@@ -87,6 +87,25 @@ beforeEach(() => {
   __testing.reset();
 });
 
+// Test value: public push dispatch must deliver the new metadata invalidation to both controllers.
+// Existing forwarding cases did not cover alias topics or the bot-authorization queue's empty payload.
+// Minimal input: one {} invalidation and two sessions subscribers; unit tier, no network.
+it('forwards project alias invalidations through the production bot authorization queue to every subscriber', async () => {
+  const client = mkClient();
+  __testing.setActiveClient(client as never);
+  subscriptions.subscribe('mobile', ['sessions'], 'mobile', []);
+  subscriptions.subscribe('desktop', ['sessions'], 'desktop', []);
+  setRemoteBotSessionLookup(async () => 'ordinary');
+  try {
+    __testing.forwardPush('local-db:project-aliases:changed', {});
+    await vi.waitFor(() => expect(client.sendPush).toHaveBeenCalledTimes(2));
+    expect(client.sendPush).toHaveBeenCalledWith('mobile', 'local-db:project-aliases:changed', {});
+    expect(client.sendPush).toHaveBeenCalledWith('desktop', 'local-db:project-aliases:changed', {});
+  } finally {
+    setRemoteBotSessionLookup(null);
+  }
+});
+
 it('strips Desktop credential links from authorization history and live metadata pushes', () => {
   const card = { v: 1, sessionId: 's1', createdAt: 1, target: { kind: 'plugin', id: 'p' },
     snapshot: { kind: 'plugin_setup', requestId: 'r', revision: 1, ghost: { id: 'p', name: 'Plugin' },
@@ -426,6 +445,18 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     });
     expect(second[2].result[0].content).toContain('[remote content truncated: payload too large]');
     expect(second[2].result[0].content.length).toBeLessThan(bigContent.length);
+  });
+
+  it('keeps a long HTML draft card reference in the compact phone history response', () => {
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => { throw tooLarge(); });
+    const client = mkClient({ sendInvokeResult });
+    const content = JSON.stringify({ ok: true, result: { bodyHtml: '你好'.repeat(16000) }, xdt_card_id: 'draft-card' });
+    __testing.sendInvokeResultSafe(client as never, 'ctrl', 'req', {
+      ok: true, result: [{ id: 'card-result', role: 'tool_result', content }],
+    }, 'local-db:messages:list');
+    const stored = sendInvokeResult.mock.calls[1][2].result[0].content;
+    expect(JSON.parse(stored)).toMatchObject({ xdt_card_id: 'draft-card' });
+    expect(Buffer.byteLength(stored)).toBeLessThanOrEqual(8192);
   });
 
   it('消息页非字符串 content 超限 → 用占位文本替代,不返回半截 JSON', () => {
@@ -1019,6 +1050,44 @@ describe('remote companion Session visibility at the device-link boundary', () =
     expect(client.sendPush.mock.calls.every((call) => call[2].sessionId !== 's1')).toBe(true);
   });
 
+  // 测试价值:forwardPush 扇出到多台控制端时,同一轮只读一次授权(实测 3 台 peer 下每条 push
+  // 每台各读一次 sessions,rawAll 堆积);同时守住「排在慢 push 后面的 push 到队头才读库」:
+  // 提前读到的 visible 结论不能越过排队等待,等待期间被隐藏的伙伴事件不得发出。unit,进程内 fake。
+  it('shares one authorization read per fan-out and reads a queued push only when it reaches the head', async () => {
+    let hidden = false;
+    let release!: () => void;
+    let gate: Promise<void> = Promise.resolve();
+    const batch = vi.fn(async (ids: readonly string[]) => {
+      const snapshot = hidden;
+      await gate;
+      return new Map(ids.map((id) => [id, snapshot ? 'hidden' as const : 'visible' as const]));
+    });
+    setRemoteBotSessionLookup(async () => { throw new Error('single lookup must not run'); }, batch);
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const peers = ['ctrl-1', 'ctrl-2', 'ctrl-3'];
+    for (const peer of peers) subscriptions.subscribe(peer, ['session:s1']);
+    __testing.forwardPush('maker:event', { sessionId: 's1', seq: 0 });
+    await vi.waitFor(() => expect(client.sendPush).toHaveBeenCalledTimes(3));
+    // Three peers, one push: a single shared read, not one per peer.
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch).toHaveBeenCalledWith(['s1'], 'session');
+
+    // The first push's read is slow; the second queues behind it and must not carry a
+    // verdict taken before the companion is hidden.
+    gate = new Promise<void>((resolve) => { release = resolve; });
+    __testing.forwardPush('maker:event', { sessionId: 's1', seq: 2 });
+    await vi.waitFor(() => expect(batch).toHaveBeenCalledTimes(2));
+    __testing.forwardPush('maker:event', { sessionId: 's1', seq: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(batch).toHaveBeenCalledTimes(2);
+    hidden = true;
+    release();
+    await vi.waitFor(() => expect(batch.mock.calls.length).toBeGreaterThanOrEqual(3));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(client.sendPush.mock.calls.map((call) => call[2].seq).filter((seq) => seq >= 2)).toEqual([2, 2, 2]);
+  });
+
   it('revalidates cached replies without repeating the local handler', async () => {
     let hidden = false;
     setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
@@ -1314,4 +1383,20 @@ describe('remote recorded-turn actions', () => {
       .toMatchObject({ ok: false });
     expect(write).not.toHaveBeenCalled();
   });
+});
+
+it('compacts rich answer history into a complete replayable snapshot instead of cutting its JSON', () => {
+  const sendInvokeResult = vi.fn().mockImplementationOnce(() => { throw tooLarge(); });
+  const client = mkClient({ sendInvokeResult });
+  const ops = [JSON.stringify({ seq: 1, op: 'create', id: 'text', kind: 'text', props: { text: 'Initial' } })];
+  for (let seq = 2; seq <= 80; seq++) ops.push(JSON.stringify({ seq, op: 'patch', id: 'text', props: { text: '中'.repeat(600) + seq } }));
+  const content = '```cindy-ui\n' + ops.join('\n') + '\n```';
+  __testing.sendInvokeResultSafe(client as never, 'mobile', 'rich-history', { ok: true, result: [{ id: 'rich', role: 'assistant', content }] }, 'local-db:messages:list');
+  expect(sendInvokeResult).toHaveBeenCalledTimes(2);
+  const result = sendInvokeResult.mock.calls[1][2].result[0].content;
+  expect(result).toContain('```cindy-ui\n');
+  const operation = JSON.parse(result.split('\n')[1]);
+  expect(operation).toMatchObject({ seq: 1, op: 'create', id: 'text', props: { text: '中'.repeat(600) + '80' } });
+  expect(result.endsWith('\n```\n')).toBe(true);
+  expect(encodedByteLength(result)).toBeLessThan(128 * 1024);
 });

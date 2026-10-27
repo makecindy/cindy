@@ -5,20 +5,17 @@
  *   - CCAgentSidebarUpper：会话列表右键菜单 / 行内 archive 快捷按钮
  *   - SessionContentHeader：右栏顶栏 ··· 菜单
  *
- * 本 hook 只封装"确认之后的执行序列"（关子进程 / 写库 / 乐观补丁 / 释放内存 /
- * 清 composer draft / refresh 列表与 worktree / 必要时跳转）。**前置检查
- * （running / IM 接管拦截）和确认弹窗留在调用方** —— 两处的确认交互形态不同
- * （sidebar 是受控 ConfirmDialog + 行内两步确认，header 是 imperative
- * confirmDialog），强行收进来反而耦合。
+ * 本 hook 封装乐观补丁、预检、写库与收尾。前置检查（IM 接管拦截）和确认弹窗
+ * 由调用方通过 prepareArchive 提供；运行态判据由本 hook 统一提供，
+ * 调用方在关闭共享前复用，执行层在异步等待后复核。归档入口共用可等待的
+ * confirmDialog，确认文案与是否需要确认仍由各入口按预检结果决定。
  *
- * activeSessionId 由调用方传入：sidebar 是当前路由解析出的活跃会话（可能
- * 操作非活跃行）；header 操作的恒为当前打开的会话（传 session.id 即可）。
+ * activeSessionId 表示调用方原先浏览的会话；归档跳转前还会读取实时路由，
+ * 防止预检或确认期间切换任务后，旧操作把新页面带走。
  *
  * 远程(device-link)任务的归档 / 恢复走 remoteProjectsStore 的状态迁移叠加层,与本机
  * sessionsStore 状态事务对称:行当帧换桶,写库成功后落被控端返回的行,失败回滚。
- * 远程归档的 worktree 预检是一次完整隧道往返,调用方可先 `beginRemoteArchive`
- * (行消失 + 跳离)再等预检,确认后把凭据经 `remoteArchiveToken` 交回 runSessionAction
- * 复用;取消则 `cancelRemoteArchive` 让行回来(不跳回原任务)。
+ * 远程预检通过 prepareArchive 在乐观换桶之后执行；取消或失败恢复行，确认后才跳离详情。
  *
  * includeArchived 必须与调用方自己的 useCCSessions 桶一致：unarchive 的 refreshSessions
  * 只刷当前桶，sidebar 处于 archived / all 桶时删除行后若刷的是默认 active
@@ -29,6 +26,7 @@
 import { useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useSidebarNavigate } from '../sidebar/sidebarNavigation';
+import { isSessionRemovalRouteCurrent } from '../lib/sessionRemovalNavigation';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -42,6 +40,10 @@ import {
   remoteProjectsStore,
   type RemotePendingStatusToken,
 } from '@/features/device-link/remoteProjectsStore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { createLogger } from '@/lib/logger';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { Session, SessionStatus } from '@/lib/ccAgent.types';
@@ -74,6 +76,8 @@ function setStatusInOrder(
 }
 
 export interface RunSessionActionOptions {
+  /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
+  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -81,11 +85,6 @@ export interface RunSessionActionOptions {
    * "下一条 / 上一条 / 新建"；没有列表上下文的入口继续回落到 /cc-agent。
    */
   deleteRedirectRoute?: string | null;
-  /**
-   * 调用方已用 beginRemoteArchive 提前隐藏远程任务(并已跳离)时交回的凭据:
-   * 归档沿用同一叠加层直接写库,不再重复 begin / 跳转,避免行闪烁。
-   */
-  remoteArchiveToken?: RemotePendingStatusToken | null;
 }
 
 export function useSessionLifecycleActions(options?: { includeArchived?: ListStatusFilter }) {
@@ -100,10 +99,18 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
   // (行渲染隔离不变量,见 SessionItem.tsx)。
   const listFilter: ListStatusFilter = options?.includeArchived ?? 'active';
 
+  // Read stores at the side-effect boundary, never the render-time running set.
+  const archiveBlockedByRunning = useCallback((sessionId: string, deviceId?: string | null) => {
+    const running = makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning ||
+      (deviceId && isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId)));
+    if (running) toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
+    return Boolean(running);
+  }, [t]);
+
   /**
    * 远程任务归档的乐观起点:叠加层把行移出 active 桶,并按 runSessionAction 同一顺序
    * 跳离(行留在列表时先跳再换桶,否则先换桶再跳,理由见下方 archive 段注释)。
-   * 返回的凭据由调用方交给 runSessionAction(remoteArchiveToken)或 cancelRemoteArchive。
+   * 只在已确认的 runSessionAction 内开始，返回凭据供写库成功或失败时结算。
    */
   const beginRemoteArchive = useCallback(
     (
@@ -113,7 +120,9 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     ): RemotePendingStatusToken => {
       const archivedRowStaysInList = listFilter === 'all';
       const leaveArchivedSession = () => {
-        if (sessionId === activeSessionId) navigate('/cc-agent/new');
+        if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+          navigate('/cc-agent/new');
+        }
       };
       if (archivedRowStaysInList) flushSync(leaveArchivedSession);
       let token!: RemotePendingStatusToken;
@@ -126,11 +135,6 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     [navigate, listFilter],
   );
 
-  /** 用户取消 / 前置条件失败:撤掉提前隐藏,行回到列表。已跳离的视图不跳回。 */
-  const cancelRemoteArchive = useCallback((token: RemotePendingStatusToken) => {
-    remoteProjectsStore.rollbackPendingStatus(token);
-  }, []);
-
   /**
    * archive / delete 实际执行序列。不关心确认弹窗的开合状态——由调用方负责。
    */
@@ -138,36 +142,49 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (
       sessionId: string,
       action: 'delete' | 'archive',
-      { activeSessionId, deleteRedirectRoute, remoteArchiveToken }: RunSessionActionOptions,
+      { activeSessionId, deleteRedirectRoute, prepareArchive }: RunSessionActionOptions,
     ) => {
       const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
       const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
       const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
-      // 预先隐藏的远程归档在等预检 / 确认期间已被更新的操作取代(「全部」筛选里行仍可见,
-      // 用户可能已点了恢复):以最后一次操作为准,这次过时的归档不再写库。检查放在最后一个
-      // await 之后,从这里到 setStatusInOrder 入队全程同步,恢复插不进来。
-      if (
-        remoteArchiveToken &&
-        isDeviceLinkSession &&
-        !remoteProjectsStore.isPendingStatusCurrent(remoteArchiveToken)
-      ) {
-        return;
-      }
+      // Preflight/confirmation and write-target resolution may outlive the initial running check.
+      const deviceId = statusWriteTarget.kind === 'device-link' ? statusWriteTarget.deviceId : undefined;
+      if (action === 'archive' && archiveBlockedByRunning(sessionId, deviceId)) return;
       let statusTransition: SessionStatusTransitionToken | null = null;
       // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta)。归档走
       // remoteProjectsStore 的状态迁移叠加层乐观换桶,写库成功即落被控端返回的行,不等
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
-      if (remoteArchiveToken && !isDeviceLinkSession) {
-        // 远程 id 撞上本机行(该设备已停用控制)时改走本机状态桶,提前登记的远程叠加层作废。
-        remoteProjectsStore.rollbackPendingStatus(remoteArchiveToken);
+
+      if (action === 'archive' && prepareArchive) {
+        if (isDeviceLinkSession) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, null);
+        }
+        try {
+          const confirmed = await prepareArchive(
+            () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+          );
+          if (!confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
+            if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+            return;
+          }
+          // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
+          if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
+        } catch (err) {
+          if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+          log.error('[archive preparation]', err);
+          toast.error(t('ccAgent.sidebar.archiveFailed'));
+          return;
+        }
       }
 
       if (action === 'archive' && isDeviceLinkSession) {
-        remoteStatus =
-          remoteArchiveToken ??
-          beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
+        if (!remoteStatus) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
+        } else if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+          navigate('/cc-agent/new');
+        }
       } else if (action === 'archive') {
         // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
         //
@@ -194,11 +211,10 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         // 后再用 patchLocal 从所有桶移除。
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
-          if (sessionId === activeSessionId) navigate('/cc-agent/new');
+          if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+            navigate('/cc-agent/new');
+          }
         };
-        if (archivedRowStaysInList) {
-          flushSync(leaveArchivedSession);
-        }
         statusTransition = await sessionsStore.beginStatusTransitionWhenReady(
           sessionId,
           {
@@ -206,6 +222,9 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
             pinnedAt: null,
           },
           (begin) => {
+            // A previous local status write can keep us waiting after the check above.
+            if (archiveBlockedByRunning(sessionId, deviceId)) return null;
+            if (archivedRowStaysInList) flushSync(leaveArchivedSession);
             let transition: SessionStatusTransitionToken | null = null;
             flushSync(() => {
               transition = begin();
@@ -311,7 +330,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         navigate(deleteRedirectRoute ?? '/cc-agent');
       }
     },
-    [navigate, patchLocal, listFilter, beginRemoteArchive, t],
+    [navigate, patchLocal, listFilter, beginRemoteArchive, archiveBlockedByRunning, t],
   );
 
   /**
@@ -351,5 +370,5 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     [refreshSessions, t],
   );
 
-  return { runSessionAction, unarchiveSession, beginRemoteArchive, cancelRemoteArchive };
+  return { runSessionAction, unarchiveSession, archiveBlockedByRunning };
 }

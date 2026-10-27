@@ -642,6 +642,7 @@ describe('resolveAgentCapability', () => {
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
       supportsFastMode: true,
+      supportsUltrafastMode: false,
       contextWindow: 200_000,
       contextWindowVerified: false,
     });
@@ -1233,6 +1234,16 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].group).toBe('anthropic');
     expect(entries[0].sortOrder).toBe(3);
   });
+
+  it('模型组 Auto 按服务端给的名称显示，行身份不剥 auto/', () => {
+    const named = { name: 'Auto (研发组)', mode: 'chat' as const };
+    const gateway = view({ id: 'xd', authStrategy: 'gateway-key', models: { pi: [m('auto/grp_123', named)] } });
+    const pool = view({ id: 'org-pool', source: 'organization', models: { pi: [m('auto/grp_456', { ...named, name: 'Auto (销售组)' })] } });
+    const entries = unifiedModelEntries({ providers: [gateway, pool], isVisible: alwaysVisible });
+    expect(find(entries, 'xd', 'auto/grp_123')?.displayName).toBe('Auto (研发组)');
+    expect(find(entries, 'org-pool', 'auto/grp_456')?.displayName).toBe('Auto (销售组)');
+    expect(unifiedModelKeyId('auto/grp_123')).toBe('auto/grp_123');
+  });
 });
 
 // ── 原生底座排序 ──────────────────────────────────────────────────────────────
@@ -1299,4 +1310,17 @@ describe('sortEntriesForAgent(原生底座优先,无主场不降级)', () => {
     });
     expect(codexOnly.every((e) => e.candidates.includes('codex'))).toBe(true);
   });
+});
+
+
+it('keeps display pricing attached to the selected provider and engine', () => {
+  const quote = { items: [{ label: 'Usage', price: 0.5, unit: 'second', quantity: 1 }] };
+  const providers = [
+    view({ id: 'xd', models: { codex: [m('same-model', { displayPricing: quote, currency: 'CNY', costDiscount: 0.2 })] } }),
+    view({ id: 'openai', models: { codex: [m('same-model')] } }),
+  ];
+  expect(resolveAgentCapability(providers, 'xd', 'same-model', 'codex')).toMatchObject({
+    displayPricing: quote, currency: 'CNY', costDiscount: 0.2,
+  });
+  expect(resolveAgentCapability(providers, 'openai', 'same-model', 'codex')).not.toHaveProperty('displayPricing');
 });

@@ -84,4 +84,66 @@ describe('namespace delivery contract', () => {
     });
     expect(parsed.removals[0]?.namespace).toBe('acme');
   });
+
+  it.each([
+    'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+    'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+    'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+  ] as const)('preserves public results when enterprise access fails with %s', (code) => {
+    const response = {
+      schemaVersion: 2,
+      plugins: [namespaceFixtures[0]!.plugin],
+      nextCursor: null,
+      currentOrganization: { organizationId: 'org-example', orgSlug: 'acme', pluginPrefix: null },
+      organizationAccessError: { code, message: '请升级 Cindy' },
+    };
+    expect(parseListPluginsResponse(response)).toMatchObject({
+      plugins: [{ id: namespaceFixtures[0]!.plugin.id, scope: 'public' }],
+      organizationAccessError: response.organizationAccessError,
+      removals: [],
+    });
+  });
+
+  it('rejects an enterprise access error that still carries enterprise data', () => {
+    const currentOrganization = { organizationId: 'org-example', orgSlug: 'acme', pluginPrefix: null };
+    const organizationAccessError = { code: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED', message: '请升级 Cindy' };
+    const base = { schemaVersion: 2, nextCursor: null, currentOrganization, organizationAccessError };
+    expect(() => parseListPluginsResponse({
+      ...base,
+      plugins: [namespaceFixtures[1]!.plugin],
+    })).toThrow('企业准入拒绝');
+    expect(() => parseListPluginsResponse({
+      ...base,
+      plugins: [],
+      removals: [{
+        pluginId: namespaceFixtures[1]!.plugin.id,
+        ghostId: 'x-manager',
+        scope: 'organization',
+        organizationId: 'org-example',
+        namespace: 'acme',
+        action: 'purge',
+        removedAt: '2026-09-07T00:00:00.000Z',
+      }],
+    })).toThrow('企业准入拒绝');
+    expect(() => parseListPluginsResponse({
+      ...base,
+      plugins: [],
+      currentOrganization: null,
+    })).toThrow('企业准入拒绝');
+    expect(parseListPluginsResponse({
+      ...base,
+      plugins: [namespaceFixtures[0]!.plugin],
+      organizationAccessError: { code: 'PLUGIN_FUTURE_REASON', message: '以后再说' },
+    }).organizationAccessError).toEqual({ code: 'PLUGIN_FUTURE_REASON', message: '以后再说' });
+    expect(() => parseListPluginsResponse({
+      ...base,
+      plugins: [],
+      organizationAccessError: { code: 'not-a-code', message: 'bad' },
+    })).toThrow('organizationAccessError.code');
+    expect(() => parseListPluginsResponse({
+      ...base,
+      plugins: [],
+      organizationAccessError: { code: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' },
+    })).toThrow('organizationAccessError.message');
+  });
 });

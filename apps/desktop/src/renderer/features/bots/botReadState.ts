@@ -114,7 +114,7 @@ export function pruneBotReadState(botIds: readonly string[]): boolean {
   const next: ReadStateMap = {};
   let changed = false;
   for (const [botId, at] of Object.entries(current)) {
-    if (botId.startsWith('group:') || alive.has(botId)) next[botId] = at;
+    if (botId.startsWith('group:') || botId.startsWith('thread:') || alive.has(botId)) next[botId] = at;
     else changed = true;
   }
   if (changed) writeStorage(next);
@@ -146,7 +146,13 @@ export function resetBotReadStateForTests(): void {
 
 /** Group replies use the same owner-scoped, monotonic local read positions. */
 export const botGroupReadKey = (groupId: string) => `group:${groupId}`;
-type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage'>>;
+type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage' | 'serverUnread'>> & {
+  /**
+   * ISO times of the group's latest (up to 99) messages from others — Bots and other humans,
+   * never the reader's own or notices — oldest first. Older hosts omit it.
+   */
+  incomingMessageTimes?: readonly string[];
+};
 
 function latestGroupReplyAt(group: GroupReadSummary): number {
   // Older hosts may omit lastReplyAt; other humans count just like companions.
@@ -155,9 +161,27 @@ function latestGroupReplyAt(group: GroupReadSummary): number {
     last && last.authorKind !== 'system' && (last.authorKind === 'bot' || last.isSelf === false) ? last.createdAt : 0);
 }
 
-export function isBotGroupUnread(group: GroupReadSummary): boolean {
+/**
+ * Messages from others after the local read mark: counted from `incomingMessageTimes` (so at
+ * most 99); a host without the list only says whether anything is new (1).
+ */
+export function botGroupUnreadCount(group: GroupReadSummary): number {
+  if (group.serverUnread) return group.serverUnread.count;
   const readAt = getBotLastReadAt(botGroupReadKey(group.id));
-  return readAt !== null && latestGroupReplyAt(group) > readAt;
+  if (readAt === null) return 0;
+  const latestUnread = latestGroupReplyAt(group) > readAt ? 1 : 0;
+  const times = group.incomingMessageTimes;
+  if (!Array.isArray(times)) return latestUnread;
+  let count = 0;
+  for (const time of times) {
+    const at = Date.parse(time);
+    if (Number.isFinite(at) && at > readAt) count += 1;
+  }
+  return Math.max(count, latestUnread);
+}
+
+export function isBotGroupUnread(group: GroupReadSummary): boolean {
+  return botGroupUnreadCount(group) > 0;
 }
 export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
   const current = readStorage();
@@ -169,4 +193,14 @@ export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void
     if (next[key] === undefined) next[key] = Math.max(1, latestGroupReplyAt(group));
   }
   if (JSON.stringify(next) !== JSON.stringify(current)) writeStorage(next);
+}
+
+/** Private-chat topics use the same owner-scoped, monotonic local read positions, per topic Session. */
+export const botDmThreadReadKey = (threadSessionId: string) => `thread:${threadSessionId}`;
+
+/** A topic has a companion reply the reader has not seen in its panel. */
+export function isBotDmThreadUnread(thread: { sessionId: string; lastAssistantAt: number | null }): boolean {
+  if (thread.lastAssistantAt === null) return false;
+  const readAt = getBotLastReadAt(botDmThreadReadKey(thread.sessionId));
+  return readAt === null || thread.lastAssistantAt > readAt;
 }

@@ -198,7 +198,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
     descCallTool.trim(),
     {
       name: z.string().min(1).describe('工具名(slack_list_tools 可查)'),
-      arguments: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略)').optional(),
+      arguments: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略)'),
       team_id: z.string().optional().describe(TEAM_ID_DESC),
       out_file: z
         .string()

@@ -205,6 +205,21 @@ describe('LibraryBindingStore', () => {
     expect(await fs.promises.readFile(path.join(candidate, 'hello', 'keep.txt'), 'utf8')).toBe('original');
   });
 
+  // Windows CI can round distinct native inode values to the same Number.
+  // Model an observable identity change for these recovery unit tests while
+  // retaining real files, the production recovery entry, and restoration/retry.
+  async function mockChangedDirectoryIdentity(root: string, recordedInode: number) {
+    const realRoot = await fs.promises.realpath(root);
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    return vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      if (args[0] === realRoot) {
+        Object.assign(stat, { ino: recordedInode === 1 ? 2 : 1 });
+      }
+      return stat;
+    });
+  }
+
   it('rejects a foreign target even with an unfinished relocation journal and retries after restoration', async () => {
     await interruptRelocation('folder');
     const target = path.join(candidate, '_ns__acme__hello');
@@ -212,11 +227,14 @@ describe('LibraryBindingStore', () => {
     await fs.promises.rename(target, original);
     await fs.promises.mkdir(target);
     await fs.promises.writeFile(path.join(target, 'foreign.txt'), 'foreign');
+    const { libraryIdentity } = JSON.parse(await fs.promises.readFile(bindingFile, 'utf8')).pendingRelocation;
+    const targetIdentity = await mockChangedDirectoryIdentity(target, libraryIdentity.ino);
     const restarted = new LibraryBindingStore(deps);
     await expect(restarted.relocateBinding('hello', '_ns__acme__hello')).rejects.toThrow('directory identity changed');
     await expect(restarted.getBinding('_ns__acme__hello')).rejects.toThrow('directory identity changed');
     expect(await fs.promises.readFile(path.join(target, 'foreign.txt'), 'utf8')).toBe('foreign');
     expect(JSON.parse(await fs.promises.readFile(bindingFile, 'utf8')).bindings.hello.generation).toBe(1);
+    targetIdentity.mockRestore();
     await fs.promises.rm(target, { recursive: true });
     await fs.promises.rename(original, target);
     await restarted.relocateBinding('hello', '_ns__acme__hello');
@@ -229,9 +247,12 @@ describe('LibraryBindingStore', () => {
     const saved = path.join(tmp, 'saved-parent');
     await fs.promises.rename(candidate, saved);
     await fs.promises.mkdir(candidate);
+    const { rootIdentity } = JSON.parse(contents).pendingRelocation;
+    const parentIdentity = await mockChangedDirectoryIdentity(candidate, rootIdentity.ino);
     const restarted = new LibraryBindingStore(deps);
     await expect(restarted.relocateBinding('hello', '_ns__acme__hello')).rejects.toThrow('root identity changed');
     expect(await fs.promises.readFile(bindingFile, 'utf8')).toBe(contents);
+    parentIdentity.mockRestore();
     await fs.promises.rm(candidate, { recursive: true });
     await fs.promises.rename(saved, candidate);
     await restarted.relocateBinding('hello', '_ns__acme__hello');
@@ -245,10 +266,13 @@ describe('LibraryBindingStore', () => {
     await fs.promises.rename(source, original);
     await fs.promises.mkdir(source);
     await fs.promises.writeFile(path.join(source, 'foreign.txt'), 'foreign');
+    const { libraryIdentity } = JSON.parse(await fs.promises.readFile(bindingFile, 'utf8')).pendingRelocation;
+    const sourceIdentity = await mockChangedDirectoryIdentity(source, libraryIdentity.ino);
     const restarted = new LibraryBindingStore(deps);
     await expect(restarted.relocateBinding('hello', '_ns__acme__hello')).rejects.toThrow('directory identity changed');
     expect(await fs.promises.readFile(path.join(source, 'foreign.txt'), 'utf8')).toBe('foreign');
     expect(fs.existsSync(path.join(candidate, '_ns__acme__hello'))).toBe(false);
+    sourceIdentity.mockRestore();
     await fs.promises.rm(source, { recursive: true });
     await fs.promises.rename(original, source);
     await restarted.relocateBinding('hello', '_ns__acme__hello');
@@ -366,6 +390,17 @@ describe('LibraryBindingStore', () => {
     });
     await expect(relocateLibraryMetaOwner(root, 'other', 'hello')).rejects.toThrow('different plugin');
     expect(await relocateLibraryMetaOwner(path.join(defaultRootBase, 'missing'), 'hello', '_ns__acme__hello')).toBe(false);
+  });
+
+  it('clears the uninstall marker when asked, including on a repeat after the owner already moved', async () => {
+    const root = path.join(defaultRootBase, 'hello');
+    const file = path.join(root, '.cindy-library', 'meta.json');
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify({ version: 1, ghostId: '_ns__acme__hello', createdAt: 1, orphaned: { at: 2, name: 'old' } }));
+    const options = { clearOrphaned: true };
+    expect(await relocateLibraryMetaOwner(root, 'hello', '_ns__acme__hello', () => {}, options)).toBe(true);
+    expect(JSON.parse(await fs.promises.readFile(file, 'utf8'))).toEqual({ version: 1, ghostId: '_ns__acme__hello', createdAt: 1 });
+    expect(await relocateLibraryMetaOwner(root, 'hello', '_ns__acme__hello', () => {}, options)).toBe(false);
   });
 
   it('无 binding → 默认根;绑定后解析到 <candidate>/<ghostId>', async () => {

@@ -68,7 +68,7 @@ export async function downloadAttachments(
 
   for (const ref of refs) {
     try {
-      const one = await downloadOne(client, messageId, ref, ctx);
+      const one = await downloadOne(client, ref.messageId ?? messageId, ref, ctx);
       if ('attachment' in one) attachments.push(one.attachment);
       else unsupported.push(one.unsupported);
     } catch (err) {

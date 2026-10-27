@@ -12,12 +12,15 @@
  * fork 点支持 user / assistant 消息 (语义区别见 forkSessionAtMessage doc)。
  */
 
+import { remoteAgentErrorCode } from '@cindy/device-link';
 import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { forkSessionAtMessage, forkSessionStripEncrypted } from '../maker-orchestration/fork.js';
+import { createSideChat, listSideChats, forkSessionAtMessage, forkSessionStripEncrypted } from '../maker-orchestration/fork.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -31,7 +34,47 @@ function broadcastSessionCreated(sessionId: string): void {
   emitSessionCreated(sessionId);
 }
 
+function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: string): void {
+  const context = getDeviceLinkInvokeContext();
+  if (context) {
+    // Main creates this context only after device-link authorization. A remote
+    // invoke has no Electron frame; never accept a caller-supplied substitute.
+    if (context.channel !== channel || !context.controllerDeviceId || context.sharedTask) {
+      throwIpcError('PERMISSION_DENIED', 'Side chats require the task owner');
+    }
+  } else {
+    assertTrustedAppRendererEvent(event);
+  }
+}
+
 export function registerMakerForkIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.SIDE_CHAT_LIST, (event, sourceSessionId: unknown) => {
+    assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT_LIST);
+    return listSideChats(requireString(sourceSessionId, 'sourceSessionId'));
+  });
+  ipcMain.handle(MAKER_INVOKE.SIDE_CHAT, async (event, sourceSessionId: unknown) => {
+    assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT);
+    const sid = requireString(sourceSessionId, 'sourceSessionId');
+    try {
+      const session = await createSideChat(sid);
+      broadcastSessionCreated(session.id);
+      return session;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('side chat creation failed', { sourceSessionId: sid, code, error: message });
+      if (code === 'SOURCE_NOT_FOUND') throwIpcError('NOT_FOUND', 'Source task is unavailable');
+      if (code === 'REMOTE_NOT_SUPPORTED') throwIpcError('UNSUPPORTED_CAPABILITY', 'Native history is on another execution host');
+      if (code === 'NO_PRIOR_ASSISTANT' || code === 'SOURCE_NEVER_RAN') {
+        throwIpcError('NO_PRIOR_ASSISTANT', 'Wait for the first completed reply');
+      }
+      // 远程 Agent 的错误码带给界面，让它说清是哪台电脑、什么原因(与分叉同一套提示)。
+      const remoteCode = remoteAgentErrorCode(message);
+      throwIpcError('PRECONDITION_FAILED', remoteCode
+        ? `[${remoteCode}] Could not create a side chat from this history`
+        : 'Could not create a side chat from this history');
+    }
+  });
   ipcMain.handle(
     MAKER_INVOKE.FORK,
     async (

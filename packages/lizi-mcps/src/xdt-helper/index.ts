@@ -11,6 +11,7 @@
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
 export { registerAppUpdateTools, type AppUpdateCallbacks } from './app_update.js';
 export { registerGrokLoginTools, type GrokLoginCallbacks, type GrokLoginState } from './grok_login.js';
+export { registerInputHandoffTool, type InputHandoffCallbacks, type InputHandoffToolRequest, type InputHandoffToolResult } from './input_handoff.js';
 export { registerSkillhubTools, type SkillhubAgentCallback, type SkillhubAgentRequest } from './skillhub.js';
 export {
   registerGetCurrentSessionIdTool,
@@ -40,6 +41,7 @@ export {
   type SessionStatus,
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
+  type RemoteSessionsStatusResult,
 } from './archive_sessions.js';
 // multi-worker Phase 1 control tools
 export {
@@ -106,6 +108,10 @@ export {
   type ArchiveWorkerDeps,
 } from './archive_worker.js';
 export {
+  registerUpdateWorkerTool,
+  type UpdateWorkerDeps,
+} from './update_worker.js';
+export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
   type ModelDescriptor,
@@ -159,27 +165,34 @@ export {
 } from './bot_skills.js';
 export {
   registerBotWorkbenchTools,
-  WORKBENCH_BATCH_MAX,
+  glanceForModel,
   WORKBENCH_MESSAGE_MAX_CHARS,
+  type BotGlanceWire,
   type BotWorkbenchCallbacks,
-  type BotWorkbenchSnapshotWire,
   type BotWorkbenchToolDeps,
-  type WorkbenchAutomationWire,
-  type WorkbenchDigestWire,
-  type WorkbenchItemWire,
-  type WorkbenchJudgmentInputWire,
-  type WorkbenchJudgmentWire,
-  type WorkbenchProjectBriefWire,
-  type WorkbenchProjectWire,
-  type WorkbenchTaskStateWire,
-  type WorkbenchTaskWire,
+  type GlanceKindWire,
+  type GlanceRowWire,
   type WorkbenchTranscriptWire,
-  type WorkbenchVerdictWire,
 } from './bot_workbench.js';
+export {
+  registerGetTaskDigestTool,
+  boundTaskDigest,
+  TASK_DIGEST_MAX_BYTES,
+  TASK_DIGEST_TEXT_MAX,
+  type GetTaskDigestToolDeps,
+  type TaskDigestPhase,
+  type TaskDigestRoute,
+  type TaskDigestWire,
+} from './get_task_digest.js';
 export {
   registerCreateTeammateTool,
   type CreateTeammateCallbacks,
 } from './create_teammate.js';
+export {
+  registerTeammateHomeTools,
+  type TeammateHomeCallbacks,
+  type TeammateHomeComputerWire,
+} from './teammate_home.js';
 export {
   registerBotCapabilityTools,
   buildFindBotCapabilitiesDescription,
@@ -211,6 +224,7 @@ export type {
   HistoryPage,
   HistoryWorkdir,
   HistorySession,
+  HistoryCompanion,
   HistoryMessage,
   ListWorkdirsArgs,
   ListSessionsArgs,

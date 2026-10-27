@@ -26,6 +26,7 @@ import { and, eq, isNull, isNotNull, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
+import { noteSessionHidden } from '../hiddenSessionRegistry.js';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { pickSessionForWorkdir } from '../pluginWorkspaceDedupe';
@@ -76,7 +77,7 @@ export async function createPluginDraftSession(params: {
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
   };
   /**
@@ -143,11 +144,16 @@ export async function createPluginTaskSession(params: {
   agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
   permissionMode: 'ask' | 'plan' | 'acceptEdits' | 'auto';
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
   workingDir?: string;
+  /**
+   * 后台隐藏任务(插件声明 agent.hiddenTasks):同一次 INSERT 带上 hidden_at,
+   * 任务从不闪进列表;调用方不应再为它广播「新建」推送。
+   */
+  hidden?: boolean;
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
 }): Promise<string> {
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
@@ -157,7 +163,9 @@ export async function createPluginTaskSession(params: {
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
   const workspaceKind = projectDir ? ('project' as const) : ('dialogue' as const);
+  if (params.hidden) noteSessionHidden(id, true);
   const { row: insertRow } = await openSession({ id, now, source: 'plugin',
+    ...(params.hidden ? { hiddenAt: now } : {}),
     body: { workingDir: projectDir, workspaceKind, permissionMode: params.permissionMode,
       agentKind: params.agentKind, model: params.model, effort: params.effort,
       fastMode: params.fastMode, providerId: params.providerId,
@@ -185,6 +193,7 @@ export async function createPluginTaskSession(params: {
   log.info('[plugin-task] session created', {
     sessionId: id,
     ghostId: params.ghostId,
+    hidden: params.hidden === true,
     workspaceKind,
     workingDir: insertRow.workingDir,
   });

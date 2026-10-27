@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Platform, View, useWindowDimensions } from 'react-native';
+import { Platform, useWindowDimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
-import { SessionDetailsNativeHeading } from './SessionDetailsNative';
-import { Button, Group, HStack, Image, RNHostView, Text, ZStack } from '@expo/ui/swift-ui';
+import { Button, HStack, Image, Rectangle, Text, ZStack } from '@expo/ui/swift-ui';
 import {
   accessibilityAddTraits,
   accessibilityLabel,
@@ -11,7 +9,6 @@ import {
   contentShape,
   disabled,
   foregroundStyle,
-  onGeometryChange,
   frame,
   listRowInsets,
   shapes,
@@ -19,7 +16,9 @@ import {
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import { ComposerNativeRow } from './ComposerNativeRow';
-import { TaskMenuHeading, TaskTagsPanel, type TaskTagsCompactState } from './TaskTags';
+import { TaskTagsPanel, type TaskTagsCompactState } from './TaskTags';
+import { NativeTagSwatch, NativeTaskTagsExpanded } from './TaskTagsNative';
+import { TAG_SWATCH, taskTagsPageTitle, useTaskTagsNativePage } from './taskTagsNativePage';
 import { SessionActionSheet } from './SessionActionSheet';
 import type { RemoteSession } from './types';
 import { buildSessionActionMenu, type SessionSwipeAction } from './swipeRowRegistry';
@@ -43,57 +42,71 @@ export function SessionOptionsPresenter(props: SessionOptionsProps) {
   );
 }
 
+const SWATCH_CELL = 44;
+
 export function NativeTagShortcuts({ state }: { state: TaskTagsCompactState }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
-  // Reserve room for management, without shrinking the 44pt tap targets.
-  const count = Math.max(1, Math.min(7, Math.floor((width - 80) / 44) - 1));
+  // Even cells across the inset row; every cell keeps at least a 44pt target.
+  const cells = Math.max(2, Math.min(8, Math.floor((width - 56) / SWATCH_CELL)));
+  const count = Math.max(1, Math.min(7, cells - (state.canManage ? 1 : 0)));
+  const shown = state.tags.slice(0, count);
+  const filler = Math.max(0, cells - shown.length - (state.canManage ? 1 : 0));
+  const cell = [frame({ maxWidth: Infinity, minHeight: 52 }), contentShape(shapes.rectangle())];
   return (
     <Section title={t('taskTags.title')}>
       {state.tags.length > 0 || state.canManage ? (
         <HStack
           spacing={0}
-          modifiers={[listRowInsets({ leading: 8, trailing: 8, top: 4, bottom: 4 })]}
+          modifiers={[listRowInsets({ leading: 8, trailing: 8, top: 2, bottom: 2 })]}
         >
-          {state.tags.slice(0, count).map((tag) => (
+          {shown.map((tag) => (
             <Button
               key={tag.id}
               onPress={() => state.onToggle(tag.id)}
               modifiers={[
                 buttonStyle('plain'),
+                frame({ maxWidth: Infinity }),
                 disabled(state.disabled),
                 accessibilityLabel(tag.name),
                 accessibilityAddTraits(tag.selected ? ['isSelected'] : []),
               ]}
             >
-              <ZStack
-                modifiers={[frame({ width: 44, height: 44 }), contentShape(shapes.rectangle())]}
-              >
-                <Image systemName="circle.fill" size={iconSize.action} color={tag.color} />
-                <Image systemName="circle" size={iconSize.action} color={colors.border} />
-                {tag.selected ? (
-                  <Image systemName="checkmark" size={iconSize.xs} color={tag.checkColor} />
-                ) : null}
+              <ZStack modifiers={cell}>
+                <NativeTagSwatch {...tag} size={TAG_SWATCH.picker} />
               </ZStack>
             </Button>
           ))}
           {state.canManage ? (
             <Button
               onPress={state.onManage}
+              testID="home.sessionActions.tags.manage"
               modifiers={[
                 buttonStyle('plain'),
-                accessibilityLabel(t('taskTags.title')),
+                frame({ maxWidth: Infinity }),
+                accessibilityLabel(t('taskTags.more')),
               ]}
             >
-              <ZStack
-                modifiers={[frame({ width: 44, height: 44 }), contentShape(shapes.rectangle())]}
-              >
-                <Image systemName="circle" size={iconSize.action} color={colors.border} />
-                <Image systemName="ellipsis" size={iconSize.xs} color={colors.textSecondary} />
+              <ZStack modifiers={cell}>
+                <NativeTagSwatch
+                  color={colors.surfaceChip}
+                  checkColor={colors.textSecondary}
+                  outlined={false}
+                  selected={false}
+                  size={TAG_SWATCH.picker}
+                />
+                <Image systemName="ellipsis" size={iconSize.sm} color={colors.textSecondary} />
               </ZStack>
             </Button>
           ) : null}
+          {/* Keep cell widths stable when there are fewer tags than cells. */}
+          {Array.from({ length: filler }, (_, index) => (
+            <Rectangle
+              key={`filler-${index}`}
+              modifiers={[foregroundStyle('clear'), frame({ maxWidth: Infinity, minHeight: 52 })]}
+            />
+          ))}
         </HStack>
       ) : null}
       {state.message ? (
@@ -121,9 +134,8 @@ function SessionOptionsExpoSheet({
 }: SessionOptionsProps) {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { width } = useWindowDimensions();
-  const [headingWidth, setHeadingWidth] = useState<number | null>(null);
   const [tagsExpanded, setTagsExpanded] = useState(false);
+  const tagPage = useTaskTagsNativePage();
   useEffect(() => {
     if (!visible) setTagsExpanded(false);
   }, [visible]);
@@ -134,38 +146,19 @@ function SessionOptionsExpoSheet({
   const destructive = menu.filter(
     (item) => item.destructive || item.action === 'archive' || item.action === 'restore',
   );
+  const page = tagsExpanded ? (tagPage.page ?? 'list') : null;
 
   return (
     <ComposerSheet
       visible={visible}
-      title=""
-      nativeHeader={
-        session ? (
-          <>
-            <SessionDetailsNativeHeading
-              title={projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle'))}
-              backLabel={t('taskTags.back')}
-            />
-            <Group
-              modifiers={[
-                frame({ maxWidth: Infinity }),
-                onGeometryChange(({ width: measured }) => {
-                  if (measured > 0) setHeadingWidth(measured);
-                }),
-              ]}
-            >
-              <RNHostView matchContents>
-                <View style={{ width: headingWidth ?? width }}>
-                  <TaskMenuHeading session={session} showTitle={false} />
-                </View>
-              </RNHostView>
-            </Group>
-          </>
-        ) : undefined
-      }
+      // The row the user swiped already names the task; only tag pages need a title.
+      title={page ? taskTagsPageTitle(page, t) : ''}
+      onBack={page ? tagPage.back : undefined}
+      backDisabled={page ? tagPage.backDisabled : false}
+      backLabel={t('taskTags.back')}
       onClose={onClose}
       onClosed={onClosed}
-      nativeContent={!tagsExpanded}
+      nativeContent
       testID="home.sessionActions"
     >
       {!tagsExpanded ? (
@@ -187,6 +180,8 @@ function SessionOptionsExpoSheet({
           expanded={tagsExpanded}
           onExpandedChange={setTagsExpanded}
           renderCompact={(state) => <NativeTagShortcuts state={state} />}
+          renderExpanded={(state) => <NativeTaskTagsExpanded state={state} />}
+          onPageChange={tagPage.onPageChange}
         />
       ) : null}
       {!tagsExpanded ? (

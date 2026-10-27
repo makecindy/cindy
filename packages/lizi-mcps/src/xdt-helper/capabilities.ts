@@ -17,6 +17,7 @@
  *    因为后者是 Cindy 最差异化的能力,值得独立索引项让模型一眼能查到。
  */
 
+import { RICH_ANSWER_GUIDE } from '@cindy/maker-shared/rich-answer-guide';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 export interface CapabilityEntry {
@@ -27,6 +28,12 @@ export interface CapabilityEntry {
 }
 
 export const CAPABILITIES: readonly CapabilityEntry[] = [
+  {
+    key: 'rich-answers',
+    title: '流式正文与可组合组件',
+    oneLiner: '模型可自由组合正文图文、图表与交互控件，增量更新；按需查询组件协议，不要求另存 HTML。',
+    detail: RICH_ANSWER_GUIDE,
+  },
   {
     key: 'grok-login',
     title: 'Grok / SuperGrok 授权登录',
@@ -47,6 +54,22 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【源码范围】该仓库是客户端本体(desktop、mobile 及共享 packages 的 pnpm monorepo), 服务端不在其中也不开源。安装版不携带源码, agent 侧无法推断用户是否 clone 过、clone 在哪: 要读改源码就让用户给路径或用工程模式打开, 不要假设固定路径, 更不要因为工作目录里出现品牌名就断定当前目录是源码仓库。`,
       `【版本号不要猜】本条不含版本号。CN 版可在"设置 → 关于"看到客户端版本; 国际版该页当前不展示它(只有更新开关与 agent 二进制版本), 别把用户支使过去空找。用 submit_github_issue 提反馈时客户端版本 / OS / 界面语言由系统自动附加, 不用 agent 填。`,
       `【模型怎么来】登录官方 ${BRAND_NAME} 服务按量透明扣费、授权已付费的 Claude Code / Codex Coding Plan 继续用(不重复付费)、接自己的 API key, 或跑本地模型。价格见对应区域官网。`,
+    ].join(' '),
+  },
+  {
+    key: 'self-management',
+    title: '自我管理(Agent 管理用户自己的任务 / 定时任务 / 项目 / 伙伴)',
+    oneLiner:
+      '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
+    detail: [
+      '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
+      '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
+      '【定时任务】cindy_scheduler：schedule_list / get / list_runs(device=local|all|<deviceId>，list 可用 query 做文本筛选)与 schedule_update / pause / resume / delete / run_now(device=<deviceId>)可跨电脑；schedule_create、schedule_set_pre_run_hook、当前运行的通知设置仅本机；本机定时任务可用 agentDeviceId 让每次新建的任务在其它电脑或分享来的供应商上运行（schedule_list_models 查位置与模型）。',
+      '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents / send_to_agent 可跨电脑(deviceId::botId)；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力、待办、后台任务仅本机。list_teammate_projects / set_teammate_project 读取与修改自身关联项目，资料按需读取，关联不授予任务责任或执行权限。',
+      '【自动跟进】宿主在任务卡住、等主人、出错、撞用量上限、做完时叫醒负责跟进的伙伴(内置例行任务)。伙伴先 get_task_digest 读摘要，再用 continue_workbench_task 让任务继续、send_to_session 代答低风险问题、set_session_runtime 换到 suggested_route(仅本机)、update_teammate_todo 记下要主人处理的事。get_workbench 是工作台「一眼」(等你 / 在做，仅本机投影)；负责「自动跟进所有任务」的伙伴可读取与继续另一台在线电脑上的任务(read_workbench_task / continue_workbench_task 传 deviceId::sessionId)，别的伙伴开的任务默认只读不继续(TASK_FOLLOWED_BY_OTHER_BOT，主人可在那位伙伴的设置里交出来)；其它伙伴只碰自己开的或接手的任务。',
+      '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。',
+      '【尚无工具】在另一台电脑上新建任务或定时任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。',
     ].join(' '),
   },
   {
@@ -78,7 +101,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【怎么开】用户表达"用 worker / 协同模式 / 独立 agent / 派一个 agent 帮我 X"等意图时, Lead 调 start_team 工具创建 team, 再调 create_worker 工具添加 worker。worker 创建后可通过 send_to_worker 派活, 通过 list_workers 查看所有 worker, 通过 switch_focus 切换 focused worker。',
       '【怎么关】用户表达"够了 / 关掉 worker / 不要协同了"时, Lead 调 end_team 结束整个 team(归档所有 worker), 或调 archive_worker 归档单个 worker。Lead 自身保留可继续单 session 对话。',
       '【硬边界】Worker session 不能再开 team(嵌套禁止, 返 WORKER_CANNOT_NEST);Claude Code / Codex / Pi 本地项目或对话 session 都可以作为 Lead 调 start_team,也都可以作为 Worker;SSH 远程 Lead 与 Worker 当前只支持 Claude Code / Codex;Worker 不能结束自己所在 team(返 WORKER_CANNOT_DISABLE);要求 Lead session 有 workingDir。',
-      '【工具归属】17 个 team 工具(start_team / create_worker / create_workers / send_to_worker / interrupt_worker / get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages / steer_queued_message / move_queued_message / list_workers / switch_focus / idle_worker / end_team / archive_worker / list_available_models)在独立的 cindy_orca server 直接顶层注册, 对应"协同模式"可关插件(Settings → Connections → Built-in Tools)。通用 session handoff 原语 send_to_session 在 essential 的 cindy_helper 的 handoff 类目下(走 call_tool, 常开, 供 skill 路由用)。',
+      '【工具归属】18 个 team 工具(start_team / create_worker / create_workers / send_to_worker / interrupt_worker / get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages / steer_queued_message / move_queued_message / list_workers / switch_focus / idle_worker / end_team / archive_worker / update_worker / list_available_models)在独立的 cindy_orca server 直接顶层注册, 对应"协同模式"可关插件(Settings → Connections → Built-in Tools)。通用 session handoff 原语 send_to_session 在 essential 的 cindy_helper 的 handoff 类目下(走 call_tool, 常开, 供 skill 路由用)。',
       `【与 Claude Code Task tool / Codex subagent 的区别】Task / subagent 是 agent 框架内的子任务派发机制(子 agent 跑在同一 SDK 进程内、有限工具集、生命周期短、对话历史归属父 turn);${BRAND_NAME} 协同模式是业务层的 session 级编排(Lead/Worker 都是完整独立的 ${BRAND_NAME} session, 独立进程、UI 栏位、完整工具、独立对话历史, 长生命周期, 通过 main 进程 IPC + MCP bridge 通信)。两者不互斥, Worker 内部仍可用 Task/subagent 派子任务。`,
       '【手动入口】ChatInput「+」菜单里的「协同模式」项,开启态用橙色 UsersRound 图标与文字标识;用户也能在这里手动开/关,与本工具走同一份业务代码。',
     ].join(' '),
@@ -91,8 +114,9 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【是什么】get_current_session_id(cindy_helper 自省类)+ send_to_worker(cindy_orca team 工具)/ send_to_session(cindy_helper handoff 类, 走 call_tool)配合使用。前者返回当前 ${BRAND_NAME} session 的 business id / agent_kind / working_dir, 后两者把一条控制层消息投递到指定 session;目标不在内存时会自动 resume, 投递成功即返回。`,
       '【典型场景】自动化 skill 首次处理某个外部业务对象(issue / jira / pr / 任意自定义 key)时, 先调 get_current_session_id 拿 session_id 并把它和外部 key 做持久化绑定;后续二次处理同一对象时, 调 send_to_worker(team 内 worker)或 send_to_session(任意已知 session)把增量信息 handoff 回那个 session, 保留原始上下文、决策链和历史工具调用。',
       '【skill 端伪代码】first_seen -> sid = get_current_session_id(); store(key, sid.session_id); later -> sid = load(key); if sid then send_to_worker / send_to_session({ target_session_id: sid, message: "...增量..." }) else fallback normal flow。',
+      '【跨电脑】target_session_id 传 deviceId::sessionId(list_sessions 用 device 参数查到的 id)可发给另一台电脑上的既有任务,对方电脑需在线并开启远程控制;不能在另一台电脑新建任务。',
       '【硬规则】send_to_session 要发给已有任务时 target_session_id 必传;不知道 id 先用 history 类目的 list_sessions 查。完全省略该参数不会报错,而是 create:静默新建一个专属任务、把消息当首条输入并立刻跑一轮,返回 wake_kind=created 和 note。只有明确要为业务对象新建专属任务时才省略;拿到 created 不等于已投给既有任务。',
-      '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档,skill 自己决定是否回退或等待未来的 unarchive 能力; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
+      '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档，在已有恢复授权时可先用 control/unarchive_sessions 恢复，再发送新消息，不能自行推翻用户归档意图; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
       '【边界】它不是普通聊天入口,而是 session 间 handoff 的控制层能力;不会自动关闭当前 dispatcher session,也不会替 skill 管理绑定键的存储语义。',
     ].join(' '),
   },
@@ -100,10 +124,11 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     key: 'session-control',
     title: '会话控制面(队列 / 插话 / 停止 / 运行探针)',
     oneLiner:
-      'agent 可观察任意本机会话队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止。',
+      'agent 可观察本机任务的队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止(仅本机任务)。',
     detail: [
+      '【授权】主人私聊输入及宿主实时核验的群内主人请求沿用普通任务权限流程，不另加行动确认卡。访客、转入消息及群授权核验暂不可用不算主人输入。自动唤醒、跟进责任与可用工具不增加操作授权。观察可以自动进行；发消息、插话、队列修改、停止、代答、恢复及模型/账号变更必须符合主人已委托的任务与动作范围，否则先展示目标、动作和内容并等待确认。',
       '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session_queued_message、move_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
-      '【伙伴入口】伙伴不挂载通用 control 类。只管理自己拥有的后台任务：message_session_task 的 queue / steer / resume 分别表示排队、同轮插话、恢复暂停；stop_session_task 的 cancel / request-stop / pause 分别表示取消任务、请求当前轮停止、保留任务与队列的可恢复暂停。check_session_task 的 control 区分 pausing / paused；requested 或 unconfirmed 不能当作已停。不支持的引擎明确返回失败。',
+      '【伙伴入口】伙伴可发现通用 control 类；主人请求沿用普通权限流程，自动轮次的实际写入须通过 Host 行动授权。自己的后台任务优先用专属入口：message_session_task 的 queue / steer / resume 分别表示排队、同轮插话、恢复暂停；stop_session_task 的 cancel / request-stop / pause 分别表示取消任务、请求当前轮停止、保留任务与队列的可恢复暂停。check_session_task 的 control 区分 pausing / paused；requested 或 unconfirmed 不能当作已停。不支持的引擎明确返回失败。',
       '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。steer_session_queued_message / move_session_queued_message 把排队消息转为插话或调整顺序,可操作范围另含自己任务队列里由其它任务 / 协同成员发来的机器消息;没插成时消息留在队列并返回 reason。',
       '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
       '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
@@ -118,8 +143,9 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '会话列表带搜索、按时间和工程目录组织。',
       'Fork:在任意历史消息处分裂出新会话,继承到该点为止的全部上文。',
       'Rewind:在当前会话回到历史点,改写发送内容后重新运行,原分支被替换。',
-      'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换)。',
-      '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。',
+      'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换；跨电脑传 deviceId::sessionId，单次限定一台电脑)。',
+      '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。恢复不启动执行、不发旧消息、不恢复暂停自动化；之后可用 send_to_session 发送新消息。',
+      '本机批次原子写入；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
       '以上操作都不破坏原数据,可放心试错。',
     ].join(' '),
   },
@@ -160,11 +186,12 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
     key: 'scheduler',
     title: '自动化调度',
-    oneLiner: '按 cron 规则自动跑任务(定期分析、工单分拣等),含执行历史,agent 也能通过 MCP 工具自助管理。',
+    oneLiner: '按 cron 规则自动跑任务(定期分析、工单分拣等),含执行历史,agent 也能通过 MCP 工具自助管理,包括其它电脑上的定时任务。',
     detail: [
       '基于 cron 表达式创建定时任务,常见用法是每天定时跑 AI 工单分拣或周报生成。',
       'GUI 展示任务列表、上次执行结果、失败原因。已执行项可加黑名单防重复。',
       'agent 也能通过 MCP 工具(schedule_create / list / get / update / pause / resume / run_now / delete / list_runs)自助创建和管理调度,GUI 与 MCP 看到同一份数据。',
+      '定时任务保存在各自的电脑上,工具默认只作用于本机:schedule_list / get / list_runs 传 device="all" 或某台电脑的 deviceId 可查其它在线且已开启远程控制的电脑(结果按电脑分组,没查到的电脑写明原因),update / pause / resume / delete / run_now 传 device=<deviceId> 可管理那台电脑上的任务;新建只在本机。',
       '后端 SQLite 存储,有独立 Scheduler Host 进程管理生命周期。',
     ].join(' '),
   },
@@ -173,9 +200,11 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '聊天历史查询(本机与在线已授权电脑)',
     oneLiner: 'agent 可发现、列出和搜索本机与在线已授权电脑的聊天历史，并按任务读取内容。',
     detail: [
+      '【引用任务】任务元数据的 sessionUrl 可直接写成 [任务标题](sessionUrl)；已知 id 只需链接时用 get_task_digest，无需读取完整聊天。',
       `【是什么】${BRAND_NAME} 的对话历史保存在各电脑的本地 SQLite。cindy_helper 的 history 类提供只读查询入口，让 agent 按宿主授予的范围读取历史，协助用户组织 memory / 知识库。`,
-      '【六个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口; (6)list_history_devices: 发现本机与在线已授权电脑。',
-      '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
+      '【六个工具】(1)list_workdirs: 列出本机出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口; (6)list_history_devices: 发现本机与在线已授权电脑。',
+      '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO, time_field: "activity"}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
+      '【伙伴跨渠道】get_teammate_state 返回本机连接；list_sessions / search_chat_history 使用 teammate_id=profile.id 匹配已保存的归属，含归档、旧历史和话题。按话题搜索不默认限制 workdir 或创建时间。旧 IM 未关联记录仍可在原有账号权限内按内容查询，结果 companion=null 不代表属于当前伙伴；当前连接、目录或名字都不能补造归属。source 是原始任务来源，伙伴渠道看 companion.channel 和消息来源。',
       '【跨设备】list_history_devices 发现设备；list_sessions / search_chat_history 传 device="all" 查询本机与在线已授权电脑，或 device=<设备 ID> 指定电脑。结果按设备分组，每组独立翻页，partial 表示有设备未查到。远程任务 ID 带 deviceId:: 前缀，可直接传给 get_chat_history；不读取离线缓存，旧端不支持会明确报告。默认 device="local" 保持原本机查询。',
       '【向量是增益不是依赖】search_chat_history 在用户没开 embedding / sqlite-vec 不可用时静默退化为纯 FTS, 搜索照常工作; 响应里 vector_used 标明向量是否生效。',
       '【分页】任务列表与聊天读取可用 hasMore + nextCursor 持续翻页；跨设备时每台电脑独立翻页。搜索受候选池上限约束，pool_capped=true 时应缩小查询范围，不能声称已经穷尽全部匹配。',

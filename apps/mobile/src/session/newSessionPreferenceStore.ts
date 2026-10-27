@@ -8,6 +8,7 @@ import {
   normalizeNewSessionAgentKind,
   type NewSessionAgentKind,
   type NewSessionDeviceOption,
+  type NewSessionRemoteAgentPick,
   type NewSessionStoredPreferences,
   type NewSessionWorkspaceKind,
 } from '@/session/newSession';
@@ -22,6 +23,8 @@ export interface NewSessionPreferencePatch {
   permissionModeForAgent?: { agentKind: NewSessionAgentKind; mode: string };
   /** 记住某台被控电脑上次显式选择的项目目录(单键合并进 workingDirByDevice;空值被忽略,#4103)。 */
   workingDirForDevice?: { deviceId: string; workingDir: string };
+  /** 记住(pick)或清掉(null)某台被控电脑上某 agent 选的另一台电脑 / 分享来的模型。 */
+  remoteAgentForDevice?: { deviceId: string; agentKind: NewSessionAgentKind; pick: NewSessionRemoteAgentPick | null };
 }
 
 export async function readNewSessionPreferences(): Promise<NewSessionStoredPreferences> {
@@ -29,17 +32,24 @@ export async function readNewSessionPreferences(): Promise<NewSessionStoredPrefe
   const owner = getMobileAuthOwner();
   await writeChain;
   const preferences = await loadNewSessionPreferences(owner.accountKey);
-  return isMobileAuthOwnerCurrent(owner) ? preferences : { ...preferences, workingDirByDevice: {} };
+  return isMobileAuthOwnerCurrent(owner)
+    ? preferences
+    : { ...preferences, workingDirByDevice: {}, remoteAgentByDevice: {} };
 }
 
 function workingDirStorageKey(accountId: string): string {
   return `${STORAGE_KEY}.working-directories.${encodeURIComponent(accountId)}`;
 }
 
+function remoteAgentStorageKey(accountId: string): string {
+  return `${STORAGE_KEY}.remote-agents.${encodeURIComponent(accountId)}`;
+}
+
 async function loadNewSessionPreferences(accountId: string): Promise<NewSessionStoredPreferences> {
-  const [raw, directories] = await Promise.all([
+  const [raw, directories, remoteAgents] = await Promise.all([
     AsyncStorage.getItem(STORAGE_KEY).catch(() => null),
     accountId ? AsyncStorage.getItem(workingDirStorageKey(accountId)).catch(() => null) : null,
+    accountId ? AsyncStorage.getItem(remoteAgentStorageKey(accountId)).catch(() => null) : null,
   ]);
   let preferences = emptyPreferences();
   try {
@@ -52,6 +62,11 @@ async function loadNewSessionPreferences(accountId: string): Promise<NewSessionS
     if (directories) preferences.workingDirByDevice = normalizeWorkingDirByDevice(JSON.parse(directories));
   } catch {
     // A malformed directory map must not prevent loading the other preferences.
+  }
+  try {
+    if (remoteAgents) preferences.remoteAgentByDevice = normalizeRemoteAgentByDevice(JSON.parse(remoteAgents));
+  } catch {
+    // Same as directories: a malformed map only loses this memory.
   }
   return preferences;
 }
@@ -76,6 +91,8 @@ async function writeNewSessionPreferences(
   const workingDirDeviceId = workingDirPatch?.deviceId.trim() ?? '';
   // 路径原样保存(macOS / Linux 允许目录名首尾带空格,浏览器也原样返回);只用 trim 判空。
   const workingDirValue = workingDirPatch && workingDirPatch.workingDir.trim() ? workingDirPatch.workingDir : '';
+  const remoteAgentPatch = patch.remoteAgentForDevice;
+  const remoteAgentDeviceId = remoteAgentPatch?.deviceId.trim() ?? '';
   const next: NewSessionStoredPreferences = {
     agentKind: patch.agentKind ?? current.agentKind,
     workspaceKind: patch.workspaceKind ?? current.workspaceKind,
@@ -90,18 +107,39 @@ async function writeNewSessionPreferences(
       workingDirDeviceId && workingDirValue
         ? { ...current.workingDirByDevice, [workingDirDeviceId]: workingDirValue }
         : current.workingDirByDevice,
+    remoteAgentByDevice: remoteAgentPatch && remoteAgentDeviceId
+      ? withRemoteAgentPick(current.remoteAgentByDevice, remoteAgentDeviceId, remoteAgentPatch.agentKind, remoteAgentPatch.pick)
+      : current.remoteAgentByDevice,
   };
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next))).catch(() => undefined);
   if (workingDirDeviceId && workingDirValue && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
     await AsyncStorage.setItem(workingDirStorageKey(owner.accountKey), JSON.stringify(next.workingDirByDevice)).catch(() => undefined);
   }
+  if (remoteAgentDeviceId && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
+    await AsyncStorage.setItem(remoteAgentStorageKey(owner.accountKey), JSON.stringify(next.remoteAgentByDevice)).catch(() => undefined);
+  }
+}
+
+function withRemoteAgentPick(
+  current: NewSessionStoredPreferences['remoteAgentByDevice'],
+  deviceId: string,
+  agentKind: NewSessionAgentKind,
+  pick: NewSessionRemoteAgentPick | null,
+): NewSessionStoredPreferences['remoteAgentByDevice'] {
+  const { [agentKind]: _previous, ...others } = current[deviceId] ?? {};
+  const byAgent = pick ? { ...others, [agentKind]: { ...pick, agentKind } } : others;
+  const { [deviceId]: _device, ...rest } = current;
+  return Object.keys(byAgent).length > 0 ? { ...rest, [deviceId]: byAgent } : rest;
 }
 
 export function clearNewSessionPreferences(): Promise<void> {
   const owner = getMobileAuthOwner();
   const next = writeChain.then(async () => {
     await AsyncStorage.removeItem(STORAGE_KEY);
-    if (owner.accountKey) await AsyncStorage.removeItem(workingDirStorageKey(owner.accountKey));
+    if (owner.accountKey) {
+      await AsyncStorage.removeItem(workingDirStorageKey(owner.accountKey));
+      await AsyncStorage.removeItem(remoteAgentStorageKey(owner.accountKey));
+    }
   });
   writeChain = next.catch(() => undefined);
   return writeChain;
@@ -114,6 +152,7 @@ function emptyPreferences(): NewSessionStoredPreferences {
     device: null,
     permissionModeByAgent: {},
     workingDirByDevice: {},
+    remoteAgentByDevice: {},
   };
 }
 
@@ -125,6 +164,33 @@ function normalizeWorkingDirByDevice(value: unknown): Record<string, string> {
     const id = deviceId.trim();
     // 目录原样保留(首尾空格可能是路径的一部分),只剔除非字符串 / 纯空白。
     if (id && typeof workingDir === 'string' && workingDir.trim()) out[id] = workingDir;
+  }
+  return out;
+}
+
+function normalizeRemoteAgentByDevice(value: unknown): NewSessionStoredPreferences['remoteAgentByDevice'] {
+  const record = readRecord(value);
+  if (!record) return {};
+  const out: NewSessionStoredPreferences['remoteAgentByDevice'] = {};
+  for (const [controlledDeviceId, byAgentValue] of Object.entries(record)) {
+    const byAgent = readRecord(byAgentValue);
+    if (!controlledDeviceId.trim() || !byAgent) continue;
+    const picks: Partial<Record<NewSessionAgentKind, NewSessionRemoteAgentPick>> = {};
+    for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+      const pick = readRecord(byAgent[agentKind]);
+      const deviceId = readString(pick?.deviceId);
+      const model = readString(pick?.model);
+      if (!pick || !deviceId || !model) continue;
+      picks[agentKind] = {
+        deviceId,
+        agentKind,
+        model,
+        providerId: readString(pick.providerId),
+        effort: typeof pick.effort === 'string' ? pick.effort : '',
+        fastMode: (pick.fastMode === 'ultrafast' ? 'ultrafast' : pick.fastMode === true),
+      };
+    }
+    if (Object.keys(picks).length > 0) out[controlledDeviceId.trim()] = picks;
   }
   return out;
 }
@@ -162,6 +228,7 @@ function normalizeStoredPreferences(value: unknown): NewSessionStoredPreferences
       : null,
     permissionModeByAgent: normalizePermissionModeByAgent(record.permissionModeByAgent),
     workingDirByDevice: {},
+    remoteAgentByDevice: {},
   };
 }
 
@@ -208,4 +275,5 @@ function readString(value: unknown): string | null {
 export const __testing = {
   storageKey: STORAGE_KEY,
   workingDirStorageKey,
+  remoteAgentStorageKey,
 };

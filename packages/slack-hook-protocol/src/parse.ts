@@ -157,6 +157,22 @@ function validateHello(p: Record<string, unknown>): string | null {
   if (p.lifecycleAnnouncement !== undefined && typeof p.lifecycleAnnouncement !== 'boolean') {
     return 'hello.lifecycleAnnouncement must be a boolean when present';
   }
+  if (p.statusReactions !== undefined) {
+    const r = p.statusReactions;
+    const name = (v: unknown): v is string =>
+      typeof v === 'string' && v.length > 0 && v.length <= 64 && !/\s/.test(v);
+    const pool = (v: unknown, max: number): boolean =>
+      Array.isArray(v) && v.length > 0 && v.length <= max && v.every(name);
+    if (
+      !isPlainObject(r) ||
+      !name(r.queued) ||
+      !name(r.error) ||
+      !pool(r.processing, 16) ||
+      (r.expressiveError !== undefined && !pool(r.expressiveError, 64))
+    ) {
+      return 'hello.statusReactions must contain bounded reaction names and non-empty pools';
+    }
+  }
   // defaultWorkspace 可选(旧 desktop 不发 = 无默认)。成员关系在协议层卡死:
   // server 只能派发 workspaces 内的别名, 默认值若能指向清单外的别名, 等于给
   // 这条约束开了后门 —— 而它恰恰是 server 侧派发校验的唯一依据。

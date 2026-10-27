@@ -8,7 +8,7 @@ vi.mock('react-native', () => ({
   Pressable: ({ onPress, children }: any) => createElement('button', { onClick: onPress }, children),
   Switch: ({ accessibilityLabel, value, disabled, onValueChange }: any) => createElement('input', { type: 'checkbox', 'aria-label': accessibilityLabel, checked: value, disabled, onChange: (e: any) => onValueChange(e.target.checked) }),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key, i18n: { language: 'en' } }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => h.uuid() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
 vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.submit(...args) }));
@@ -226,4 +226,28 @@ it('submits sparse 100,000-entry choices using bounded actions with the original
     text += request.input.selectionChunk.text;
   }
   expect(JSON.parse(text)).toMatchObject({ entryIds: [], entryRanges: entries.filter(entry => entry.selected).map(entry => { const index = Number(entry.id.slice(6)); return [index, index]; }), deferSetup: true });
+});
+
+it('advertises the bots category and shows bots with the handover note, owner alternatives and source-disabled bots', async () => {
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'openclaw' }] } : id.startsWith('preview:') ? { preview: { id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'openclaw' }, entries: [
+      { id: 'owner-a', name: 'Ada', category: 'bots', platform: 'discord', owner: '111111111111111111', selected: false, exclusiveWith: ['owner-b'] },
+      { id: 'owner-b', name: 'Ada', category: 'bots', platform: 'discord', owner: '222222222222222222', selected: false, exclusiveWith: ['owner-a'] },
+      { id: 'lark', name: 'Work', category: 'bots', platform: 'feishu', owner: 'ou_fixture', selected: false, enabled: false },
+    ] } } : { result: null } }] };
+  });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  expect(h.invoke.mock.calls[0]![2][0].client.primitives).toContain('companion-import-bots-v1');
+  const click = async (text: string) => { await act(async () => { const button = [...container.querySelectorAll('button')].find(button => button.textContent?.startsWith(text)); expect(button).toBeDefined(); button!.click(); }); };
+  await click('Ada · OpenClaw');
+  expect(container.textContent).toContain('devices.companionImport.botsNote OpenClaw');
+  await click('devices.companionImport.bots');
+  // A short list needs no search field.
+  expect(container.querySelector('input:not([type="checkbox"])')).toBeNull();
+  expect(container.textContent).toContain('devices.companionImport.botOwner 222222222222222222');
+  expect(container.textContent).not.toContain('devices.companionImport.botOwner ou_fixture');
+  expect(container.textContent).toContain('devices.companionImport.sourceDisabled');
+  expect(container.querySelector('[aria-label="message.renderer.imPlatform.feishu · Work"]')).not.toBeNull();
 });

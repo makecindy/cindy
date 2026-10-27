@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
@@ -100,11 +101,25 @@ describe('task page schedule index gate', () => {
     expect(sessionMayHaveScheduleRuns('mac', 'ordinary', 'desktop')).toBe(true);
   });
 
-  it('gates the task page read-marking scan before it starts', () => {
+  it('gates the task page read-marking scan before it starts', async () => {
     const page = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r\n/g, '\n');
-    const effect = page.slice(page.indexOf('const cancel = deferScheduleIndexHydration(() => {'));
-    expect(effect.indexOf('if (!sessionMayHaveScheduleRuns(deviceId, sessionId, sessionSourceForSchedule)) return;'))
-      .toBeLessThan(effect.indexOf('markSessionScheduleRunsRead(maker, sessionId, deviceId, isActive'));
-    expect(page).toContain('scheduleNoticeSource, sessionId, sessionSourceForSchedule]));');
+    const tree = ts.createSourceFile('session.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let effect: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isCallExpression(node) && node.expression.getText(tree) === 'deferScheduleIndexHydration') effect = node.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!effect) throw new Error('Missing production schedule hydration callback');
+    const markSessionScheduleRunsRead = vi.fn(async () => undefined);
+    const f = maker();
+    await loadSharedSessionScheduleIndex('mac', f.maker);
+    for (const sessionId of ['ordinary', 'pr-task']) {
+      const bindings = { sessionMayHaveScheduleRuns, deviceId: 'mac', sessionId, sessionSourceForSchedule: undefined,
+        withTransientRemoteRetry: async (operation: () => unknown) => operation(), markSessionScheduleRunsRead, maker: f.maker,
+        isActive: () => true, setScheduleFailure: vi.fn(), scheduleNoticeSource: 'test' };
+      new Function(...Object.keys(bindings), `return (${effect.getText(tree)})();`)(...Object.values(bindings));
+      expect(markSessionScheduleRunsRead).toHaveBeenCalledTimes(sessionId === 'ordinary' ? 0 : 1);
+    }
   });
 });

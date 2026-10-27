@@ -128,6 +128,10 @@ describe('sidebar display settings menu', () => {
     expect(rows[0].textContent).toContain('项目、对话、设备');
     expect(rows[2].textContent).toContain('跟随任务');
     const submenu = await openSubmenu(/^任务排序/);
+    // PR #6196: preserve the historical glass-menu clipping regression through
+    // real unit DOM containment; content/click assertions alone miss a lost portal.
+    expect(root.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
     expect(
       within(submenu)
         .getAllByRole('menuitem')
@@ -162,6 +166,21 @@ describe('sidebar display settings menu', () => {
     fireEvent.click(within(harness).getByRole('menuitem', { name: 'Pi' }));
     expect(filter.setVendor).toHaveBeenCalledWith('pi');
     expect(screen.getAllByRole('menu').length).toBeGreaterThan(1);
+  });
+
+  it('marks the trigger with a dot only while the list shows archived tasks', () => {
+    // Dash 反馈:切到「已归档」后列表和平常几乎一样,误以为内容没更新。
+    // 「全部」不提醒,所以不能用 status !== 'active' 代替。
+    const dot = (status: 'active' | 'archived' | 'all') => {
+      const { unmount } = render(
+        <SidebarFilterPopover filter={makeFilter({ status })} allKnownProjects={[]} open={false} />,
+      );
+      const trigger = screen.getByRole('button', { name: /^侧边栏显示设置/ });
+      const found = trigger.querySelector('span[aria-hidden]') !== null;
+      unmount();
+      return found;
+    };
+    expect([dot('active'), dot('archived'), dot('all')]).toEqual([false, true, false]);
   });
 
   it('hides unavailable grouping choices and their summary without clearing saved device preference', async () => {

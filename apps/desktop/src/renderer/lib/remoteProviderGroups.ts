@@ -38,6 +38,11 @@ export interface RemoteProviderGroups {
   memberOf: ReadonlyMap<string, RemoteProviderGroupEntry>;
 }
 
+export interface CollectRemoteProviderGroupsOptions {
+  /** 设置页需要保留关闭远程调用的组，以便仍能进入组管理；模型列表默认不保留。 */
+  includeDisabledGroups?: boolean;
+}
+
 /**
  * @param catalogs 列表里此刻在线的其他电脑的目录(带组摘要)。
  * @param localGroups 任务所在电脑自己建的组(按供应商 id；本机任务时是本机的组)：它们的组员同样收起，组那一项
@@ -46,6 +51,7 @@ export interface RemoteProviderGroups {
 export function collectRemoteProviderGroups(
   catalogs: Iterable<{ deviceId: string; providers: readonly ProviderView[] }>,
   localGroups: Readonly<Record<string, ProviderGroupConfig>> = {},
+  options: CollectRemoteProviderGroupsOptions = {},
 ): RemoteProviderGroups {
   const groups = new Map<string, ProviderGroupConfig>();
   const memberOf = new Map<string, RemoteProviderGroupEntry>();
@@ -59,9 +65,9 @@ export function collectRemoteProviderGroups(
   };
   for (const { deviceId, providers } of catalogs) {
     for (const provider of providers) {
-      if (provider.remoteInvocationEnabled !== true) continue;
       const config = remoteProviderGroupOf(provider);
       if (!config) continue;
+      if (provider.remoteInvocationEnabled !== true && !options.includeDisabledGroups) continue;
       groups.set(remoteProviderEntryKey(deviceId, provider.id), config);
       addMembers({ deviceId, providerId: provider.id }, config);
     }

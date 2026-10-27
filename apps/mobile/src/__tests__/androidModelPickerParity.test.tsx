@@ -134,6 +134,10 @@ vi.mock("react-i18next", () => ({
       values?.mode ? `${key}:${values.mode}` : key,
   }),
 }));
+vi.mock("react-native-svg", () => ({
+  default: ({ children, ...props }: AnyProps) => createElement("svg", props, children),
+  Path: (props: AnyProps) => createElement("path", props),
+}));
 vi.mock("lucide-react-native", async () => {
   const { createElement: el } = await import("react");
   const icon =

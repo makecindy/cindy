@@ -5,6 +5,7 @@ export default {
   id: 'storage',
   order: 17,
   entries: [
+    { id: 'settings.about.storage.remoteMediaLabel', fallbackTargetId: 'settings-panel-storage', tab: 'storage', targetId: 'settings-search-settings-about-storage-remoteMediaLabel', titleKey: 'settings.about.storage.remoteMediaLabel', sectionKey: 'settings.tabs.storage', descriptionKey: 'settings.about.storage.remoteMediaDescription' },
     { id: 'storage', tab: 'storage', targetId: 'settings-panel-storage', titleKey: 'settings.tabs.storage', sectionKey: 'settings.about.storage.title' },
     { id: 'settings.about.storage.databaseSectionTitle', fallbackTargetId: 'settings-panel-storage', tab: 'storage', targetId: 'settings-search-settings-about-storage-databaseSectionTitle', titleKey: 'settings.about.storage.databaseSectionTitle', sectionKey: 'settings.tabs.storage' },
     { id: 'settings.about.storage.mediaSectionTitle', fallbackTargetId: 'settings-panel-storage', tab: 'storage', targetId: 'settings-search-settings-about-storage-mediaSectionTitle', titleKey: 'settings.about.storage.mediaSectionTitle', sectionKey: 'settings.tabs.storage', descriptionKey: 'settings.about.storage.mediaSectionHint' },

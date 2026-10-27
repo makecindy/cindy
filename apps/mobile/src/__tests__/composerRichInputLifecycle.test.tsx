@@ -3,6 +3,7 @@ import { act, createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { runInNewContext } from 'node:vm';
 import { afterEach, expect, it, vi } from 'vitest';
+import { Platform } from 'react-native';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
 import { textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 
@@ -15,6 +16,7 @@ const bridge = vi.hoisted(() => ({
   mounts: 0,
   clipboard: vi.fn<() => Promise<string>>(),
   inject: vi.fn(),
+  requestFocus: vi.fn(),
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' }, StyleSheet: { create: (styles: unknown) => styles },
@@ -33,7 +35,7 @@ vi.mock('react-native-webview', async () => {
     bridge.onContentProcessDidTerminate = props.onContentProcessDidTerminate;
     bridge.onRenderProcessGone = props.onRenderProcessGone;
     useEffect(() => { bridge.mounts += 1; }, []);
-    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject }));
+    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject, requestFocus: bridge.requestFocus }));
     return null;
   }) };
 });
@@ -48,7 +50,8 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined; bridge.inject.mockReset();
-  bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  bridge.requestFocus.mockReset(); bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  Platform.OS = 'ios';
   expect(bridge.listeners.size).toBe(0);
 });
 
@@ -164,6 +167,19 @@ it('does not probe slow initial loading or discard pending focus', () => {
   expect(page.ping).toHaveBeenCalledTimes(1);
 });
 
+it('requests native WebView focus on Android when the editor receives focus', () => {
+  const { ref, send } = mount();
+  Platform.OS = 'android';
+  send({ type: 'ready' });
+
+  act(() => ref.current?.focus());
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
+
+  bridge.requestFocus.mockClear();
+  act(() => ref.current?.applyDocumentAndSetSelectionToEnd(textComposerDocument('recommendation')));
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
+});
+
 it('recovers a terminated initial load but does not probe the replacement before ready', () => {
   vi.useFakeTimers();
   const { page, send } = mount();
@@ -258,6 +274,17 @@ it('settles interrupted paste placeholders and drops late clipboard results', as
   send({ type: 'ready' }); bridge.inject.mockClear();
   await act(async () => resolveClipboard('late text'));
   expect(bridge.inject).not.toHaveBeenCalled();
+});
+
+it.each(['text', 'empty', 'failure'])('settles a native clipboard fallback with %s', async (result) => {
+  const { send, page } = mount();
+  const commit = vi.fn();
+  Object.assign(page, { commitPaste: commit });
+  send({ type: 'ready' });
+  if (result === 'failure') bridge.clipboard.mockRejectedValueOnce(new Error('clipboard unavailable'));
+  else bridge.clipboard.mockResolvedValueOnce(result === 'text' ? 'pasted text' : '');
+  await act(async () => send({ type: 'paste-text-request', requestId: 'clipboard' }));
+  expect(commit).toHaveBeenCalledExactlyOnceWith('clipboard', result === 'text' ? [{ type: 'text', text: 'pasted text' }] : []);
 });
 
 it('retains structural endpoints when only a zero-width quote is selected', () => {

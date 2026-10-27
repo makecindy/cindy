@@ -52,7 +52,7 @@ describe('invitation validity', () => {
   it('disables acceptance for expired previews', async () => {
     mocks.previewInvite.mockResolvedValue({ ok: true, groupId: 'room', name: 'Room', inviterName: 'Host', expiresAt: '2000-01-01T00:00:00Z', joined: false });
     render(<ChatInviteDialog initialLink={link} onClose={vi.fn()} />);
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('previewInvite') })));
+    await screen.findByText('Room');
     expect(screen.getByRole('status').textContent).toBe(k('expiredLink'));
     expect((screen.getByRole('button', { name: k('accept') }) as HTMLButtonElement).disabled).toBe(true);
     expect(mocks.acceptInvite).not.toHaveBeenCalled();
@@ -161,12 +161,13 @@ describe('invitation validity', () => {
   it('discards a stale reusable preview when the server reports an expired or revoked link on acceptance', async () => {
     mocks.acceptInvite.mockResolvedValue({ ok: false, errorCode: 'INVITATION_NOT_FOUND' });
     render(<ChatInviteDialog initialLink={link} onClose={vi.fn()} />);
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('previewInvite') })));
+    await screen.findByRole('button', { name: k('accept') });
     expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: k('accept') })));
     expect(screen.queryByRole('status')).toBeNull();
     expect(screen.getByRole('alert').textContent).toBe(k('invalidInvite'));
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(link);
+    expect(screen.queryByRole('button', { name: k('accept') })).toBeNull();
+    expect(mocks.previewInvite).toHaveBeenCalledTimes(1);
   });
   it('does not show permanent validity when a response omits the reusable flag', async () => {
     mocks.createInvite.mockResolvedValue({ ok: true, link, expiresAt: null });

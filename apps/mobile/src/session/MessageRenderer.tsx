@@ -1,4 +1,11 @@
+import { VideoSitePreview } from './VideoSitePreview';
+import { InlineVideoPlayer } from './InlineVideoPlayer';
+import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
+import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
+import { RichAnswer } from './RichAnswer';
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
 import { PluginCardActions } from '@/plugins/PluginCardActions';
+import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
@@ -6,8 +13,13 @@ import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { BotGroupQuote } from './BotGroupQuote';
+import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { messageReadingPosition } from './messageReadingPosition';
@@ -18,14 +30,17 @@ import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
-import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
+import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { CompanionEntering } from '@/session/CompanionEntering';
+import { LOCAL_SEND_FRESH_MS, localSendStartedAt } from '@/session/localSendMotion';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
+import { createScrollDebugSampler } from '@/debug/scrollDebugSampler';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { createContext, Fragment, memo, useId, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactElement, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageLoadingImage, MessageImagePlaceholder } from './MessageLoadingImage';
+import { InputHandoffRecordRow } from '@/inputHandoff/InputHandoffRecordRow';
 import {
   ArrowLeftRight,
   Bot,
@@ -77,6 +92,7 @@ import {
   type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type ScrollViewProps,
   type LayoutChangeEvent,
   type StyleProp,
   type TextStyle,
@@ -133,6 +149,7 @@ import {
   SelectionQuoteContext,
   handleSelectionQuoteMenuAction,
 } from '@/session/selectionQuote';
+import { SelectionMenuText } from '@/session/SelectionMenuText';
 import {
   MOBILE_COMPOSER_CONTROL_SIZE,
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
@@ -177,6 +194,7 @@ import {
 } from '@/session/userMessageCollapse';
 import {
   collectMobileMessageGalleryImages,
+  galleryImageIndexForPayload,
   isLightboxMediaKind,
   lightboxImagesForPayload,
   type MobileMessageGalleryImage,
@@ -233,29 +251,19 @@ import {
   type SessionDeepLinkTarget,
 } from '@/session/sessionLinks';
 import {
-  canOpenChatPathChip,
   chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
-  resolveChatAbsPath,
-  toWorkdirRel,
-  type ChatPathCandidate,
 } from '@/session/chatPathCandidate';
-import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
-import {
-  peekRemotePathVerdict,
-  peekRemotePathVerdictForRender,
-  remotePathVerdictKey,
-  subscribeRemotePathVerdictChange,
-  verifyRemotePathCached,
-  type RemotePathVerdict,
-} from '@/session/remotePathVerdict';
+import { ChatFilePathContext } from '@/session/chatFilePathContext';
+import { MailLinkSpan } from '@/session/MailLinkSpan';
+import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
 import {
   useRemoteDeviceIdentity,
   useRemoteSessionMessages,
-  useRemoteSessions,
 } from '@/session/remoteSessionStore';
 import {
+  isCrossDeviceSourceSessionId,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -353,6 +361,7 @@ import {
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 import {
   projectMobileWorkActivities,
+  projectRecentMobileWorkActivities,
   type MobileProjectedToolActivity,
   sameMobileWorkToolActivity,
 } from '@/session/workActivityProjection';
@@ -431,7 +440,6 @@ const MarkdownRemoteMediaContext = createContext<ResolveRemoteMediaFn | undefine
 /** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
 const SHARE_STICKY_CHECK_HEIGHT = 44;
 const STICKY_SHARE_CHECK_THROTTLE_MS = 150;
-const SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD = 10;
 // LegendList 变高 item 的初始估高(仅影响首帧布局定位,LegendList 挂载后按实测尺寸修正)。
 /** Bound the hidden initial correction so live measurement churn cannot blank the list for seconds. */
 const MOBILE_INITIAL_REVEAL_MAX_MS = 300;
@@ -532,7 +540,7 @@ const stylesStatic = StyleSheet.create({
  */
 type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionColor'> & {
   /**
-   * iOS 是否使用可部分选中的 UITextView。超长展开正文禁用它并回退 RN Text:
+   * iOS 是否使用可部分选中的 UITextView。普通任务的超长展开正文回退 RN Text:
    * UITextView 在折叠→展开时骤增为超高复用视图会偶发只留下巨高空白容器。
    */
   allowIosUITextView?: boolean;
@@ -592,14 +600,18 @@ function MarkdownSelectableText({
         // RN Text props 里,组件内部私有附加(经 {...rest} 透传到原生组件)。
         {...{
           menuActionLabel: selectionQuoteMenuLabel(),
+          sideChatMenuActionLabel: quoteCtx.askInSideChat ? i18n.t('session.sideChat.title') : '',
           onMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
             handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx);
+          },
+          onSideChatMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
+            handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx, 'side-chat');
           },
         }}
       />
     );
   }
-  return <Text selectable={selectable} {...rest} />;
+  return <SelectionMenuText selectable={selectable} {...rest} />;
 }
 
 /**
@@ -638,17 +650,32 @@ export interface MobileMessageDraft {
 
 export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
 
-export interface ShareableMessageViewport {
-  visibleBottom: number;
-  visibleTop: number;
-}
-
 /** Desktop BotAvatar `sm` beside teammate replies; exported so the host renders a matching portrait. */
 export const COMPANION_AVATAR_SIZE = 28;
 const COMPANION_AVATAR_GAP = 10;
 
+/** 伙伴私聊引用回复与「回复对应的消息」（docs/product-rules/cindy-bots-runtime.md）。 */
+export interface CompanionQuoteOptions {
+  names: { owner: string; companion: string };
+  /** 「显示回复对应的消息」本机偏好。 */
+  showReplyTargets: boolean;
+  /** Put a quote of this message above the composer. */
+  onQuote: (quote: ChatReplyQuote) => void;
+  /** Scroll to and highlight a message of this chat, loading it first when needed. */
+  onLocate: (clientId: string) => void;
+}
+
+interface CompanionQuoteActions extends CompanionQuoteOptions {
+  /** The message as this chat has it loaded; reads the latest list without re-rendering every row. */
+  getMessage: (clientId: string) => NormalizedRemoteMessage | undefined;
+  /** Whether `assistantClientId` is the last loaded reply of the turn it answers. */
+  isLastReplyFor: (assistantClientId: string) => boolean;
+}
+
 interface MessageActions {
+  onRetryImageDelivery?: (imageId: string) => Promise<void>;
   companion?: boolean;
+  companionQuoteActions?: CompanionQuoteActions;
   onCompanionReadThrough?: (at: number) => void;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
@@ -665,6 +692,7 @@ interface MessageActions {
   onCopyMessageLink?: (clientId: string) => void;
   /** Insert this message's anchored link as an atom in the active composer. */
   onAddMessageToComposer?: (clientId: string) => void;
+  onSideChatMessage?: (text: string) => void;
   /**
    * chat-text-quote:选中消息文字 → 系统选择菜单「添加到对话」项的采集回调
    * (会话页写入 chatQuoteStore)。未传时选区采集整体关闭(context 为 null,
@@ -692,8 +720,6 @@ interface MessageActions {
    */
   onOpenPayloadFromItem?: (payload: MessagePayload, sourceGroupKey: string) => void;
   onLoadToolInput?: (ref: MobileToolInputProjection) => Promise<MobileToolInputDetail>;
-  onBlockingOverlayChange?: (blocked: boolean) => void;
-  onMessageActionSheetOpenChange?: (clientId: string, open: boolean) => void;
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
   onOpenSessionLink?: (url: string) => void;
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
@@ -704,7 +730,7 @@ interface MessageActions {
   /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
   pendingSend?: PendingSendBubbleActions;
   getSentImagePreview?: GetSentMessageImagePreview;
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>;
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   busyClientId?: string | null;
@@ -726,6 +752,7 @@ interface MessageActions {
 
 export function MessageRenderer({
   companion = false,
+  companionQuote,
   companionWorkingLabel,
   onOpenCompanionSettings,
   companionAvatar,
@@ -739,23 +766,24 @@ export function MessageRenderer({
   itemsStructureKey,
   onCopyMessageLink,
   onAddMessageToComposer,
+  onSideChatMessage,
   onForkMessage,
   onDeleteMessage,
   onLoadEarlier,
   onLoadToolInput,
+  onRetryImageDelivery,
   onOpenForkOrigin,
   onOpenOriginSession,
   viewerDeviceId,
   onOpenSourceDevice,
-  onBlockingOverlayChange,
   onOpenSessionLink,
   onPreviewRewind,
   onEnterShareSelection,
-  onVisibleShareableMessageIdsReaderChange,
   shareSelectionActive,
   shareSelectionBusy,
   onQuoteSelection,
   pendingSend,
+  pendingSendGroupKeys,
   getSentImagePreview,
   onReadTextFilePreview,
   onReleaseRemoteMedia,
@@ -766,8 +794,10 @@ export function MessageRenderer({
   busyAction,
   canLoadEarlier,
   emptyTestID,
+  emptyMessage,
   bottomOverlayHeight,
   contentBottomInset,
+  renderScrollComponent,
   isSessionStreaming,
   makerTurnRunning,
   continuationTurnClientId,
@@ -785,6 +815,8 @@ export function MessageRenderer({
   devRecycleItems = false,
 }: {
   companion?: boolean;
+  /** Companion private chats only; ordinary tasks keep their existing message actions. */
+  companionQuote?: CompanionQuoteOptions;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   companionAvatar?: ReactNode;
@@ -792,6 +824,8 @@ export function MessageRenderer({
   /** Offscreen preload and disappearing native screens must not replace the user's bookmark. */
   isReadingPositionActive?: () => boolean;
   bottomOverlayHeight?: number;
+  /** 列表滚动容器；任务页用它让聊天记录往下拖到输入框顶边时交给输入框（composerPullThrough）。 */
+  renderScrollComponent?: (props: ScrollViewProps) => ReactElement<ScrollViewProps>;
   /** Floating composers reserve a stable tail gap while their expanded surface overlays history. */
   contentBottomInset?: number;
   /** 顶部 chrome(绝对定位半透明工具栏)实测高度:内容顶部按此让位,详见 mobileMessageListTopPadding。 */
@@ -800,11 +834,14 @@ export function MessageRenderer({
   focusedRequestKey?: number | string | null;
   followLatestRequestKey?: number | string | null;
   items: readonly MobileMessageRenderItem[];
+  /** Live outbox, queued and settling rows; an absent source cannot retain its viewer forever. */
+  pendingSendGroupKeys?: ReadonlySet<string>;
   /** Stable while streaming only changes row content; structural list derivations key off this. */
   itemsStructureKey?: unknown;
   /** Oldest loaded host cursor; synthetic cards must not mask successful history prepends. */
   loadEarlierProgressKey?: string | null;
   emptyTestID?: string;
+  emptyMessage?: string;
   /** 排队消息 inline 区(InlineQueueSection),渲染在最后一条消息之后、随内容滚动。 */
   queueFooter?: ReactNode;
   scrollResetKey?: string;
@@ -824,9 +861,6 @@ export function MessageRenderer({
   /** 全屏图片查看器的圈点标注配置(画笔 → 发送到对话;由会话屏接线附件管线)。 */
   imageAnnotation?: ImageLightboxAnnotationConfig;
   onEnterShareSelection?: (clientId: string) => void;
-  onVisibleShareableMessageIdsReaderChange?: (
-    reader: ((viewport: ShareableMessageViewport) => Promise<readonly string[]>) | null,
-  ) => void;
   shareSelectionActive?: boolean;
   shareSelectionBusy?: boolean;
   /** DEV-only:把内部列表控制器暴露给性能 harness 驱动自动滚动(临时,profiling/回归测量用)。 */
@@ -942,6 +976,7 @@ export function MessageRenderer({
   // LegendList updates getState().scroll optimistically before an imperative native scroll lands.
   // Only native ScrollView scroll/end-drag samples advance this ack source for Android prepend.
   const nativeScrollEventSequenceRef = useRef(0);
+  const [sampleScrollDebug] = useState(createScrollDebugSampler);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
     contentHeight: 0,
     offsetY: 0,
@@ -1093,27 +1128,9 @@ export function MessageRenderer({
     setPayloadSourceGroupKey(sourceGroupKey);
     setPayload(next);
   }, []);
-  const payloadRef = useRef(payload);
-  payloadRef.current = payload;
-  const openMessageActionSheetsRef = useRef(new Set<string>());
-  const handleMessageActionSheetOpenChange = useCallback((clientId: string, open: boolean) => {
-    if (open) openMessageActionSheetsRef.current.add(clientId);
-    else openMessageActionSheetsRef.current.delete(clientId);
-    if (!historyActiveRef.current) return;
-    onBlockingOverlayChange?.(
-      payloadRef.current !== null || openMessageActionSheetsRef.current.size > 0,
-    );
-  }, [onBlockingOverlayChange]);
   useEffect(() => {
-    if (!historyActive) {
-      setPayload(null);
-      return;
-    }
-    onBlockingOverlayChange?.(
-      payload !== null || openMessageActionSheetsRef.current.size > 0,
-    );
-    return () => onBlockingOverlayChange?.(false);
-  }, [historyActive, onBlockingOverlayChange, payload]);
+    if (!historyActive) setPayload(null);
+  }, [historyActive, payload]);
   // 关闭回调必须引用稳定:内联闭包每次渲染换新,会经 ImageLightbox 透传成
   // LightboxPage 手势 useMemo 的依赖,流式回复期间每 token 重建手势图,
   // 可能打断进行中的捏合/拖动手势(rule 7)。
@@ -1698,22 +1715,31 @@ export function MessageRenderer({
   // 避免取件 effect / FlatList / LightboxPage memo 每帧全部失效。
   const lightboxImagesRef = useRef<readonly MobileMessageGalleryImage[] | null>(null);
   const lightboxImages = useMemo(() => {
-    if (!(payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind)) || !galleryImages) return null;
-    const next = lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey);
+    if (!(payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind)) || !galleryImages) {
+      lightboxImagesRef.current = null;
+      return null;
+    }
     const prev = lightboxImagesRef.current;
+    const sourceGroupPresent = listData.some((item) => item.key === payloadSourceGroupKey);
+    const retainPendingSnapshot = !!payloadSourceGroupKey && pendingSendGroupKeys?.has(payloadSourceGroupKey) === true;
+    const next = lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey, prev, sourceGroupPresent, retainPendingSnapshot);
     if (prev && prev.length === next.length && prev.every((p, i) => {
       const n = next[i];
       return p.key === n.key
         && p.url === n.url
         && p.payload.media.url === n.payload.media.url
         && p.payload.media.previewable === n.payload.media.previewable
+        && p.payload.galleryImageSlot === n.payload.galleryImageSlot
         && p.previewUri === n.previewUri;
     })) {
       return prev;
     }
     lightboxImagesRef.current = next;
     return next;
-  }, [galleryImages, imageLightboxOpen, payload, payloadSourceGroupKey]);
+  }, [galleryImages, imageLightboxOpen, listData, payload, payloadSourceGroupKey, pendingSendGroupKeys]);
+  const initialLightboxImage = lightboxImages
+    ? lightboxImages[galleryImageIndexForPayload(lightboxImages, payload)]
+    : undefined;
   const bottomPadding = mobileMessageListBottomPadding(bottomOverlayHeight, contentBottomInset);
   const topPadding = mobileMessageListTopPadding(topOverlayHeight);
   listBottomPaddingRef.current = bottomPadding;
@@ -1748,11 +1774,56 @@ export function MessageRenderer({
   }, []);
   const companionPluginWork = useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]);
   // Desktop MessageStream groups the visible teammate conversation (not hidden work) into five-minute stamps.
-  const companionTimeGroups = useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item) =>
-    item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-      ? [{ clientId: item.key, createdAt: item.message.createdAt }] : [])) : undefined, [companion, items]);
+  // Your own send is grouped by its send time from the moment its bubble appears, and its echo
+  // (same key) keeps that time, so a phone/computer clock skew cannot add or move a stamp on
+  // confirmation. Outbox rows carry the time across restarts.
+  const pendingSentAtRef = useRef(new Map<string, number>());
+  const companionTimeGroups = useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+    if (item.type === 'pending_send') {
+      const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+      if (sentAt === null) return [];
+      pendingSentAtRef.current.set(item.key, sentAt);
+      return [{ clientId: item.key, createdAt: sentAt }];
+    }
+    return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+      ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+  })) : undefined, [companion, items]);
+  const quoteItemsRef = useRef(items);
+  quoteItemsRef.current = items;
+  const showCompanionReplyTargets = !!(companion && companionQuote?.showReplyTargets);
+  // The last reply of each turn, as a stable key: rows re-render when a later reply of the same turn
+  // arrives (so the earlier one drops its reply target), not on every streaming update.
+  const lastCompanionReplyKey = useMemo(() => {
+    if (!showCompanionReplyTargets) return '';
+    const answered = new Set<string>();
+    const lastReplies: string[] = [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const entry = items[index];
+      if (entry.type !== 'message' || entry.message.kind !== 'assistant') continue;
+      const target = readReplyToClientId(entry.message);
+      if (!target || answered.has(target)) continue;
+      answered.add(target);
+      lastReplies.push(messageClientId(entry));
+    }
+    return lastReplies.join('\n');
+  }, [items, showCompanionReplyTargets]);
+  const companionQuoteActions = useMemo<CompanionQuoteActions | undefined>(() => {
+    if (!companion || !companionQuote) return undefined;
+    const lastReplies = new Set(lastCompanionReplyKey ? lastCompanionReplyKey.split('\n') : []);
+    return {
+    ...companionQuote,
+    getMessage: (clientId) => {
+      for (const entry of quoteItemsRef.current) {
+        if (entry.type === 'message' && messageClientId(entry) === clientId) return entry.message;
+      }
+      return undefined;
+    },
+    isLastReplyFor: (assistantClientId) => lastReplies.has(assistantClientId),
+    };
+  }, [companion, companionQuote, lastCompanionReplyKey]);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
+    companionQuoteActions,
     companionWorkingLabel,
   onOpenCompanionSettings,
     companionAvatar,
@@ -1761,6 +1832,7 @@ export function MessageRenderer({
     showPluginInvocations,
     remoteDeviceId,
     onAddMessageToComposer,
+    onSideChatMessage,
     onCopyMessageLink,
     onForkMessage,
     onDeleteMessage,
@@ -1775,7 +1847,7 @@ export function MessageRenderer({
     onOpenPayload: openPayload,
     onOpenPayloadFromItem: openPayloadFromItem,
     onLoadToolInput,
-    onMessageActionSheetOpenChange: handleMessageActionSheetOpenChange,
+    onRetryImageDelivery,
     onResolveRemoteMedia,
     // 待发送气泡(pending_send 项)的展开态与队列操作:漏了这一项 actions.pendingSend 就是
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
@@ -1794,6 +1866,7 @@ export function MessageRenderer({
     screenWidth: viewportLayout.contentWidth,
   }), [
     companion,
+    companionQuoteActions,
     companionWorkingLabel,
   onOpenCompanionSettings,
     companionAvatar,
@@ -1811,6 +1884,7 @@ export function MessageRenderer({
     makerTurnRunning,
     onCopyMessageLink,
     onAddMessageToComposer,
+    onSideChatMessage,
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
@@ -1818,11 +1892,11 @@ export function MessageRenderer({
     viewerDeviceId,
     onOpenSourceDevice,
     onLoadToolInput,
+    onRetryImageDelivery,
     onOpenSessionLink,
     onPreviewRewind,
     onEnterShareSelection,
     handleShareableMessageViewChange,
-    handleMessageActionSheetOpenChange,
     onResolveRemoteMedia,
     openPayload,
     openPayloadFromItem,
@@ -1832,16 +1906,15 @@ export function MessageRenderer({
     shareSelectionBusy,
     viewportLayout.contentWidth,
   ]);
-  // chat-text-quote:选区采集 context。仅「会话页传了采集回调 + iOS」时启用
-  // (Android RN Text 无系统菜单扩展点,v1 降级只读系统复制;只读宿主不传回调,
-  // context 为 null,MarkdownSelectableText 零开销)。菜单点按 → 直接提交,
-  // 无浮层状态。
-  const selectionQuoteEnabled = !!onQuoteSelection && Platform.OS === 'ios';
+  // Native selection menus share the host's action availability. Read-only hosts
+  // keep the system menu; side-chat tasks do not recursively offer side chats.
+  const selectionQuoteEnabled = !!onQuoteSelection;
+  const commitSelectionQuote = useCallback((text: string) => onQuoteSelection?.({ text }), [onQuoteSelection]);
   const selectionQuoteContextValue = useMemo(
-    () => (selectionQuoteEnabled && onQuoteSelection
-      ? { commitQuote: (text: string) => onQuoteSelection({ text }) }
+    () => (selectionQuoteEnabled
+      ? { commitQuote: commitSelectionQuote, askInSideChat: onSideChatMessage }
       : null),
-    [onQuoteSelection, selectionQuoteEnabled],
+    [onSideChatMessage, selectionQuoteEnabled, commitSelectionQuote],
   );
   const showJumpToLatest = isAwayFromBottom && !hasNewMessages;
   const focusRunKey = focusedItemKey
@@ -1919,45 +1992,6 @@ export function MessageRenderer({
   useEffect(() => () => {
     if (stickyCheckTimerRef.current) clearTimeout(stickyCheckTimerRef.current);
   }, []);
-  const readActuallyVisibleShareableMessageIds = useCallback(async (
-    viewport: ShareableMessageViewport,
-  ): Promise<readonly string[]> => {
-    const list = listRef.current;
-    if (!list) return [];
-    const listFrame = await measureInWindow(list.getNativeScrollRef());
-    if (!listFrame || listFrame.height <= 0) return [];
-    const visibleTop = Math.max(listFrame.y, viewport.visibleTop);
-    const visibleBottom = Math.min(
-      listFrame.y + listFrame.height,
-      viewport.visibleBottom,
-    );
-    if (visibleBottom <= visibleTop) return [];
-    const measuredItems = await Promise.all(
-      Array.from(shareableMessageViewsRef.current.entries()).map(async ([clientId, view]) => {
-        const frame = await measureInWindow(view);
-        if (!frame || frame.height <= 0) return null;
-        const visibleHeight = Math.max(
-          0,
-          Math.min(frame.y + frame.height, visibleBottom) - Math.max(frame.y, visibleTop),
-        );
-        if (
-          visibleHeight / frame.height
-          < SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD / 100
-        ) return null;
-        return { clientId, y: frame.y };
-      }),
-    );
-    return measuredItems
-      .filter((item): item is { clientId: string; y: number } => item !== null)
-      .sort((left, right) => left.y - right.y)
-      .map((item) => item.clientId);
-  }, []);
-  useEffect(() => {
-    if (!historyActive) return;
-    onVisibleShareableMessageIdsReaderChange?.(readActuallyVisibleShareableMessageIds);
-    return () => onVisibleShareableMessageIdsReaderChange?.(null);
-  }, [historyActive, onVisibleShareableMessageIdsReaderChange, readActuallyVisibleShareableMessageIds]);
-
   // 贴底跟随由 handleContentSize 的手动补滚承担(nearBottomRef 是跟随意图的唯一真相);
   // 跳底先命令式 scrollToEnd,随后复用同一轮有界落底校验。
   const scrollToBottom = useCallback(() => {
@@ -1968,6 +2002,25 @@ export function MessageRenderer({
     setHasNewMessages(false);
     scrollToEndProgrammatically(true, 'explicit');
   }, [cancelHistoryPrependTransaction, scrollToEndProgrammatically]);
+
+  // The send-time follow runs before the local bubble exists, so the bubble would then land through
+  // the instant tail correction. Follow once more, animated, the moment it is in the list: the list
+  // carries the bubble up while it eases in.
+  const followedLocalSendKeysRef = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    if (!historyActive) return;
+    const now = Date.now();
+    for (let index = listData.length - 1; index >= Math.max(0, listData.length - 3); index--) {
+      const item = listData[index];
+      if (item.type !== 'pending_send' && item.type !== 'message') continue;
+      const sentAt = localSendStartedAt(item.key);
+      if (sentAt === null || now - sentAt >= LOCAL_SEND_FRESH_MS) continue;
+      if (followedLocalSendKeysRef.current.has(item.key)) return;
+      followedLocalSendKeysRef.current.add(item.key);
+      scrollToBottom();
+      return;
+    }
+  }, [historyActive, listData, scrollToBottom]);
 
   // A retained list must not replay requests issued while another task was active.
   const followRequestWasActiveRef = useRef(historyActive);
@@ -2252,7 +2305,12 @@ export function MessageRenderer({
     }
     // Preloads need real geometry, but must not publish bookmarks or trigger user work.
     if (!historyActiveRef.current) return;
-    if (mobileDebugEnabled()) mobileDebugLog('debug', 'scroll', 'list scroll', {
+    const debugFlags = Number(isDragSample) | (Number(isMomentumScrollingRef.current) << 1)
+      | (Number(readingOlderRef.current) << 2) | (Number(nearBottomRef.current) << 3);
+    if (mobileDebugEnabled() && sampleScrollDebug(debugFlags, isFinalDragSample)) mobileDebugLog('debug', 'scroll', 'list scroll', {
+      hostRef: remoteDeviceId?.slice(0, 8), sessionRef: scrollResetKey?.slice(0, 8),
+      itemCount: itemsForStructureRef.current.length, initialAnchorDone: initialAnchorDoneRef.current,
+      reopening: reopeningAnchorRef.current !== null,
       ...metrics, dragging: isDragSample, momentum: isMomentumScrollingRef.current,
       readingOlder: readingOlderRef.current, nearBottom: nearBottomRef.current,
     });
@@ -2341,6 +2399,8 @@ export function MessageRenderer({
     getCurrentHistoryTopOffsetAdjustment,
     revealPositionedHistory,
     readingPosition,
+    remoteDeviceId,
+    scrollResetKey,
     attemptAutoLoadEarlier,
     bottomOverlayHeight,
     handoffHistoryPrependToUser,
@@ -2577,11 +2637,15 @@ export function MessageRenderer({
       useNativeDriver: true,
     });
     initialRevealAnimationRef.current = revealAnimation;
-    revealAnimation.start(({ finished }) => {
+    revealAnimation.start(() => {
       if (initialRevealAnimationRef.current === revealAnimation) {
         initialRevealAnimationRef.current = null;
       }
-      if (finished) finish();
+      // Native cancellation must also release the initial visibility gate. Once
+      // this handle is cleared, positioning cannot reveal the list through it,
+      // and a retained list will not rerun initial positioning on reentry.
+      // finish() fences callbacks from a previous history or an unmounted list.
+      finish();
     });
 
     // Seek once, then reconcile the bookmark as estimated row heights become measured.
@@ -2822,7 +2886,7 @@ export function MessageRenderer({
         ]}
         ListEmptyComponent={syncingWhileEmpty
           ? <SyncingMessages />
-          : <EmptyMessages testID={emptyTestID} />}
+          : <EmptyMessages testID={emptyTestID} copy={emptyMessage} />}
         ListHeaderComponent={
           loadEarlierAction.visible ? (
             <MessageListActionButton
@@ -2853,6 +2917,7 @@ export function MessageRenderer({
         testID={testID ?? 'message.list'}
         viewabilityConfig={viewabilityConfigRef.current}
         onViewableItemsChanged={handleViewableItemsChanged}
+        renderScrollComponent={renderScrollComponent}
       />
       </Animated.View>
       {shareSelectionActive && stickyShareClientId ? (
@@ -2891,7 +2956,8 @@ export function MessageRenderer({
         <ImageLightbox
           annotation={imageAnnotation}
           images={lightboxImages}
-          initialUrl={payload.media.url}
+          initialImageKey={initialLightboxImage?.key ?? payload.galleryImageKey}
+          initialUrl={initialLightboxImage?.url ?? payload.media.url}
           onClose={closePayload}
           onReleaseRemoteMedia={onReleaseRemoteMedia}
           onResolveRemoteMedia={onResolveRemoteMedia}
@@ -2963,8 +3029,8 @@ const RenderItemView = memo(function RenderItemView({
       node = item.message.authorization
         ? <AuthorizationMessageCard message={item.message} />
         : item.message.companion
-        ? <CompanionMessageCard message={item.message}
-            renderMarkdown={(text) => <CompanionCardMarkdown text={text} actions={actions} />} />
+        ? <CompanionMessageCard message={item.message} deviceId={actions.remoteDeviceId ?? ''}
+            renderMarkdown={(text) => <CompanionCardMarkdown messageKey={item.key} text={text} actions={actions} />} />
         : item.message.orcaCard
         ? (
           <>
@@ -3022,6 +3088,14 @@ const RenderItemView = memo(function RenderItemView({
           <PendingSendBubble
             actions={actions.pendingSend}
             item={item}
+            renderReplyQuote={actions.companionQuoteActions ? (quote) => (
+              <View style={styles.companionQuote}>
+                <BotGroupQuote display={companionReplyQuoteDisplay(quote,
+                  actions.companionQuoteActions!.getMessage(quote.clientId), actions.companionQuoteActions!.names)}
+                  onPress={() => actions.companionQuoteActions!.onLocate(quote.clientId)} />
+              </View>
+            ) : undefined}
+            onOpenImage={actions.onOpenPayload}
             screenWidth={actions.screenWidth}
             viewerDeviceId={actions.viewerDeviceId}
             renderImage={(uri, sourceUri, onError) => uri ? (
@@ -3057,15 +3131,20 @@ const RenderItemView = memo(function RenderItemView({
       logUnhandledRenderItem(item);
       break;
   }
-  const groupTimestamp = actions.companion && item.type === 'message'
+  const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // K1: every companion card (task, result, teammate-message pill) hangs on the replies' column,
-  // left-aligned with the reply text behind an invisible avatar.
-  const alignWithReplies = !!actions.companionAvatar && actions.companion && item.type === 'message'
-    && !!item.message.companion;
+  // Cards and work groups share the reply text column, leaving the avatar slot empty.
+  const alignWithReplies = !!actions.companionAvatar && actions.companion
+    && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
   const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
-  // Companion chats: a new message or finished reply eases in once (M4 / M5); everything else stays still.
-  const entering = actions.companion && item.type === 'message' && !item.message.systemCardType
+  // Your own send eases in once, as its local bubble (both chats). Its echo keeps the same key and
+  // wrapper, so it neither remounts nor replays. Companion chats also ease in a new message or
+  // finished reply (M4 / M5).
+  const localSendAt = item.type === 'pending_send' || item.type === 'message'
+    ? localSendStartedAt(item.key) : null;
+  const entering = localSendAt !== null
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={localSendAt} kind="send">{aligned}</CompanionEntering>
+    : actions.companion && item.type === 'message' && !item.message.systemCardType
     && (item.message.kind === 'user' || item.message.kind === 'assistant')
     ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
     : aligned;
@@ -3175,7 +3254,9 @@ function SessionOriginLabel({
       idText={sourceIdText(sourceMeta)
         ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
       label={sessionOriginLabel(origin)}
-      onPress={onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined}
+      onPress={onOpen && senderSessionId && !isCrossDeviceSourceSessionId(senderSessionId)
+        ? () => onOpen(senderSessionId)
+        : undefined}
       openHint={t('message.renderer.openSessionOrigin')}
       testID="message.sessionOrigin"
     />
@@ -3242,13 +3323,13 @@ function SourceDeviceLabel({
 /** 插件任务派发的消息:气泡外的来源标签;与气泡内的本轮插件调用头(PluginInvocationHeader)是两回事。 */
 function SourcePluginLabel({ align, plugin }: { align: 'user' | 'agent'; plugin: MessageSourcePlugin }) {
   const { colors } = useTheme();
-  const { t, i18n: i18nInstance } = useTranslation();
+  const { i18n: i18nInstance } = useTranslation();
   const label = useMemo(() => sourcePluginLabel(plugin), [plugin, i18nInstance.language]);
   return (
     <SourceLabelWithId
       align={align}
       icon={<Ghost color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
-      idText={t('message.renderer.sourcePluginId', { id: plugin.pluginId })}
+      idText={sourceIdText({ sourcePlugin: plugin })}
       label={label}
       testID="message.sourcePlugin"
     />
@@ -3276,12 +3357,12 @@ function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void 
   );
 }
 
-function EmptyMessages({ testID }: { testID?: string }) {
+function EmptyMessages({ testID, copy }: { testID?: string; copy?: string }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   return (
     <View style={styles.emptyCard} testID={testID ?? 'message.empty'}>
-      <Text style={styles.emptyTitle}>{t('message.renderer.emptyMessages')}</Text>
+      <Text style={styles.emptyTitle}>{copy ?? t('message.renderer.emptyMessages')}</Text>
     </View>
   );
 }
@@ -3436,9 +3517,11 @@ function MessageBubble({
   const displayBubbleBody = hasSentInlineAtoms
     ? sentInlineTokensDisplayText(sentInlineTokens)
     : bubbleBody;
+  const draftBody = item.message.draftBody ?? item.message.body;
+  const draftText = item.message.draftBody ?? bubbleBody;
   const composerDraftDocument = useMemo(
     () => (item.message.kind === 'user'
-      ? composerDocumentFromSerializedMessage(item.message.body, {
+      ? composerDocumentFromSerializedMessage(draftBody, {
           quotesEncoded: item.message.quotesEncoded,
           agentReferences: item.message.agentReferences,
           pastedTextRanges: item.message.pastedTextRanges,
@@ -3446,7 +3529,7 @@ function MessageBubble({
         })
       : null),
     [
-      item.message.body,
+      draftBody,
       item.message.agentReferences,
       item.message.kind,
       item.message.pastedTextRanges,
@@ -3468,11 +3551,6 @@ function MessageBubble({
   const isUser = presentation.isUserAligned && !item.message.hookSource;
   const isStreamingAssistant = item.message.kind === 'assistant' && item.message.isStreaming === true;
   const clientId = messageClientId(item);
-  useEffect(() => {
-    if (!historyActive || !actionSheetOpen) return undefined;
-    actions.onMessageActionSheetOpenChange?.(clientId, true);
-    return () => actions.onMessageActionSheetOpenChange?.(clientId, false);
-  }, [historyActive, actionSheetOpen, actions.onMessageActionSheetOpenChange, clientId]);
   const shareableMessage = isShareableMessage(item.message);
   const handleShareableMessageViewChange = useCallback((view: View | null) => {
     actions.onShareableMessageViewChange?.(clientId, view);
@@ -3480,7 +3558,8 @@ function MessageBubble({
   const shareSelectionActive = actions.shareSelectionActive === true
     && shareableMessage;
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
-  const copyText = buildMobileMessageCopyText(item.message);
+  const rawCopyText = buildMobileMessageCopyText(item.message);
+  const copyText = item.message.kind === 'assistant' ? richAnswerText(rawCopyText) : rawCopyText;
   const canUseCompletedActions = !isStreamingAssistant;
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
@@ -3525,6 +3604,7 @@ function MessageBubble({
   );
   const canCopyLink = !!(showCompletedActionBar && clientId && actions.onCopyMessageLink);
   const canAddToChat = !!(showCompletedActionBar && clientId && actions.onAddMessageToComposer);
+  const canSideChat = !!(showCompletedActionBar && copyText.trim() && actions.onSideChatMessage);
   const canShare = !!(
     showCompletedActionBar
     && clientId
@@ -3589,11 +3669,12 @@ function MessageBubble({
   // label 走 i18n.t,所以语言必须进依赖:否则用户在任务页挂载期间切语言,菜单会一直
   // 停在切换前的语言,直到 capability 变化或组件重挂。
   const messageMenu = useMemo(() => buildMobileMessageMenu({
+    canSideChat,
     canAddToChat,
     canCopyLink,
     canDelete,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
+  }), [canSideChat, canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
@@ -3608,6 +3689,16 @@ function MessageBubble({
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
+  // 伙伴与普通任务都保留正文原生长按选字；消息操作由气泡下方按钮承接。
+  const companionQuote = actions.companionQuoteActions;
+  const bubbleTextSelectable = canSelectVisibleText;
+  const replyQuote = companionQuote && item.message.kind === 'user' ? item.message.replyQuote : undefined;
+  const replyTargetId = companionQuote?.showReplyTargets && item.message.kind === 'assistant' && clientId
+    ? readReplyToClientId(item.message) : null;
+  const replyTargetMessage = replyTargetId ? companionQuote?.getMessage(replyTargetId) : undefined;
+  const replyTarget = replyTargetId && isOwnerTypedMessage(replyTargetMessage)
+    && companionQuote?.isLastReplyFor(clientId)
+    ? companionReplyQuoteFor(replyTargetMessage) : null;
 
   useEffect(() => {
     if (copyState === 'idle' || copyState === 'copying') return;
@@ -3632,10 +3723,10 @@ function MessageBubble({
     }
     if (id === 'rewind' && clientId) {
       actions.onPreviewRewind?.(clientId, {
-        document: composerDraftDocument ?? composerDocumentFromSerializedMessage(item.message.body),
-        text: bubbleBody,
+        document: composerDraftDocument ?? composerDocumentFromSerializedMessage(draftBody),
+        text: draftText,
         quotes: messageQuotes,
-        ...(item.message.quotesEncoded === true ? { orderedBody: item.message.body } : {}),
+        ...(item.message.quotesEncoded === true ? { orderedBody: draftBody } : {}),
       });
       return;
     }
@@ -3644,10 +3735,10 @@ function MessageBubble({
         clientId,
         item.message.kind === 'user'
           ? {
-              document: composerDraftDocument ?? composerDocumentFromSerializedMessage(item.message.body),
-              text: bubbleBody,
+              document: composerDraftDocument ?? composerDocumentFromSerializedMessage(draftBody),
+              text: draftText,
               quotes: messageQuotes,
-              ...(item.message.quotesEncoded === true ? { orderedBody: item.message.body } : {}),
+              ...(item.message.quotesEncoded === true ? { orderedBody: draftBody } : {}),
             }
           : undefined,
       );
@@ -3658,11 +3749,11 @@ function MessageBubble({
     }
   }, [
     actions,
-    bubbleBody,
+    draftText,
     clientId,
     composerDraftDocument,
     copyMessage,
-    item.message.body,
+    draftBody,
     item.message.kind,
     item.message.quotesEncoded,
     messageQuotes,
@@ -3672,8 +3763,9 @@ function MessageBubble({
     if (id === 'rewind') return selectControlAction('rewind');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
+    if (id === 'side-chat') return actions.onSideChatMessage?.(copyText);
     actions.onCopyMessageLink?.(clientId);
-  }, [actions, clientId, selectControlAction]);
+  }, [actions, clientId, copyText, selectControlAction]);
   const openMessageActionMenu = useCallback(() => {
     if (usesSystemActionMenu()) {
       const disabled = actionBusy
@@ -3745,7 +3837,11 @@ function MessageBubble({
     && Boolean(item.message.pluginInvocations?.length);
   const hasBubbleContent = !!(
     item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations
+    // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
+    || (companionQuote && (replyQuote || replyTarget))
   );
+  const bubbleShown = item.message.role !== 'error'
+    && (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));
   // 气泡是纯 View,不承接任何手势:文本选择走正文原生 Text selectable(长按文字就地选择复制),
   // 气泡上不能挂 Pressable——它会参与触摸协商,干扰正文里表格/代码块横向 ScrollView 的拖动。
   const bubble = (
@@ -3787,7 +3883,22 @@ function MessageBubble({
           ) : null}
         </View>
       ) : null}
-      {item.message.systemCardType ? (
+      {replyQuote && companionQuote ? (
+        <View style={styles.companionQuote}>
+          <BotGroupQuote display={companionReplyQuoteDisplay(replyQuote, companionQuote.getMessage(replyQuote.clientId), companionQuote.names)}
+            onPress={() => companionQuote.onLocate(replyQuote.clientId)} />
+        </View>
+      ) : replyTarget && replyTargetId && companionQuote ? (
+        <View style={styles.companionQuote} testID="message.replyTarget">
+          <BotGroupQuote display={companionReplyQuoteDisplay(replyTarget, replyTargetMessage, companionQuote.names)}
+            onPress={() => companionQuote.onLocate(replyTargetId)} />
+        </View>
+      ) : null}
+      {item.message.systemCardType === 'mcp-app' ? (
+        <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
+          clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
+          fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
+      ) : item.message.systemCardType ? (
         <MobileSystemCard
           autoResumeInFlight={isMobileAutoResumeRowInFlight({
             isContinuationTurnOwner: clientId === actions.continuationTurnClientId,
@@ -3806,7 +3917,7 @@ function MessageBubble({
               interactiveAtoms={false}
               maxVisibleLines={collapsedLineCount}
               numberOfLines={collapsedLineCount}
-              selectable={canSelectVisibleText}
+              selectable={bubbleTextSelectable}
               testID="message.collapsedSentInlineAtoms"
               textStyle={styles.messageText}
               tokens={sentInlineTokens}
@@ -3817,7 +3928,7 @@ function MessageBubble({
             // MarkdownSelectableText(iOS UITextView 原生支持 numberOfLines)。
             <MarkdownSelectableText
               numberOfLines={collapsedLineCount}
-              selectable={canSelectVisibleText}
+              selectable={bubbleTextSelectable}
               style={styles.messageText}
               testID="message.collapsedBody"
             >
@@ -3830,12 +3941,13 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
                   onOpenSessionLink={actions.onOpenSessionLink}
                   pinContentWidth={!isUser}
-                  selectable={canSelectVisibleText}
+                  selectable={bubbleTextSelectable}
                   streaming={false}
                   text={text}
                 />
@@ -3845,13 +3957,17 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
-            allowIosUITextView={!shouldCollapseLongMessage}
+            codeCopyEnabled={!shareSelectionActive}
+            renderRichAnswers={item.message.kind === 'assistant'}
+            richStateKey={item.message.source.clientId ?? item.message.key}
+            allowIosUITextView={!shouldCollapseLongMessage || actions.companion === true}
+            boundTextRuns={shouldCollapseLongMessage && actions.companion === true}
             markdownImageCacheKey={item.message.key}
             layout={contentLayout}
             onOpenPayload={actions.onOpenPayload}
             onOpenSessionLink={actions.onOpenSessionLink}
             pinContentWidth={!isUser}
-            selectable={canSelectVisibleText}
+            selectable={bubbleTextSelectable}
             streaming={isStreamingAssistant}
             text={bubbleBody}
           />
@@ -3862,8 +3978,8 @@ function MessageBubble({
         // 纯文本,absolute 不占布局、opacity 0 不可见、pointerEvents none 不挡
         // 触摸。这里只需知道行数是否越过阈值,因此最多排到 threshold + 1 行:
         // 不让不可见节点为超长消息完整排版,避免 iOS 产生额外的超高原生
-        // 文本布局,Android 也不用承担无意义的完整排版开销。展开态的巨高
-        // 空白由上方 MarkdownBody 的 RN Text fallback 单独处理。
+        // 文本布局,Android 也不用承担无意义的完整排版开销。伙伴展开态复用有界
+        // 文本分组保留部分选字，普通任务继续使用 RN Text fallback。
         // 无障碍两端都要屏蔽:accessibilityElementsHidden 管 iOS VoiceOver
         // (opacity 0 不会让 VoiceOver 跳过,漏了会把正文重复朗读一遍),
         // importantForAccessibility 管 Android TalkBack。
@@ -3902,7 +4018,7 @@ function MessageBubble({
         </Text>
       ) : null}
       {item.message.secondaryBody ? (
-        <MarkdownSelectableText selectable={canSelectVisibleText} style={styles.detailText}>
+        <MarkdownSelectableText selectable={bubbleTextSelectable} style={styles.detailText}>
           {item.message.secondaryBody}
         </MarkdownSelectableText>
       ) : null}
@@ -3966,7 +4082,16 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
-      {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
+      {item.message.failedSamplingAttempt ? (
+        <Text style={styles.failedSamplingAttemptText}>
+          {t('message.renderer.failedSamplingAttempt')}
+        </Text>
+      ) : null}
+      {item.message.role === 'error' ? (
+        <ErrorNotice message={displayBubbleBody}>
+          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
+        </ErrorNotice>
+      ) : bubbleShown ? bubble : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
           onOpenSettings={actions.onOpenCompanionSettings} />
@@ -3975,9 +4100,8 @@ function MessageBubble({
         && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(meta => (
           <CompanionTaskResultCard key={botTaskResultKey(meta)} meta={meta} attached
             deviceId={actions.remoteDeviceId ?? ''} parentSessionId={item.message.source.sessionId}
-            renderMarkdown={text => <CompanionCardMarkdown text={text} actions={actions} />} />
+            renderMarkdown={text => <CompanionCardMarkdown messageKey={`${item.key}:${botTaskResultKey(meta)}`} text={text} actions={actions} />} />
         )) : null}
-      {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
         // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
         // 常显在气泡下方,icon 用 warning 橙、文字保持 tertiary 灰阶。
@@ -3998,10 +4122,13 @@ function MessageBubble({
           ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
           // Desktop's teammate action bar omits fork and per-turn cost/tokens: the Bot owns its one timeline.
           ...messageMenu.map(item => ({ id: item.id, title: item.label, image: item.image, destructive: item.destructive, disabled: actionBusy })),
-          ...(absoluteTime ? [{ id: 'time', title: t('message.renderer.sentTime', { time: absoluteTime }), disabled: true }] : []),
+          ...(absoluteTime ? [{ id: 'time', title: absoluteTime.slice(0, 16), disabled: true }] : []),
         ]}
         onAction={id => {
-          if (id === 'copy') selectControlAction(id);
+          // Reply quotes what can be quoted; other rows (errors, system cards) keep inserting their link.
+          const quote = id === 'add-to-chat' && companionQuote ? companionReplyQuoteFor(item.message) : null;
+          if (quote) companionQuote?.onQuote(quote);
+          else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
         }} /> : hasActions ? (
@@ -4278,7 +4405,7 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
-type ToolDetailActions = Pick<MessageActions, 'onLoadToolInput' | 'onOpenPayload'>;
+type ToolDetailActions = Pick<MessageActions, 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
 
 function ToolActionRow({
   actions,
@@ -4296,8 +4423,7 @@ function ToolActionRow({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  // 媒体不在行内渲染:tool 产出的图/视频由紧随 tool_group 的独立 ToolMediaBlock
-  // 承载(对齐桌面 AgentActionRow「媒体跳出折叠卡」的语义),行内不再重复。
+  // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
   const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
   const showDetails = expanded && hasDetails;
@@ -4325,6 +4451,15 @@ function ToolActionRow({
         <Text style={[styles.toolName, styles.toolNameFlex]} numberOfLines={1}>{row.label}</Text>
         {chevronNode}
       </Pressable>
+      {readToolProcessMedia(tool.secondaryBody).map((entry) => (
+        <MediaPreview key={entry.url} label={mediaLabel({ ...entry, previewable: false })}
+          layout={contentLayout} media={{ ...entry, previewable: false }}
+          onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildMediaPayload(
+            { ...entry, previewable: false }, mediaLabel({ ...entry, previewable: false }),
+          )) : undefined}
+          onResolveRemoteMedia={actions.onResolveRemoteMedia}
+          variant={entry.kind === 'image' ? 'attachment' : 'card'} />
+      ))}
       {showDetails ? (
         <View style={styles.toolRowDetails}>
           {row.detail || tool.body ? (
@@ -4338,7 +4473,7 @@ function ToolActionRow({
             />
           ) : null}
           {tool.diff ? <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} /> : null}
-          {tool.secondaryBody ? <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} /> : null}
+          {tool.secondaryBody ? <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} /> : null}
         </View>
       ) : null}
     </View>
@@ -4717,20 +4852,26 @@ function WorkGroupCard({
   const isStreaming = item.isStreaming === true;
   const [rememberedExpanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const expanded = item.deferred?.setVisible ? rememberedExpanded : item.deferred?.expanded ?? rememberedExpanded;
+  const lines = isStreaming ? item.deferred?.lines : undefined;
+  const lineMode = lines !== undefined;
   const deferredRef = useRef(item.deferred);
   deferredRef.current = item.deferred;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const current = deferredRef.current;
-    current?.setVisible?.(expanded, false);
+    current?.setVisible?.(expanded, isStreaming && !lineMode);
     return () => current?.setVisible?.(false, false);
-  }, [item.deferred?.owner, item.deferred?.key, expanded]);
+  }, [item.deferred?.owner, item.deferred?.key, expanded, isStreaming, lineMode]);
   const layout = useMemo(() => buildMessageHierarchyLayout({
     screenWidth: actions.screenWidth,
     summaryCount: header.summaryCount,
   }), [actions.screenWidth, header.summaryCount]);
-  const contentLayout = useMemo(() => (expanded
-    ? buildMessageContentLayout({ screenWidth: actions.screenWidth })
-    : null), [actions.screenWidth, expanded]);
+  const contentLayout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
+  const liveActivities = useMemo(() => isStreaming && !lineMode
+    ? projectRecentMobileWorkActivities(item.children, true, 5) : [], [item.children, isStreaming, lineMode]);
+  // The outer group already occupies the reply column. Keep companion actions,
+  // but neither repeat its portrait nor indent nested work groups a second time.
+  const childActions = useMemo(() => actions.companion && actions.companionAvatar
+    ? { ...actions, companionAvatar: undefined } : actions, [actions]);
   const activityProjection = useMemo(
     () => (expanded
       ? projectMobileWorkActivities(item.children, isStreaming)
@@ -4741,9 +4882,10 @@ function WorkGroupCard({
   // Keep their callbacks and streaming flag stable across those unrelated updates.
   const toolActions = useMemo(() => ({
     onLoadToolInput: actions.onLoadToolInput,
+    onRetryImageDelivery: actions.onRetryImageDelivery,
     onOpenPayload: actions.onOpenPayload,
     isSessionStreaming: actions.isSessionStreaming,
-  }), [actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
+  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
   const startedAtIso = isStreaming && item.startedAtMs !== undefined
     ? new Date(item.startedAtMs).toISOString()
     : undefined;
@@ -4768,12 +4910,17 @@ function WorkGroupCard({
   const pluginWork = actions.companionPluginWork?.get(item.key);
   // The Host projects running lines for this view; folded groups render them as they are,
   // without building the hidden activity tree or reading any work details.
-  const lines = isStreaming ? item.deferred?.lines : undefined;
   // Expanding keeps these lines on screen until the detail read has rows to replace them.
   const holdLines = expanded && item.deferred?.awaitingDetails === true && !!lines?.length;
   const lineRows = lines?.length ? (
     <View style={styles.workActivityStack}>
       {lines.map((line) => <WorkLineRow key={line.key} line={line} onPress={onToggle} />)}
+    </View>
+  ) : !lineMode && liveActivities.length ? (
+    <View style={styles.workActivityStack}>
+      {liveActivities.map((activity) => activity.kind === 'tool'
+        ? <WorkToolActivityRow key={activity.key} activity={activity} actions={toolActions} contentLayout={contentLayout} />
+        : <WorkLineRow key={activity.key} line={{ kind: 'thinking', key: activity.key, text: activity.content }} onPress={onToggle} />)}
     </View>
   ) : null;
   return (
@@ -4833,7 +4980,7 @@ function WorkGroupCard({
                   </View>
                 );
               }
-              return <RenderItemView key={child.key} item={child} actions={actions} />;
+              return <RenderItemView key={child.key} item={child} actions={childActions} />;
             })}
           </View>
         </Rail>
@@ -5308,7 +5455,8 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
-  const label = formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
+  const modelOnly = data?.modelOnly === true;
+  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
     ?? t('message.renderer.agentSwitchLabel', { from, to });
 
   return (
@@ -5324,7 +5472,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
         >
           <ArrowLeftRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
           <Text style={styles.agentSwitchPillText} numberOfLines={1}>{label}</Text>
-          {toModel ? (
+          {toModel && !modelOnly ? (
             <>
               <Text style={styles.agentSwitchDot}>·</Text>
               <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
@@ -5378,6 +5526,7 @@ function MobileSystemCard({
   }
   // agent-switch 走专用「分隔线 + 药丸」渲染(对齐桌面),不落通用盒子卡片。
   if (type === 'agent-switch') return <MobileAgentSwitchCard data={data} />;
+  if (type === 'input-handoff') return <InputHandoffRecordRow data={data} />;
   // auto-resume 复用桌面 AgentActionRow 的单行状态布局:默认只显示当前状态和压缩后的
   // 中断原因,完整诊断按需展开,避免底层错误全文把手机消息流撑成一张大卡片。
   if (type === 'auto-resume') {
@@ -5583,6 +5732,13 @@ function OrcaCollabCard({ card, screenWidth, blockKey }: {
   );
 }
 
+const ViewabilityGatedMcpAppCard = memo(function ViewabilityGatedMcpAppCard(
+  props: Omit<ComponentProps<typeof McpAppCard>, 'active'>,
+) {
+  const heavyContentVisible = useContext(MessageHeavyContentVisibilityContext);
+  return <McpAppCard {...props} active={heavyContentVisible} />;
+});
+
 const ViewabilityGatedMermaidDiagram = memo(function ViewabilityGatedMermaidDiagram({
   source,
   testID,
@@ -5619,17 +5775,19 @@ const ViewabilityGatedMathFormula = memo(function ViewabilityGatedMathFormula({
 });
 
 /** A frozen task result reads like a reply: same Markdown, links and file chips (Desktop MarkdownRenderer). */
-function CompanionCardMarkdown({ text, actions }: { text: string; actions: MessageActions }) {
+function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; actions: MessageActions; messageKey: string }) {
   const layout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
-  return <MarkdownBody layout={layout} text={text} selectable
+  return <MarkdownBody renderRichAnswers markdownImageCacheKey={messageKey} layout={layout} text={text} selectable
     onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
 }
 
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
 // 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
-function MarkdownBody({
+function MarkdownBodyBase({
   allowIosUITextView = true,
+  codeCopyEnabled = true,
+  boundTextRuns = false,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -5639,8 +5797,13 @@ function MarkdownBody({
   streaming,
   text,
 }: {
-  /** 超长展开正文在 iOS 回退 RN Text,避免超高 UITextView 空白;仍保留整块复制。 */
+  renderRichAnswers?: boolean;
+  /** Persisted row ids may replace stream ids; clientId stays stable across that handoff. */
+  richStateKey?: string;
+  /** 普通任务的超长展开正文可禁用 UITextView，伙伴改用有界文本分组。 */
   allowIosUITextView?: boolean;
+  /** Reuse bounded native text runs for expanded companion messages on iOS. */
+  boundTextRuns?: boolean;
   /** 本地 Markdown 图片的稳定消息身份,避免后续消息复用同一路径的旧媒体缓存。 */
   markdownImageCacheKey?: string;
   layout: MessageContentLayout;
@@ -5652,6 +5815,8 @@ function MarkdownBody({
    * 气泡(长代码围栏横向裁切 + 纵向巨高空白)。
    */
   pinContentWidth?: boolean;
+  /** 分享图片选择态关闭块级操作,避免把按钮带进导出内容。 */
+  codeCopyEnabled?: boolean;
   /** 完成态消息为 true:各块 Text 开原生选中(含内嵌图片 View 的块除外,Android 上有风险)。 */
   selectable?: boolean;
   /** 消息流式中:文件 chip 层跳过远端验证。 */
@@ -5765,8 +5930,7 @@ function MarkdownBody({
   }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
-  const remoteSessions = useRemoteSessions();
-  const sessionLinkTitles = useMarkdownSessionLinkTitles(text, remoteSessions);
+  const sessionLinkTitles = useMarkdownSessionLinkTitles(text);
   const renderInlines = useCallback(
     (
       inlines: readonly MobileMarkdownInline[],
@@ -5792,11 +5956,12 @@ function MarkdownBody({
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
+    ...(boundTextRuns ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
     imageRendersPreview,
-  }), [imageRendersPreview]);
+  }), [boundTextRuns, imageRendersPreview]);
   // 连续纯文本块合并为 text_run，图片预览保持独立。
   // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
-  // 后仍保留块内跨段选择,同时避免单个 LegendList item 内出现巨型 selectable Text。
+  // 后仍保留块内跨段选择。伙伴的 iOS 长消息展开也复用同一分块，避免巨型 UITextView。
   const groups = useMemo(
     () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
     [blocks, textRunGroupingOptions],
@@ -5864,6 +6029,12 @@ function MarkdownBody({
     );
   };
   const renderSingleBlock = useCallback((block: MobileMarkdownBlock): ReactNode => {
+    // Only text_run groups are bounded. Code, quotes and table cells retain
+    // the stable RN Text fallback in expanded long companion messages.
+    const singleBlockAllowsIosUITextView = allowIosUITextView && !boundTextRuns;
+    const singleBlockSpanFor = (blockSelectable: boolean) => singleBlockAllowsIosUITextView
+      ? spanFor(blockSelectable)
+      : undefined;
     if (block.type === 'mermaid') {
       // 内联图表按「图片」形态呈现:无卡片 chrome、无标签文字、无按钮,
       // 就是一块圆角图表;点击任意位置打开沉浸式全屏详情(透明 Pressable
@@ -5897,20 +6068,23 @@ function MarkdownBody({
     if (block.type === 'code') {
       // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
       // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
+      const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
-                paddingVertical: layout.codePaddingVertical,
+                paddingBottom: layout.codePaddingVertical,
+                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
               },
             ]}
           >
             <HighlightedCodeText
-              SpanComponent={spanFor(selectable === true) ?? Text}
-              allowIosUITextView={allowIosUITextView}
+              SpanComponent={spanFor(selectable === true && singleBlockAllowsIosUITextView) ?? Text}
+              allowIosUITextView={singleBlockAllowsIosUITextView}
               language={block.language}
               selectable={selectable === true}
               styles={styles}
@@ -5928,13 +6102,13 @@ function MarkdownBody({
       const headingSelectable = inlinesSelectable(block.inlines);
       return (
         <MarkdownSelectableText
-          allowIosUITextView={allowIosUITextView}
+          allowIosUITextView={singleBlockAllowsIosUITextView}
           key={block.key}
           selectable={headingSelectable}
           style={headingStyle}
           testID="message.markdownHeading"
         >
-          {renderInlines(block.inlines, spanFor(headingSelectable))}
+          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable))}
         </MarkdownSelectableText>
       );
     }
@@ -5942,11 +6116,11 @@ function MarkdownBody({
       return (
         <View key={block.key} style={styles.markdownQuote} testID="message.markdownQuote">
           <MarkdownSelectableText
-            allowIosUITextView={allowIosUITextView}
+            allowIosUITextView={singleBlockAllowsIosUITextView}
             selectable={inlinesSelectable(block.inlines)}
             style={[styles.messageText, styles.markdownQuoteText]}
           >
-            {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+            {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
         </View>
       );
@@ -5967,11 +6141,11 @@ function MarkdownBody({
             {task ? (block.checked ? '✓' : '') : block.ordered ? block.marker : '•'}
           </Text>
           <MarkdownSelectableText
-            allowIosUITextView={allowIosUITextView}
+            allowIosUITextView={singleBlockAllowsIosUITextView}
             selectable={inlinesSelectable(block.inlines)}
             style={[styles.messageText, styles.markdownListText]}
           >
-            {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+            {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
         </View>
       );
@@ -5997,7 +6171,7 @@ function MarkdownBody({
                 return (
                   <MarkdownSelectableText
                     adjustVerticalAlignment={false}
-                    allowIosUITextView={allowIosUITextView}
+                    allowIosUITextView={singleBlockAllowsIosUITextView}
                     key={`${block.key}:th:${index}`}
                     selectable={inlinesSelectable(cell)}
                     style={[
@@ -6006,7 +6180,7 @@ function MarkdownBody({
                       styles.markdownTableHeaderCell,
                     ]}
                   >
-                    {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
+                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
                   </MarkdownSelectableText>
                 );
               })}
@@ -6018,12 +6192,12 @@ function MarkdownBody({
                   return (
                     <MarkdownSelectableText
                       adjustVerticalAlignment={false}
-                      allowIosUITextView={allowIosUITextView}
+                      allowIosUITextView={singleBlockAllowsIosUITextView}
                       key={`${row.key}:td:${index}`}
                       selectable={inlinesSelectable(cell)}
                       style={[styles.markdownTableCell, { width: columnWidth }]}
                     >
-                      {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
                     </MarkdownSelectableText>
                   );
                 })}
@@ -6035,15 +6209,15 @@ function MarkdownBody({
     }
     return (
       <MarkdownSelectableText
-        allowIosUITextView={allowIosUITextView}
+        allowIosUITextView={singleBlockAllowsIosUITextView}
         key={`${block.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
         selectable={inlinesSelectable(block.inlines)}
         style={settledTextStyle}
       >
-        {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
+        {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}
@@ -6073,126 +6247,6 @@ function MarkdownBody({
       })}
       </View>
     </View>
-  );
-}
-
-/**
- * 文件/目录路径 chip 的共享执行体(远程会话文件交互,对齐桌面 #631 的 chip 点亮
- * 语义)。inline code 与本地路径链接两种形态共用:候选先经被控端精确 stat 验证——
- * 文件/目录点亮可点(文件 → Quick Look 预览页;目录 → 文件浏览器定位),明确
- * 不存在保持纯文本,链路断等无法判定时乐观点亮(点击后预览页自己的错误 UX 兜底)。
- * workdir 外的绝对路径同样候选(对齐桌面):文件走被控端 absPath 取件通道预览,
- * 目录因文件浏览器只认 workdir 内而保持纯文本(canOpenChatPathChip)。
- * 无会话上下文(context null)/ 流式中 → plainStyle 纯文本渲染。
- */
-function ChatPathChipSpan({
-  candidate,
-  chipStyle,
-  display,
-  plainStyle,
-  SpanText,
-  streaming,
-}: {
-  candidate: ChatPathCandidate | null;
-  chipStyle: StyleProp<TextStyle>;
-  /** span 显示文本(code 形态 = 原文;链接形态 = 链接 label)。 */
-  display: string;
-  plainStyle: StyleProp<TextStyle>;
-  SpanText: typeof Text;
-  streaming?: boolean;
-}) {
-  const ctx = useContext(ChatFilePathContext);
-  // workdir 外候选不再一票否决:relPath 为 null 表示 workdir 外,文件仍可经
-  // absPath 通道打开,可开性由 canOpenChatPathChip 在 verdict 定 kind 后裁决。
-  const target = useMemo(() => {
-    if (!ctx || !candidate) return null;
-    const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
-    return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
-  }, [candidate, ctx]);
-  // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
-  // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
-  // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
-  // 带着下划线可点(PR #1144 review 实捉,桌面同款)。
-  const readVerdict = useCallback(
-    () =>
-      ctx && target
-        ? peekRemotePathVerdictForRender(ctx.deviceId, ctx.workdir, target.absPath)
-        : undefined,
-    [ctx, target],
-  );
-  const [verdict, setVerdict] = useRecyclingState<RemotePathVerdict | undefined>(readVerdict);
-
-  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 递增,**驱动下面的验证副作用重跑**。
-  // 按 key 过滤:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
-  //
-  // ⚠️ 这里必须递增一个计数、不能只 setVerdict(readVerdict()):`readVerdict` 是
-  // `[ctx, target]` 的稳定 useCallback,通知**不改变验证副作用的任何依赖**,那个副作用
-  // 就不会重跑 → 再也不发 verifyRemotePathCached。TTL 到期时负缓存已被删、又没有确定态,
-  // ForRender 回 undefined,于是 chip 只完成「降级成纯文本」、没完成「重验」,挂载期间
-  // 永不自愈 —— 比重构前(一直乐观点亮)更糟。桌面同一处把 cacheGen 放进了验证副作用的
-  // 依赖,手机漏了这一环(PR #1144 review 实捉:第 10 轮重构只做对了桌面那一半)。
-  const [cacheGen, setCacheGen] = useRecyclingState(0);
-  useEffect(() => {
-    if (!ctx || !target) return;
-    const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
-    return subscribeRemotePathVerdictChange((key) => {
-      if (key === mine) setCacheGen((n) => n + 1);
-    });
-  }, [ctx, target]);
-
-  useEffect(() => {
-    // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
-    setVerdict(readVerdict());
-    if (!ctx || !target) return;
-    // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 的负缓存承担。
-    if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
-    // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
-    if (streaming) return;
-    let cancelled = false;
-    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
-      // 不看返回值:结论已落缓存,统一重新派生。
-      if (!cancelled) setVerdict(readVerdict());
-    });
-    return () => {
-      cancelled = true;
-    };
-    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生 + 必要时重验。
-  }, [ctx, streaming, target, readVerdict, cacheGen]);
-
-  // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
-  //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
-  //     stat 异常)照旧乐观点亮,绝不因断链把整条消息的 chip 全灭掉;
-  //   - 歧义形状(裸名 `array.map`、分隔符无扩展 `and/or`——与 `package.json`、
-  //     `src/components` 词法同形,分不开):必须等远端明确回 file / directory 才点亮。
-  //     否则链路一抖,满屏普通行内 code 都变成可点的假链接——「可点」的视觉信号一旦
-  //     不可信,加强它只会让误判更醒目(DESIGN.md §14.5 规则 5)。
-  const verdictAllowsLit = candidate?.ambiguousShape
-    ? verdict === 'file' || verdict === 'directory'
-    : verdict !== undefined && verdict !== 'nonfile';
-  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
-  if (!lit) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
-  }
-  const kind: 'file' | 'directory' =
-    verdict === 'directory' || (verdict === 'unknown' && candidate.directoryShape) ? 'directory' : 'file';
-  if (!canOpenChatPathChip(kind, target.relPath)) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
-  }
-  const chipTarget: ChatFilePathTarget = {
-    kind,
-    relPath: target.relPath,
-    absPath: target.absPath,
-    ...(kind === 'file' && candidate.line !== undefined ? { line: candidate.line } : {}),
-  };
-  return (
-    <SpanText
-      onLongPress={ctx.onLongPressPath ? () => ctx.onLongPressPath?.(chipTarget) : undefined}
-      onPress={() => ctx.onOpenPath(chipTarget)}
-      style={chipStyle}
-      testID="message.markdownPathChip"
-    >
-      {display}
-    </SpanText>
   );
 }
 
@@ -6279,6 +6333,7 @@ function LinkPathChipSpan({
   return (
     <ChatPathChipSpan
       candidate={candidate}
+      explicitLink={!bare}
       chipStyle={
         codeStyled
           ? [baseStyle, styles.markdownInlineCode, underlineDecoration(styles, baseStyle, styles.markdownPathChip)]
@@ -6435,13 +6490,14 @@ function renderInline(
         void Linking.openURL(inline.url).catch(() => undefined);
       };
       return (
-        <SpanText
+        <MailLinkSpan
           key={spanKey(`link:${index}:${inline.url}`)}
-          onPress={openExternalUrl}
+          url={inline.url}
+          SpanText={SpanText}
           style={clickableInlineStyle(styles, openExternalUrl, ctx.baseStyle)}
         >
           {inline.text}
-        </SpanText>
+        </MailLinkSpan>
       );
     }
     case 'strong':
@@ -6581,6 +6637,9 @@ export function AttachmentStrip({
   align,
   layout,
   onOpen,
+  onOpenFile,
+  onImageError,
+  imageReloadKeys,
   onResolveRemoteMedia,
   usePreviewState = useRecyclingState,
 }: {
@@ -6591,6 +6650,12 @@ export function AttachmentStrip({
   align: 'left' | 'right';
   layout: MessageContentLayout;
   onOpen?: (payload: MessagePayload) => void;
+  /** Index within this strip's file chips, for callers that resolve files by ID on tap. */
+  onOpenFile?: (index: number) => void;
+  /** Index within this strip's images, for owners that refresh short-lived authorization. */
+  onImageError?: (index: number) => void;
+  /** Reset only the failed image when authorization returns the same URL. */
+  imageReloadKeys?: readonly number[];
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   usePreviewState?: MediaPreviewStateHook;
 }) {
@@ -6611,13 +6676,14 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}`}
+          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
           media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
+          onImageError={onImageError ? () => onImageError(index) : undefined}
           variant="attachment"
           usePreviewState={usePreviewState}
         />
@@ -6636,7 +6702,7 @@ export function AttachmentStrip({
               key={`${item.kind}:${item.path ?? item.name}:${index}`}
               layout={layout}
               name={item.name}
-              onOpen={onOpen ? () => onOpen(buildAttachmentPayload(item)) : undefined}
+              onOpen={onOpenFile ? () => onOpenFile(index) : onOpen ? () => onOpen(buildAttachmentPayload(item)) : undefined}
               path={item.path}
             />
           ))}
@@ -6703,13 +6769,15 @@ function ToolMediaBlock({
 function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   callId: string; sessionId: string; excludedUrls: string[]; actions: MessageActions;
 }) {
-  const { blocks, error, retry } = usePluginResultCard(actions.remoteDeviceId, sessionId, callId);
+  const { blocks, error, retry, hidden } = usePluginResultCard(actions.remoteDeviceId, sessionId, callId);
   const layout = buildMessageContentLayout({ screenWidth: actions.screenWidth });
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
+  if (hidden) return null;
   return <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
     {blocks?.map((block) => {
-      if (block.primitive === 'plugin-card-actions') return <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId} />;
+      if (block.primitive === 'plugin-card-actions') return <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />;
       const url = (block.data as { url?: unknown } | undefined)?.url;
       const kind = managedToolMediaKind(url);
       if (typeof url === 'string' && excludedUrls.includes(url)) return null;
@@ -6804,6 +6872,7 @@ function MediaPreview({
   label,
   onOpen,
   onResolveRemoteMedia,
+  onImageError,
   variant = 'card',
   presentationOnly = false,
   localPreview,
@@ -6814,6 +6883,7 @@ function MediaPreview({
   label: string;
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  onImageError?: () => void;
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
@@ -6881,6 +6951,7 @@ function MediaPreview({
   const handleImageError = useCallback(() => {
     if (media.previewable) {
       setResolveState({ status: 'error' });
+      onImageError?.();
       return;
     }
     if (imageRetryUsedRef.current) {
@@ -6889,7 +6960,7 @@ function MediaPreview({
     }
     imageRetryUsedRef.current = true;
     resolveThumbnail(true);
-  }, [media.previewable, resolveThumbnail]);
+  }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
   // decode SVG. Reuse the decoded dimensions without a second image request.
@@ -7139,13 +7210,17 @@ function ToolResultPreview({
   layout,
   tool,
   onOpen,
+  onRetryImageDelivery,
 }: {
   layout: MessageContentLayout;
   tool: NormalizedRemoteMessage;
   onOpen?: (payload: MessagePayload) => void;
+  onRetryImageDelivery?: (imageId: string) => Promise<void>;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const payload = buildToolResultPayload(tool);
+  const imageId = readFailedImageDelivery(tool.secondaryBody);
+  if (imageId) return <GeneratedImageRetry imageId={imageId} onRetry={onRetryImageDelivery} />;
+  const payload = buildToolResultPayload({ ...tool, secondaryBody: readToolProcessText(tool.secondaryBody) });
   if (!payload) return null;
   const preview = summarizeMessagePayloadPreview(payload, { maxPreviewChars: TOOL_RESULT_PREVIEW_MAX_CHARS });
   // 「查看内容」hint 只在纯文本结果确实被截断(字符上限或行数上限)时显示——预览已
@@ -7220,7 +7295,7 @@ function MessagePayloadModal({
   /** 图表导出图的标注配置(来自聊天 lightbox 的同一份 chatAnnotation)。 */
   imageAnnotation?: ImageLightboxAnnotationConfig;
   onClose(): void;
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>;
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   onShareImage?: ComponentProps<typeof ImageLightbox>['onShareImage'];
@@ -7605,7 +7680,7 @@ function MessagePayloadBody({
   onResolveRemoteMedia,
 }: {
   payload: MessagePayload;
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>;
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
 }) {
@@ -7799,7 +7874,7 @@ function DiffPayloadBody({
 }: {
   diff: NormalizedToolDiff;
   layout: PayloadBodyLayout;
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>;
 }) {
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -7987,7 +8062,7 @@ function FilePayloadBody({
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   layout: PayloadBodyLayout;
   payload: Extract<MessagePayload, { kind: 'file' }>;
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>;
 }) {
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -8086,26 +8161,34 @@ type RemoteTextFilePreviewLoadState =
 
 function useRemoteTextFilePreview(
   sourcePath: string,
-  onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>,
+  onReadTextFilePreview?: (filePath: string, options?: { signal?: AbortSignal }) => Promise<RemoteTextFilePreviewResult>,
 ) {
   const { i18n: i18nInstance } = useTranslation();
   const [previewLoadState, setPreviewLoadState] = useState<RemoteTextFilePreviewLoadState>(
     { status: 'idle' },
   );
   const previewSeqRef = useRef(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
   const previewKind = useMemo(() => remoteFilePreviewKind(sourcePath), [sourcePath]);
   const canPreview = previewKind === 'text' && !!sourcePath && !!onReadTextFilePreview;
 
   useEffect(() => {
     previewSeqRef.current += 1;
     setPreviewLoadState({ status: 'idle' });
-  }, [sourcePath]);
+    return () => {
+      previewSeqRef.current += 1;
+      previewAbortRef.current?.abort();
+    };
+  }, [sourcePath, onReadTextFilePreview]);
 
   const loadPreview = useCallback(() => {
     if (!canPreview || previewLoadState.status === 'loading') return;
     const seq = ++previewSeqRef.current;
+    previewAbortRef.current?.abort();
+    const abort = new AbortController();
+    previewAbortRef.current = abort;
     setPreviewLoadState({ status: 'loading' });
-    void onReadTextFilePreview(sourcePath)
+    void onReadTextFilePreview(sourcePath, { signal: abort.signal })
       .then((result) => {
         if (previewSeqRef.current !== seq) return;
         if (result.success && typeof result.data === 'string') {
@@ -8572,6 +8655,18 @@ function messageClientId(item: MobileMessageItem): string {
   return item.message.source.clientId || item.message.source.id || item.message.key;
 }
 
+/** Host-stamped input a companion reply answers (agentMeta.replyToClientId). */
+function readReplyToClientId(message: NormalizedRemoteMessage): string | null {
+  const value = message.source.agentMeta?.replyToClientId;
+  return typeof value === 'string' && value ? value : null;
+}
+
+/** A message the companion's reply can point back to: a visible message the owner typed. */
+function isOwnerTypedMessage(message: NormalizedRemoteMessage | undefined): message is NormalizedRemoteMessage {
+  return !!message && message.kind === 'user' && !message.isSyntheticTrigger && !message.automationOrigin
+    && !message.hookSource && !message.sessionOrigin && !message.systemCardType;
+}
+
 /** 语法 kind → 样式。plain 不走这里(直接当字符串塞进父 Text,少一层节点)。 */
 function syntaxStyleFor(
   styles: ReturnType<typeof makeStyles>,
@@ -8738,6 +8833,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.sm,
   },
   companionAnswer: { backgroundColor: colors.surface, borderWidth: 0, paddingHorizontal: 0 },
+  companionQuote: { alignSelf: 'stretch', marginBottom: spacing.xs },
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
   companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
   companionAvatarSlot: { flexShrink: 0, marginTop: 2 },
@@ -8819,6 +8915,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: 4,
     maxWidth: '86%',
+  },
+  failedSamplingAttemptText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   modelMismatchText: {
     color: colors.textTertiary,
@@ -9291,7 +9393,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fileText: { flex: 1, minWidth: 0 },
+  // Basis auto, not `flex: 1`: a content-sized chip (left-aligned strip, group wrapper) would give the name zero width.
+  fileText: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
   fileName: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   diffCard: {
     backgroundColor: colors.chatCodeSurface,
@@ -9497,6 +9600,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
+  },
+  imageDeliveryHint: {
+    color: colors.textSecondary, fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption, fontWeight: fontWeight.regular,
+  },
+  imageDeliveryRetry: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: spacing.sm },
+  imageDeliveryRetryText: {
+    color: colors.textPrimary, fontSize: typeScale.body,
+    lineHeight: lineHeight.body, fontWeight: fontWeight.medium,
   },
   toolInputPreview: {
     backgroundColor: colors.chatCodeSurface,
@@ -9837,3 +9949,69 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   todoPending: { color: colors.textTertiary },
   todoDone: { fontWeight: fontWeight.medium },
 });
+
+export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
+  const instanceKey = useId();
+  const origin = useContext(ChatFilePathContext);
+  const renderMedia = (node: RichNode) => <RichAnswerMedia node={node} body={props} />;
+  const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
+  return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
+    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
+        stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
+        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
+    : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
+}
+
+/** Each composed column supplies its actual width; media never assumes a full message row. */
+function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0] }) {
+  const origin = useContext(ChatFilePathContext);
+  const resolver = useContext(MarkdownRemoteMediaContext);
+  const visible = useContext(MessageHeavyContentVisibilityContext);
+  const [width, setWidth] = useState(0);
+  const raw = richMediaSource(node);
+  if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
+  if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
+  const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
+  const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
+  const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
+  // Images outside workdir retain explicit-open. Video resolves only on explicit play.
+  if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
+  const label = richString(node, 'alt', node.kind);
+  const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
+  // Rich answers also render outside LegendList (cloud companions). Keep ordinary
+  // state there, but remount the preview when a recycled row or streamed media
+  // patch changes its identity, so resolved thumbnails/errors cannot cross images.
+  const previewKey = JSON.stringify([origin?.deviceId, origin?.sessionId, body.richStateKey ?? body.markdownImageCacheKey, node.id, url]);
+  const visual = richVisualStyle(node);
+  const imageWidth = typeof visual.width === 'number' || typeof visual.width === 'string'
+    ? width : Math.min(body.layout.imagePreviewWidth, width);
+  const naturalFrameHeight = imageWidth * body.layout.imagePreviewHeight / body.layout.imagePreviewWidth;
+  const imageHeight = Math.min(typeof visual.maxHeight === 'number' ? visual.maxHeight : Infinity,
+    Math.max(typeof visual.minHeight === 'number' ? visual.minHeight : 0,
+      typeof visual.height === 'number' ? visual.height : naturalFrameHeight));
+  const layout = { ...body.layout, imagePreviewWidth: imageWidth,
+    imagePreviewHeight: imageHeight,
+    mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
+  return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
+    {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
+      width={width} visible={visible} resolve={resolver} />
+      : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
+      usePreviewState={useState}
+      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}
+  </View>;
+}
+
+function GeneratedImageRetry({ imageId, onRetry }: { imageId: string; onRetry?: (id: string) => Promise<void> }) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <View>
+    <Text style={styles.imageDeliveryHint}>{t(failed ? 'chat:imageDelivery.retryFailed' : 'chat:imageDelivery.failed')}</Text>
+    {onRetry && <Pressable accessibilityRole="button" disabled={pending} style={styles.imageDeliveryRetry} onPress={async () => {
+      setPending(true); setFailed(false);
+      try { await onRetry(imageId); } catch { setFailed(true); } finally { setPending(false); }
+    }}><Text style={styles.imageDeliveryRetryText}>{t(pending ? 'chat:imageDelivery.retrying' : 'chat:imageDelivery.retry')}</Text></Pressable>}
+  </View>;
+}

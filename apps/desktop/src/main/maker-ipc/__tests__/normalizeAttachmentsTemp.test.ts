@@ -37,12 +37,14 @@ import {
   materializeDirectSendOssAttachments,
   materializeQueuedOssAttachmentsDeferred,
   normalizeUserMessage,
+  writeTempFile,
 } from '../normalizeAttachments.js';
 import * as imageCacheStore from '../../imageCacheStore.js';
 import * as cindyMediaBlobStore from '../../cindy-media/blobStore.js';
 import { ingestMedia } from '../../cindy-media/ingest.js';
 import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
 import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
+import { configureMailAttachmentHost, prepareMailAttachmentSelection } from '../../cindy-brain/mailAttachmentUpload.js';
 
 const tempDirs: string[] = [];
 
@@ -50,6 +52,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   tempRoot.value = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-inline-test-'));
   tempDirs.push(tempRoot.value);
+  configureMailAttachmentHost({ writeTempFile, materializeDirectSendOssAttachments });
   configureTempAttachmentOwner({
     instanceId: 'normalize-attachments-test-owner',
     processId: process.pid,
@@ -61,6 +64,30 @@ afterEach(async () => {
 });
 
 describe('inline attachment temporary files', () => {
+  // Unit, real isolated bytes: PR #6404 selected-file path disclosure/TOCTOU.
+  // Existing temp tests did not traverse the mail picker handoff. Replacing the
+  // selected source must not change the delivered file; rollback removes only
+  // the staged copy, and acceptance retains the existing session cleanup.
+  it('stages selected mail bytes without exposing or retaining the source path', async () => {
+    const source = path.join(tempRoot.value, 'personal-name.txt');
+    for (const inline of [false, true]) {
+      await fs.writeFile(source, 'selected');
+      const staged = await prepareMailAttachmentSelection(source, 'mail-selection', inline);
+      expect(staged.attachment.filename).toBe('personal-name.txt');
+      expect(staged.attachment.path).not.toBe(source);
+      expect(staged.attachment.path).not.toContain('personal-name');
+      await fs.writeFile(source, 'replaced');
+      expect(await fs.readFile(staged.attachment.path, 'utf8')).toBe('selected');
+      expect(staged.attachment.bytes).toBe(8);
+      expect(Boolean(staged.attachment.contentId)).toBe(inline);
+      if (inline) {
+        staged.accepted();
+        await cleanupSessionTempAttachments('mail-selection');
+      } else await staged.discard();
+      await expect(fs.stat(staged.attachment.path)).rejects.toThrow();
+      expect(await fs.readFile(source, 'utf8')).toBe('replaced');
+    }
+  });
   it('keeps a resolved xdt-image URL as the Host-managed image identity', async () => {
     const imageUrl = 'xdt-image://managed-reference/source.png';
     const absPath = path.join(tempRoot.value, 'source.png');

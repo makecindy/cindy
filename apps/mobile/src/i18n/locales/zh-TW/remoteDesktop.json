@@ -1,4 +1,17 @@
 {
+  "skin_macii": "Macintosh II",
+  "skin_powerbook": "PowerBook 170",
+  "skin_thinkpad": "ThinkPad 701C",
+  "skin_classic": "經典原版",
+  "skin_compact": "窄邊經典",
+  "skin_edge": "極簡大螢幕",
+  "skin_modern": "現代",
+  "nextSkin": "下一個外觀",
+  "retroSkin": "復古",
+  "modernSkin": "現代",
+  "switchModern": "切換到現代",
+  "switchRetro": "切換到復古",
+  "skinSwipeHint": "在這裡左右滑動切換外觀。",
   "hostDisconnected": "電腦已主動中斷遠端桌面連線。",
   "privacyScreen": "電腦防窺",
   "privacyScreenHint": "遮住電腦螢幕。在電腦上點擊滑鼠或按鍵，確認後中斷連線，並依設定鎖定螢幕。",
@@ -160,5 +173,8 @@
   "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。",
   "hostMute": "遠端電腦靜音",
   "hostMuteHint": "連線期間將遠端電腦靜音",
-  "hostMuteFailed": "無法修改遠端電腦的靜音狀態"
+  "hostMuteFailed": "無法修改遠端電腦的靜音狀態",
+  "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
+  "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
+  "handoffWindow": "代輸入 · {{app}}"
 }

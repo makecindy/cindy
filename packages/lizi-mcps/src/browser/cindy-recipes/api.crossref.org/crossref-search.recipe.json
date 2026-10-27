@@ -1,0 +1,31 @@
+{
+  "id": "crossref-search",
+  "match": [
+    "api.crossref.org"
+  ],
+  "description": "检索 Crossref 论文与出版物，返回 DOI、作者、期刊、出版日期和官方链接。",
+  "access": "read",
+  "inputs": {
+    "query": {
+      "required": true,
+      "description": "论文标题、作者或 DOI"
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://api.crossref.org/works?query.bibliographic={{query|url}}&rows=20"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "evaluate",
+      "as": "result",
+      "fn": "async () => {\n const query = '{{query|js}}'.trim().replace(/^https?:\\/\\/(?:dx\\.)?doi\\.org\\//i, '');\n let data;\n if (/^10\\.\\d{4,9}\\/\\S+$/i.test(query)) {\n  const response = await fetch('/works/' + encodeURIComponent(query), {credentials: 'omit', signal: AbortSignal.timeout(20000)});\n  if (!response.ok) throw new Error('Crossref DOI 查询返回 HTTP ' + response.status);\n  const record = await response.json();\n  if (record.status !== 'ok' || record.message?.DOI?.toLowerCase() !== query.toLowerCase()) throw new Error('Crossref DOI 响应与查询不一致');\n  data = {status: 'ok', message: {'total-results': 1, items: [record.message]}};\n } else data = JSON.parse(document.body.innerText);\n if (data.status !== 'ok' || !Array.isArray(data.message?.items)) throw new Error('Crossref 未返回有效出版物，检查当前页面');\n return {total: data.message['total-results'], works: data.message.items.map(w => ({doi: w.DOI, title: w.title?.[0] || '', authors: (w.author || []).map(a => [a.given,a.family].filter(Boolean).join(' ') || a.name || ''), publisher: w.publisher, journal: w['container-title']?.[0] || '', published: w.published?.['date-parts']?.[0], type: w.type, url: w.URL}))};\n}",
+      "timeoutMs": 30000
+    }
+  ],
+  "output": "{{result}}"
+}

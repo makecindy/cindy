@@ -48,6 +48,21 @@ describe('anonymous shared group status', () => {
     expect(await createGuestSupportReader(env.readCaps)(member)).toBe('needs-update');
   });
 
+  it('coalesces shared accounts that point to one physical computer', async () => {
+    const env = setup(['available', 'available']);
+    const base = env.view.config!.members[1]!;
+    const members = [
+      { ...base, kind: 'share' as const, agentDeviceId: 'share:s1', hostDeviceId: 'kai-pc' },
+      { ...base, kind: 'share' as const, agentDeviceId: 'share:s2', hostDeviceId: 'kai-pc' },
+    ];
+    env.readCaps.mockResolvedValue({ virtualWorkspace: true, reshareConsent: true } as RemoteAgentCaps);
+    const read = createGuestSupportReader(env.readCaps);
+
+    expect(await Promise.all(members.map((member) => read(member)))).toEqual(['supported', 'supported']);
+    expect(env.readCaps).toHaveBeenCalledTimes(1);
+    expect(env.readCaps).toHaveBeenCalledWith(members[0]);
+  });
+
   it('projects coarse states without identities, sources, limits, or usage', async () => {
     const env = setup();
     expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual([
@@ -192,12 +207,43 @@ describe('anonymous shared group status', () => {
     const env = setup(['available', 'available']);
     env.readCaps.mockResolvedValue({ virtualWorkspace: true } as RemoteAgentCaps);
     expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'needs-update']);
-    // A shared member is already isolated by its host and does not require guestRelay.
+    // A shared member is isolated by its host, but still needs reshareConsent so
+    // the anonymous status matches the actual guest-task admission check.
     env.view.config!.members[1].kind = 'share';
-    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'busy']);
-    env.readCaps.mockResolvedValue({ guestRelay: true } as RemoteAgentCaps);
-    await vi.advanceTimersByTimeAsync(15_000);
     expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'needs-update']);
+    env.readCaps.mockResolvedValue({ virtualWorkspace: true, reshareConsent: true } as RemoteAgentCaps);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'busy']);
+  });
+
+  // 转分享(provider-sharing.md §4.3)：主人没同意过读状态的这个人时，分享来的电脑对他显示暂不可用，与实际分配一致。
+  it('shows a shared-in computer as unavailable to a shared user its owner has not agreed to', async () => {
+    const env = setup(['available', 'available', 'offline']);
+    env.view.config!.members[1].kind = 'share';
+    env.view.config!.members[2].kind = 'share';
+    let agreed = false;
+    const reshareState: NonNullable<SharedGroupStatusDeps['reshareState']> = vi.fn((member) =>
+      (member.kind === 'share' && !agreed ? 'unavailable' : null));
+    expect(await readSharedGroupStatus({ ...env.deps, reshareState }, 'anthropic')).toEqual(['available', 'unavailable', 'offline']);
+    // 离线的照实显示离线；不再为没同意的那台探测能力。
+    expect(reshareState).toHaveBeenCalledTimes(2);
+    expect(env.readCaps).not.toHaveBeenCalled();
+    agreed = true;
+    env.readCaps.mockResolvedValue({ virtualWorkspace: true, reshareConsent: true } as RemoteAgentCaps);
+    // 同意后照常显示(这台在跑任务，显示忙碌)。
+    expect(await readSharedGroupStatus({ ...env.deps, reshareState }, 'anthropic')).toEqual(['available', 'busy', 'offline']);
+  });
+
+  // 受邀者看到的是电脑不是账号(provider-groups.md §10，2026-10-15)：同一台电脑的几个账号合成一项，取最能接任务的状态。
+  it('lists one state per computer, taking the most usable account of each computer', async () => {
+    const env = setup(['available', 'cooling', 'full', 'offline', 'cooling', 'paused']);
+    const members = env.view.config!.members;
+    members[2].agentDeviceId = members[1].agentDeviceId;
+    for (const index of [3, 4]) {
+      Object.assign(members[index], { kind: 'share', agentDeviceId: `share:s${index}`, hostDeviceId: 'kai-pc' });
+    }
+    // 本机；同一台(冷却 + 满载仍能接 → 忙碌)；Kai 的那台(离线 + 冷却 → 冷却)；暂停的那台。
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'busy', 'cooling', 'paused']);
   });
 
   it('reflects the same temporary exclusion as the guest router without probing or changing it', async () => {

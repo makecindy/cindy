@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildUnconfirmedConfirmationEvidence } from '../pluginInstanceConfirmation.js';
-import { reconcilePendingNamespaceMigrations, stampInstanceCensus } from '../pluginNamespaceMigration.js';
+import {
+  canReclaimLegacyBareInstance,
+  reconcilePendingNamespaceMigrations,
+  stampInstanceCensus,
+} from '../pluginNamespaceMigration.js';
 import { emptyPluginInstanceRegistry, type PluginInstanceRecord } from '../pluginInstanceRegistry.js';
 
 const NOW = '2026-10-08T00:00:00.000Z';
@@ -134,5 +138,45 @@ describe('reconcilePendingNamespaceMigrations', () => {
       confirmUnconfirmed: async () => {},
     }, true);
     expect(settled).toHaveBeenCalledWith('hello', true);
+  });
+});
+
+describe('canReclaimLegacyBareInstance', () => {
+  const org = { organizationId: 'org-acme', orgSlug: 'acme' };
+  const removed = {
+    pluginId: 'plugin-a',
+    scope: 'organization' as const,
+    source: 'market' as const,
+    organizationId: 'org-acme',
+    installed: false,
+  };
+  const reclaim = (
+    records: Parameters<typeof canReclaimLegacyBareInstance>[0]['records'],
+    currentOrganization: Parameters<typeof canReclaimLegacyBareInstance>[0]['currentOrganization'] = org,
+    namespace = 'acme',
+  ) => canReclaimLegacyBareInstance({ pluginId: 'plugin-a', namespace, records, currentOrganization });
+
+  it('lets the same organization plugin take back its removed pre-namespace install', () => {
+    expect(reclaim([removed])).toBe(true);
+    expect(reclaim([{ ...removed, source: 'legacy-adopted' }])).toBe(true);
+  });
+
+  it.each([
+    ['another plugin id', [{ ...removed, pluginId: 'plugin-b' }]],
+    ['a record that is still installed', [{ ...removed, installed: true }]],
+    ['a record written after namespaces', [{ ...removed, namespace: 'acme' }]],
+    ['a root record', [{ ...removed, namespace: null }]],
+    ['a public install', [{ ...removed, scope: 'public' as const, organizationId: null }]],
+    ['a custom market install', [{ ...removed, source: 'git-market' as const }]],
+    ['another organization', [{ ...removed, organizationId: 'org-other' }]],
+    ['two records for the same plugin', [removed, { ...removed }]],
+  ])('refuses %s', (_label, records) => {
+    expect(reclaim(records)).toBe(false);
+  });
+
+  it('refuses when the current organization does not own the requested namespace', () => {
+    expect(reclaim([removed], null)).toBe(false);
+    expect(reclaim([removed], { organizationId: 'org-acme', orgSlug: null })).toBe(false);
+    expect(reclaim([removed], org, 'other')).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -113,7 +114,7 @@ const detailPatchEpoch = new Map<string, number>();
 const sessionContentOrigins = new WeakMap<Session, Session>();
 // Activity and list presentation pushes do not establish a newer model route.
 const activityFields = ['totalMoney', 'totalCostUsd', 'totalTokenUsage', 'lastTurnEndedAt',
-  'preview', 'title', 'userSendAt', 'updatedAt'] as const;
+  'preview', 'title', 'userSendAt', 'lastActivityAt', 'updatedAt'] as const;
 const activityFieldNames: ReadonlySet<string> = new Set(activityFields);
 type ActivityField = typeof activityFields[number];
 // Per-field markers distinguish pushes after a GET began, even equal-value pushes.
@@ -159,6 +160,8 @@ let bootstrapRetryImpl: ((deviceId: string) => void) | null = null;
 
 /** 扁平合并快照(缓存引用,变化时才换新)。 */
 let mergedSnapshot: Session[] = [];
+/** UI 订阅使用的稳定投影；协议与传输层仍可读取 mergedSnapshot 原始镜像。 */
+let visibleMergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
 /** sessionId → 投影后标题(含标题预览),随 recompute 重建;供消息来源标签 O(1) 查询。 */
@@ -171,8 +174,8 @@ const sessionTitleIndex = new Map<string, string>();
  * 那个窗口里 sessionDeviceIndex 没有这条,`getSessionDeviceId` 返回 undefined —— 传输层据此把
  * 一个**远程**会话的操作发给本机 maker:首条消息、setGoal、流订阅全落错边(#807 review P1)。
  *
- * 所以创建成功后立刻把这个已确定的事实钉进来,recompute 时先铺钉子、再让分片派生值覆盖
- * (分片更完整,且与钉子不可能冲突)。钉子只影响 origin 判定,不伪造会话行 —— 会话进列表仍等
+ * 创建成功或打开带设备归属的链接后立刻把目标钉进来。recompute 时钉子优先于其它设备
+ * 的同 id 分片(复制的任务可能保留 id)。钉子只选择 origin 与标题,不伪造会话行 —— 会话进列表仍等
  * 权威快照。
  *
  * 不主动清理(含 clear / removeDevice):与 stickySessionOrigin 同一论证 —— 归属是单向的
@@ -448,7 +451,7 @@ function recompute(): void {
   sessionDeviceIndex.clear();
   sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
-  // 分片派生值随后覆盖同 id 的条目。
+  // 其它设备的同 id 分片不能覆盖显式指定的 origin。
   for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
   if (shards.size === 0) {
     mergedSnapshot = EMPTY;
@@ -461,11 +464,23 @@ function recompute(): void {
           shard.deviceId,
         );
         flat.push(projected);
-        sessionDeviceIndex.set(s.id, shard.deviceId);
-        if (projected.title) sessionTitleIndex.set(s.id, projected.title);
+        const pinnedDeviceId = pinnedOrigins.get(s.id);
+        if (!pinnedDeviceId || pinnedDeviceId === shard.deviceId) {
+          sessionDeviceIndex.set(s.id, shard.deviceId);
+          if (projected.title) sessionTitleIndex.set(s.id, projected.title);
+        }
       }
     }
     mergedSnapshot = flat;
+  }
+  const nextVisible = CINDY_MAKE_ENABLED
+    ? mergedSnapshot
+    : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
+  if (
+    visibleMergedSnapshot.length !== nextVisible.length ||
+    visibleMergedSnapshot.some((session, index) => session !== nextVisible[index])
+  ) {
+    visibleMergedSnapshot = nextVisible;
   }
   // 设备列表快照:按 deviceName(再 deviceId 兜底)稳定排序,避免 Map 插入序在设备增删时
   // 抖动导致切换栏 chip 乱跳;内容不变时保持旧引用(防 useRemoteDevices 无谓重渲染)。
@@ -609,12 +624,12 @@ const actions = {
     const incomingIds = new Set(stamped.map((session) => session.id));
     const preserved =
       existing?.sessions
-        // The ordinary sessions:list excludes companions. Absence from that
-        // snapshot cannot retire a companion loaded through its resource link.
+        // The ordinary sessions:list excludes companions and side chats. Absence
+        // cannot retire a task loaded through its own resource link.
         // Its own authoritative patch/get still controls status and deletion.
         .filter(
           (session) =>
-            (session.status !== status || session.source === 'bot') && !incomingIds.has(session.id),
+            (session.status !== status || session.source === 'bot' || session.source === 'side-chat') && !incomingIds.has(session.id),
         )
         .map((session) =>
           session.deviceLinkDeviceName === deviceName &&
@@ -1004,6 +1019,11 @@ const actions = {
     return mergedSnapshot;
   },
 
+  /** 用户界面使用的远端会话投影；旧 Cindy Make 行保留在原始镜像中但不可见。 */
+  getVisibleMergedRemoteSessions(): Session[] {
+    return visibleMergedSnapshot;
+  },
+
   /**
    * 发送瞬间登记标题预览(见 {@link pendingTitlePreview})。只影响投影层显示,
    * 权威标题仍由被控端写回;被控端标题到达后本条自动失效。
@@ -1390,7 +1410,7 @@ export function useRemoteSessionTitle(sessionId: string | undefined): string | n
 
 /** 组件内订阅:返回扁平远端会话快照(喂给 sidebar 合并点)。 */
 export function useRemoteProjectSessions(): Session[] {
-  return useSyncExternalStore(subscribe, actions.getMergedRemoteSessions);
+  return useSyncExternalStore(subscribe, actions.getVisibleMergedRemoteSessions);
 }
 
 /** 组件内订阅:返回当前已连接的被控设备摘要列表(机器切换栏 chips)。 */

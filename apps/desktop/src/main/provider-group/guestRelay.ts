@@ -11,7 +11,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import type { ProviderShareGroupState } from '@cindy/device-link';
 
 import type { ProviderGroupConfig } from '../../shared/providerGroup.js';
-import type { RelayRunFailure } from '../remote-agent/host/groupRelay.js';
+import { reshareKeyForGuest, type RelayRunFailure } from '../remote-agent/host/groupRelay.js';
 import type { GroupRelayLoad, GroupRelayMember, RemoteAgentGroupRelayDeps } from '../remote-agent/host/runHost.js';
 import type { RemoteAgentInvoke, RemoteAgentPoller } from '../remote-agent/controller/runClient.js';
 import { RemoteAgentRunClient } from '../remote-agent/controller/runClient.js';
@@ -25,12 +25,22 @@ import type { ProviderGroupOwnerScope } from './runtime.js';
 export const PROVIDER_GROUP_GUEST_INCAPABLE_MS = 10 * 60_000;
 
 export interface ProviderGroupGuestRelayDeps {
+  bindFastPolicy?: RemoteAgentGroupRelayDeps['bindFastPolicy'];
   /** 当前账号的分配器与负载(每次选电脑开头取一次)。 */
   scope(): ProviderGroupOwnerScope;
   readGroup(providerId: string): ProviderGroupConfig | null;
   connect(agentDeviceId: string): { invoke: RemoteAgentInvoke; poller: RemoteAgentPoller };
   /** 组内电脑报错里的用量重置时刻(unix ms)；不提供时用量上限一律按默认时长冷却。 */
   readResetAt?(failure: RelayRunFailure): number | null;
+  /**
+   * 转分享(provider-sharing.md §4.3)：分享来的那台电脑的主人是否同意过这个受邀者(按转分享键)。提供时，没同意过
+   * (或不知道是谁)的一律不选、匿名状态里写暂不可用；不提供时不按同意过滤(测试)。
+   */
+  reshareAllows?(agentDeviceId: string, reshareKey: string | undefined): boolean;
+  /** 分享来的那台拒绝了这个人：重新核对同意情况。 */
+  noteReshareDenied?(agentDeviceId: string, reshareKey: string): void;
+  /** 分享来的那台给不出同意(版本太旧)：匿名状态里写需要更新。 */
+  reshareNeedsUpdate?(agentDeviceId: string): boolean;
   now(): number;
   log: { info?(message: string, meta?: Record<string, unknown>): void; warn(message: string, meta?: Record<string, unknown>): void };
 }
@@ -40,7 +50,8 @@ function errorText(error: unknown): string {
 }
 
 export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps): RemoteAgentGroupRelayDeps & {
-  sharedStatus(providerId: string): Promise<ProviderShareGroupState[] | null>;
+  /** 给某个受邀者看的匿名状态；guestController 是读目录的那个受邀者(分享来的电脑按它是否被同意)。 */
+  sharedStatus(providerId: string, guestController?: string): Promise<ProviderShareGroupState[] | null>;
 } {
   /** 不支持接受受邀者任务的同账号电脑 → 到何时前不再试。 */
   const incapable = new Map<string, number>();
@@ -55,20 +66,38 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
     return true;
   }
 
-  return {
-    sharedStatus: (providerId) => readSharedGroupStatus({
-      scope: deps.scope,
-      readGroup: deps.readGroup,
-      isIncapable,
-      readCaps: (member) => RemoteAgentRunClient.caps(deps.connect(member.agentDeviceId!).invoke),
-    }, providerId),
+  /** 分享来的电脑：它的主人没同意过这个受邀者时不能给他用(没接同意核对时不过滤)。 */
+  function reshareBlocked(member: ProviderGroupConfig['members'][number], reshareKey: string | undefined): boolean {
+    if (member.kind !== 'share' || !member.agentDeviceId || !deps.reshareAllows) return false;
+    return !deps.reshareAllows(member.agentDeviceId, reshareKey);
+  }
 
-    async plan({ kind, model, providerId, exclude, reserve }) {
+  return {
+    ...(deps.bindFastPolicy ? { bindFastPolicy: deps.bindFastPolicy } : {}),
+    sharedStatus: (providerId, guestController) => {
+      const reshareKey = guestController ? reshareKeyForGuest(guestController) : undefined;
+      return readSharedGroupStatus({
+        scope: deps.scope,
+        readGroup: deps.readGroup,
+        isIncapable,
+        readCaps: (member) => RemoteAgentRunClient.caps(deps.connect(member.agentDeviceId!).invoke),
+        reshareState: (member) => {
+          if (!reshareBlocked(member, reshareKey)) return null;
+          return member.agentDeviceId && deps.reshareNeedsUpdate?.(member.agentDeviceId) ? 'needs-update' : 'unavailable';
+        },
+      }, providerId);
+    },
+
+    noteReshareDenied: (agentDeviceId, reshareKey) => deps.noteReshareDenied?.(agentDeviceId, reshareKey),
+
+    async plan({ kind, model, providerId, exclude, reserve, reshareKey }) {
       const config = deps.readGroup(providerId);
       if (!config) return null;
       const skip = new Set(exclude);
       for (const member of config.members) {
         if (member.kind === 'device' && member.agentDeviceId && isIncapable(member.agentDeviceId)) skip.add(member.key);
+        // 转分享：分享来的电脑只给它的主人同意过的人(provider-sharing.md §4.3)。
+        if (reshareBlocked(member, reshareKey)) skip.add(member.key);
       }
       const scope = deps.scope();
       let load: GroupRelayLoad | undefined;
@@ -103,7 +132,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
 
     connect: (agentDeviceId) => deps.connect(agentDeviceId),
 
-    noteStartFailure(providerId, member: GroupRelayMember, error) {
+    noteStartFailure(providerId, member: GroupRelayMember, error, model) {
       const config = deps.readGroup(providerId);
       if (!config?.members.some((m) => m.key === member.memberKey)) return false;
       const message = errorText(error);
@@ -130,14 +159,15 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         deps.scope().router.markCooling(
           providerId,
           member.memberKey,
-          now + (decision.cause === 'usage-limit' ? PROVIDER_GROUP_DEFAULT_COOLDOWN_MS : PROVIDER_GROUP_FAILURE_COOLDOWN_MS),
+          now + (decision.cause === 'usage-limit' && model ? PROVIDER_GROUP_DEFAULT_COOLDOWN_MS : PROVIDER_GROUP_FAILURE_COOLDOWN_MS),
+          decision.cause === 'usage-limit' ? model : undefined,
         );
       }
       // 账号问题仍冷却，关闭自动换电脑时把原错误交给受邀者，与运行中的口径一致。
       return config.autoSwitch;
     },
 
-    noteRunFailure(providerId, member: GroupRelayMember, failure) {
+    noteRunFailure(providerId, member: GroupRelayMember, failure, model) {
       // 没有组，或那台已被移出组：已经在它上面的任务成为普通的远程 Agent 任务，不再自动换电脑(§9 #4)。
       const config = deps.readGroup(providerId);
       if (!config?.members.some((m) => m.key === member.memberKey)) return false;
@@ -159,7 +189,9 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
               ? Math.min(resetAt, now + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS)
               : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS)
           : now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS;
-        deps.scope().router.markCooling(providerId, member.memberKey, until);
+        const scopedModel = decision.cause === 'usage-limit' ? model : undefined;
+        deps.scope().router.markCooling(providerId, member.memberKey,
+          scopedModel ? until : Math.min(until, now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS), scopedModel);
       }
       // 冷却照常(之后的新任务避开它)；组设置里关掉了自动换电脑时不发凭证，受邀者照现有方式看到错误(§6.1)。
       return config.autoSwitch;

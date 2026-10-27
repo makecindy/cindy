@@ -33,7 +33,12 @@ export function placeGhostAtComposerStart(
   // 替换识别看完整已安装命令集：旧 Plugin 即使已停用或被当前
   // 工作目录禁用，它在草稿头的 `$old` 仍应被新选择替换。能否发送
   // 仍由可用 roster / 发送期闸门单独决定。
-  const match = findGhostCommandMatch(doc, [...installedRoster], { includeDisabled: true });
+  // 唯一时插入的裸 `$draw` 在之后装了同名实例后会有歧义,仍按消息头指令替换,
+  // 不叠成 `$draw/acme $draw`。
+  const match = findGhostCommandMatch(doc, [...installedRoster], {
+    includeDisabled: true,
+    ambiguousBareToken: true,
+  });
   const transaction = editor.state.tr;
 
   if (match) {

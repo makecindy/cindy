@@ -3,6 +3,16 @@ import { act, createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
+import { openBrowserAsync } from 'expo-web-browser';
+
+// The shared renderer imports site-video; replace only its native surface.
+vi.mock('@/platform/gestureHandler', () => {
+  const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
+  return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
+});
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
@@ -25,6 +35,7 @@ vi.mock('react-native', async () => {
   };
 });
 vi.mock('lucide-react-native', () => ({
+  Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Users: () => null, Star: () => null,
   Image: () => null, ImageOff: () => null, Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
@@ -63,6 +74,7 @@ vi.mock('@/session/ImageLightbox', async () => {
   const { createElement } = await import('react');
   return { ImageLightbox: ({ initialUrl }: { initialUrl: string }) => createElement('div', { 'data-testid': 'lightbox', 'data-url': initialUrl }) };
 });
+vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
@@ -74,7 +86,7 @@ vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => n
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 
-import { BotGroupMessageAttachments } from '@/session/BotGroupMessageAttachments';
+import { BotGroupMessageAttachments, botGroupAttachmentRuns } from '@/session/BotGroupMessageAttachments';
 import { AttachmentStrip } from '@/session/MessageRenderer';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
@@ -91,7 +103,7 @@ const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async () => ({
   ossKey: 'thumbnail', size: 10, expiresAt: '',
 }));
 
-beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); });
+beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); vi.mocked(openBrowserAsync).mockClear(); });
 
 async function renderAttachment(messageId: string) {
   host = document.createElement('div');
@@ -197,5 +209,74 @@ describe('group image attachments outside LegendList (#5278)', () => {
     host!.remove();
     const reopened = await renderAttachment('historical-message');
     expect(reopened.querySelector('img')?.getAttribute('src')).toBe(thumbnailUrl);
+  });
+});
+
+describe('group attachments the computer has not fetched yet', () => {
+  const ready = (id: string, name: string) => ({ id, name, category: 'file' as const, mimeType: 'text/plain', size: 1, url: null, path: null });
+  const pending = (id: string, name: string, state: 'loading' | 'unavailable') => ({ ...ready(id, name), mimeType: '', size: 0, state });
+
+  const picture = (id: string, name: string) => ({ id, name, category: 'image' as const, mimeType: 'image/png', size: 1, url: `xdt-image://cache/${id}.png`, path: null });
+  const summary = (runs: ReturnType<typeof botGroupAttachmentRuns>) =>
+    runs.map((run) => run.kind === 'pending' ? `${run.attachment.id}:${run.attachment.state}` : run.attachments.map((item) => item.id).join('+'));
+
+  it.each(['left', 'right'] as const)('groups direct-server files while opening each same-named attachment by ID (%s)', async (align) => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const resolveServerMedia = vi.fn(async (id: string) => ({ ...ready(id, 'same.txt'),
+      category: id === 'photo' ? 'image' as const : 'file' as const,
+      url: `https://example.invalid/signed/${id}`, mimeType: id === 'photo' ? 'image/png' : 'text/plain' }));
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'direct', align, onResolveRemoteMedia: resolveMedia, resolveServerMedia,
+      attachments: [ready('first', 'same.txt'), ready('second', 'same.txt'),
+        pending('gone', 'gone.md', 'unavailable'), ready('photo', 'photo.png')],
+    })));
+    const chips = [...host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')];
+    expect(chips).toHaveLength(3);
+    expect(chips[0]!.parentElement).toBe(chips[1]!.parentElement);
+    expect(chips[1]!.parentElement).not.toBe(chips[2]!.parentElement);
+    expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['first', 'second', 'photo']);
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('https://example.invalid/signed/photo');
+    resolveServerMedia.mockClear();
+    expect(resolveMedia).not.toHaveBeenCalled();
+    await act(async () => chips[1]!.click());
+    await act(async () => chips[0]!.click());
+    expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['second', 'first']);
+    expect(vi.mocked(openBrowserAsync).mock.calls.map(([url]) => url)).toEqual([
+      'https://example.invalid/signed/second', 'https://example.invalid/signed/first',
+    ]);
+    await act(async () => host!.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
+    expect(resolveServerMedia).toHaveBeenLastCalledWith('photo');
+    expect(host.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/photo');
+    expect(openBrowserAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the sent order: neighbours of one kind share a strip, each pending one stands alone', () => {
+    const runs = botGroupAttachmentRuns([ready('a', 'a.txt'), pending('b', 'b.png', 'loading'), ready('c', 'c.txt'), ready('d', 'd.txt'), pending('e', 'e.md', 'unavailable')]);
+    expect(summary(runs)).toEqual(['a', 'b:loading', 'c+d', 'e:unavailable']);
+  });
+
+  it('never hands a strip both a picture and a file, since a strip draws pictures first', () => {
+    // [report.pdf, photo.png] must not become [photo.png, report.pdf].
+    expect(summary(botGroupAttachmentRuns([ready('r', 'report.pdf'), picture('p', 'photo.png')]))).toEqual(['r', 'p']);
+    expect(summary(botGroupAttachmentRuns([picture('p', 'a.png'), picture('q', 'b.png'), ready('r', 'r.pdf'), ready('s', 's.md'), picture('t', 't.png')])))
+      .toEqual(['p+q', 'r+s', 't']);
+  });
+
+  it('shows the loading / unavailable state instead of an openable file', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'm', align: 'left', onResolveRemoteMedia: resolveMedia,
+      attachments: [pending('late', 'late.png', 'loading'), pending('gone', 'gone.md', 'unavailable')],
+    })));
+    // The real English copy: a status word under each name, never the "open it on your computer" file.
+    expect(host.querySelector('[aria-label="late.png, Loading…"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="gone.md, Unavailable right now"]')).not.toBeNull();
+    expect(host.textContent).toContain('Loading…');
+    expect(host.textContent).toContain('Unavailable right now');
+    expect(resolveMedia).not.toHaveBeenCalled();
   });
 });

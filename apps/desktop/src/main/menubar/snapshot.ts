@@ -64,6 +64,8 @@ export interface MenubarSubscriptionInput {
   updatedAtMs: number | null;
   /** Identity keys used only to recognize one account read on two computers; never shown. */
   accountKeys?: readonly string[];
+  /** A running task on this computer uses this account. */
+  consuming?: boolean;
   /** Set when the account is signed in on another of the user's computers. */
   device?: MenubarRemoteDevice | null;
   /** Codex rate-limit resets the user can redeem. */
@@ -100,6 +102,8 @@ export interface MenubarBalanceInput {
   pools?: MenubarWalletPools | null;
   /** The promotional grant with money left that expires first. */
   promoExpiry?: { amount: number; expiresAtMs: number } | null;
+  /** A running task on this computer is billed to the Cindy balance. */
+  consuming?: boolean;
 }
 
 export interface MenubarWalletPools {
@@ -113,6 +117,8 @@ export interface MenubarQuotaPeriod {
   resetsAtMs: number | null;
   /** Spent today (UTC day) across every client; null when the gateway did not say. */
   todaySpend: number | null;
+  /** Undefined preserves the legacy gateway's daily display. */
+  dailyLimitEnabled?: boolean;
 }
 
 export interface MenubarPaygInput {
@@ -123,6 +129,8 @@ export interface MenubarPaygInput {
   name: string;
   /** api = billed per use; subscription = a plan Cindy cannot read the remaining amount of. */
   billing: 'api' | 'subscription';
+  /** A running task on this computer uses this provider. */
+  consuming?: boolean;
 }
 
 export type MenubarSourceInput = MenubarSubscriptionInput | MenubarBalanceInput | MenubarPaygInput;
@@ -138,6 +146,11 @@ export interface MenubarTaskInput {
   running: boolean;
   startedAtMs: number | null;
   lastActiveAtMs: number;
+  /** Provider the session sends to (null = the implicit default route); only used to mark
+   * the source it is drawing on, together with the raw model and agent kind below. */
+  providerId?: string | null;
+  routeModel?: string | null;
+  routeAgentKind?: string | null;
 }
 
 export interface MenubarUsageDeviceInput {
@@ -502,7 +515,7 @@ class Builder {
     return groups;
   }
 
-  private headline(): { primary: string; secondary: string | null } {
+  private headline(): { primary: string; secondary: string | null; alert: boolean } {
     const recommended = this.recommended();
     const groups = this.restores();
     const soon = this.visibleSubscriptions()
@@ -528,19 +541,28 @@ class Builder {
       if (!measured) {
         const unread = this.visibleSubscriptions().length > 0;
         return unread
-          ? { primary: this.t('headline.unread'), secondary: null }
-          : { primary: this.t('headline.empty'), secondary: this.t('headline.emptyHint') };
+          ? { primary: this.t('headline.unread'), secondary: null, alert: false }
+          : { primary: this.t('headline.empty'), secondary: this.t('headline.emptyHint'), alert: false };
       }
       return {
         primary: this.t('headline.none'),
         secondary: sentence(parts.length ? [parts[0]!] : [this.t('headline.waitReset')]),
+        alert: true,
       };
     }
     if (recommended.kind === 'balance') {
       const primary = this.t(recommended.quota ? 'headline.quota' : 'headline.balance');
-      return { primary, secondary: sentence([this.t('headline.subscriptionsUsed'), ...parts]) };
+      return {
+        primary,
+        secondary: sentence([this.t('headline.subscriptionsUsed'), ...parts]),
+        alert: true,
+      };
     }
-    return { primary: this.t('headline.recommend', { name: this.who(recommended) }), secondary: sentence(parts) };
+    return {
+      primary: this.t('headline.recommend', { name: this.who(recommended) }),
+      secondary: sentence(parts),
+      alert: parts.length > 0,
+    };
   }
 
   // ── Cells ─────────────────────────────────────────────────────────────────
@@ -562,7 +584,7 @@ class Builder {
   }
 
   private cell(source: MenubarSourceInput, emphasized: boolean, roomy: boolean): MenubarSourceCell {
-    const base = { id: source.id, kind: source.kind, logoSvg: source.logoSvg, emphasized };
+    const base = { id: source.id, kind: source.kind, logoSvg: source.logoSvg, emphasized, active: source.consuming === true };
     if (source.kind === 'payg') {
       const label = this.t(source.billing === 'api' ? 'cell.payg' : 'cell.plan');
       return {
@@ -692,7 +714,7 @@ class Builder {
             : this.t('fact.cindyModels'),
         },
       );
-      if (quota.todaySpend !== null) {
+      if (quota.dailyLimitEnabled !== false && quota.todaySpend !== null) {
         const suggested = source.fullAmount ? (source.fullAmount / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
         facts.push({
           label: this.t('fact.todaySpent'),
@@ -1076,6 +1098,7 @@ class Builder {
       updatedAtMs: this.input.updatedAtMs,
       headlinePrimary: headline.primary,
       headlineSecondary: headline.secondary,
+      headlineAlert: headline.alert,
       sources: this.cells(),
       details: this.details(),
       taskSummary: tasks.summary,

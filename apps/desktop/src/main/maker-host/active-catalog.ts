@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels,
   isCustomRoutedProvider,
@@ -184,6 +185,8 @@ export interface XdGatewayAgentOverride {
  * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
  */
 export interface XdGatewayModelInfo {
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
   id: string;
   availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
@@ -1112,6 +1115,14 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
   return [...byId.values()];
 }
 
+function gatewayDisplayPricing(model: XdGatewayModelInfo): Pick<CatalogModel, 'displayPricing' | 'currency' | 'costDiscount'> {
+  return model.displayPricing && model.currency ? {
+    displayPricing: model.displayPricing,
+    currency: model.currency,
+    ...(model.costDiscount !== undefined ? { costDiscount: model.costDiscount } : {}),
+  } : {};
+}
+
 function projectXdGatewayMediaModels(
   provider: Provider,
   gatewayModels: readonly XdGatewayModelInfo[],
@@ -1121,6 +1132,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'image_generation')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1131,6 +1143,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'video_generation')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1144,6 +1157,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'embedding' && model.availability === 'available')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1156,6 +1170,7 @@ function projectXdGatewayMediaModels(
     )
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       mode: model.mode,
@@ -1568,6 +1583,7 @@ function computeMerged(): Catalog {
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
+          ...gatewayDisplayPricing(gm),
           id: gm.id,
           discoveredMetadata: { ...pickModelMetadata(gm), ...pickModelMetadata(ov) },
           ...(nativeApi !== undefined ? { nativeApi } : {}),
@@ -1894,10 +1910,11 @@ function computeMerged(): Catalog {
         const metadataProviderId = providerCatalogId(provider);
         const rootId = metadataProviderId === 'openai'
           ? model.id.replace(/^chatgpt\//, '') : model.id;
-        const identity = findModelRegistryRoute(
+        const matched = findModelRegistryRoute(
           b.modelRegistry, metadataProviderId, rootId,
           agent === 'pi' ? undefined : agent as RootAgentKind,
-        )?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
+        );
+        const identity = matched?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
         // Known public identities take precedence, including other vendors using
         // GPT-like aliases. Only unresolved GPT/Codex/o-series IDs fall back to
         // family names before the next catalog release; protocol alone never
@@ -1911,11 +1928,27 @@ function computeMerged(): Catalog {
               agent as AgentKind, metadataProviderId) ||
             (rootId !== model.id && hasLocalContextWindowOverride(localOverrides,
               provider.id, model.id, agent as AgentKind, metadataProviderId))) return model;
-        return { ...model, contextWindow: 272_000,
+        // Subscription working budgets are server-maintained per-agent defaults,
+        // separate from public model capacity. Other OpenAI connections retain
+        // the daily fallback. Pi follows the subscription Codex budget; route
+        // defaults and baseModels may contain capacity rather than a working budget.
+        const declaredWindow = isOpenAiSubscriptionProvider(provider)
+          ? matched?.entry.perAgent?.[agent === 'pi' ? 'codex' : agent as RootAgentKind]?.contextWindow
+          : undefined;
+        const contextWindow = Math.min(model.contextWindow, declaredWindow ?? 272_000);
+        if (contextWindow === model.contextWindow) return model;
+        return { ...model, contextWindow,
           contextWindowMax: model.contextWindowMax ?? model.contextWindow };
       }),
     ])),
   }));
+  // Ultrafast is a native Codex account capability; bridge aliases cannot inherit it.
+  providers = providers.map(provider => ({ ...provider, models: Object.fromEntries(
+    Object.entries(provider.models).map(([agent, models]) => [agent,
+      agent === 'codex' ? models : models?.map(model => model.supportsUltrafastMode
+        ? { ...model, supportsUltrafastMode: false } : model),
+    ]),
+  ) }));
   return { ...b, modelRegistry, providers };
 }
 

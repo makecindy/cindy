@@ -59,9 +59,10 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   // 不进这份跨端 descriptor)。
   if (m.description !== undefined) d.description = m.description;
   // 「未声明档位」要跟着走到准入:否则 sendToSession/新建任务会把占位的 [] 当成明确无档位(#5535)。
-  if (m.effortsUnknown === true) d.effortsUnknown = true;
+  d.effortsUnknown = m.effortsUnknown === true;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
+  if (m.supportsUltrafastMode !== undefined) d.supportsUltrafastMode = m.supportsUltrafastMode;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
   if (m.mode !== undefined) d.mode = m.mode;
@@ -99,8 +100,7 @@ function intersectPiEffortCapabilities(
   }
   const merged: ModelDescriptor = { ...first, efforts, defaultEffort };
   // 只要有一条路由声明过档位,交集就是已声明的结论;两条都未声明才保留「未知」。
-  if (first.effortsUnknown === true && next.effortsUnknown === true) merged.effortsUnknown = true;
-  else delete merged.effortsUnknown;
+  merged.effortsUnknown = first.effortsUnknown === true && next.effortsUnknown === true;
   return merged;
 }
 

@@ -139,3 +139,41 @@ describe('collectConversationShareMessages', () => {
     ]);
   });
 });
+
+describe('collectConversationShareMessages 气泡归属', () => {
+  it('自己的 IM 原文仍可分享，但来源卡不应用个人气泡色', () => {
+    const messages = collectConversationShareMessages([
+      messageItem('mine', 'user'),
+      messageItem('im', 'user', {
+        hookSource: { im: 'telegram', userText: 'im', userTextContent: true },
+      }),
+      messageItem('legacy-hook', 'user', {
+        hookSource: { im: 'telegram', userText: 'legacy-hook', userTextContent: false },
+      }),
+    ], () => false, () => true);
+
+    expect(messages.map((message) => [message.clientId, message.ownUserBubble === true])).toEqual([
+      ['mine', true],
+      ['im', false],
+    ]);
+    expect(messages[1]?.body).toBe('im');
+  });
+
+  it('只给判定为自己发的用户消息标记 ownUserBubble', () => {
+    const items = [
+      messageItem('mine', 'user'),
+      messageItem('guest', 'user', { sharedAuthorName: 'Guest' }),
+      messageItem('reply', 'assistant'),
+    ];
+    const messages = collectConversationShareMessages(
+      items,
+      () => false,
+      (message) => !message.sharedAuthorName,
+    );
+    expect(messages.map((message) => [message.clientId, message.ownUserBubble === true])).toEqual([
+      ['mine', true],
+      ['guest', false],
+      ['reply', false],
+    ]);
+  });
+});

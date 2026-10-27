@@ -469,35 +469,41 @@ async function handleTabOpRequest(
       const newTab = await addTab(req.sessionId, 'web-browser', initialState);
 
       // ── Eager webview spawn ─────────────────────────────────────────────
-      // The tab is now in the store, but `<webview>` only exists once
-      // `BrowserTabBody` mounts — which doesn't happen until the user is
-      // looking at this session. If the agent operates on a session OTHER
-      // than the currently-focused one (cross-session automation), the
-      // webview never comes into being, no webContentsId is ever reported
-      // to main, and the very next `backend.navigate` / `evaluate` fails
-      // with "tab not found".
+      // A newly added background tab may not have a BrowserTabBody yet.
+      // Without eager materialization, cross-session automation can reach
+      // backend.navigate / evaluate before main has a webContentsId.
       //
       // Fix: synchronously acquire the pool entry NOW. That creates the
-      // <webview> DOM node inside the invisible parking container (already
+      // <webview> DOM node inside the off-screen parking container (already
       // attached to document.body — see browserWebviewPool.ensureContainer),
       // which is enough for Electron to create the guest webContents.
-      // Setting `src` kicks off navigation. We wait for guest attachment, report
-      // (sessionId, tabId, webContentsId) to main, and ONLY THEN ack the
-      // tab-op back to the backend — so by the time the agent's next call
-      // arrives, the registry has the mapping.
+      // Wait for attachment and registration before acknowledging.
       //
       // When the user later switches into this session, BrowserTabBody
-      // mounts and `useBrowserWebview` acquires the SAME pool entry (key
-      // is tabId) — the loaded page is preserved verbatim (the entire
-      // point of the pool's parking-region design, see browserWebviewPool
-      // line 4-13). Its own dom-ready listener won't re-fire (the event
-      // already passed), but main already has the registry entry, and
-      // BrowserTabBody.tsx's initial-URL-read code (line 175-181 of
-      // useBrowserWebview) syncs the displayed URL from `webview.getURL()`.
-      await eagerSpawnAndReport(req.sessionId, newTab.id, initialState.url);
+      // mounts and useBrowserWebview may reuse the same pool DOM entry.
+      // Moving its wrapper from parking into the slot can recreate the
+      // guest and lose page state; the hook observes attach / dom-ready
+      // and reports the current id. Retaining already-mounted hosts avoids
+      // reparenting on task switches; it does not cover this first mount
+      // of an eager-spawned background tab or promise its guest survives.
+      try {
+        await eagerSpawnAndReport(req.sessionId, newTab.id, initialState.url);
+      } catch (error) {
+        // Roll back only this request's tab. closeTab serializes persistence
+        // and releases its pool entry. Never rehydrate a previous host.
+        if (!getBucket(req.sessionId).hydrated) {
+          throw new Error(`browser tab ${newTab.id} moved to another host; retry using this tabId`);
+        }
+        try {
+          await storeCloseTab(req.sessionId, newTab.id, { skipBeforeClose: true });
+        } catch {
+          throw new Error(`browser tab ${newTab.id} registration failed and cleanup failed; retry using this tabId`);
+        }
+        throw error;
+      }
       // Visibility command runs AFTER the eager-spawn so that by the time
-      // MainLayout reads the new collapsed-state archive (when user later
-      // switches to this session), the webview is already prepared.
+      // MainLayout reads the new collapsed-state archive, the initial
+      // guest registration has completed.
       // userInitiated:false —— agent 自动化开的标签,不是用户点的:侧边栏该展开
       // 就展开,但 detached 子窗口不得抢走用户当前前台应用的焦点。
       requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
@@ -511,21 +517,13 @@ async function handleTabOpRequest(
         result = { reqId, ok: false, error: `tab ${req.tabId} not found` };
       } else {
         await setActiveTab(req.sessionId, req.tabId);
-        const tab = bucket.tabs.find((t) => t.id === req.tabId);
-        if (tab?.kind === 'web-browser' && !hasNativePopupSurface(tab)) {
-          await eagerSpawnAndReport(
-            req.sessionId,
-            tab.id,
-            (tab.state as { url?: string } | null)?.url ?? 'about:blank',
-          );
-        }
         // Same rationale as open: focus implies the user should see the tab —
         // but it's still the agent acting, so no OS-level focus steal.
         requestRightSidebarVisibility('open', { sessionId: req.sessionId, userInitiated: false });
         result = { reqId, ok: true, tabId: req.tabId };
       }
     } else if (req.op === 'ensure') {
-      // 直连动作(navigate / screenshot / pdf / console / act)的 guest 恢复
+      // 直连动作(navigate / screenshot / pdf / console / act)的 detached 恢复
       // 路径:把一个已存在的 web-browser tab 的 webview 在本 renderer 重新物化
       // 并 report 回 main 的 TabRegistry。与 focus 的区别:零用户可见副作用 ——
       // 不改 activeTab、不发 visibility 请求(agent 只是要继续操作这个 tab,
@@ -607,11 +605,10 @@ function hasNativePopupSurface(tab: ReturnType<typeof getBucket>['tabs'][number]
  * open / ensure 共用的 webview 物化:acquire pool entry → setAttribute('src')
  * → 等 did-attach(或 dom-ready 兜底) → 等 report IPC 完成后应答。
  *
- * 为什么要 eager:tab 在 store 里 ≠ `<webview>` 存在 —— `BrowserTabBody` 只在
- * 用户看着这个 session 时才 mount。agent 跨 session 自动化时 webview 永远不会
- * 自然出生,main 的 registry 拿不到 webContentsId,下一个 backend 动作就会报
- * "tab not found"。所以在停车区容器里同步 acquire(创建 guest webContents),
- * report 完成后才让调用方 ack —— backend 下一次解析时 registry 已有映射。
+ * store 中新建的后台 tab 不一定已有 BrowserTabBody，先在停车区物化并等待
+ * 注册，避免自动化动作直接遇到 "tab not found"；超过截止时间则失败。
+ * 随后首次附着到 body slot 仍可能重建 guest，不能把 DOM 复用当作页面状态
+ * 保留；该路径未由常驻宿主策略覆盖。
  *
  * 已 attach 过的 entry(getWebContentsId 可取)走幂等 re-report 快路径,
  * 不再动 src(避免把用户正在看的页面重新导航)。
@@ -622,14 +619,6 @@ export async function eagerSpawnAndReport(
   url: string,
 ): Promise<void> {
   const entry = browserWebviewPool.acquire(tabId);
-  try {
-    const webContentsId = entry.webview.getWebContentsId();
-    // Wait for registration before acknowledging open / ensure / focus.
-    await reportRsbBrowserTab({ sessionId, tabId, webContentsId });
-    return;
-  } catch {
-    /* 尚未 attach —— 走下面的首次 spawn 路径 */
-  }
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let reporting = false;
@@ -655,11 +644,25 @@ export async function eagerSpawnAndReport(
         return; // dom-ready can retry if did-attach ran too early.
       }
       reporting = true;
-      void reportRsbBrowserTab({ sessionId, tabId, webContentsId }).then(() => finish());
+      const api = ipc();
+      if (!api) {
+        finish(new Error('browser bridge unavailable'));
+        return;
+      }
+      // Unlike ordinary UI reports, an automation acknowledgement must not
+      // silently swallow a failed registration. Track the id for stale-safe release.
+      lastReportedWebContentsId.set(tabId, webContentsId);
+      void api.report({ sessionId, tabId, webContentsId }).then(
+        () => finish(),
+        (error: unknown) => finish(error instanceof Error ? error : new Error(String(error))),
+      );
     };
     entry.webview.addEventListener('did-attach', onAttached);
     entry.webview.addEventListener('dom-ready', onAttached);
     timer = setTimeout(() => finish(new Error('browser guest registration timed out')), 4000);
+    // An attached guest only needs re-registration; keep its current URL.
+    onAttached();
+    if (reporting || settled) return;
     try {
       entry.webview.setAttribute('src', url);
     } catch (err) {

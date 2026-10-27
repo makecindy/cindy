@@ -8,11 +8,12 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { readWorkingPhase } from '@cindy/maker-shared';
-import type { BotGroupSpeakerActivity } from '@cindy/maker-shared/botGroupChat';
+import type { BotGroupSpeakerActivity, BotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { useThemedStyles, type ThemeColors } from '@/theme';
@@ -31,15 +32,18 @@ import { CompanionPresenceRing } from './CompanionPresenceRing';
 import { ThinkingDots } from './ThinkingDots';
 import { WorkingStatusText } from './WorkingStatusText';
 
-export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, onError }: {
+export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, onError }: {
   deviceId: string;
   identity: BotGroupIdentity;
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
   online: boolean;
+  executionStatus?: BotGroupSpeaker['executionStatus'];
+  stopping?: boolean;
   onError(message: string | null): void;
 }) {
   const { t } = useTranslation();
+  const router = useRouter();
   const styles = useThemedStyles(makeStyles);
   const { invoke, subscribe, unsubscribe } = useDeviceLink();
   const lane = sessionId ?? '';
@@ -49,25 +53,27 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `bot-group-speaker:${lane}`, topic: `session:${lane}`, subscribe, unsubscribe });
     // Seed prompts raised before this screen subscribed; later ones arrive as pushes.
     void invoke<PendingInteraction[]>(deviceId, 'maker:get-pending-interactions', [lane]).then((list) => {
-      if (!cancelled && Array.isArray(list)) remoteSessionStore.setPendingInteractions(lane, list);
+      if (!cancelled && Array.isArray(list)) remoteSessionStore.setPendingInteractions(lane, list, { deviceId });
     }).catch(() => undefined);
     return () => { cancelled = true; offTopic(); };
   }, [deviceId, invoke, lane, online, subscribe, unsubscribe]));
   const pending = useSessionPendingInteractions(lane);
-  const live = useSyncExternalStore(remoteSessionStore.subscribe, () => lane ? remoteSessionStore.getSessionLiveActivity(lane) : null);
-  const waiting = pending.length > 0 || live?.phase === 'needs-interaction';
+  const live = useSyncExternalStore(remoteSessionStore.subscribe, () => lane ? remoteSessionStore.getSessionLiveActivity(lane, deviceId) : null);
+  const waiting = pending.length > 0 || live?.phase === 'needs-interaction' || executionStatus === 'needs_input';
   const livePhase = readWorkingPhase(live?.workingPhase);
   // The organizer's decision runs outside any Session: there is no live phase to show.
   const copy = useCompanionGenerationCopy({
     deviceId,
     botId: identity.botId,
-    phase: activity === 'reply' ? livePhase ?? 'thinking' : livePhase,
+    phase: activity === 'reply' ? livePhase ?? 'processing' : livePhase,
     active: !waiting && activity !== 'planning' && (activity === 'reply' || livePhase !== null),
     turnId: lane,
   });
-  const label = activity === 'planning'
+  const label = stopping || executionStatus === 'stopping' ? t('groupChat.speaking.stopping')
+    : executionStatus === 'queued' ? t('devices.companions.status.queued')
+    : activity === 'planning'
     ? t('groupChat.speaking.planning')
-    : copy ?? (activity === 'step' ? t('groupChat.speaking.step') : t('devices.companions.working.thinking'));
+    : copy ?? (activity === 'step' ? t('groupChat.speaking.step') : t('devices.companions.working.processing'));
   // G4: the same working vocabulary as the 1:1 chat — breathing portrait, three dots, paced copy.
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t('groupChat.waitingConfirm', { name: identity.name }) : label}`}>
     <View style={styles.avatar}>
@@ -80,6 +86,8 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
         <ThinkingDots />
         <WorkingStatusText key={`${lane}:${activity}`} text={label} style={styles.statusText} />
       </View> : null}
+      {live?.compactDetail?.trim() && !/^(?:NO_REPLY|SILENT)$/i.test(live.compactDetail.trim()) ? <Text numberOfLines={2} style={styles.statusText}>{live.compactDetail}</Text> : null}
+      {sessionId && deviceId ? <MainWindowActionButton action={{ label: t('devices.companions.openTask'), onPress: () => router.push({ pathname: '/sessions/[sessionId]', params: { sessionId, deviceId } }) }} /> : null}
       {pending.length > 0 && lane ? <InteractionPanel embedded companion
         companionIdentity={{ name: identity.name, avatar: <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /> }}
         deviceId={deviceId} sessionId={lane} interactions={pending} onError={onError} />

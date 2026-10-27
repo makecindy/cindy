@@ -123,6 +123,18 @@ afterEach(() => {
 });
 
 describe('appBadgeService', () => {
+  it('suppresses late hidden Make notifications through the raw session catalog without dropping Bot attention', async () => {
+    const service = await freshService();
+    service.markSessionNeedsAttention('hidden-make');
+    expect(service.getAttentionCount()).toBe(1);
+    await publish({ sender: mainWebContents }, 0, ['hidden-make', 'hidden-make-merge']);
+    expect(service.getAttentionCount()).toBe(0);
+    service.markSessionNeedsAttention('hidden-make-merge');
+    expect(service.getAttentionCount()).toBe(0);
+    service.markSessionNeedsAttention('bot-task');
+    expect(service.getAttentionCount()).toBe(1);
+  });
+
   it.each([
     [false, 0],
     [false, 1],

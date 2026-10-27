@@ -30,12 +30,15 @@ import { createBrowserMcpServer } from './browser/index.js';
 import { createComputerMcpServer } from './computer/index.js';
 import { createAndroidMcpServer } from './android/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
+import type { PreparedOutboundImage } from './outboundImage.js';
 
 export interface CreateLiziMcpProvidersOptions {
   /**
    * Optional allow-list. Omit to enable every MCP whose deps were supplied.
    */
   enabled?: readonly LiziMcpId[];
+  /** Optional host image snapshot for outbound tools; resolve the caller per invocation. */
+  prepareOutboundImage?: (path: string, context: LiziMcpSessionContext) => Promise<PreparedOutboundImage>;
   android?: AndroidMcpDeps;
   /** Browser automation tools. Host injects the neutral runtime implementation. */
   browser?: BrowserMcpDeps;
@@ -149,6 +152,9 @@ export function createLiziMcpProviders(
           name: 'cindy_browser',
           instance: createBrowserMcpServer({
             ...baseDeps,
+            recipeFiles: baseDeps.recipeFiles
+              ? () => baseDeps.recipeFiles!(resolveLiziMcpSessionContext(ctx).sessionId)
+              : undefined,
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
               return {
@@ -249,15 +255,31 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_feishu_bot',
         instance: createFeishuBotMcpServer({
-          getChatId: () =>
-            readFeishuChatId(resolveLiziMcpSessionContext(ctx)) ?? opts.feishuBot!.getOwnerOpenId() ?? null,
-          sendFile: opts.feishuBot!.sendFile,
+          prepareOutboundImage: opts.prepareOutboundImage
+            ? (path) => opts.prepareOutboundImage!(path, resolveLiziMcpSessionContext(ctx))
+            : undefined,
+          // 每个 host dep 都带上当前 tool-call 的 session:宿主据此选出这一轮真正要
+          // 出站的 bot(个人设置页那份,或触发本轮的伙伴自有连接)。
+          getChatId: async () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            return readFeishuChatId(current) ?? await opts.feishuBot!.getOwnerOpenId(current) ?? null;
+          },
+          sendFile: (chatId, absPath, displayName) =>
+            opts.feishuBot!.sendFile(chatId, absPath, displayName, resolveLiziMcpSessionContext(ctx)),
           sendMessage: (chatId, text) => {
             // Codex's shared bridge only has the calling session at tool-call time.
             const current = resolveLiziMcpSessionContext(ctx);
             return opts.feishuBot!.sendMessage(
-              chatId, text, readFeishuChatId(current) ? undefined : current.sessionId,
+              chatId, text, readFeishuChatId(current) ? undefined : current.sessionId, current,
             );
+          },
+          // 轮次内直通工具的作用域:逐轮租约,不来自模型参数;非飞书轮次为 null。
+          // 工作目录取本次 tool-call 的 session ctx(与 cindy_telegram_bot 同源)。
+          getLaneScope: () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            const scope = opts.feishuBot!.readLaneScope?.(current);
+            if (!scope) return null;
+            return current.workingDir ? { ...scope, workingDir: current.workingDir } : scope;
           },
           // slack-hook 会话里按来源在构建期注入渠道路由提示,
           // 把「发给我」的默认通道钉死在会话自身渠道(规则 9)。
@@ -275,6 +297,9 @@ export function createLiziMcpProviders(
         name: 'cindy_wechat',
         instance: createWechatMcpServer({
           ...opts.wechatBot!,
+          prepareOutboundImage: opts.prepareOutboundImage
+            ? (path) => opts.prepareOutboundImage!(path, resolveLiziMcpSessionContext(ctx))
+            : undefined,
           getPeerId: async () => {
             const current = resolveLiziMcpSessionContext(ctx);
             return (

@@ -73,8 +73,35 @@ function findHeader(
   return null;
 }
 
-function logInjection(logger: ProxyLogger | undefined, ctx: InjectionLogContext): void {
-  logger?.debug?.('codex proxy instructions injection', ctx);
+const INJECTION_LOG_DEDUPE_LIMIT = 512;
+
+/**
+ * 每笔 /responses POST 都会走一次注入判定;同一线程的判定通常每轮相同(实测与 POST
+ * 数同量)。只在某线程的判定结果(命中/追加/已存在/前后字节数)变化时记 debug,
+ * 首次出现与变化仍可排查;失败另走 error 日志,不受去重影响。
+ */
+function createInjectionLogger(logger: ProxyLogger | undefined): (ctx: InjectionLogContext) => void {
+  const lastSignatureByThread = new Map<string, string>();
+  return (ctx) => {
+    if (!logger?.debug) return;
+    const threadKey = ctx.selectedThreadId ?? '';
+    const signature = [
+      ctx.selectedHeaderName,
+      ctx.registryHit,
+      ctx.appended,
+      ctx.alreadyPresent,
+      ctx.instructionsBeforeBytes,
+      ctx.instructionsAfterBytes,
+    ].join('|');
+    if (lastSignatureByThread.get(threadKey) === signature) return;
+    lastSignatureByThread.delete(threadKey);
+    if (lastSignatureByThread.size >= INJECTION_LOG_DEDUPE_LIMIT) {
+      const oldest = lastSignatureByThread.keys().next().value;
+      if (oldest !== undefined) lastSignatureByThread.delete(oldest);
+    }
+    lastSignatureByThread.set(threadKey, signature);
+    logger.debug('codex proxy instructions injection', ctx);
+  };
 }
 
 /**
@@ -135,6 +162,8 @@ export function createInstructionsInjectionTransform(
     return pathname.endsWith('/responses');
   });
 
+  const logInjection = createInjectionLogger(opts.logger);
+
   return (body, ctx) => {
     if (!pathMatch(ctx.url)) return null;
 
@@ -146,7 +175,7 @@ export function createInstructionsInjectionTransform(
     // No usable thread-id header → can't key the registry. Never fall back to a
     // "last/only" entry (that would cross-contaminate sessions); just skip.
     if (!selected) {
-      logInjection(opts.logger, buildInjectionLog({
+      logInjection(buildInjectionLog({
         selected: null, registryHit: false, beforeBytes, afterBytes: beforeBytes,
         inputDeveloperCount, appended: false, alreadyPresent: false,
       }));
@@ -157,7 +186,7 @@ export function createInstructionsInjectionTransform(
     // session, or not yet registered). Skip, no fallback.
     const productInstructions = opts.registry.get(selected.value);
     if (productInstructions === undefined) {
-      logInjection(opts.logger, buildInjectionLog({
+      logInjection(buildInjectionLog({
         selected, registryHit: false, beforeBytes, afterBytes: beforeBytes,
         inputDeveloperCount, appended: false, alreadyPresent: false,
       }));
@@ -172,7 +201,7 @@ export function createInstructionsInjectionTransform(
         selected, registryHit: true, beforeBytes, afterBytes: beforeBytes,
         inputDeveloperCount, appended: false, alreadyPresent: false,
       });
-      logInjection(opts.logger, logCtx);
+      logInjection(logCtx);
       opts.logger?.error?.('codex proxy instructions injection failed', {
         ...logCtx,
         event: 'codex_proxy_injection_error',
@@ -190,7 +219,7 @@ export function createInstructionsInjectionTransform(
 
     // Idempotent: never append twice.
     if (before.includes(productInstructions)) {
-      logInjection(opts.logger, buildInjectionLog({
+      logInjection(buildInjectionLog({
         selected, registryHit: true, beforeBytes, afterBytes: beforeBytes,
         inputDeveloperCount, appended: false, alreadyPresent: true,
       }));
@@ -199,7 +228,7 @@ export function createInstructionsInjectionTransform(
 
     // Append after the existing codex base instructions — never replace.
     const nextInstructions = before ? `${before}\n\n${productInstructions}` : productInstructions;
-    logInjection(opts.logger, buildInjectionLog({
+    logInjection(buildInjectionLog({
       selected, registryHit: true, beforeBytes, afterBytes: textBytes(nextInstructions),
       inputDeveloperCount, appended: true, alreadyPresent: false,
     }));

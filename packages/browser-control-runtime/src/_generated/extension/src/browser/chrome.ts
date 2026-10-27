@@ -45,6 +45,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -1220,26 +1221,44 @@ export async function stopOpenClawChrome(
 ) {
   const proc = running.proc;
   try {
-    if (proc.killed) {
+    if (proc.exitCode != null || proc.signalCode != null) {
       return;
     }
-    try {
-      proc.kill("SIGTERM");
-    } catch {
-      // ignore
+    // LOCAL PATCH (Cindy, via sync.mjs): Windows SIGTERM force-kills too.
+    // Ask Chrome to flush and close via CDP, within the existing grace period.
+    const start = Date.now();
+    if (!proc.killed && process.platform === "win32" && timeoutMs > 0) {
+      try {
+        // Discovery, WebSocket handshake and command each share the budget.
+        const cdpTimeoutMs = Math.max(1, Math.floor(timeoutMs / 3));
+        const wsUrl = await getChromeWebSocketUrl(
+          cdpUrlForPort(running.cdpPort), cdpTimeoutMs,
+        );
+        if (wsUrl && proc.exitCode == null && proc.signalCode == null && Date.now() - start < timeoutMs) {
+          await withCdpSocket(wsUrl, (send) => send("Browser.close"), {
+            handshakeTimeoutMs: cdpTimeoutMs,
+            commandTimeoutMs: cdpTimeoutMs,
+            handshakeRetries: 0,
+          });
+        }
+      } catch {
+        // Closing Chrome can drop CDP before replying. Still wait for exit.
+      }
+    } else if (!proc.killed && process.platform !== "win32") {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
     }
 
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (!proc.exitCode && proc.killed) {
-        break;
-      }
-      if (
-        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
-      ) {
+    while (true) {
+      // CDP can disappear while Chrome is still flushing its profile.
+      if (proc.exitCode != null || proc.signalCode != null) {
         return;
       }
       const remainingMs = timeoutMs - (Date.now() - start);
+      if (remainingMs <= 0) break;
       await new Promise((r) => {
         setTimeout(r, Math.max(1, Math.min(100, remainingMs)));
       });

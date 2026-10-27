@@ -1,4 +1,5 @@
 import { chatErrorDiagnostic } from './chatServerErrors.js';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import { net } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,7 +13,21 @@ import { safeAttachmentFileName } from './botGroupAttachments.js';
 import type { BotGroupAttachment } from '../../shared/botGroupChat.js';
 import type { ChatApi, ChatContentBlock } from './chatServerMigration.js';
 
+/** Internal-only readers: never serialized in group messages or IPC. */
+export type ChatUploadAttachment = BotGroupAttachment & {
+  /** Offset in the file-rewritten Markdown, before image materialization. Never sent over the wire. */
+  sourceOffset?: number;
+  /** Canonical local image/file sources, used only to reconcile the two reply passes. */
+  sourcePaths?: string[];
+  /** Original Markdown target, for shared reference definitions; never serialized. */
+  sourceUrl?: string;
+  readBytes?: () => Promise<Buffer>;
+  assertCurrent?: () => void;
+};
+
 const MAX_SIZE = 100 * 1024 * 1024;
+/** Files of one send uploaded at once; each holds its bytes in memory until sealed. */
+const UPLOAD_CONCURRENCY = 3;
 export function createChatMedia(api: ChatApi, current: () => boolean, log?: { warn(message: string, meta?: Record<string, unknown>): void }, options: { allowLoopback?: boolean } = {}) {
   const cache = new Map<string, Promise<BotGroupAttachment>>();
   const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
@@ -22,21 +37,41 @@ export function createChatMedia(api: ChatApi, current: () => boolean, log?: { wa
     return url.href;
   };
   return {
-    async upload(roomId: string, source: string, attachments: BotGroupAttachment[], actorId: string): Promise<ChatContentBlock[]> {
-      const blocks: ChatContentBlock[] = [];
-      for (const attachment of attachments) {
+    /**
+     * Uploads a send's files a few at a time (prepare → PUT → complete each), keeping the
+     * blocks in the files' order. Every file settles before a failure is reported, so no
+     * upload keeps running after the send has given up; the first failure in order wins.
+     */
+    async upload(roomId: string, source: string, attachments: ChatUploadAttachment[], actorId: string, assertCurrent?: () => void | Promise<void>): Promise<ChatContentBlock[]> {
+      const checkUpload = async () => { check(); await assertCurrent?.(); check(); };
+      const results: Array<PromiseSettledResult<ChatContentBlock>> = new Array(attachments.length);
+      let next = 0;
+      const worker = async () => {
+        while (next < attachments.length) {
+          const index = next++;
+          results[index] = await uploadOne(attachments[index]!).then(
+            value => ({ status: 'fulfilled' as const, value }), reason => ({ status: 'rejected' as const, reason }));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, attachments.length) }, worker));
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      return results.map(result => (result as PromiseFulfilledResult<ChatContentBlock>).value);
+
+      async function uploadOne(attachment: ChatUploadAttachment): Promise<ChatContentBlock> {
         let stage = 'read';
         const started = Date.now();
+        const checkFile = async () => { await checkUpload(); attachment.assertCurrent?.(); };
         try {
-          check();
+          await checkFile();
           if (attachment.size > MAX_SIZE) throw new Error('ATTACHMENT_TOO_LARGE');
-          if (attachment.path) {
-            const stat = await fs.stat(attachment.path); check();
+          if (attachment.path && !attachment.readBytes) {
+            const stat = await fs.stat(attachment.path); await checkFile();
             if (!stat.isFile() || stat.size > MAX_SIZE) throw new Error('ATTACHMENT_TOO_LARGE');
           }
-          const bytes = attachment.url?.startsWith('cindy-media://') ? (await readMedia(attachment.url)).buffer
+          const bytes = attachment.readBytes ? await attachment.readBytes() : attachment.url?.startsWith('cindy-media://') ? (await readMedia(attachment.url)).buffer
             : attachment.path ? await fs.readFile(attachment.path) : null;
-          check();
+          await checkFile();
           if (!bytes || !bytes.length || bytes.length > MAX_SIZE) throw new Error('ATTACHMENT_UNAVAILABLE');
           const key = createHash('sha256').update(source).update(attachment.id).update(bytes).digest('hex');
           // Expired abandoned uploads must get a new prepare receipt, but a successful
@@ -53,22 +88,22 @@ export function createChatMedia(api: ChatApi, current: () => boolean, log?: { wa
               operationId: `media:${key}:${randomUUID()}`, name: attachment.name, type: attachment.mimeType, size: bytes.length,
             }, actorId);
           }
-          check();
+          await checkFile();
           stage = 'upload';
           const response = await net.fetch(signedUrl(upload.uploadUrl), { method: 'PUT', redirect: 'error',
             headers: { 'Content-Type': attachment.mimeType }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
-          if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status });
-          check();
+          if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status,
+            ...(response.status === 429 ? { retryAt: retryAfterDeadline(response) } : {}) });
+          await checkFile();
           stage = 'complete';
           await api(`/conversations/${roomId}/media/${upload.id}/complete`, 'POST', { operationId: `seal:${upload.id}` }, actorId);
-          blocks.push({ type: 'media', mediaId: upload.id, caption: attachment.name });
+          return { type: 'media', mediaId: upload.id, caption: attachment.name };
         } catch (error) {
           log?.warn('Chat media upload failed', { stage, groupId: roomId,
             trace: createHash('sha256').update(source).digest('hex').slice(0, 16), durationMs: Date.now() - started, ...chatErrorDiagnostic(error) });
           throw error;
         }
       }
-      return blocks;
     },
     async download(roomId: string, mediaId: string): Promise<BotGroupAttachment> {
       check();
@@ -82,7 +117,8 @@ export function createChatMedia(api: ChatApi, current: () => boolean, log?: { wa
         const root = ownerScopedUserDataPath();
         const db = getDbClient().drizzle;
         const response = await net.fetch(signedUrl(media.url), { redirect: 'error', signal: AbortSignal.timeout(60000) });
-        if (!response.ok || !response.body) throw new Error('MEDIA_DOWNLOAD_FAILED');
+        // The status tells a file that is gone (4xx: never comes) from a failing server (retried).
+        if (!response.ok || !response.body) throw Object.assign(new Error('MEDIA_DOWNLOAD_FAILED'), response.ok ? {} : { status: response.status });
         const chunks: Uint8Array[] = []; let received = 0;
         const reader = response.body.getReader();
         try {

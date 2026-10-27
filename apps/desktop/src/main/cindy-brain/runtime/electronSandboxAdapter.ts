@@ -14,11 +14,14 @@ import {
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
+  ghostLoopbackOrigin,
+  ghostPanelLoopbackEmbedAllowed,
 } from '../../../shared/ghost.js';
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
 import { buildRangedMediaResponse } from '../../cindy-media/rangeResponse.js';
@@ -92,6 +95,16 @@ const logicWebContentsToGhost = new Map<number, string>();
 
 export function ghostIdForLogicWebContents(webContentsId: number): string | null {
   return logicWebContentsToGhost.get(webContentsId) ?? null;
+}
+
+/** Capture one logic page, so delayed hook replies cannot cross a runtime restart. */
+export function captureGhostLogicSource(ghostId: string): () => boolean {
+  const id = [...logicWebContentsToGhost].find(([, value]) => value === ghostId)?.[0];
+  return () => {
+    if (id === undefined || logicWebContentsToGhost.get(id) !== ghostId) return false;
+    const wc = webContents.fromId(id);
+    return !!wc && !wc.isDestroyed();
+  };
 }
 
 /**
@@ -192,6 +205,34 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
   return { status: response.status === 206 ? 200 : response.status, mime: response.headers.get('content-type') ?? 'application/json', base64: Buffer.concat(chunks).toString('base64'), ...(revision ? { revision } : {}),
     ...(file && remaining > total ? { nextOffset: offset + total } : {}),
   };
+}
+
+/** Same configuration executors as local settings, with the remote lease checked at persistence. */
+export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string, method: string, body: string | undefined, current: () => boolean, confirmConnection?: (label: string, host: string) => Promise<boolean>) {
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
+  if (!partition || !current()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  ensureGhostProtocolRegistered(ghost);
+  const target = captureGhostProtocolTargetGuard(partition);
+  const isCurrent = () => current() && target();
+  const id = installedGhostStoragePart(ghost), path = new URL(pathname, 'https://plugin.invalid').pathname;
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
+  const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
+    : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+  let result: { status: number; body?: string };
+  if (handler) result = await handler(args);
+  else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
+    method, readBodyText: args.readBodyText, store: ghostKvStore, ghostId: id, isCurrent,
+  });
+  else {
+    if (method !== 'GET') return { status: 405, mime: 'application/json', base64: '' };
+    const response = await fetchGhostMobilePage(ghost, pathname, method);
+    if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+    return response;
+  }
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  return { status: result.status, mime: 'application/json', base64: Buffer.from(result.body ?? '').toString('base64') };
 }
 
 // 管子桥 preload 的产物路径(与 main bundle 同目录,forge VitePlugin 出的
@@ -312,6 +353,7 @@ type GhostConnectionsProtocolHandler = (args: {
   pathname: string;
   readBodyText: () => Promise<string>;
   isCurrent: () => boolean;
+  confirmConnection?: (label: string, host: string) => Promise<boolean>;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostConnectionsHandler: GhostConnectionsProtocolHandler | null = null;
@@ -373,8 +415,39 @@ export function revokeLegacyGhostProtocolPartition(ghostId: string): void {
  * data:/blob:。
  * 与分区级断网(onBeforeRequest)构成双保险。
  */
-const GHOST_HTML_CSP =
+export const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
+/** 回环嵌入插件(见 ghostPanelLoopbackEmbedAllowed)额外允许的子帧来源;其余 CSP 不变。 */
+const GHOST_LOOPBACK_FRAME_CSP = "frame-src 'self' http://127.0.0.1:* http://localhost:*";
+
+/** 分区网络闸看到的请求形状(只取判定所需字段,便于单测构造)。 */
+interface LoopbackEmbedRequestDetails {
+  url: string;
+  resourceType: string;
+  referrer?: string;
+  frame?: { url: string; parent?: { url: string } | null } | null;
+}
+
+/**
+ * 回环嵌入请求是否放行:
+ * - 首层子帧(subFrame)到回环地址:父帧必须是本插件自己的页面;
+ * - 更深的子帧:父帧必须是同一回环主机:端口(插件自己那台本机服务内部的
+ *   分层页面),跨到另一个端口一律拒绝;
+ * - 子帧内的其它请求(脚本/样式/XHR/WebSocket/媒体…):发起帧与目标必须是
+ *   同一回环主机:端口;
+ * - 顶层导航(mainFrame)与来自 cindy-ghost 页面自身的回环请求一律拒绝。
+ */
+function loopbackEmbedRequestAllowed(details: LoopbackEmbedRequestDetails, selfPrefix: string): boolean {
+  const target = ghostLoopbackOrigin(details.url);
+  if (!target) return false;
+  if (details.resourceType === 'mainFrame') return false;
+  if (details.resourceType === 'subFrame') {
+    const parent = details.frame?.parent?.url ?? details.referrer ?? '';
+    return parent.startsWith(selfPrefix) || ghostLoopbackOrigin(parent) === target;
+  }
+  const from = details.frame?.url ?? details.referrer;
+  return ghostLoopbackOrigin(from) === target;
+}
 
 function createGhostProtocolTargetGuard(
   ghostId: string,
@@ -430,6 +503,11 @@ function registerGhostProtocol(
   // 任意插件页面发出的 HTTPS image 请求（<img> 与 CSS 图片共用该资源类型）。
   // HTTP 图片、XHR/fetch、脚本、样式、字体、媒体、WebSocket 与其它协议继续拒绝。
   const selfPrefix = `${SCHEME}://${ghostId}/`;
+  // 回环嵌入(ghostPanelLoopbackEmbedAllowed):面板页可以把随包 Node 进程在本机
+  // 提供的页面装进 <iframe>;该子帧内的请求只许回到同一主机:端口(含 WebSocket)。
+  // 面板页自身发出的回环 fetch/XHR 仍被拒;顶层导航到回环地址仍被拒。
+  const loopbackEmbed = ghostPanelLoopbackEmbedAllowed(ghost.manifest);
+  const htmlCsp = loopbackEmbed ? `${GHOST_HTML_CSP}; ${GHOST_LOOPBACK_FRAME_CSP}` : GHOST_HTML_CSP;
   ses.webRequest.onBeforeRequest((details, callback) => {
     let allowed = details.url.startsWith(selfPrefix);
     if (!allowed && isGhostProtocolOwnerActive(owner) && details.resourceType === 'image') {
@@ -438,6 +516,9 @@ function registerGhostProtocol(
       } catch {
         allowed = false;
       }
+    }
+    if (!allowed && loopbackEmbed && isGhostProtocolOwnerActive(owner)) {
+      allowed = loopbackEmbedRequestAllowed(details, selfPrefix);
     }
     callback({ cancel: !allowed });
   });
@@ -634,6 +715,11 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === GHOST_MAIL_SDK_PATH) {
+        return new Response(mailComposeRuntimeSource, { status: 200, headers: {
+          'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache',
+        } });
+      }
       if (url.pathname === GHOST_BOOT_PATH || url.pathname === '/') {
         const entry = binding.entry;
         if (!entry) return new Response(null, { status: 404 });
@@ -641,7 +727,7 @@ function registerGhostProtocol(
           status: 200,
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
-            'Content-Security-Policy': GHOST_HTML_CSP,
+            'Content-Security-Policy': htmlCsp,
             'Cache-Control': 'no-cache',
           },
         });
@@ -656,7 +742,7 @@ function registerGhostProtocol(
         status: 200,
         headers: {
           'Content-Type': mime,
-          ...(mime.startsWith('text/html') ? { 'Content-Security-Policy': GHOST_HTML_CSP } : {}),
+          ...(mime.startsWith('text/html') ? { 'Content-Security-Policy': htmlCsp } : {}),
           'Cache-Control': 'no-cache',
         },
       });
@@ -835,6 +921,10 @@ async function serveGhostGallery(storagePart: string, protocolHost: string): Pro
 
 class ElectronSandboxHandle implements SandboxHandle {
   private win: BrowserWindow | null;
+  // 建窗时记下:窗口可能先于 destroy() 被外部销毁(更新重启的 forceQuit 会逐个
+  // destroy 全部 BrowserWindow),那时再读 win.webContents 会抛 Object has been
+  // destroyed,打断 destroyAll 让后续沙箱与 Node runtime 都收不掉。
+  private readonly logicWebContentsId: number;
   private goneCb: ((details: { reason: string }) => void) | null = null;
   private destroyed = false;
 
@@ -861,8 +951,9 @@ class ElectronSandboxHandle implements SandboxHandle {
         devTools: !ghostSandboxDevToolsDisabled,
       },
     });
-    ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, installedGhostStoragePart(ghost));
+    this.logicWebContentsId = this.win.webContents.id;
+    ghostWebContentsIds.add(this.logicWebContentsId);
+    logicWebContentsToGhost.set(this.logicWebContentsId, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。
@@ -883,10 +974,8 @@ class ElectronSandboxHandle implements SandboxHandle {
     this.destroyed = true;
     const win = this.win;
     this.win = null;
-    if (win) {
-      logicWebContentsToGhost.delete(win.webContents.id);
-      if (!win.isDestroyed()) win.destroy();
-    }
+    logicWebContentsToGhost.delete(this.logicWebContentsId);
+    if (win && !win.isDestroyed()) win.destroy();
   }
 
   crashForTest(): void {

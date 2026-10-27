@@ -96,6 +96,7 @@ describe('market Ghost session boundary', () => {
     expect(serverCommitBody).not.toContain('requireSameMarketOwner(');
   });
 
+
   it('requires the pre-approval session generation when acquiring the mutation lease', () => {
     const captureStart = source.indexOf(
       'function captureGhostMutationOwner(): ActiveAppSession {',
@@ -155,7 +156,14 @@ describe('market Ghost session boundary', () => {
     expect(resolverBody.match(/availableGhosts\(\)/g)).toHaveLength(1);
     expect(resolverBody).toContain('resolvePluginInstanceQuery(availableGhosts(), id, namespace)');
     expect(resolverBody).not.toContain('findInstalledGhostByInstanceId');
-    expect(resolverBody).not.toContain('if (namespace === undefined)');
+    // The exact-key fast path fails closed at an account boundary and keeps the
+    // active-session availability filter that availableGhosts() applies.
+    const fastPathStart = resolverBody.indexOf('if (namespace === undefined) {');
+    expect(fastPathStart).toBeGreaterThanOrEqual(0);
+    const fastPath = resolverBody.slice(fastPathStart, resolverBody.indexOf('\n  }', fastPathStart));
+    expect(fastPath).toContain('if (isAppSessionBoundaryPending()) return null;');
+    expect(fastPath.indexOf('isAppSessionBoundaryPending()')).toBeLessThan(fastPath.indexOf('findInstalledInstance(id)'));
+    expect(fastPath).toContain('isGhostAvailableForActiveSession(ghost.manifest.id) ? ghost : null');
     expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBe(0);
     expect(source.match(/getGhost: findGhostForInstanceId/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
     expect(resolverBody).toContain(
@@ -262,7 +270,8 @@ describe('market Ghost session boundary', () => {
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
     expect(helperBody).toContain('onPackagePlaced: () => {');
     expect(helperBody).toContain('packagePlaced = true;');
-    expect(helperBody).toContain('if (!packagePlaced) {\n      restoreMarketRecord();');
+    // The rollback condition and first action are the contract, not nesting indentation.
+    expect(helperBody).toMatch(/if \(!packagePlaced\) \{\n[ \t]+restoreMarketRecord\(\);/);
     expect(updateBody).toContain('releaseMutation();');
     expect(helperBody).not.toContain('GHOST_SOURCE_CONFLICT');
   });
@@ -281,8 +290,16 @@ describe('market Ghost session boundary', () => {
       body.indexOf('const runtime = getGhostRuntime();'),
     );
 
-    expect(initialBranch).toContain('beforePackagePlacement: expected.beforeCommitInLock,');
-    expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(1);
+    // plugin-security-and-authoring §3: check cancellation at the actual transaction hooks.
+    const placement = initialBranch.indexOf('beforePackagePlacement: () => {');
+    expect(placement).toBeGreaterThan(-1);
+    const placementHook = initialBranch.slice(placement, initialBranch.indexOf('},', placement));
+    expect(placementHook).toContain('expected.assertCurrent?.();');
+    expect(placementHook).toContain('expected.beforeCommitInLock?.();');
+    expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(2);
+    const commit = body.indexOf('beforePackageCommit: () => {');
+    expect(commit).toBeGreaterThan(-1);
+    expect(body.slice(commit, body.indexOf('},', commit))).toContain('expected.assertCurrent?.();');
 
     const waitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(',

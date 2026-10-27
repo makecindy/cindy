@@ -487,6 +487,76 @@ describe('pi translator', () => {
     }));
   });
 
+  it.each([
+    ['English', '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}'],
+    ['Chinese (#6649)', '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention",'
+      + '"data":{"field":"prompt_cache_retention"}}'],
+  ])('classifies a %s prompt_cache_retention rejection for provider compat self-heal', (_label, errorMessage) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage,
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          isTerminal: true,
+          reason: 'unsupported-request-option',
+        }),
+      }),
+    ]);
+  });
+
+
+  it('classifies a custom gateway prompt_cache_key rejection for provider compat self-heal', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage:
+            '400: {"message":"Validation: Unsupported parameter(s): `prompt_cache_key`",'
+            + '"type":"invalid_request_error"}',
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          isTerminal: true,
+          reason: 'unsupported-request-option',
+        }),
+      }),
+    ]);
+  });
+
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -2269,7 +2339,7 @@ describe('pi translator live token speed', () => {
   const speedOf = (event: AgentEvent | undefined) =>
     (event?.data as { tokenSpeed?: Record<string, unknown> } | undefined)?.tokenSpeed;
 
-  it('counts streamed text, pauses on non-writing tools and snaps to real output at the end', () => {
+  it('counts streamed text, pauses on tools and snaps to real output at the end', () => {
     vi.useFakeTimers();
     try {
       const ctx = createPiTranslateContext(noopLogger);
@@ -2287,10 +2357,11 @@ describe('pi translator live token speed', () => {
       expect(live).toMatchObject({ streaming: true, tokens: 6, elapsedMs: 500 });
       expect(live?.rate).toBeGreaterThan(0);
 
-      // A bash call: its arguments are not counted and its execution is paused out.
+      // A bash call: count generated arguments, exclude execution time.
       update({ type: 'toolcall_start', contentIndex: 1, toolCall: { name: 'bash' } }, 1_600);
       update({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls -la"}', toolCall: { name: 'bash' } }, 1_700);
       update({ type: 'toolcall_end', contentIndex: 1, toolCall: { name: 'bash' } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000 });
       update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_000);
 
       vi.setSystemTime(12_500);
@@ -2333,7 +2404,7 @@ describe('pi translator live token speed', () => {
     }
   });
 
-  it('counts file-writing tool arguments and starts each turn fresh', () => {
+  it.each(['write', 'mcp__custom_tool'])('counts %s arguments, excludes execution and starts each turn fresh', (name) => {
     vi.useFakeTimers();
     try {
       const ctx = createPiTranslateContext(noopLogger);
@@ -2342,9 +2413,13 @@ describe('pi translator live token speed', () => {
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
         type: 'toolcall_delta', contentIndex: 0, delta: 'a b c',
-        partial: { content: [{ type: 'toolCall', name: 'write' }] },
+        partial: { content: [{ type: 'toolCall', name }] },
       } }), queue, ctx);
       expect(speedOf(events.filter((e) => e.type === 'status').at(-1))).toMatchObject({ tokens: 3 });
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', toolCall: { name } } }), queue, ctx);
+      vi.setSystemTime(12_000);
+      expect(ctx.tokenSpeed.snapshot()?.elapsedMs).toBe(1_000);
       translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
       events.length = 0;
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
@@ -2353,4 +2428,38 @@ describe('pi translator live token speed', () => {
       vi.useRealTimers();
     }
   });
+});
+
+it.each(['none', 'thinking', 'tool'])('reports a route receipt and blocks recovery after %s output', (kind) => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  const receipt = { providerId: 'connection-a', modelId: 'public', wireModelId: 'wire', routeKey: 'a'.repeat(64), applied: false };
+  ctx.getCacheCompatibility = () => receipt;
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  if (kind === 'thinking') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'working' } }), queue, ctx);
+  if (kind === 'tool') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'bash', args: { command: 'true' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+    reason: 'unsupported-request-option', piCacheCompatibility: receipt, piCacheRecoverySafe: kind === 'none',
+  });
+  disposePiTranslateContext(ctx);
+});
+
+// Regression: [image] retained text but lost the actual media. Unit, native RPC entry.
+it('retains tool image bytes and a video resource alongside text', () => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'media', result: {
+    content: [{ type: 'text', text: 'preview' },
+      { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' },
+      { type: 'resource_link', mimeType: 'video/mp4', uri: 'https://example.com/clip.mp4' }],
+  } }), queue, ctx);
+  expect(events.find(e => e.type === 'tool_result_full')?.data).toMatchObject({
+    toolUseId: 'media', fullText: 'preview\n[image]', processMedia: [
+      { kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' },
+      { kind: 'video', url: 'https://example.com/clip.mp4' },
+    ],
+  });
+  disposePiTranslateContext(ctx);
 });

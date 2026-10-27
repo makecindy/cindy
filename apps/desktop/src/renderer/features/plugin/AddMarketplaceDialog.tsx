@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * 添加插件市场对话框：添加表单（来源 / Git 引用 / 稀疏路径）+ 已添加市场的
  * 管理入口（新开 MarketplaceSourcesDialog，避免本对话框被列表撑长）。
@@ -272,19 +273,12 @@ export function AddMarketplaceDialog({
             </div>
 
             {operationError ? (
-              <div
+              <ErrorNotice
                 role="alert"
-                className="mt-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
-              >
-                <p className="text-12 leading-5 text-[hsl(var(--destructive))]">
-                  {t(operationError.key)}
-                </p>
-                {operationError.detail ? (
-                  <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-11 leading-4 text-[var(--text-tertiary)]">
-                    {operationError.detail}
-                  </pre>
-                ) : null}
-              </div>
+                className="mt-3"
+                message={t(operationError.key)}
+                details={operationError.detail ?? undefined}
+              />
             ) : null}
 
             {addedSummary ? (

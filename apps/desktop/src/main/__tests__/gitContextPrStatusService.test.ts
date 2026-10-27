@@ -117,6 +117,33 @@ describe('PrStatusService', () => {
     expect(fetchPr).toHaveBeenCalledTimes(2);
   });
 
+  // 过期但未超 stale 窗:立即用旧值回答,后台复核一次;下一次查询拿到新值。
+  // 修复前每 60s 过期都让一次 ~1.2s 的 GitHub 往返挡在侧栏 / 手机的状态查询前面。
+  it('过期后先回旧值再后台复核,超过 stale 窗才同步等待', async () => {
+    let now = 0;
+    let resolveFetch!: (v: PrRemoteState) => void;
+    const fetchPr = vi.fn(async () => remote({}));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK, fetchPr, cacheTtlMs: 100, staleTtlMs: 1_000, now: () => now,
+    });
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: true, status: 'open' });
+    now = 200;
+    fetchPr.mockImplementation(() => new Promise<PrRemoteState>((res) => (resolveFetch = res)));
+    // Stale answer returns without waiting for the slow revalidation.
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: true, status: 'open' });
+    await vi.waitFor(() => expect(fetchPr).toHaveBeenCalledTimes(2));
+    // A second stale read joins the same in-flight revalidation.
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'open' });
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+    resolveFetch(remote({ merged: true, state: 'closed' }));
+    await vi.waitFor(async () => expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'merged' }));
+    // Beyond the stale window the read waits for GitHub again.
+    now = 5_000;
+    fetchPr.mockImplementation(async () => remote({ state: 'closed' }));
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'closed' });
+    expect(fetchPr).toHaveBeenCalledTimes(3);
+  });
+
   it('并发同一 PR 只发一次请求(in-flight 去重)', async () => {
     let resolveFetch!: (v: PrRemoteState) => void;
     const fetchPr = vi.fn(() => new Promise<PrRemoteState>((res) => (resolveFetch = res)));

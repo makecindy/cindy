@@ -11,7 +11,10 @@ import {
   PROVIDER_SHARE_AGENT_DEVICE_PREFIX,
   type ProviderShareModelUsageView,
   type ProviderShareMoney,
+  type ProviderShareMemberView,
   type ProviderShareOwnedView,
+  type ProviderShareOwnerState,
+  type ProviderShareReshareView,
 } from '../../../shared/providerShare';
 
 /** 分享入口的能力门：允许远程控制 → 允许被远程调用 → 分享(产品规则 §3)。 */
@@ -121,6 +124,14 @@ export function pendingRequestCountByProvider(
 export interface ProviderSharePendingRequest {
   request: ProviderShareRequestItem;
   share: { shareId: string; providerId: string; providerLabel: string };
+  /** 分享在同账号另一台电脑上：本机生成链接或从管理页手动审批时带上，处理转交那台电脑。本机的分享不带。 */
+  hostDeviceId?: string;
+  /** 链接由同账号另一台电脑生成：由那台弹窗，本机只计入提示点与管理页。 */
+  quiet?: boolean;
+}
+
+function byRequestTime(a: ProviderSharePendingRequest, b: ProviderSharePendingRequest): number {
+  return Date.parse(a.request.createdAt) - Date.parse(b.request.createdAt);
 }
 
 /** owned 快照 → 待审批申请列表(按申请时间先后)。 */
@@ -136,7 +147,48 @@ export function pendingRequestsFromOwned(
       });
     }
   }
-  return items.sort((a, b) => Date.parse(a.request.createdAt) - Date.parse(b.request.createdAt));
+  return items.sort(byRequestTime);
+}
+
+/** 整份 owned 状态 → 本机的待审批申请(标出由别处弹窗的)，加上本机负责弹窗的其他电脑上的申请。 */
+export function pendingRequestsFromOwnerState(state: ProviderShareOwnerState): ProviderSharePendingRequest[] {
+  if (!state.ready) return [];
+  const quiet = new Set(state.quietRequestIds ?? []);
+  const local = pendingRequestsFromOwned(state.shares).map((item) =>
+    quiet.has(item.request.requestId) ? { ...item, quiet: true } : item);
+  const localIds = new Set(local.map((item) => item.request.requestId));
+  const watched = (state.watchedRequests ?? [])
+    .filter((item) => item.hostDeviceId && !localIds.has(item.request.requestId))
+    .map((item) => ({ request: item.request, share: item.share, hostDeviceId: item.hostDeviceId }));
+  return [...local, ...watched].sort(byRequestTime);
+}
+
+/** 待处理的转分享请求(provider-sharing.md §4.3)：成员想把分享来的供应商经自己的供应商组转给这个人用。 */
+export interface ProviderSharePendingReshare {
+  reshare: ProviderShareReshareView;
+  /** 经谁的供应商组(已分享的那个成员)。 */
+  owner: Pick<ProviderShareMemberView, 'memberId' | 'displayName' | 'avatarUrl' | 'note'>;
+  share: { shareId: string; providerId: string; providerLabel: string };
+}
+
+/** owned 快照 → 待处理的转分享请求(按请求时间先后)。 */
+export function pendingResharesFromOwned(
+  shares: readonly ProviderShareOwnedView[],
+): ProviderSharePendingReshare[] {
+  const items: ProviderSharePendingReshare[] = [];
+  for (const share of shares) {
+    for (const member of share.members) {
+      for (const reshare of member.reshares ?? []) {
+        if (reshare.state !== 'pending') continue;
+        items.push({
+          reshare,
+          owner: { memberId: member.memberId, displayName: member.displayName, avatarUrl: member.avatarUrl, note: member.note },
+          share: { shareId: share.shareId, providerId: share.providerId, providerLabel: share.providerLabel },
+        });
+      }
+    }
+  }
+  return items.sort((a, b) => a.reshare.requestedAt - b.reshare.requestedAt);
 }
 
 /** 受邀者打开链接时，错误码对应的弹窗状态。 */

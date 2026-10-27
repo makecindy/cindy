@@ -108,9 +108,15 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     isPendingHandoff(source) && !seen.has(source.clientId)
       ? pendingTail[pendingIndex++] : source);
   for (const row of orderedLiveMessages) {
-    if (isLive(row) && !seen.has(row.clientId)
-      && (Date.parse(row.createdAt) >= endMs
-        || isPendingHandoff(row))) rows.push(row);
+    if (!isLive(row) || seen.has(row.clientId)) continue;
+    const createdAt = Date.parse(row.createdAt);
+    if (isStaleTail(row) && !isPendingHandoff(row) && createdAt < endMs) {
+      // The receipt already proves this body arrived after the page read. A
+      // delayed/persisted timestamp cannot veto that proof. Insert missing durable
+      // rows in time order without reordering the authoritative page itself.
+      const before = rows.findIndex((known) => Date.parse(known.createdAt) > createdAt);
+      rows.splice(before < 0 ? rows.length : before, 0, row);
+    } else if (isStaleTail(row) || createdAt >= endMs || isPendingHandoff(row)) rows.push(row);
   }
   // Local pending/blocked user bubbles and ephemeral UI rows belong to the
   // current UI store, not persisted history. Anchor them to the reordered slots,

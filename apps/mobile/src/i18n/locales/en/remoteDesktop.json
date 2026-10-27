@@ -1,4 +1,17 @@
 {
+  "skin_macii": "Macintosh II",
+  "skin_powerbook": "PowerBook 170",
+  "skin_thinkpad": "ThinkPad 701C",
+  "skin_classic": "Classic 84",
+  "skin_compact": "Slim classic",
+  "skin_edge": "Full-screen retro",
+  "skin_modern": "Modern",
+  "nextSkin": "Next appearance",
+  "retroSkin": "Retro",
+  "modernSkin": "Modern",
+  "switchModern": "Switch to modern",
+  "switchRetro": "Switch to retro",
+  "skinSwipeHint": "Swipe left or right here to change the appearance.",
   "hostDisconnected": "The computer ended the remote desktop connection.",
   "privacyScreen": "Computer privacy screen",
   "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
@@ -160,5 +173,8 @@
   "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
   "hostMute": "Mute remote computer",
   "hostMuteHint": "Mute the remote computer while connected",
-  "hostMuteFailed": "Couldn't change the remote computer's mute setting"
+  "hostMuteFailed": "Couldn't change the remote computer's mute setting",
+  "handoffEnded": "This input handoff has already finished, so there is no window to show.",
+  "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
+  "handoffWindow": "Input handoff · {{app}}"
 }

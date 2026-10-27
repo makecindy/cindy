@@ -47,4 +47,16 @@ describe('IM public image fetch', () => {
     ).rejects.toThrow(/size limit/);
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it('aborts the download when the caller cancels', async () => {
+    const caller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const guardedFetch = vi.fn<GuardedImageFetch>(async ({ signal }) => {
+      seen = signal;
+      caller.abort();
+      return { response: new Response(PNG_BYTES), finalUrl: 'https://cdn.example/image.png', release: async () => undefined };
+    });
+    await fetchPublicImageBytes('https://cdn.example/image.png', 1024, guardedFetch, { signal: caller.signal });
+    expect(seen?.aborted).toBe(true);
+  });
 });

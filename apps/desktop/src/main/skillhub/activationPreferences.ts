@@ -110,6 +110,14 @@ export function isCindyLearnSkillEnabled(): boolean {
   return descriptor ? isCindySkillEnabled(descriptor.absolutePath) : false;
 }
 
+/** Listing reads user intent; execution checks the current Skill's integrity. */
+export function isCindyLearnSkillEnabledForCommandListing(): boolean {
+  // Use the same active path as execution, without enumerating or hashing files.
+  // A retired profile copy must not veto an explicitly reenabled shared copy.
+  const source = path.join(sharedBuiltInSkillsRoot(app.getPath('appData')), '.active', BUILT_IN_LEARN_SKILL_NAME);
+  return !readDisabledSkillPathsForListing().includes(skillActivationKey(source));
+}
+
 export interface SkillActivationSnapshot { key: string; revision?: string; aliases: string[] }
 
 export function snapshotSkillActivation(source: string): SkillActivationSnapshot | null {

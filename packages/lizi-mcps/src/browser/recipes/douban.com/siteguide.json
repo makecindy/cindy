@@ -1,11 +1,15 @@
 {
   "site": "douban.com",
-  "auth": "搜索/榜单多数可匿名,但豆瓣风控较严,登录态(持久浏览器)更稳;触发验证码时需人工通过一次",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "search": "https://search.douban.com/{type}/subject_search?search_text={keyword}",
-    "movieChart": "https://movie.douban.com/chart",
-    "bookChart": "https://book.douban.com/chart"
+    "home": "https://search.douban.com"
   },
-  "recipes": ["douban-search"],
-  "notes": "豆瓣无可用公开 JSON 接口,只能扒服务端+客户端渲染的 DOM。搜索结果页 search.douban.com/{type}/subject_search?search_text= 客户端异步填充,必须先轮询 .item-root 出现再扒(配方已封装)。卡片选择器:标题 .title-text / .title a / a[title];链接取标题 a 的 href(含 /subject/);评分 .rating_nums;简介 .meta.abstract / .meta / .abstract。type ∈ movie/book/music。⚠️ 选择器随豆瓣改版可能失效;失效时配方会快速失败,回退到现场 snapshot+extract,并可 saveRecipe 更新。风控验证码需在持久浏览器里人工通过。"
+  "recipes": [
+    "douban-search"
+  ],
+  "notes": "兼容入口 douban-search 现执行内置 douban/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

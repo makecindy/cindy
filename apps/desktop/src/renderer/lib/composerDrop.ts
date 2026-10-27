@@ -10,7 +10,7 @@ interface ComposerMentionDataTransfer {
 
 interface ComposerMentionTarget {
   addFileMention(payload: ComposerFileMentionPayload): void;
-  addFolderPath(folderPath: string): void;
+  addFolderPath(folderPath: string, source?: 'task'): void;
 }
 
 export function consumeComposerMentionDrop(
@@ -22,7 +22,7 @@ export function consumeComposerMentionDrop(
   );
   if (!mentionPayload) return false;
   if (mentionPayload.type === 'directory') {
-    target.addFolderPath(mentionPayload.relPath);
+    target.addFolderPath(mentionPayload.relPath, 'task');
     return true;
   }
   target.addFileMention(mentionPayload);

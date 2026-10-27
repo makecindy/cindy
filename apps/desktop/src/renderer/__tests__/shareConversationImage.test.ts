@@ -13,12 +13,14 @@ vi.mock('@/lib/annotationBurnIn', () => ({
 const {
   SHARE_EXCLUDE_ATTR,
   SHARE_MESSAGE_ATTR,
+  SHARE_PENDING_IMAGE_ATTR,
   SHARE_SESSION_ATTR,
   SHARE_SOURCE_ATTR,
   ShareImageTooLargeError,
   appendShareMessages,
   assertShareImageReadableSize,
   buildShareImageFooter,
+  buildShareStageMotionFreeze,
   expandScrollableBlocks,
   inlineCloneImages,
   prepareShareMessageClone,
@@ -125,6 +127,23 @@ describe('prepareShareMessageClone', () => {
     const node = root(`<div><img src="data:image/png;base64,AAAA" alt="" /></div>`)
       .firstElementChild as HTMLElement;
     expect(prepareShareMessageClone(node)).not.toBeNull();
+  });
+
+  it('流里仍在加载的图片照常进图:去掉加载占位,恢复显示', () => {
+    const node = root(`
+      <div ${SHARE_MESSAGE_ATTR}="media-1">
+        <span ${SHARE_EXCLUDE_ATTR} role="status"></span>
+        <img ${SHARE_PENDING_IMAGE_ATTR} src="cindy-media://shot.png" style="max-width: 480px; display: none;" />
+      </div>
+    `).firstElementChild as HTMLElement;
+    const clone = prepareShareMessageClone(node);
+    const img = clone?.querySelector('img');
+    expect(clone?.querySelector('[role="status"]')).toBeNull();
+    expect(img?.hasAttribute(SHARE_PENDING_IMAGE_ATTR)).toBe(false);
+    expect(img?.style.display).toBe('');
+    expect(img?.style.maxWidth).toBe('480px');
+    // 原节点不受影响,流里照旧等加载完成。
+    expect(node.querySelector('img')?.style.display).toBe('none');
   });
 });
 
@@ -478,6 +497,15 @@ describe('queryShareableMessageIds', () => {
     document.body.appendChild(message);
 
     expect(queryShareableMessageIds(sessionId)).toEqual(['escaped']);
+  });
+});
+
+describe('buildShareStageMotionFreeze', () => {
+  it('只作用于导出 stage,关掉入场动画与过渡,避免图片按动画中途的透明度入图', () => {
+    const css = buildShareStageMotionFreeze().textContent ?? '';
+    expect(css).toContain('[data-share-export] *');
+    expect(css).toContain('animation:none!important');
+    expect(css).toContain('transition:none!important');
   });
 });
 

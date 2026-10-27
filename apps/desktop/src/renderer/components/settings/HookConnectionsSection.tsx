@@ -1,4 +1,3 @@
-import { Button } from '@/components/ui/button';
 /**
  * HookConnectionsSection —— 「IM 机器人」页「官方」栏(Cindy 渠道)。
  * i18n key 刻意留在 settings.remoteControl.hook.* 命名空间(50+ 条 × 4 语言的
@@ -35,6 +34,8 @@ import { Button } from '@/components/ui/button';
  *
  * 颜色全部走主题 token; 状态徽章沿用「个人」栏的 --settings-badge-* 语义色。
  */
+
+import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -451,7 +452,7 @@ export function workspaceRowsToMap(
   return workspaces;
 }
 
-export function HookConnectionsSection() {
+export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
   const { t } = useTranslation();
   const { entry, activation } = useSettingsSearchNavigation();
   const [hook, setHook] = useState<SlackHookView | null>(null);
@@ -467,10 +468,11 @@ export function HookConnectionsSection() {
   const targetCard = (['slack', 'telegram', 'x'] as const).find(
     (card) => entry?.targetId === 'cindy-im-' + card,
   ) ?? null;
-  const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(targetCard);
+  const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
   useLayoutEffect(() => {
     if (targetCard) setExpandedCard(targetCard);
   }, [targetCard, activation]);
+  const [companionPending, setCompanionPending] = useState(false);
   const [slackAuthActionPending, setSlackAuthActionPending] = useState(false);
   const slackAuthActionInFlightRef = useRef(false);
   const toggleCard = (card: CindyImCard) =>
@@ -792,7 +794,7 @@ export function HookConnectionsSection() {
     void (async () => {
       const ok = await confirm({
         title: t('settings.remoteControl.hook.x.guide.ackTitle'),
-        content: <XUsageGuide />,
+        content: <XUsageGuide companion={!!hookRef.current?.x.companionBotId} />,
         confirmText: t('settings.remoteControl.hook.x.guide.ackConfirm'),
         showCancel: false,
         // 主操作非破坏性(只是"我明白"), 焦点直接落在它上面
@@ -1377,6 +1379,29 @@ export function HookConnectionsSection() {
    * 子树 remount)。动作按钮完全由 binding.actions 数据驱动 —— X 的 actions
    * 里没有 add_to_group, 加群按钮自然不渲染。
    */
+  const changeXCompanion = async () => {
+    if (companionPending) return;
+    const previous = hookRef.current?.x.companionBotId ?? null;
+    if (!companion && !previous) return;
+    const removing = !companion || previous === companion.id;
+    setCompanionPending(true);
+    try {
+      const ok = await confirm({
+        title: t(`bots.channels.officialX.${removing ? 'removeTitle' : 'bindTitle'}`, { name: companion?.name }),
+        description: t(`bots.channels.officialX.${removing ? 'removeBody' : 'bindBody'}`, { name: companion?.name }),
+        confirmText: t(`bots.channels.officialX.${removing ? 'remove' : 'bind'}`),
+      });
+      if (!ok) return;
+      const requestedAtRevision = ++viewRevisionRef.current;
+      const result = await window.electronAPI.hookControl.setXCompanion(removing ? null : companion!.id, previous);
+      if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+    } catch {
+      toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
+    } finally {
+      setCompanionPending(false);
+    }
+  };
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
@@ -1392,7 +1417,7 @@ export function HookConnectionsSection() {
             : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
-        routeSummary={cs.bindingLine}
+        routeSummary={companion ? null : cs.bindingLine}
         status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
         headerAction={
           <Switch
@@ -1414,7 +1439,7 @@ export function HookConnectionsSection() {
 
           {/* 绑定进度/结果一行(完成关联引导、失败原因等; 已关联的摘要由
               收起行承载, 展开区不重复) */}
-          {cs.bindingLine !== null && !cs.confirmed ? (
+          {cs.bindingLine !== null && (!cs.confirmed || companion) ? (
             <span
               className={`text-11 leading-relaxed ${
                 cs.state === 'failed' ||
@@ -1536,10 +1561,30 @@ export function HookConnectionsSection() {
                 确认门弹窗, 那里根本没有目录选择器;
               · **不按 view.enabled / cs.confirmed 收起**: 正在评估要不要打开的人
                 最需要看到「回帖是公开的」, 那时候两个条件都还不成立。 */}
-          {provider === 'x' ? <XUsageGuide /> : null}
+          {provider === 'x' ? <>
+            <XUsageGuide companion={!!view.companionBotId} />
+            {companion ? (
+              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
+                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
+                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.bound'
+                    : view.companionBotId ? 'bots.channels.officialX.boundElsewhere' : 'bots.channels.officialX.unbound', { name: companion.name })}
+                </p>
+                <Button variant="secondary" size="sm" type="button" disabled={companionPending}
+                  onClick={() => void changeXCompanion()}>
+                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
+                </Button>
+              </div>
+            ) : view.companionBotId ? (
+              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
+                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
+                <Button variant="secondary" size="sm" type="button" disabled={companionPending}
+                  onClick={() => void changeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
+              </div>
+            ) : null}
+          </> : null}
 
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
-          {view.enabled
+          {view.enabled && !view.companionBotId
             ? renderWorkdirSection(prefsState, undefined, {
                 value: view.defaultWorkspace,
                 // Telegram 的目录本来就一行一个, 行内选中比再开一个下拉更直白;
@@ -1551,7 +1596,7 @@ export function HookConnectionsSection() {
           {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
               global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上
               影响解析了 —— 要能看见才谈得上"可管理"。从未改过的设备一次都不会渲染。 */}
-          {view.enabled ? (
+          {view.enabled && !view.companionBotId ? (
             <LegacyGlobalDefaultsNotice
               state={legacyGlobalDefaults.state}
               pending={legacyGlobalDefaults.pending}
@@ -1584,12 +1629,12 @@ export function HookConnectionsSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-12 text-[var(--text-tertiary)]">
+      {!companion ? <p className="text-12 text-[var(--text-tertiary)]">
         {t('settings.remoteControl.hook.description')}
-      </p>
+      </p> : null}
 
       {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
-      <ImChannelSettingsCard
+      {!companion ? <ImChannelSettingsCard
         id="cindy-im-slack"
         title={t('settings.tina.prefs.providerSlack')}
         description={t('settings.remoteControl.hook.slackDescription')}
@@ -2027,10 +2072,10 @@ export function HookConnectionsSection() {
           {/* 工作目录映射(清单共享, 偏好取 Slack 那份) */}
           {hook.enabled ? renderWorkdirSection(slackPrefsState, 6) : null}
         </div>
-      </ImChannelSettingsCard>
+      </ImChannelSettingsCard> : null}
 
       {/* ── provider-neutral 渠道卡(Telegram / X, 同构渲染) ─────────── */}
-      {renderProviderCard('telegram')}
+      {!companion ? renderProviderCard('telegram') : null}
       {renderProviderCard('x')}
     </div>
   );

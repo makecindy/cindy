@@ -40,6 +40,8 @@ const TOP_CHANNELS = 6;
 let enabled = false;
 let pushes = new Map<string, ChannelTiming>();
 let invokes = new Map<string, number>();
+type TransferCounters = { sent: number; results: number; payloadBytes: number; notModified: number; gzip: number };
+let transfers = new Map<string, TransferCounters>();
 let storeSizeSource: (() => RemoteSessionStoreSizeMetrics) | null = null;
 
 export function setJankMetricsEnabled(next: boolean): void {
@@ -47,6 +49,7 @@ export function setJankMetricsEnabled(next: boolean): void {
   enabled = next;
   pushes = new Map();
   invokes = new Map();
+  transfers = new Map();
 }
 
 export function jankMetricsEnabled(): boolean {
@@ -65,6 +68,23 @@ export function recordPushHandled(channel: string, durationMs: number): void {
 export function recordInvokeSent(channel: string): void {
   if (!enabled) return;
   invokes.set(channel, (invokes.get(channel) ?? 0) + 1);
+}
+
+/** Relay requests that actually wrote to the socket, and encoded response payloads.
+ * Excludes peer-direct traffic, frame headers and retransmissions; not a wire-byte total.
+ */
+export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | 'result';
+  payloadBytes?: number; notModified?: boolean; gzip?: boolean }): void {
+  if (!enabled) return;
+  const entry = transfers.get(event.channel) ?? { sent: 0, results: 0, payloadBytes: 0, notModified: 0, gzip: 0 };
+  if (event.phase === 'sent') entry.sent++;
+  else {
+    entry.results++;
+    entry.payloadBytes += event.payloadBytes ?? 0;
+    if (event.notModified) entry.notModified++;
+    if (event.gzip) entry.gzip++;
+  }
+  transfers.set(event.channel, entry);
 }
 
 /** The store registers itself so this module does not import the store's module graph. */
@@ -91,6 +111,8 @@ export function takeJankMetrics(): {
   pushes: ChannelTimingRow[];
   invokeCount: number;
   invokes: ChannelCountRow[];
+  relayTransfers: ({ channel: string } & TransferCounters)[];
+  relayTransfersOmitted: number;
 } {
   let pushCount = 0;
   let pushMs = 0;
@@ -118,8 +140,16 @@ export function takeJankMetrics(): {
     pushes: topChannels(pushRows, (row) => row.totalMs),
     invokeCount,
     invokes: topChannels(invokeRows, (row) => row.count),
+    // Six rows per list keep the complete record below the writer's 120-value
+    // budget. Rank by bytes so a late large response cannot disappear behind noise.
+    relayTransfers: topChannels(
+      [...transfers].map(([channel, counts]) => ({ channel, ...counts })),
+      (row) => row.payloadBytes,
+    ),
+    relayTransfersOmitted: Math.max(0, transfers.size - TOP_CHANNELS),
   };
   pushes = new Map();
   invokes = new Map();
+  transfers = new Map();
   return snapshot;
 }

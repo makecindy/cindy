@@ -1,3 +1,4 @@
+import { HARNESS_BRIDGE_REVISION, type HarnessCapabilityCatalog, type HarnessHookHandler } from './types/harness-capabilities.js';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -86,7 +87,7 @@ export interface PermissionModeState {
 
 export type SessionEventListener = (event: AgentEvent) => void;
 export type SessionStatusListener = (status: SessionStatus) => void;
-export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
+export type InteractionRequestListener = (req: InteractionRequest, signal?: AbortSignal) => Promise<InteractionDecision>;
 
 /**
  * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**没有产品进展**,视为整条
@@ -133,6 +134,11 @@ export const STALL_ABORT_RECOVERY_GRACE_MS = 10_000;
  * 端到端最长不超过 15s(review #944 第十一轮末尾调优)。
  */
 export const MANUAL_ABORT_RECOVERY_GRACE_MS = 15_000;
+/**
+ * The same Codex tool call starting again sooner than this cannot be a new model
+ * response (one sampling takes seconds): it is a script repeating it in a burst.
+ */
+const CODEX_BURST_REPEAT_GAP_MS = 2_000;
 
 /** Shared confirmation budget for provider interrupt ACK and send acceptance. */
 const GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
@@ -312,8 +318,11 @@ function appendManagedImageReferences(
 }
 
 export interface SessionSendOptions extends SendOptions {
-  /** Host-owned authorization refresh after all async preparation, before vendor dispatch. */
-  resolveAutoReviewUserIntent?: () => Promise<AutoReviewUserIntent>;
+  /**
+   * Host-owned authorization refresh after all preparation, before vendor dispatch.
+   * Returning undefined preserves the existing intent; an empty intent still clears it.
+   */
+  resolveAutoReviewUserIntent?: () => Promise<AutoReviewUserIntent | undefined>;
   /**
    * Turn reservation 建立后的原子准备钩子。
    *
@@ -336,7 +345,9 @@ export interface SessionSendOptions extends SendOptions {
    * Session 在 active/running 守卫通过、turn reservation 建立后调用；
    * hook 完成后才启动 vendor handle。
    */
-  onAccepted?: () => void | Promise<void>;
+  // Reservation cancellation reaches host preparation (for example Git
+  // snapshots); returning from a cancelled hook never authorizes dispatch.
+  onAccepted?: (signal?: AbortSignal) => void | Promise<void>;
   /** Reservation 建立后立刻回调本轮 turn generation；host 必须用它绑定 leftover，不能等 send 返回后再读最新 generation。 */
   onTurnReserved?: (turnGeneration: number) => void;
   /**
@@ -347,6 +358,8 @@ export interface SessionSendOptions extends SendOptions {
 }
 
 export interface SessionTurnLifecycleObserver {
+  /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
+  onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
   beforeProviderStart(turnGeneration: number): void | Promise<void>;
   /** Called when a prepared generation never crosses the provider dispatch boundary. */
@@ -472,6 +485,10 @@ export class Session {
   private readonly runtimeRecoveryListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
+  private harnessHookHandler: HarnessHookHandler | null = null;
+  private harnessActionInFlight = false;
+  /** Invalidates plugin requests when an undispatched reservation reuses its turn number. */
+  private harnessRevision = 0;
   private turnLifecycleObserver: SessionTurnLifecycleObserver | null = null;
   /** Generation whose turn after the product terminal (no send) is currently open. */
   private unsolicitedTurnGeneration: number | null = null;
@@ -488,6 +505,13 @@ export class Session {
   private closePromise: Promise<void> | null = null;
   /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
   private terminationStarted = false;
+  /**
+   * The runtime itself began this teardown (dead handle, crashed loop, failed
+   * dispatch, abort / terminal-error recovery). External close()/closeIfIdle()/
+   * detach() callers never set it, so a direct product close is not mistaken
+   * for a self-close even when no Maker close reason was recorded.
+   */
+  private runtimeInitiatedClose = false;
   private eventLoopStarted = false;
   /**
    * 最近一次已观察到的终态事件属于哪个 turn generation；事件迭代器可能在上一轮
@@ -502,6 +526,8 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+    /** Codex app-server 的结构化错误 tag(如 badRequest / cyberPolicy)。 */
+    codexErrorInfo?: string;
   } | null = null;
   /** Survives N+1 reservation clearing the current snapshot; leftover done must not adopt. */
   private lastObservedTerminalGeneration: number | null = null;
@@ -620,7 +646,7 @@ export class Session {
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
-    this.handle.setInteractionResolver((req) => this.runHostInteraction(req, async () => {
+    this.handle.setInteractionResolver((req, signal) => this.runHostInteraction(req, async () => {
       if (!this.interactionListener) {
         this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
         if (req.kind === 'ask_user_question') {
@@ -631,7 +657,7 @@ export class Session {
         }
         return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
       }
-      return await this.interactionListener(req);
+      return await (signal ? this.interactionListener(req, signal) : this.interactionListener(req));
     }));
   }
 
@@ -656,6 +682,7 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+    codexErrorInfo?: string;
   } {
     if (
       this.turnGeneration <= 0 ||
@@ -683,6 +710,9 @@ export class Session {
         ...(this.terminalEventObservedErrorSignals?.toolLoop
           ? { toolLoop: this.terminalEventObservedErrorSignals.toolLoop }
           : {}),
+        ...(this.terminalEventObservedErrorSignals?.codexErrorInfo
+          ? { codexErrorInfo: this.terminalEventObservedErrorSignals.codexErrorInfo }
+          : {}),
       };
     }
     return { kind: 'done', generation: this.turnGeneration };
@@ -695,6 +725,7 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+      codexErrorInfo?: string;
     } | null;
   } {
     const errorData = (listenerEvent.data ?? null) as {
@@ -703,6 +734,7 @@ export class Session {
       sdkError?: unknown;
       errorStatus?: unknown;
       toolLoop?: unknown;
+      codexErrorInfo?: unknown;
     } | null;
     const errorMessage = errorData?.message;
     const signals: {
@@ -710,6 +742,7 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+      codexErrorInfo?: string;
     } = {};
     if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
       signals.reason = errorData.reason;
@@ -722,13 +755,18 @@ export class Session {
     }
     const toolLoop = parseToolLoopErrorDetails(errorData?.toolLoop);
     if (toolLoop) signals.toolLoop = toolLoop;
+    // Codex 的结构化 tag 是有界枚举名(translator 只取 tag,不带原文),不需要脱敏。
+    if (typeof errorData?.codexErrorInfo === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(errorData.codexErrorInfo)) {
+      signals.codexErrorInfo = errorData.codexErrorInfo;
+    }
     return {
       message: typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null,
       signals:
         signals.reason ||
         signals.sdkError ||
         signals.errorStatus !== undefined ||
-        signals.toolLoop
+        signals.toolLoop ||
+        signals.codexErrorInfo
           ? signals
           : null,
     };
@@ -815,8 +853,7 @@ export class Session {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
-    // A user/API permission change may have been waiting for the lease above.
-    // Preserve its ordering before admitting the next turn.
+    // Preserve user/API permission change ordering before admitting the next turn.
     while (this.externalPermissionModeChangesInFlight > 0) {
       if (await this.waitForGateOrAbort(this.externalPermissionModeChangeChain, handleOpts.signal)) {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
@@ -920,7 +957,7 @@ export class Session {
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
-      await onAccepted?.();
+      await onAccepted?.(reservation.abortController.signal);
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
@@ -946,7 +983,8 @@ export class Session {
         }
       }
       if (resolveAutoReviewUserIntent) {
-        handleOpts[AUTO_REVIEW_USER_INTENT] = await resolveAutoReviewUserIntent();
+        const intent = await resolveAutoReviewUserIntent();
+        if (intent !== undefined) handleOpts[AUTO_REVIEW_USER_INTENT] = intent;
         const cancelledAfterAuthorization = finishCancelledBeforeDispatch();
         if (cancelledAfterAuthorization !== null) return cancelledAfterAuthorization;
       }
@@ -978,6 +1016,14 @@ export class Session {
       try {
         this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
+        try {
+          turnLifecycleObserver?.onDispatching?.();
+        } catch (error) {
+          // Host authorization rejected synchronously, before handle.send could
+          // create work. Do not fence a later valid send for a nonexistent tail.
+          dispatchConfirmedUndispatched = true;
+          throw error;
+        }
         this.insideProviderSendSync = true;
         try {
           await this.handle.send(msg, {
@@ -1039,7 +1085,7 @@ export class Session {
           this.pendingPriorGeneration = null;
           originInstalled = false;
         }
-        await this.close();
+        await this.closeFromRuntime();
       }
       throw e;
     } finally {
@@ -1061,6 +1107,7 @@ export class Session {
       //     turn 的 done 会丢 origin → IM 转播收不到 done → 转播卡永不 finalize、残留
       //     state 污染下一轮(见 PR #129 review)。
       if (!turnDispatched) {
+        this.harnessRevision += 1;
         if (originInstalled) {
           this.currentTurnOrigin = previousTurnOrigin;
           this.currentTurnAttemptToken = previousTurnAttemptToken;
@@ -1156,7 +1203,10 @@ export class Session {
     return msg;
   }
 
-  async steer(message: UserMessage | string, opts?: SendOptions): Promise<void> {
+  async steer(
+    message: UserMessage | string,
+    opts?: SendOptions & Pick<SessionSendOptions, 'beforeProviderStart'>,
+  ): Promise<void> {
     let msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
@@ -1165,7 +1215,7 @@ export class Session {
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
-    if (!this.handle.isTurnRunning?.()) {
+    if (this.harnessActionInFlight || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
@@ -1177,10 +1227,17 @@ export class Session {
     // 层 B：steer 追加图片同样走视觉桥（与 send 一致），否则纯文本模型收到的
     // 原始 image block 会被后端忽略或拒绝（Greptile P1）。
     msg = await this.bridgedVisionMessage(msg, opts?.signal);
+    const { beforeProviderStart, ...handleOpts } = opts ?? {};
+    // Host grants must survive all asynchronous preparation, including steer.
+    // Keep the private authorization hook out of provider options.
+    if (beforeProviderStart) {
+      await beforeProviderStart();
+      this.ensureActive();
+    }
     // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
     // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
     // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
-    if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
+    if (this.harnessActionInFlight || this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     this.startEventLoopIfNeeded();
@@ -1188,7 +1245,7 @@ export class Session {
     const previousSteerGeneration = this.steerAcceptedGeneration;
     this.steerAcceptedGeneration = steerTurnGeneration;
     try {
-      await this.handle.steer(msg, { ...opts, [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent });
+      await this.handle.steer(msg, { ...handleOpts, [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent });
     } catch (error) {
       if (this.steerAcceptedGeneration === steerTurnGeneration) {
         this.steerAcceptedGeneration = previousSteerGeneration;
@@ -1389,6 +1446,15 @@ export class Session {
   }
 
   /**
+   * 宿主发起的独占 RPC 操作(手动压缩 / rewind / 切模等)在途。这类操作不预约
+   * turn,关闭会把它们拦腰截断；空闲回收据此拒绝关闭。会话已关闭 → false。
+   */
+  hasPendingHostOperation(): boolean {
+    if (this.status === 'closed' || this.status === 'error') return false;
+    return this.handle.hasPendingHostOperation?.() ?? false;
+  }
+
+  /**
    * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
@@ -1419,6 +1485,17 @@ export class Session {
   /** True once teardown has started, including an unconfirmed failed close. */
   hasStartedClosing(): boolean {
     return this.terminationStarted;
+  }
+
+  /** True when this runtime, not an external caller, started its own teardown. */
+  wasClosedByRuntime(): boolean {
+    return this.runtimeInitiatedClose;
+  }
+
+  /** Self-close: only claims the cause when no teardown has started yet. */
+  private closeFromRuntime(): Promise<void> {
+    if (!this.terminationStarted && this.status !== 'closed') this.runtimeInitiatedClose = true;
+    return this.close();
   }
 
   /**
@@ -1503,13 +1580,15 @@ export class Session {
   }
 
   /**
-   * Close only when no send reservation or agent turn is active. The check and
-   * close reservation are synchronous, so a concurrent send either wins first
-   * and keeps the session open, or observes closePromise and is rejected.
+   * Close only when no send reservation, agent turn, or host-initiated exclusive
+   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * and close reservation are synchronous, so a concurrent send either wins
+   * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration) {
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
       return Promise.resolve(false);
     }
     return this.close().then(() => true);
@@ -1621,6 +1700,85 @@ export class Session {
 
   async getCodexContextWindowInfo() {
     return this.handle.getCodexContextWindowInfo?.() ?? null;
+  }
+
+  /** Host-only fence; provider turn numbers can be reused after a rejected send. */
+  getHarnessRevision(): number {
+    return this.harnessRevision;
+  }
+
+  /** Metadata bridge capabilities, separate from the Pi-native command catalog. */
+  getHarnessCapabilities(): HarnessCapabilityCatalog {
+    const hooks: HarnessCapabilityCatalog['hooks'] = [{ name: 'permission.request', source: 'host-permission',
+      connected: true, actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' }];
+    for (const name of ['tool.before', 'compaction.before'] as const) {
+      hooks.push({ name, source: 'native', connected: !!this.handle.setHarnessHookHandler && this.handle.harnessHooks?.includes(name) === true,
+        actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' });
+    }
+    const compactConnected = !!this.handle.requestHarnessCompaction;
+    return { revision: HARNESS_BRIDGE_REVISION, agent: this.agentKind, runtimeVersion: this.handle.runtimeVersion ?? null,
+      read: ['runtime', 'usage', 'status'],
+      events: ['tool', 'usage', 'compaction', 'task', 'status', 'message'], hooks,
+      actions: ['turn.interrupt', ...(compactConnected ? ['context.compact'] : [])],
+      availability: [...hooks.map(hook => ({ group: 'hooks' as const, name: hook.name, connected: hook.connected === true })),
+        { group: 'actions', name: 'turn.interrupt', connected: true },
+        { group: 'actions', name: 'context.compact', connected: compactConnected }],
+      backgroundCompaction: { supported: false, nativeEnabled: 'unknown', nativeRunning: 'unknown' } };
+  }
+
+  /** Synchronous reservation prevents user sends or another action racing dispatch. */
+  async runHarnessAction(name: 'context.compact' | 'turn.interrupt', expectedGeneration: number) {
+    this.ensureActive();
+    if (expectedGeneration !== this.turnGeneration) return { ok: false as const, errorCode: 'STALE_RUNTIME' as const };
+    if (this.harnessActionInFlight || this.permissionModeChangesInFlight > 0)
+      return { ok: false as const, errorCode: 'BUSY' as const };
+    if (name === 'context.compact' && (this.pendingInteractions > 0 || this.isTurnRunning() || this.hasUnsettledTurn()))
+      return { ok: false as const, errorCode: 'BUSY' as const };
+    if (!this.getHarnessCapabilities().actions.includes(name))
+      return { ok: false as const, errorCode: 'UNAVAILABLE' as const };
+    const origin = this.currentTurnOrigin;
+    if (origin?.kind && origin.kind !== 'user' || origin?.surface === 'im')
+      return { ok: false as const, errorCode: 'DENIED' as const };
+    const running = this.isTurnRunning();
+    this.harnessActionInFlight = true;
+    try {
+      if (name === 'context.compact') return { ok: true as const, value: await this.handle.requestHarnessCompaction!() };
+      if (running) await this.abort();
+      // An interrupt acknowledgement does not prove all native work has stopped.
+      return { ok: true as const, value: { state: running ? 'requested' : 'noop' } };
+    } finally {
+      this.harnessActionInFlight = false;
+    }
+  }
+
+  /** Host-only registration; never serialized to a model or remote control payload. */
+  setHarnessHookHandler(handler: HarnessHookHandler): () => void {
+    this.harnessHookHandler = handler;
+    const disposeNative = this.handle.setHarnessHookHandler?.(request => this.runHarnessHook(request));
+    return () => {
+      if (this.harnessHookHandler === handler) {
+        this.harnessHookHandler = null;
+        disposeNative?.();
+      }
+    };
+  }
+
+  private async runHarnessHook(request: Parameters<HarnessHookHandler>[0]) {
+    const handler = this.harnessHookHandler;
+    // Existing subscription scope: ordinary user turns only. No IM/automation expansion.
+    if (!handler || this.currentTurnOrigin?.kind && this.currentTurnOrigin.kind !== 'user'
+      || this.currentTurnOrigin?.surface === 'im') return { action: 'continue' as const };
+    const generation = this.turnGeneration;
+    const revision = this.harnessRevision;
+    const nativeId = this.handle.requestSessionId ?? this.handle.id;
+    let result: Awaited<ReturnType<HarnessHookHandler>>;
+    try { result = await handler(request); } catch { result = { action: 'continue' }; }
+    if (this.status !== 'active' || this.terminationStarted || this.turnGeneration !== generation
+      || this.harnessRevision !== revision
+      || (this.handle.requestSessionId ?? this.handle.id) !== nativeId) {
+      return { action: 'block' as const, reason: 'Harness request is no longer current' };
+    }
+    return result;
   }
 
   getUsageSnapshot(): UsageSnapshot {
@@ -1747,6 +1905,14 @@ export class Session {
     return enabled === null ? null : { enabled, generation: this.planModeGeneration };
   }
 
+  /** Native ownership covers harness tool calls, never independently initiated Host work. */
+  get autoReviewOwner(): 'native' | 'cindy' {
+    return this.stablePermissionModeState?.mode === 'auto'
+      && this.stablePlanModeState?.enabled === false
+      ? this.handle.getAutoReviewOwner?.() ?? 'cindy'
+      : 'cindy';
+  }
+
   /** Review a Host-side tool step without reconstructing or persisting another copy of user intent. */
   async reviewHostPermissionAction(action: ReviewableAction): Promise<AutoReviewDecision> {
     const permission = this.stablePermissionModeState;
@@ -1807,7 +1973,10 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
+  async setModel(
+    model: string,
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
+  ): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
@@ -1819,7 +1988,7 @@ export class Session {
 
   async previewModelSwitch(
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ): Promise<PiModelSwitchPreview | undefined> {
     return this.handle.previewModelSwitch?.(model, opts);
   }
@@ -1845,16 +2014,8 @@ export class Session {
     this.assertPermissionModeSupported(mode);
     this.externalPermissionModeChangesInFlight += 1;
     const operation = this.externalPermissionModeChangeChain.catch(() => undefined).then(async () => {
-      if (this.isTurnPermissionPolicyUnsafe(mode)) {
-        // Official group turns hold a host lease until background continuations
-        // and the temporary safe-mode restore have both settled. Do not let an
-        // external Full access / accept-edits switch weaken that active turn.
-        // Host-owned temporary switches use setPermissionModeTracked and remain
-        // able to restore while this operation waits, avoiding a lease deadlock.
-        while (this.hostTurnLeases.size > 0) {
-          await Promise.all([...this.hostTurnLeases]);
-        }
-      }
+      // The owner's live permission choice applies equally to IM and Desktop
+      // turns. Host leases fence new sends/retirement, not permission changes.
       await this.setPermissionModeTracked(mode);
     });
     const tracked = operation.finally(() => {
@@ -1908,9 +2069,8 @@ export class Session {
     mode: PermissionMode,
   ): Promise<boolean> {
     this.assertPermissionModeSupported(mode);
-    // An external request is newer user intent even when an unsafe target is
-    // still waiting for a host turn lease. Never restore over it, and never
-    // wait here: that request may need this restore path to release the lease.
+    // An external request is newer user intent, including while its runtime
+    // update is still in flight. Never restore over it.
     if (this.externalPermissionModeChangesInFlight > 0) return false;
     this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
@@ -1955,11 +2115,7 @@ export class Session {
     }
   }
 
-  private isTurnPermissionPolicyUnsafe(mode: PermissionMode): boolean {
-    return this.capabilities.turnPermissionPolicy?.unsupportedPermissionModes.includes(mode) === true;
-  }
-
-  async setFastMode(enabled: boolean): Promise<void> {
+  async setFastMode(enabled: boolean | 'ultrafast'): Promise<void> {
     this.ensureActive();
     if (!this.handle.setFastMode) {
       throw new NotSupportedError('fastMode', { supported: false, reason: 'not-implemented' });
@@ -2016,6 +2172,7 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
+    if (this.harnessActionInFlight) throw new Error('SESSION_RUNNING: Harness control action is in progress');
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2056,7 +2213,7 @@ export class Session {
     return this.handle.navigateSessionTree(entryId, options);
   }
 
-  getFastMode(): boolean | null {
+  getFastMode(): boolean | 'ultrafast' | null {
     return this.handle.getFastMode?.() ?? null;
   }
 
@@ -2127,6 +2284,7 @@ export class Session {
   isTurnRunning(): boolean {
     return (
       this.sendReservation !== null ||
+      this.harnessActionInFlight ||
       this.hostTurnLeases.size > 0 ||
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
@@ -2226,6 +2384,11 @@ export class Session {
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
+      if (request.kind === 'permission' && this.harnessHookHandler) {
+        const result = await this.runHarnessHook({ name: 'permission.request', toolName: request.toolName,
+          ...(request.toolUseId ? { toolUseId: request.toolUseId } : {}) });
+        if (result.action === 'block') return { kind: 'permission', behavior: 'deny', reason: result.reason ?? 'Blocked by plugin' };
+      }
       return await resolve();
     } finally {
       if (isQuestion) this.pendingUserQuestions -= 1;
@@ -2299,6 +2462,9 @@ export class Session {
         // not enable the retry-count rule without that evidence. Claude also
         // disables category-only retries; repetition rules stay active.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+        // Codex code mode: a background script's calls carry no ownership marker;
+        // see ToolLoopGuardOptions.burstRepeatGapMs.
+        ...(this.agentKind === 'codex' ? { burstRepeatGapMs: CODEX_BURST_REPEAT_GAP_MS } : {}),
       }), {
         reviewer: this.toolLoopReviewer,
         context: () => ({ sessionId: this.id, agentKind: this.agentKind, model: this.handle.model }),
@@ -3062,7 +3228,7 @@ export class Session {
         generation,
         graceMs: TERMINAL_ERROR_DRAIN_GRACE_MS,
       });
-      void this.close().catch((error) => {
+      void this.closeFromRuntime().catch((error) => {
         this.logger.warn('terminal error drain close failed', { error: String(error) });
       });
     }, TERMINAL_ERROR_DRAIN_GRACE_MS);
@@ -3303,7 +3469,7 @@ export class Session {
       { trigger: ctx.trigger, graceMs: ctx.graceMs },
     );
     try {
-      await this.close();
+      await this.closeFromRuntime();
     } catch (e) {
       this.logger.warn('abort recovery close failed', { trigger: ctx.trigger, error: String(e) });
     }
@@ -3356,7 +3522,7 @@ export class Session {
       this.logger.error('event loop crashed', { error: String(e) });
       if (this.closePromise || this.status === 'closed') return;
       // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      const closing = this.close();
+      const closing = this.closeFromRuntime();
       if (this.terminalEventObservedGeneration !== this.turnGeneration) {
         this.fanOutEvent({
           type: 'error',
@@ -3393,6 +3559,7 @@ export class Session {
     const unfinishedTurn =
       this.hasUnsettledTurn();
     this.logger.debug('event loop ended (handle dead), auto-closing session', { unfinishedTurn });
+    this.runtimeInitiatedClose = true;
     this.terminationStarted = true;
     this.closePromise = Promise.resolve();
     this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event');

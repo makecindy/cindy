@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPluginMarketAgentTools } from '../agentTools.js';
 import type { PluginMarketDetail, PluginMarketSnapshot } from '../../../shared/pluginMarket.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ServerApiError } from '../../serverApiClient.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { PluginMarketInstallContext } from '../service.js';
 
@@ -75,6 +76,50 @@ describe('Agent plugin discovery and installation', () => {
     const h = harness(); h.state.installed = true; h.state.errorCode = errorCode;
     expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ status: 'already-installed', plugin: { installed: true, availability: errorCode ?? 'available' } });
     expect(h.market.install).not.toHaveBeenCalled();
+  });
+
+  it('does not call an organization-only outage a complete catalog', async () => {
+    const h = harness();
+    h.snapshot.organizationAccessError = 'PLUGIN_NAMESPACE_CLIENT_REQUIRED';
+    expect(await h.tools.search('gmail')).toMatchObject({
+      ok: true,
+      complete: false,
+      unavailable_sources: ['organization'],
+    });
+  });
+
+  it.each([
+    ['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'update Cindy'],
+    ['PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'Retry later'],
+    ['PLUGIN_LIST_CHANGED', 'Retry later'],
+    ['PLUGIN_NAMESPACE_CONFIG_REQUIRED', 'Do not retry repeatedly'],
+  ] as const)('returns %s from a market install failure', async (code, guidance) => {
+    const h = harness();
+    h.market.detail.mockRejectedValue(new ServerApiError(code, code === 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' ? 503 : 409, 'secret-plugin-id'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: code });
+    expect(String(result.message)).toContain(guidance);
+    expect(JSON.stringify(result)).not.toContain('secret-plugin-id');
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the guidance when the service reports a catalog-level organization outage', async () => {
+    const h = harness();
+    h.market.install.mockImplementation(async () =>
+      throwIpcError('PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'Organization plugin catalog is unavailable'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' });
+    expect(String(result.message)).toContain('Retry later');
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an ordinary install failure unavailable', async () => {
+    const h = harness();
+    h.market.install.mockRejectedValue(new Error('disk failed'));
+    expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({
+      ok: false,
+      errorCode: 'INSTALL_UNAVAILABLE',
+    });
   });
 
   it('distinguishes unavailable sources from an exhaustive empty result without leaking errors', async () => {

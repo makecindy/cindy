@@ -404,7 +404,7 @@ export async function removeRefs(
  * publishing their managed URL; the SQL predicate runs after they settle.
  */
 export async function removeSessionAttachmentRefIfUnreferencedByLiveMessage(
-  params: { sessionId: string; hash: string },
+  params: { sessionId: string; hash: string; visibleOnly?: boolean },
   db: LedgerDb = defaultDb(),
 ): Promise<number> {
   if (!/^[0-9a-f]{64}$/.test(params.hash)) return 0;
@@ -422,6 +422,10 @@ export async function removeSessionAttachmentRefIfUnreferencedByLiveMessage(
              WHERE messages.session_id = ${params.sessionId}
                AND messages.rewind_at IS NULL
                AND messages.content LIKE ${`%${params.hash}%`}
+               ${params.visibleOnly ? sql`AND messages.role != 'message_tombstone'
+                 AND EXISTS (SELECT 1 FROM sessions
+                   WHERE sessions.id = messages.session_id AND sessions.status != 'deleted'
+                     AND (sessions.cleared_at IS NULL OR messages.created_at > sessions.cleared_at))` : sql``}
           )`,
         ),
       )
@@ -507,6 +511,13 @@ export async function removeGhostDepositRef(
     )
     .run();
   return result.changes > 0;
+}
+
+/** Local attachment reuse must not bypass a remote cache's owner/device index. */
+export async function hasNonCacheBlob(hash: string, db: LedgerDb = defaultDb()): Promise<boolean> {
+  const rows = await db.select({ hash: mediaBlobs.hash }).from(mediaBlobs)
+    .where(and(eq(mediaBlobs.hash, hash), eq(mediaBlobs.isCache, false))).limit(1).all();
+  return rows.length > 0;
 }
 
 /** 查某指纹的落盘元数据(改图代办等"手里只有指纹"的调用方用);无账即 null。 */
@@ -601,8 +612,18 @@ export interface CacheBlobRow {
   lastAccessAt: number;
 }
 
+/** Count shared blobs once, including bytes also referenced by other integrations. */
+export async function getIntegrationCacheBytes(integration: string, db: LedgerDb = defaultDb()): Promise<number> {
+  const [row] = await db.select({ bytes: sql<number>`COALESCE(SUM(${mediaBlobs.bytes}), 0)` })
+    .from(mediaBlobs).where(and(eq(mediaBlobs.isCache, true), sql`EXISTS (
+      SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+      AND ${mediaRefs.refKind} = 'integration-cache' AND ${mediaRefs.originId} = ${integration}
+    )`)).all();
+  return row.bytes;
+}
+
 /** cache 性质 blob 按 LRU 升序(最久未用在前),供逐出候选规划。 */
-export async function listCacheBlobsByLru(db: LedgerDb = defaultDb()): Promise<CacheBlobRow[]> {
+export async function listCacheBlobsByLru(db: LedgerDb = defaultDb(), integration?: string): Promise<CacheBlobRow[]> {
   return await db
     .select({
       hash: mediaBlobs.hash,
@@ -611,7 +632,11 @@ export async function listCacheBlobsByLru(db: LedgerDb = defaultDb()): Promise<C
       lastAccessAt: mediaBlobs.lastAccessAt,
     })
     .from(mediaBlobs)
-    .where(eq(mediaBlobs.isCache, true))
+    .where(and(eq(mediaBlobs.isCache, true), integration ? sql`EXISTS (
+      SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+      AND ${mediaRefs.refKind} = 'integration-cache' AND ${mediaRefs.originId} = ${integration}
+    ) AND NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+      AND (${mediaRefs.refKind} <> 'integration-cache' OR ${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration}))` : undefined))
     .orderBy(asc(mediaBlobs.lastAccessAt))
     .all();
 }
@@ -650,6 +675,7 @@ export async function deleteZeroRefBlobRecord(
 export async function deleteCacheBlobRecord(
   hash: string,
   db: LedgerDb = defaultDb(),
+  integration?: string,
 ): Promise<boolean> {
   const result = await db
     .delete(mediaBlobs)
@@ -658,6 +684,10 @@ export async function deleteCacheBlobRecord(
         eq(mediaBlobs.hash, hash),
         eq(mediaBlobs.isCache, true),
         sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash} AND ${mediaRefs.refKind} <> 'integration-cache')`,
+        integration ? sql`NOT EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+          AND (${mediaRefs.originId} IS NULL OR ${mediaRefs.originId} <> ${integration}))` : undefined,
+        integration ? sql`EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash}
+          AND ${mediaRefs.originId} = ${integration})` : undefined,
       ),
     )
     .run();

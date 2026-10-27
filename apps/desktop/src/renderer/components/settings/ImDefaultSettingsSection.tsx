@@ -12,13 +12,15 @@ import {
   isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
 import { MessageSquare, AlertTriangle } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -36,10 +38,8 @@ import {
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import {
-  buildAgentSettingsPatch,
-  mergeSettingsPatch,
-} from './imDefaultSettingsLogic';
+import { Button } from '@/components/ui/button';
+import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
@@ -76,23 +76,29 @@ export function ImDefaultSettingsSection({
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
   const { t } = useTranslation();
-  const { providers } = useProviders();
-  const cc = useAgentCapabilities('claude-code');
-  const codex = useAgentCapabilities('codex');
-  const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
+  const settingsRequestVersion = useRef(0);
+  const agentDeviceId = settings?.agents[settings.agentKind].agentDeviceId ?? null;
+  const local = useProviders();
+  const remote = useDeviceProviders(agentDeviceId ?? undefined);
+  const providers = agentDeviceId ? remote.providers : local.providers;
+  const cc = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
+  const codex = useAgentCapabilities('codex', agentDeviceId ?? undefined);
+  const pi = useAgentCapabilities('pi', agentDeviceId ?? undefined);
+  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
 
-  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code');
+  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code', agentDeviceId);
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++settingsRequestVersion.current;
     setSettings(null);
     setPending(false);
     void window.electronAPI.maker
       .imDefaultSettingsGet(channel)
       .then((state) => {
-        if (!cancelled) setSettings(state);
+        if (!cancelled && version === settingsRequestVersion.current) setSettings(state);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -101,6 +107,7 @@ export function ImDefaultSettingsSection({
       });
     return () => {
       cancelled = true;
+      if (version === settingsRequestVersion.current) settingsRequestVersion.current++;
     };
   }, [channel, t]);
 
@@ -129,9 +136,7 @@ export function ImDefaultSettingsSection({
       codex: fromProviders.codex.length
         ? fromProviders.codex
         : (codex.capabilities?.availableModels ?? []),
-      pi: fromProviders.pi.length
-        ? fromProviders.pi
-        : (pi.capabilities?.availableModels ?? []),
+      pi: fromProviders.pi.length ? fromProviders.pi : (pi.capabilities?.availableModels ?? []),
     };
   }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
 
@@ -174,19 +179,23 @@ export function ImDefaultSettingsSection({
   const persist = useCallback(
     async (patch: ImDefaultSettingsPatch) => {
       if (!settings || pending) return false;
+      // A displayed automatic route may use a different engine than the stored empty default.
+      if (patch.agents && !patch.agentKind) patch = { ...patch, agentKind: settings.agentKind };
       const previous = settings;
+      const version = ++settingsRequestVersion.current;
       setPending(true);
       setSettings(mergeSettingsPatch(settings, patch));
       try {
         const next = await window.electronAPI.maker.imDefaultSettingsSet(patch, channel);
-        setSettings(next);
+        if (version === settingsRequestVersion.current) setSettings(next);
         return true;
       } catch (err) {
+        if (version !== settingsRequestVersion.current) return false;
         setSettings(previous);
         toast.error(err instanceof Error ? err.message : t('settings.imBot.defaults.saveFailed'));
         return false;
       } finally {
-        setPending(false);
+        if (version === settingsRequestVersion.current) setPending(false);
       }
     },
     [channel, pending, settings, t],
@@ -194,16 +203,38 @@ export function ImDefaultSettingsSection({
 
   const reset = useCallback(async () => {
     if (pending) return;
+    const version = ++settingsRequestVersion.current;
     setPending(true);
     try {
-      setSettings(await window.electronAPI.maker.imDefaultSettingsReset(channel));
+      const next = await window.electronAPI.maker.imDefaultSettingsReset(channel);
+      if (version !== settingsRequestVersion.current) return;
+      setSettings(next);
       toast.success(t('settings.defaults.restored'));
     } catch (err) {
+      if (version !== settingsRequestVersion.current) return;
       toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
     } finally {
-      setPending(false);
+      if (version === settingsRequestVersion.current) setPending(false);
     }
   }, [channel, pending, t]);
+
+  const automaticMode =
+    settings?.automaticModel ?? (settings ? !settings.agents[settings.agentKind].model : false);
+  useEffect(() => {
+    if (!automaticMode || pending || local.loading) return;
+    const version = ++settingsRequestVersion.current;
+    void window.electronAPI.maker
+      .imDefaultSettingsGet(channel)
+      .then((next) => {
+        if (version === settingsRequestVersion.current) setSettings(next);
+      })
+      .catch(() => {
+        // Retain the last display snapshot; normal settings writes report their own errors.
+      });
+    return () => {
+      if (version === settingsRequestVersion.current) settingsRequestVersion.current++;
+    };
+  }, [automaticMode, channel, local.loading, local.providers, pending]);
 
   if (!settings) {
     return (
@@ -221,17 +252,14 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  const automaticModel = settings.automaticModel ?? !activeSettings.model;
   // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
   // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
   // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
   // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
   // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
   const selectedAgentCaps =
-    settings.agentKind === 'claude-code'
-      ? cc
-      : settings.agentKind === 'codex'
-        ? codex
-        : pi;
+    settings.agentKind === 'claude-code' ? cc : settings.agentKind === 'codex' ? codex : pi;
   const selectedAgentCapabilitiesReady =
     !selectedAgentCaps.loading &&
     selectedAgentCaps.error === null &&
@@ -262,7 +290,9 @@ export function ImDefaultSettingsSection({
     providerId: string | null = activeSettings.providerId,
     reconciledEffort?: Effort,
   ) => {
-    const nextProviderId = resolveProviderId(settings.agentKind, model, providerId);
+    const nextProviderId = agentDeviceId
+      ? providerId
+      : resolveProviderId(settings.agentKind, model, providerId);
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
@@ -326,10 +356,40 @@ export function ImDefaultSettingsSection({
           <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.modelLabel')}
           </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-12 text-[var(--text-secondary)]">
+            <span>
+              {t(
+                automaticModel
+                  ? 'settings.imBot.defaults.automatic'
+                  : 'settings.imBot.defaults.fixed',
+              )}
+            </span>
+            {!automaticModel && (
+              <Button
+                size="sm"
+                tone="quiet"
+                disabled={pending}
+                onClick={() =>
+                  void persist({
+                    agentKind: IM_DEFAULT_SETTINGS.agentKind,
+                    agents: IM_DEFAULT_SETTINGS.agents,
+                  })
+                }
+              >
+                {t('settings.imBot.defaults.useAutomatic')}
+              </Button>
+            )}
+          </div>
+          {automaticModel && !activeSettings.model && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('settings.imBot.defaults.automaticUnavailable')}
+            </p>
+          )}
           <ModelSelector
+            remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
             fastModeConfigurable={false}
             unifiedAgents={pickerAgents}
-            onUnifiedSelect={({ engine, modelId, providerId, effort }) => {
+            onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
               const agentKind = agentKindOfVendor(engine);
               return persist({
                 agentKind,
@@ -337,6 +397,7 @@ export function ImDefaultSettingsSection({
                   ...settings.agents[agentKind],
                   model: modelId,
                   providerId,
+                  agentDeviceId: agentDevice?.deviceId ?? null,
                   effort: isImDefaultEffort(effort)
                     ? effort
                     : resolveEffort(agentKind, modelId, ''),

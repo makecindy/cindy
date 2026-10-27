@@ -1,3 +1,4 @@
+export { forwardedRequestDisplayText } from './forwardedRequestDisplay.js';
 /**
  * 消息来源：界面标签与发给模型的来源说明共用的一份描述。
  *
@@ -207,7 +208,17 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
   return undefined;
 }
 
-export type MessageSourceIdKind = 'plugin' | 'teammate' | 'session' | 'automation' | 'member';
+/**
+ * 来源任务在另一台电脑上（Agent 跨电脑发消息时，接收电脑把来源任务 id 记为
+ * `deviceId::sessionId`）。它不是本机可打开的任务 id：界面照常显示标签与 id，但不提供跳转。
+ */
+export function isCrossDeviceSourceSessionId(sessionId: string | undefined): boolean {
+  if (!sessionId) return false;
+  const split = sessionId.indexOf('::');
+  return split > 0 && split < sessionId.length - 2;
+}
+
+export type MessageSourceIdKind = 'plugin' | 'mcpApp' | 'teammate' | 'session' | 'automation' | 'member';
 
 export interface MessageSourceIdEntry {
   kind: MessageSourceIdKind;
@@ -221,7 +232,11 @@ export interface MessageSourceIdEntry {
  */
 export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   const sender = messageSourceSenderFromMeta(meta);
-  if (sender?.kind === 'plugin') return [{ kind: 'plugin', id: sender.pluginId }];
+  if (sender?.kind === 'plugin') {
+    return sender.pluginId.startsWith('mcp-app:')
+      ? [{ kind: 'mcpApp', id: sender.pluginId.slice(8) }]
+      : [{ kind: 'plugin', id: sender.pluginId }];
+  }
   if (sender?.kind === 'shared-member') return [{ kind: 'member', id: sender.memberId }];
   if (sender?.kind === 'session') {
     return [
@@ -259,6 +274,7 @@ export function describeMessageSourceSender(sender: MessageSourceSender): string
       return ref ? `由任务${ref} 发送` : '由其他任务发送';
     }
     case 'plugin':
+      if (sender.pluginId.startsWith('mcp-app:')) return `由 MCP App${formatSourceRef(sender.name, 'mcp_server_id', sender.pluginId.slice(8))} 发送`;
       return `由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`;
     case 'shared-member':
       return `由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`;

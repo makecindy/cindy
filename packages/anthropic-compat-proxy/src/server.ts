@@ -130,6 +130,15 @@ const DEBUG_REQUEST_DUMP_MAX_BYTES = 64 * 1024;
 // 错误响应 (status >= 400) body 的 dump 上限。错误响应通常只是一个 JSON error 对象
 // (~几百字节),给 16KB 已经非常宽裕,超出按相同截断策略尾部追加 "... (truncated, total N bytes)"。
 const ERROR_RESPONSE_DUMP_MAX_BYTES = 16 * 1024;
+/**
+ * 流式响应的终态事件:Responses `response.completed|failed|incomplete`、Anthropic
+ * `message_stop`、Chat Completions `data: [DONE]`。见 forward() 里 client close 的收口。
+ */
+const SSE_TERMINAL_EVENT_RE =
+  /\nevent:[ \t]*(?:response\.(?:completed|failed|incomplete)|message_stop)[ \t]*(?:\r?\n|\r?$)|"type"[ \t]*:[ \t]*"(?:response\.(?:completed|failed|incomplete)|message_stop)"|\ndata:[ \t]*\[DONE\]/;
+const SSE_TERMINAL_SCAN_TAIL_CHARS = 64;
+/** SSE 事件结束符:空行。 */
+const SSE_EVENT_END_RE = /\r?\n\r?\n/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1057,6 +1066,10 @@ function forward(
   // upstreamReq.error 或 upstreamRes.error。request 侧通过这个回调汇入当前
   // response 的终态处理,保证 observer 与下游收口语义不受事件先后影响。
   let failActiveResponse: ((err: unknown) => void) | null = null;
+  // 2xx SSE 已把终态事件(response.completed / message_stop / [DONE] 等)转给客户端后,
+  // 客户端随即断开是正常收尾(Codex CLI 收到 response.completed 就关连接,上游 body 往往
+  // 还没 end)。流式路径在这里挂一个收口函数:返回 true 表示已按正常完成处理。
+  let completeAfterTerminalSseEvent: (() => boolean) | null = null;
   // upstreamRes emits `end` before a request-scoped response Transform finishes
   // its _flush. Keep those downstream transforms pending so an async flush
   // error can still fail the client instead of being mistaken for a harmless
@@ -1098,6 +1111,11 @@ function forward(
     // 透明重试的上一笔 forward 也保留着 close listener;它的上游已经 end,
     // 后一笔若因上游故障 destroy clientRes,不能被旧 listener 误报成客户端断开。
     if (proxyDestroyedClient || upstreamResponseTerminal === 'end' || clientRes.writableEnded) return;
+    if (completeAfterTerminalSseEvent?.()) {
+      // 生成已经结束,不存在计费泄漏;仍释放上游 socket,不让它悬挂到 body 自然结束。
+      upstreamReq.destroy();
+      return;
+    }
     clientAborted = true;
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'client-aborted';
     if (forwardLifecycle?.onFailure) {
@@ -1254,10 +1272,12 @@ function forward(
             strippedBytes: retryBody.length,
           });
           const threadId = selectedHeaderValue(headers, rule.threadIdHeaders ?? DEFAULT_THREAD_ID_HEADERS);
-          const model = clientModel || extractBodyModel(body);
-          if (threadId && model) {
+          if (threadId) {
             for (const appliedRule of appliedRules) {
-              appliedRule.onRetry?.(threadId, model);
+              const model = appliedRule.useUpstreamModel
+                ? extractBodyModel(body)
+                : clientModel || extractBodyModel(body);
+              if (model) appliedRule.onRetry?.(threadId, model);
             }
           }
           const retry = (): void => {
@@ -1665,6 +1685,57 @@ function forward(
     // 收 body: 总字节始终累加;status >= 400 时额外收集前 ERROR_RESPONSE_DUMP_MAX_BYTES
     // 字节做 dump 用。2xx 路径只做计数, 无内存压力。
     // 错误响应的 status 在 'response' 事件就拿到了,这里直接判断要不要开收集器。
+    // 终态 SSE 事件探测:仅明文 2xx SSE(压缩流无法按行扫描,保持原有断开即失败语义)。
+    // 匹配 `event: <终态>` 行或 data JSON 的顶层 `"type":"<终态>"`(JSON 字符串内的引号
+    // 必然被转义,正文内容不会误命中);保留上一 chunk 的尾巴以覆盖跨 chunk 截断。
+    const scanTerminalSseEvent = (isSse || canInferSse) && !isCompressed && status >= 200 && status < 300;
+    // terminalSseEventSeen 仅在终态事件完整经过(其后出现空行结束符)后为真:
+    // 事件被拆成两段发送时,第一段命中标记不代表事件已转发完,此时取消仍按断开处理。
+    let terminalSseEventSeen = false;
+    let terminalSseMarkerSeen = false;
+    // 以换行起头:首个 chunk 开头即视为行首。
+    let terminalSseScanTail = '\n';
+    const scanChunkForTerminalSseEvent = (chunk: Buffer): void => {
+      if (!scanTerminalSseEvent || terminalSseEventSeen) return;
+      const text = terminalSseScanTail + chunk.toString('latin1');
+      let rest = text;
+      if (!terminalSseMarkerSeen) {
+        const match = SSE_TERMINAL_EVENT_RE.exec(text);
+        if (!match) {
+          terminalSseScanTail = text.slice(-SSE_TERMINAL_SCAN_TAIL_CHARS);
+          return;
+        }
+        terminalSseMarkerSeen = true;
+        rest = text.slice(match.index + match[0].length);
+      }
+      if (SSE_EVENT_END_RE.test(rest)) {
+        terminalSseEventSeen = true;
+        terminalSseScanTail = '';
+        return;
+      }
+      // 空行结束符可能跨 chunk,保留最后 3 个字符。
+      terminalSseScanTail = rest.slice(-3);
+    };
+    completeAfterTerminalSseEvent = () => {
+      if (!terminalSseEventSeen || !streamGateCommitted || upstreamResponseTerminal !== null) return false;
+      upstreamResponseTerminal = 'end';
+      // transform 随 clientRes close 一起被 destroy,不会再 emit 'end';清掉挂起集合,
+      // 让随后 upstream 的 aborted/error 被视为已收口后的迟到事件。
+      pendingResponseTransforms.clear();
+      observerEnd();
+      logger.debug?.('client closed after terminal SSE event — releasing upstream', {
+        reqId,
+        method,
+        path: upstreamPathname,
+        status,
+        bytes: totalBytes,
+      });
+      if (forwardLifecycle?.onComplete) {
+        notifyForwardLifecycle(() => forwardLifecycle.onComplete?.(status));
+      }
+      return true;
+    };
+
     const collectErrBody = status >= 400;
     let totalBytes = 0;
     const errBuf: Buffer[] = [];
@@ -1675,6 +1746,7 @@ function forward(
       lastChunkBytes = chunk.length;
       lastChunkAt = Date.now();
       observerData(chunk);
+      scanChunkForTerminalSseEvent(chunk);
       if (collectErrBody && errBufBytes < ERROR_RESPONSE_DUMP_MAX_BYTES) {
         const remain = ERROR_RESPONSE_DUMP_MAX_BYTES - errBufBytes;
         errBuf.push(chunk.length <= remain ? chunk : chunk.subarray(0, remain));
@@ -2170,7 +2242,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         headers['accept-encoding'] = 'identity';
         installResponseGuard(res, () => res.statusCode >= 400
           ? new PassThrough() // Native clients treat HTTP failures as errors, never executable output.
-          : requestGuard!.response(res.getHeaders()));
+          : requestGuard!.response(res.getHeaders()), error => {
+          logger.warn?.('response guard rejected upstream payload', { reqId, err: String(error) });
+        });
       }
     } catch {
       res.writeHead(403); res.end(); req.resume(); return;
@@ -2600,12 +2674,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 全新/刚归一化的 kimi 会话,请求体可能还没有任何铸造形态 id(历史缺席),
     // 但模型仍会铸 minted id —— 用请求体 model 判定 kimi,确保首 fresh id 也
     // 被接管记录(codex-connector review: Cache first streamed Kimi tool IDs)。
-    // 覆盖 moonshot-kimi-code provider 的 `k3` 模型 id(Kimi K3,catalog 里
-    // claude-code runtime 的 model id 就是裸 `k3`,不带 kimi 前缀;codex-connector
-    // review: Treat Kimi Code k3 as a Kimi stream)。
+    // Coding Plan 的 k3 / k3.1-pro 等 ID 不带 kimi 前缀，小数版本也必须命中。
     const isKimiRequest =
-      isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
-        ? /(^|[/_-])(kimi|k3)([/_-]|$)/i.test(parsedForRewrite.model)
+      decision?.compatibilityProfiles !== undefined
+        ? decision.compatibilityProfiles.includes('kimi-tool-ids-v1')
+        : isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
+        ? /(^|[/_-])(kimi|k3(?:\.\d+)?)([/_-]|$)/i.test(parsedForRewrite.model)
         : false;
 
     // per-thread 已见 id 缓存(跨请求并入 usedIds):rewind / 中断 / CLI 压缩会让

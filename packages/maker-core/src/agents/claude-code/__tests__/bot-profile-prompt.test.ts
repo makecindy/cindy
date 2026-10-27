@@ -6,6 +6,7 @@ describe('Claude Bot Profile prompt assembly', () => {
   it('keeps the Bot SOUL as the first Cindy-owned stable segment', () => {
     const prompt = buildClaudeSystemPromptAppend({
       botProfilePrompt: 'BOT SOUL',
+      answerDeliveryPrompt: 'DELIVERY PROTOCOL',
       botProfileContextPrompt: 'ACTIVE BOT PROFILE',
       makerMemoryRules: 'MEMORY RULES',
       hostSystemPrompt: 'HOST RULES',
@@ -14,7 +15,7 @@ describe('Claude Bot Profile prompt assembly', () => {
       userPrompt: 'USER OVERRIDE',
     });
 
-    expect(prompt.startsWith('BOT SOUL\n\n')).toBe(true);
+    expect(prompt.startsWith('BOT SOUL\n\nDELIVERY PROTOCOL')).toBe(true);
     expect(prompt.indexOf('BOT SOUL')).toBeLessThan(prompt.indexOf('MEMORY RULES'));
     expect(prompt.indexOf('ACTIVE BOT PROFILE')).toBeGreaterThan(prompt.indexOf('MEMORY RULES'));
     expect(prompt.indexOf('ACTIVE BOT PROFILE')).toBeLessThan(prompt.indexOf('HOST RULES'));

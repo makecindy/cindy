@@ -19,22 +19,79 @@ import { usePluginResultCard } from '@/session/usePluginResultCard';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 let current: ReturnType<typeof usePluginResultCard>;
-function Probe({ device = 'mac', task = 's', card = 'c' }: { device?: string; task?: string; card?: string }) {
-  current = usePluginResultCard(device, task, card); return null;
+function Probe({ device = 'mac', task = 's', card = 'c', follow = false }: { device?: string; task?: string; card?: string; follow?: boolean }) {
+  current = usePluginResultCard(device, task, card, follow); return null;
 }
 async function render(props = {}) {
   root ??= createRoot(document.createElement('div'));
   await act(async () => { root!.render(createElement(Probe, props)); });
 }
 const result = (text: string) => ({ display: { title: 'Plugin' }, blocks: [{ id: 'text', primitive: 'markdown', fallbackMarkdown: text }] });
+const draft = (supersededBy?: string, overrides: Record<string, unknown> = {}) => ({ display: { title: 'Mail' }, blocks: [
+  { id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { pluginId: 'provider', mail: {
+    accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: '',
+    fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: '' })),
+    attachments: [], state: 'draft', status: 'Saved', sendLabel: 'Send', fromLabel: 'From', supersededBy,
+    ...overrides,
+  } } },
+] });
 beforeEach(() => {
   vi.clearAllMocks(); h.focused = true; h.link.status = 'online'; h.auth.accountGeneration = 1; h.link.connectionEpoch = 1;
-  h.appState.currentState = 'active'; h.get.mockResolvedValue(result('done'));
+  h.appState.currentState = 'active'; h.get.mockReset().mockResolvedValue(result('done'));
   h.link.onRemoteResourceChanged.mockImplementation((cb) => { h.push = cb; return () => { h.push = undefined; }; });
   h.appState.addEventListener.mockImplementation((_event, cb) => { h.foreground = cb; return { remove() {} }; });
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 describe('plugin card lifecycle on Mobile', () => {
+  // Unit: an open draft editor follows host replacement and submits against the
+  // latest ID. Chat rows still hide old cards. Prior tests only checked hiding,
+  // which left an already-open editor permanently bound to the obsolete ID.
+  it('follows the same draft replacement and refreshes pushes addressed to its latest card', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValueOnce(draft('new')).mockResolvedValueOnce(draft());
+    await render({ follow: true });
+    expect(current.callId).toBe('new'); expect(current.hidden).toBe(false);
+    expect(h.get.mock.calls.map(call => call[2].id)).toEqual(['["s","c"]', '["s","new"]']);
+    h.get.mockResolvedValueOnce(draft('new')).mockResolvedValueOnce(draft('latest')).mockResolvedValueOnce(draft());
+    await act(async () => { h.push?.('mac', { collectionId: 'plugin-results', resourceRefs: [{ kind: 'card', id: '["s","new"]' }] }); await vi.advanceTimersByTimeAsync(250); });
+    expect(current.callId).toBe('latest'); expect(current.hidden).toBe(false);
+  });
+  it.each(['plugin', 'account', 'draft', 'cycle', 'missing'])('rejects a %s replacement instead of exposing another draft', async boundary => {
+    const replacement = draft(undefined, boundary === 'account' ? { accountId: 'other' } : boundary === 'draft' ? { draftId: 'other' } : {});
+    if (boundary === 'plugin') replacement.blocks[0].data.pluginId = 'other';
+    h.get.mockResolvedValueOnce(draft(boundary === 'cycle' ? 'c' : 'new'));
+    if (boundary === 'missing') h.get.mockRejectedValueOnce(new Error('NOT_FOUND'));
+    else h.get.mockResolvedValueOnce(replacement);
+    await render({ follow: true });
+    expect(current.error).toBe(true); expect(current.blocks).toBeUndefined(); expect(current.callId).toBeUndefined();
+  });
+  it.each(['task', 'device', 'account'])('discards a late draft replacement after the %s changes', async boundary => {
+    let release!: (value: unknown) => void;
+    h.get.mockResolvedValueOnce(draft('new')).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    await render({ follow: true });
+    if (boundary === 'account') h.auth.accountGeneration += 1;
+    await render({ follow: true, ...(boundary === 'task' ? { task: 'other' } : boundary === 'device' ? { device: 'other' } : {}) });
+    await act(async () => release(draft()));
+    expect(current.callId).toBe('c'); expect(current.blocks?.[0].fallbackMarkdown).toBe('done');
+  });
+  // A superseded card must disappear with its wrapper, including after an
+  // invalidation of an already visible card; keep the stored snapshot intact.
+  it('hides a mail card when the host publishes its replacement and restores that state from history', async () => {
+    vi.useFakeTimers();
+    const mail = { accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: '',
+      fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: '' })),
+      attachments: [], state: 'draft', status: 'Saved', sendLabel: 'Send', fromLabel: 'From' };
+    const card = (supersededBy?: string) => ({ display: { title: 'Mail' }, blocks: [
+      { id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { mail: { ...mail, supersededBy } } },
+    ] });
+    h.get.mockResolvedValue(card()); await render(); expect(current.hidden).toBe(false);
+    h.get.mockResolvedValue(card('new'));
+    await act(async () => { h.push?.('mac', { collectionId: 'plugin-results' }); await vi.advanceTimersByTimeAsync(250); });
+    expect(current.hidden).toBe(true);
+    expect(current.blocks).toHaveLength(1);
+    await render({ card: 'old-history' }); expect(current.hidden).toBe(true);
+    h.get.mockResolvedValue(card()); await render({ card: 'new' }); expect(current.hidden).toBe(false);
+  });
   it('loads history and refreshes on card change, foreground and reconnect', async () => {
     vi.useFakeTimers(); await render();
     expect(current.blocks?.[0].fallbackMarkdown).toBe('done');

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +18,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 
 import { CindyDevicePicker } from '../CindyDevicePicker';
 import { CindyDeviceRow } from '../CindyDeviceRow';
-import { cindyDeviceOptions } from '../cindyDeviceRoster';
+import { cindyDeviceOptions, type CindyDeviceOption } from '../cindyDeviceRoster';
 import type { BotProfile } from '../botStore';
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
@@ -30,6 +30,107 @@ afterAll(() => {
 });
 
 afterEach(cleanup);
+
+it.each([
+  ['row', 0],
+  ['row', 1],
+  ['row', 5],
+  ['menu', 0],
+  ['menu', 1],
+  ['menu', 5],
+] as const)(
+  'keeps connectivity separate from unread through updates (%s, unread=%s)',
+  async (surface, unreadCount) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    const onSelect = vi.fn();
+    const makeOptions = (online: boolean, connectionKnown?: boolean): CindyDeviceOption[] => {
+      const options = cindyDeviceOptions(
+        [{ id: 'cindy-default', name: 'Cindy', status: 'active' } as BotProfile],
+        [
+          {
+            id: 'cindy-default',
+            deviceId: 'remote',
+            deviceName: 'Mac mini',
+            name: 'Cindy',
+            avatar: '',
+            avatarColor: '',
+            description: '',
+            preview: '',
+            activityAt: 0,
+            sessionId: 'remote-chat',
+            online,
+            connectionKnown,
+            lastReplyAt: 20,
+            readAt: 10,
+          },
+        ],
+        [],
+        {},
+        'This Device',
+      );
+      options[1] = {
+        ...options[1],
+        unread: unreadCount > 0,
+        unreadCount: unreadCount > 1 ? unreadCount : undefined,
+      };
+      return options;
+    };
+    const renderSurface = (options: CindyDeviceOption[]) => (
+      <I18nextProvider i18n={i18n}>
+        {surface === 'row' ? (
+          <CindyDeviceRow
+            current={options[1]}
+            options={options}
+            selected={false}
+            subtitle="Ready"
+            timestamp=""
+            onOpen={vi.fn()}
+            onSelect={onSelect}
+          />
+        ) : (
+          <CindyDevicePicker current={options[1]} options={options} onSelect={onSelect} />
+        )}
+      </I18nextProvider>
+    );
+    const view = render(renderSurface(makeOptions(false, false)));
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
+    await screen.findByRole('option', { name: /Mac mini/ });
+    // Cached unknown → known offline → online → unknown (including cached online)
+    // → legacy offline → unknown again, without closing the shared device menu.
+    for (const [online, connectionKnown, offline] of [
+      [false, false, false],
+      [false, true, true],
+      [true, true, false],
+      [true, false, false],
+      [false, undefined, true],
+      [false, false, false],
+    ] as const) {
+      view.rerender(renderSurface(makeOptions(online, connectionKnown)));
+      const option = screen.getByRole('option', { name: /Mac mini/ });
+      expect(within(option).queryByText(en.bots.remote.offline) !== null).toBe(offline);
+      expect(screen.queryByText(en.bots.remote.unknown)).toBeNull();
+      expect(screen.queryByText(en.bots.remote.online)).toBeNull();
+      if (surface === 'row') {
+        expect(
+          view.container.querySelector(`span[title="${en.bots.remote.offline} · Mac mini"]`) !==
+            null,
+        ).toBe(offline);
+      }
+      if (unreadCount > 0) {
+        const label =
+          unreadCount > 1
+            ? i18n.t('bots.list.unread', { count: unreadCount })
+            : en.bots.devicePicker.unread;
+        expect(within(option).getByLabelText(label)).toBeTruthy();
+      } else {
+        expect(within(option).queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
+      }
+    }
+    fireEvent.click(screen.getByRole('option', { name: /This Device/ }));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ label: 'This Device' }));
+  },
+);
 
 it.each([true, false])(
   'keeps the sidebar device picker on its row surface (selected=%s)',
@@ -78,6 +179,8 @@ it.each([true, false])(
       selected ? 'bg-sidebar-item-active' : 'text-[var(--sidebar-nav-text)]',
     );
     const trigger = screen.getByRole('combobox');
+    // The compact row must retain the picker's 24px click/focus target.
+    expect(trigger.className.split(/\s+/)).toContain('h-6');
     expect(trigger.className).toContain('text-inherit');
     expect(trigger.className).toContain('[--button-face-bg:transparent]');
     expect(trigger.className).toContain('[--button-face-border:transparent]');

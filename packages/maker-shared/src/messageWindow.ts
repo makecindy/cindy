@@ -235,3 +235,4 @@ function containsContiguousSlice(full: readonly string[], slice: readonly string
   }
   return false;
 }
+export { historyAfter } from './historyAfter.js';

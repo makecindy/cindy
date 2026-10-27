@@ -40,26 +40,9 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('LanguageOptionRow');
   });
 
-  it('keeps Android debug disclosure synchronous so repeated toggles cannot retain exiting rows', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
-
-    expect(source).toContain("const debugDisclosureMotionEnabled = Platform.OS !== 'android';");
-    expect(source).toContain([
-      'useListDisclosureTransition({',
-      '    motionEnabled: debugDisclosureMotionEnabled,',
-      '  })',
-    ].join('\n'));
-    expect(source).toContain([
-      '<ListDisclosureScope',
-      '          controller={debugDisclosure.controller}',
-      '          motionEnabled={debugDisclosureMotionEnabled}',
-    ].join('\n'));
-    expect(source).toContain('runDebugDisclosure(() => setDebugExpanded((value) => !value));');
-  });
-
   it('shows the server switch only in CindyDev and clears the old session before reloading', () => {
     const settingsSource = readTextLf(
-      resolve(process.cwd(), 'app/settings.tsx'),
+      resolve(process.cwd(), 'app/settings/developer.tsx'),
       'utf8',
     );
     const environmentSource = readTextLf(
@@ -87,7 +70,7 @@ describe('mobile settings overview', () => {
     );
 
     expect(settingsSource).toContain(
-      '...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED',
+      '{DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ? (',
     );
     expect(settingsSource).toContain(
       'testID="settings.devServerEnvironment"',
@@ -136,12 +119,10 @@ describe('mobile settings overview', () => {
       relayTone: 'ready',
     });
     expect(overview.sections.map((section) => section.id)).toEqual(['about', 'debug']);
-    // 「调试 / 开发者」默认折叠,普通用户不直面。
-    expect(overview.sections.find((section) => section.id === 'debug')?.collapsible).toBe(true);
-    expect(overview.sections.find((section) => section.id === 'about')?.collapsible).toBeUndefined();
+    // 设备名称的说明是分组 footer,不在行内。
+    expect(overview.sections.find((section) => section.id === 'about')?.footer).toBe('显示在电脑的授权列表中');
 
     expect(overview.sections.find((section) => section.id === 'about')?.rows).toContainEqual({
-      detail: '显示在电脑的授权列表中',
       id: 'about.deviceName',
       label: '设备名称',
       value: 'Carol iPhone',
@@ -284,14 +265,15 @@ describe('mobile settings overview', () => {
 
   it('always shows privacy policy + user agreement (regional links via legalLinks) above the cn-only App filing number', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
-    const filingCardIndex = source.indexOf("<SettingsGroup title={t('settings.legal.sectionTitle')}>");
+    const filingCardIndex = source.indexOf("title={t('settings.legal.sectionTitle')}");
+    const analyticsRowIndex = source.indexOf('testID="settings.analyticsToggleRow"');
     const privacyRowIndex = source.indexOf('testID="settings.privacyPolicy"');
     const userAgreementRowIndex = source.indexOf('testID="settings.userAgreement"');
     const regionGuardIndex = source.indexOf("{AUTH_REGION === 'cn' ? (", userAgreementRowIndex);
     const filingNumberIndex = source.indexOf('testID="settings.appFilingNumber"');
     const accountActionsIndex = source.indexOf('testID="settings.accountActions"');
 
-    // 链接不再本地写死:与登录页共用 legalLinks 区域分流单点(protocol.xd.cn/.com)
+    // 链接不再本地写死:与登录页共用 legalLinks 区域分流单点(cindy.cn / cindy.app)
     expect(source).toContain("import { LEGAL_LINKS } from '@/config/legalLinks';");
     expect(source).toContain('Linking.openURL(LEGAL_LINKS.privacyPolicy)');
     expect(source).toContain('Linking.openURL(LEGAL_LINKS.termsOfService)');
@@ -310,13 +292,16 @@ describe('mobile settings overview', () => {
     expect(userAgreementRowIndex).toBeGreaterThan(privacyRowIndex);
     expect(regionGuardIndex).toBeGreaterThan(userAgreementRowIndex);
     expect(filingNumberIndex).toBeGreaterThan(regionGuardIndex);
-    expect(accountActionsIndex).toBeGreaterThan(filingNumberIndex);
+    // 使用统计留在同一分组(合规:关闭入口可被找到),放组末让 footer 说明紧接开关。
+    expect(analyticsRowIndex).toBeGreaterThan(filingNumberIndex);
+    expect(source).toContain("footer={t('settings.legal.analyticsHint')}");
+    expect(accountActionsIndex).toBeGreaterThan(analyticsRowIndex);
   });
 
   it('keeps one update action, scopes TestFlight checks to OTA, and shows both versions', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
 
-    expect(source.match(/testID: 'settings\.checkUpdateButton'/g)).toHaveLength(1);
+    expect(source.match(/testID="settings\.checkUpdateButton"/g)).toHaveLength(1);
     expect(source).not.toContain('settings.checkBundleUpdateButton');
     expect(source).not.toContain('testID="settings.bundleUpdate"');
     expect(source).toContain('runManualUpdateCheck({');
@@ -333,25 +318,22 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('setUpdateMessage(');
     expect(source).toContain("'settings.version.testFlightCheckAction'");
     expect(source).toContain("'settings.version.testFlightCheckingAccessibility'");
-    expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
-    expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
-    // 版本卡片面向用户:「版本 x.y.z」+ 更新方式说明;热更版本等技术细节在调试分组。
-    expect(source).toContain("{t('settings.version.appVersion', { version: appVersion })}");
-    expect(source).toContain('testID="settings.updateMethod"');
-    expect(source).toContain("tone: 'secondary',");
+    expect(source).toContain("? t('settings.version.testFlightUpdateManaged')");
+    // 版本分组面向用户:「当前版本 x.y.z」+ 检查行;更新方式与结果在分组 footer,
+    // 检查不可用时不显示检查行;热更版本等技术细节在二级页「开发者」。
+    expect(source).toContain("{t('settings.version.currentLabel')}");
+    expect(source).toContain('testID="settings.appVersion">{appVersion}</Text>');
+    expect(source).toContain('footerTestID="settings.updateMethod"');
+    expect(source).toContain('const showUpdateCheck = !REVIEW_MODE && updateCheckEnabled;');
     expect(source).toContain('const showBetaBadge = betaReady && betaEnabled;');
     expect(source).toContain('testID="settings.betaChannelBadge"');
     expect(source).toContain("{t('settings.betaChannel.badge')}");
     expect(source).toContain('backgroundColor: colors.betaChannelBadgeBackground');
     expect(source).toContain('color: colors.betaChannelBadgeForeground');
-    expect(source).toContain("label={t('settings.updateInfo.otaVersion')}");
-    expect(source).toContain('testID="settings.otaVersion"');
-    expect(source).toContain(
-      "testID=\"settings.desktopVersion\">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}",
-    );
+    expect(source).toContain("label={t('settings.version.pairedDesktopLabel')}");
+    expect(source).toContain('testID="settings.desktopVersion"');
     expect(source).not.toContain("'settings.version.desktopVersion'");
-    expect(i18n.t('settings.version.pairedDesktopVersion', { version: '0.1.18' }))
-      .toBe('配套桌面版本 0.1.18');
+    expect(i18n.t('settings.version.pairedDesktopLabel')).toBe('配套桌面版本');
   });
 
   it('整包版本读原生真值 APP_BINARY_VERSION,不读会被 OTA 覆盖的 expoConfig.version', () => {

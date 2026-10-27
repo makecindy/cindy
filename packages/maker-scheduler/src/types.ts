@@ -224,13 +224,19 @@ export interface Schedule {
    * 语义与 desktop `session-provider-store` 的 null 对齐。
    */
   providerId?: string;
+  /**
+   * 新建任务时 Agent 运行在哪台电脑(同账号另一台电脑或分享来的供应商)。undefined = 本机。
+   * 设了时 providerId / model 属于那台电脑的已授权目录。绑定的任务仍存在时不使用:
+   * 运行位置跟随被绑定的任务。
+   */
+  agentDeviceId?: string;
   effort?: string;
   /**
    * Fast 模式：仅 Codex 有意义（agent capability `hasFastMode` 为 true）。
    * true → runner fire 时透传给 codex agent，落到 app-server 的 ServiceTier.Fast，
    * 输出更快。Claude agent 忽略此字段。undefined/false → 标准 tier。
    */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
    * - project: workingDir is a user-selected project directory.
@@ -250,9 +256,9 @@ export interface Schedule {
    *
    * 与 MCP 显式指定 `targetSessionId` 的"手绑 session"模式正交：显式绑定本身已经
    * 达到等效效果，`persistentSession=true` 在那种 schedule 上是 no-op；
-   * 绑定的 session 若被归档/删除：persistentSession=true → runner 自动清空
-   * targetSessionId 并本次 fire 走新建分支（自我续命）；persistentSession=false
-   * → 维持旧行为 pause 整条 schedule。
+   * 绑定的普通任务被归档时，自动输入与用户发送一样恢复原任务，完成后不重新归档。
+   * 仅当任务被删除或不存在时：persistentSession=true → runner 清空
+   * targetSessionId 并走新建分支；persistentSession=false → pause 整条 schedule。
    */
   persistentSession?: boolean;
   /**
@@ -360,9 +366,11 @@ export interface CreateScheduleInput {
    * 语义与 desktop `session-provider-store` 的 null 对齐。
    */
   providerId?: string;
+  /** Agent 运行位置。详见 Schedule.agentDeviceId。 */
+  agentDeviceId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
@@ -495,7 +503,7 @@ export interface ScheduleTemplate {
   providerId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;

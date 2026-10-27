@@ -54,9 +54,10 @@ export interface LatestWriteGuard {
   /**
    * 开始一笔写:立即把本笔登记为该 key 下 fields 各字段的最新写。返回的 isLatest()
    * 实时判断本笔是否仍是全部字段的最新(后续对同 key 的**交集字段**再 begin 才会使
-   * 旧笔过期;字段无交集的写互不取代)。
+   * 旧笔过期;字段无交集的写互不取代)。observeFields 只观察当前代次、不使旧写过期，
+   * 用于确认前预检：后续 status 写能取消预检，取消预检不能丢弃此前的 status 写。
    */
-  begin(key: string, fields: readonly string[]): { isLatest(): boolean };
+  begin(key: string, fields: readonly string[], observeFields?: readonly string[]): { isLatest(): boolean };
 }
 
 /**
@@ -75,15 +76,19 @@ export interface LatestWriteGuard {
 export function createLatestWriteGuard(): LatestWriteGuard {
   const seqs = new Map<string, number>();
   return {
-    begin(key, fields) {
+    begin(key, fields, observeFields = []) {
       const mine = fields.map((field) => {
         const slot = `${key} ${field}`;
         const seq = (seqs.get(slot) ?? 0) + 1;
         seqs.set(slot, seq);
         return [slot, seq] as const;
       });
+      const observed = observeFields.map((field) => {
+        const slot = `${key} ${field}`;
+        return [slot, seqs.get(slot)] as const;
+      });
       return {
-        isLatest: () => mine.every(([slot, seq]) => seqs.get(slot) === seq),
+        isLatest: () => [...mine, ...observed].every(([slot, seq]) => seqs.get(slot) === seq),
       };
     },
   };

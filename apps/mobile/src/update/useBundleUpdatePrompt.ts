@@ -67,16 +67,33 @@ async function openGooglePlay(packageName: string): Promise<void> {
   }
 }
 
+type BundleInstallTarget = { version?: string; itmsUrl?: string; installUrl?: string; releaseNotes?: string };
+
+/** Android 应用内安装:旧原生包、网页地址或 Play 安装返回 false,由调用方走原有出口。 */
+function startAndroidInstall(target: BundleInstallTarget, confirm: boolean, automatic = false): boolean {
+  if (Platform.OS !== 'android' || isGooglePlayInstallation() || !target.version || !target.installUrl) return false;
+  const releaseNotes = target.releaseNotes?.trim();
+  return androidInstaller.start({
+    version: target.version,
+    installUrl: target.installUrl,
+    ...(releaseNotes ? { releaseNotes } : {}),
+  }, { confirm, ...(automatic ? { automatic: true } : {}) });
+}
+
+/** Resume discovery stays quiet on platforms/builds without in-app APK downloads. */
+export function downloadAndroidBundleUpdate(evaluation: ReturnType<typeof evaluateBundleUpdate>): void {
+  if (evaluation.target && !evaluation.forced) startAndroidInstall(evaluation.target, true, true);
+}
+
 /** 普通更新与强更共用的安装出口；旧 Android 包及网页地址保留浏览器回退。 */
-export function openBundleInstall(target: { version?: string; itmsUrl?: string; installUrl?: string }): void {
+export function openBundleInstall(target: BundleInstallTarget): void {
   if (Platform.OS === 'android' && isGooglePlayInstallation()) {
     // A stale forced-update target must never hand a Play install to the APK installer.
     const packageName = Application.applicationId;
     if (packageName) void openGooglePlay(packageName);
     return;
   }
-  if (Platform.OS === 'android' && target.version && target.installUrl
-    && androidInstaller.start({ version: target.version, installUrl: target.installUrl })) return;
+  if (startAndroidInstall(target, false)) return;
   const url = preferredInstallUrl(target);
   if (url) void openInstall(url);
 }
@@ -86,11 +103,11 @@ export function openBundleInstall(target: { version?: string; itmsUrl?: string; 
  * - 强更:不弹窗,进入模块级阻断态,由 root 层渲染只有「去更新」的闸门屏。
  *   弹窗做不到阻断——RN Alert 的按钮点一下就关(cancelable: false 只挡点外部/返回键),
  *   弹窗消失后底下的 App 照旧可用,那是"强提醒"不是"强制"。
- * - 非强更:可跳过的普通提示,行为不变。
+ * - 非强更:Android 自动检查先静默下载，手动检查与其他安装渠道保留普通提示。
  * 两种情况都要求先解析出可跳转的安装地址:拿不到地址就什么都不做,
  * 尤其不能把用户关进一个没有出口的阻断屏(见 forcedUpdateStore 的三层保证)。
  */
-export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleUpdate>): void {
+export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleUpdate>, automatic = false): void {
   if (!evaluation.target) return;
   const url = preferredInstallUrl(evaluation.target);
   if (!url) return;
@@ -99,6 +116,8 @@ export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleU
     enterForcedUpdate(evaluation.target);
     return;
   }
+  // 自动检查先在 Wi-Fi 下静默备好 APK；手动检查仍可直接打开更新卡。
+  if (startAndroidInstall(evaluation.target, true, automatic)) return;
 
   const notes = evaluation.target.releaseNotes?.trim();
   const message = [
@@ -159,7 +178,7 @@ export function useBundleUpdatePrompt({
       });
       if (evaluation.needsUpdate) {
         setState('update-available');
-        promptBundleUpdate(evaluation);
+        promptBundleUpdate(evaluation, auto);
         return 'update-available';
       } else {
         setState('up-to-date');
@@ -176,10 +195,17 @@ export function useBundleUpdatePrompt({
     } finally {
       inFlightChannels.current.delete(channel);
     }
-  }, [bundleCheckEnabled, channel, notifyWhenUpToDate]);
+  }, [auto, bundleCheckEnabled, channel, notifyWhenUpToDate]);
 
   useEffect(() => {
-    if (auto && bundleCheckEnabled) void checkNow();
+    if (!auto || !bundleCheckEnabled) return;
+    void checkNow();
+    return () => {
+      // The root auto hook owns the shared installer's channel lifetime, including
+      // work started by resume checks. Settings' manual hook never owns cleanup.
+      channelEpochRef.current += 1;
+      androidInstaller.cancel();
+    };
     // auto hook 在登录/切账号导致 channel 变化时再检查一次，避免新的账号
     // 继续沿用旧账号的 release 指针；手动检查入口仍由调用方通过 checkNow 触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps

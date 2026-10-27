@@ -50,19 +50,11 @@ function getRenderEntryContext(): RenderEntryContext {
   try {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view');
-    const ghostPanel = params.get('ghostPanelWindow');
 
     if (params.get('sidebarWindow') === '1') {
       return {
         entry: 'sidebar-window',
         windowKind: 'sidebar',
-        appVersion: window.electronAPI?.appVersion,
-      };
-    }
-    if (ghostPanel) {
-      return {
-        entry: 'ghost-panel',
-        windowKind: 'ghost-panel',
         appVersion: window.electronAPI?.appVersion,
       };
     }

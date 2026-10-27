@@ -9,6 +9,11 @@ vi.mock('undici', async (importOriginal) => {
   };
 });
 
+const reportKeyRejectedMock = vi.hoisted(() => vi.fn());
+vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
+  reportCindyGatewayKeyRejected: reportKeyRejectedMock,
+}));
+
 import { LiteLlmTextModelClient } from '../LiteLlmTextModelClient.js';
 import { isRefinerModelOutputError } from '../refinerErrorKind.js';
 
@@ -29,7 +34,37 @@ function chatCompletionSseChunk(content: string): string {
 describe('LiteLlmTextModelClient', () => {
   afterEach(() => {
     undiciFetchMock.mockReset();
+    reportKeyRejectedMock.mockReset();
     vi.useRealTimers();
+  });
+
+  it('reports the Cindy AI key when the gateway proxy rejects it with HTTP 401', async () => {
+    undiciFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { message: 'invalid key' },
+    }), { status: 401 }));
+
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key-sent',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    await expect(client.requestJson({ model: 'm', schemaName: 's', system: 'sys', user: {} }))
+      .rejects.toThrow();
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    expect(reportKeyRejectedMock).toHaveBeenCalledTimes(1);
+    expect(reportKeyRejectedMock).toHaveBeenCalledWith('proxy-key-sent');
+  });
+
+  it('does not report non-401 proxy failures', async () => {
+    undiciFetchMock.mockResolvedValueOnce(new Response('{}', { status: 403 }));
+    const client = new LiteLlmTextModelClient({
+      proxyApiKey: 'proxy-key-sent',
+      baseUrl: 'https://llm-proxy.example.com',
+    });
+
+    await expect(client.requestJson({ model: 'm', schemaName: 's', system: 'sys', user: {} }))
+      .rejects.toThrow();
+    expect(reportKeyRejectedMock).not.toHaveBeenCalled();
   });
 
   it('streams chat completion deltas, emits text snapshots, and reports usage', async () => {
@@ -258,6 +293,8 @@ describe('LiteLlmTextModelClient', () => {
     expect(undiciFetchMock.mock.calls[1]?.[1]).toMatchObject({
       headers: expect.objectContaining({ Authorization: 'Bearer fresh-token' }),
     });
+    // Managed voice tokens are not Cindy AI keys.
+    expect(reportKeyRejectedMock).not.toHaveBeenCalled();
   });
 
   it('uses stream-idle timeout instead of total request duration', async () => {

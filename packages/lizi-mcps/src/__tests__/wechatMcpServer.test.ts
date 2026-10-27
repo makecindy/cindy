@@ -64,6 +64,10 @@ describe('cindy_wechat proactive routing', () => {
     const absPath = path.join(workingDir, 'preview.png');
     await fs.writeFile(absPath, 'png-bytes');
     const sendFile = vi.fn(async () => ({ ok: true, messageId: 'media-1' }));
+    // Sent-image regression: retain the prepared image in the tool result for chat.
+    // Unit; the existing recipient/path test previously only checked the channel receipt.
+    const stored = path.join(workingDir, 'stored.png');
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     const server = createWechatMcpServer({
       getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => 'peer-history',
@@ -71,6 +75,7 @@ describe('cindy_wechat proactive routing', () => {
       sendMessage: vi.fn(),
       sendFile,
       workingDir,
+      prepareOutboundImage: async () => ({ path: stored, url }),
     });
     const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'wechat-test', version: '0.0.0' });
@@ -83,8 +88,11 @@ describe('cindy_wechat proactive routing', () => {
           args: { absPath, displayName: 'result.png' },
         },
       });
-      expect(sendFile).toHaveBeenCalledWith('peer-session', await fs.realpath(absPath), 'result.png');
+      expect(sendFile).toHaveBeenCalledWith('peer-session', stored, 'result.png');
       expect(JSON.stringify(call)).toContain('media-1');
+      expect(JSON.parse((call.content as Array<{ text: string }>)[0]!.text)).toMatchObject({
+        xdt_image_urls: [url], _xdt_forward_media: false,
+      });
     } finally {
       await client.close();
       await server.close();

@@ -4,22 +4,25 @@ import type { UtilityTextResult } from '../../shared/utilityTextResult.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   requestDedicatedAutoReviewCandidateText,
+  type AutoReviewAuxiliaryFallback,
   type DedicatedAutoReviewCandidate,
 } from '../utility-model/oneShotCandidates.js';
+import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
 import { parseAutoPermissionReviewDecision } from './auto-permission-reviewer.js';
 
 export const AUTO_REVIEW_CANDIDATE_TIMEOUT_MS = 12_000;
 /**
- * 整条链的预算 = 每个候选一次完整超时 + 4s 余量。按候选数推导:一个候选整段超时后先让给
+ * 内置链的预算 = 每个候选一次完整超时 + 4s 余量。按候选数推导:一个候选整段超时后先让给
  * 下一个,而不是在原位重试吃掉后续候选的时间;兜底候选本机不可用(立即 no_candidate)时,
  * 省下的预算留给超时候选在所有兜底之后再试一次。
  */
 export const AUTO_REVIEW_CHAIN_TIMEOUT_MS =
   DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000;
-export const AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS = AUTO_REVIEW_CHAIN_TIMEOUT_MS + 1_000;
+export const AUTO_REVIEW_AUXILIARY_TIMEOUT_MS = 40_000;
+export const AUTO_REVIEW_TOTAL_TIMEOUT_MS = AUTO_REVIEW_CHAIN_TIMEOUT_MS + AUTO_REVIEW_AUXILIARY_TIMEOUT_MS;
+export const AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS = AUTO_REVIEW_TOTAL_TIMEOUT_MS + 1_000;
 const AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS = 2;
 const AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS = 100;
-const AUTO_REVIEW_CANDIDATE_TIMEOUT = Symbol('auto-review-candidate-timeout');
 
 interface AutoReviewModelRouterLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -34,6 +37,7 @@ interface AutoReviewModelRouterDeps {
     candidate: DedicatedAutoReviewCandidate,
     opts: { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<UtilityTextResult>;
+  createAuxiliaryFallback?: () => AutoReviewAuxiliaryFallback | undefined;
   parseDecision?: (text: string) => AutoReviewDecision | null;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -100,42 +104,6 @@ function candidateTimeoutFailure(
   };
 }
 
-async function requestCandidateWithinTimeout(
-  requestCandidate: NonNullable<AutoReviewModelRouterDeps['requestCandidate']>,
-  prompt: string,
-  candidate: DedicatedAutoReviewCandidate,
-  timeoutMs: number,
-  chainSignal: AbortSignal,
-): Promise<UtilityTextResult> {
-  if (chainSignal.aborted) return candidateTimeoutFailure(candidate);
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let abortFromChain: (() => void) | undefined;
-  const cutoff = new Promise<typeof AUTO_REVIEW_CANDIDATE_TIMEOUT>((resolve) => {
-    const abort = () => {
-      controller.abort();
-      resolve(AUTO_REVIEW_CANDIDATE_TIMEOUT);
-    };
-    abortFromChain = abort;
-    if (chainSignal.aborted) abort();
-    else chainSignal.addEventListener('abort', abort, { once: true });
-    timeout = setTimeout(abort, timeoutMs);
-  });
-
-  try {
-    const result = await Promise.race([
-      requestCandidate(prompt, candidate, { timeoutMs, signal: controller.signal }),
-      cutoff,
-    ]);
-    return result === AUTO_REVIEW_CANDIDATE_TIMEOUT
-      ? candidateTimeoutFailure(candidate)
-      : result;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    if (abortFromChain) chainSignal.removeEventListener('abort', abortFromChain);
-  }
-}
-
 function safeFailureReason(result: UtilityTextResult): string {
   if (result.ok) return 'none';
   const failed = result.attempts.find((attempt) => attempt.status === 'failed');
@@ -148,7 +116,7 @@ interface PendingCandidateAttempt {
 }
 
 /**
- * Runs the dedicated Auto-review model chain once.
+ * Runs the dedicated Auto-review chain, then an explicitly customized auxiliary chain.
  *
  * Each candidate owns its HTTP timeout and receives the chain AbortSignal, and gets at most
  * AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS attempts. A transient failure is retried in place only
@@ -157,6 +125,8 @@ interface PendingCandidateAttempt {
  * therefore cannot starve fallback or an earlier, higher-priority retry, and fallbacks that
  * are unavailable locally (`no_candidate` returns immediately) do not waste the budget
  * reserved for them.
+ * The auxiliary phase has its own bounded budget, shares parent cancellation, and
+ * cannot replace any valid dedicated decision (including block and ask).
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
@@ -169,12 +139,20 @@ export function createAutoReviewModelRouter(
 
   return async (prompt, parentSignal) => {
     const startedAt = now();
+    let auxiliaryFallback: AutoReviewAuxiliaryFallback | undefined;
+    try {
+      auxiliaryFallback = deps.createAuxiliaryFallback?.();
+    } catch {
+      deps.logger.warn('auto-review auxiliary fallback unavailable', { reason: 'configuration_unavailable' });
+    }
     const deadlineAt = startedAt + AUTO_REVIEW_CHAIN_TIMEOUT_MS;
+    const totalTimeoutMs = auxiliaryFallback ? AUTO_REVIEW_TOTAL_TIMEOUT_MS : AUTO_REVIEW_CHAIN_TIMEOUT_MS;
+    const totalDeadlineAt = startedAt + totalTimeoutMs;
     const controller = new AbortController();
     const abortFromParent = () => controller.abort();
     if (parentSignal?.aborted) abortFromParent();
     else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
-    const deadline = setTimeout(() => controller.abort(), AUTO_REVIEW_CHAIN_TIMEOUT_MS);
+    const deadline = setTimeout(() => controller.abort(), totalTimeoutMs);
 
     try {
       const queue: PendingCandidateAttempt[] = candidates.map((candidate) => ({ candidate, attempt: 1 }));
@@ -198,12 +176,12 @@ export function createAutoReviewModelRouter(
         const attemptStartedAt = now();
         let result: UtilityTextResult;
         try {
-          result = await requestCandidateWithinTimeout(
-            requestCandidate,
-            prompt,
-            candidate,
-            Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs),
+          const timeoutMs = Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs);
+          result = await requestUtilityTextWithinTimeout(
+            (signal) => requestCandidate(prompt, candidate, { timeoutMs, signal }),
+            timeoutMs,
             controller.signal,
+            () => candidateTimeoutFailure(candidate),
           );
         } catch {
           // Credential refresh and catalog probes are runtime boundaries too. A thrown
@@ -211,6 +189,7 @@ export function createAutoReviewModelRouter(
           result = candidateRequestFailure(candidate);
         }
         const durationMs = now() - attemptStartedAt;
+        if (controller.signal.aborted) break;
 
         if (result.ok) {
           const decision = parseDecision(result.text);
@@ -261,6 +240,39 @@ export function createAutoReviewModelRouter(
           queue.unshift({ candidate, attempt: attempt + 1 });
         } else if (retryDeferred) {
           queue.push({ candidate, attempt: attempt + 1 });
+        }
+      }
+
+      if (auxiliaryFallback && !controller.signal.aborted) {
+        const timeoutMs = Math.min(AUTO_REVIEW_AUXILIARY_TIMEOUT_MS, totalDeadlineAt - now());
+        if (timeoutMs > 0) {
+          try {
+            const result = await requestUtilityTextWithinTimeout(
+              (signal) => auxiliaryFallback(prompt, {
+                timeoutMs: AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
+                signal,
+                validateResponse: (text) => parseDecision(text) !== null,
+              }),
+              timeoutMs,
+              controller.signal,
+              () => ({ ok: false, reason: 'timeout', attempts: [] }),
+            );
+            const decision = result.ok ? parseDecision(result.text) : null;
+            if (decision && !controller.signal.aborted) {
+              deps.logger.debug('auto-review auxiliary fallback completed', {
+                providerId: result.ok ? result.providerId : undefined,
+                model: result.ok ? result.model : undefined,
+                verdict: decision.verdict,
+                durationMs: now() - startedAt,
+              });
+              return JSON.stringify(decision);
+            }
+            deps.logger.warn('auto-review auxiliary fallback failed', {
+              reason: result.ok ? 'malformed_decision' : safeFailureReason(result),
+            });
+          } catch {
+            deps.logger.warn('auto-review auxiliary fallback failed', { reason: 'request_failed' });
+          }
         }
       }
     } finally {

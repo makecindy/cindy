@@ -22,7 +22,7 @@ export interface RemoteControlSessionFixture {
   model: string;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   orcaRole?: 'lead' | 'worker' | null;
   parentSessionId?: string | null;
 }

@@ -26,6 +26,20 @@ const p = {
   ],
 };
 describe('host Todo persistence', () => {
+  // Unit regression: a new automatic observation must not become a user assignment.
+  it('attributes automatic discoveries in the locked write and preserves existing assignments', async () => {
+    const { file } = await fixture();
+    const owner = createBotTodoStore(file, async () => ({}));
+    const automatic = createBotTodoStore(file, async () => ({}), () => {}, () => false);
+    const discovered = await automatic.patch({ ...p, origin: 'assigned' });
+    expect(discovered.origin).toBe('discovered');
+    const assigned = await owner.patch({ ...p, key: 'owner-task' });
+    expect((await automatic.patch({ id: assigned.id, expectedRevision: assigned.revision, progress: 'Observed', origin: 'discovered' })).origin).toBe('assigned');
+    const result = await automatic.ingest({ source: 'event', sequence: 1, patch: { ...p, key: 'event-task', origin: 'assigned' } });
+    expect(result.todo?.origin).toBe('discovered');
+    expect((await owner.read()).items.find(t => t.id === assigned.id)?.origin).toBe('assigned');
+  });
+
   it('preserves fields after partial writes across independent store instances', async () => {
     const { file } = await fixture(),
       a = createBotTodoStore(file, async () => ({})),
@@ -201,7 +215,7 @@ it('expired deferral allows advancing the same next step without altering its re
 
 it('reconciles later legacy writes into the same record after new-format persistence, preserving dates and rejection', async () => {
   const { file } = await fixture();
-  let legacy: Record<string, import('../../../shared/botWorkbench.js').WorkbenchTaskJudgment> = {};
+  let legacy: Record<string, import('../botWorkbenchLegacy.js').LegacyWorkbenchJudgment> = {};
   const s = createBotTodoStore(file, async () => legacy);
   await s.patch(p);
   const j = {
@@ -350,4 +364,55 @@ it('preserves valid suggested dates and local legacy evidence while rejecting in
       store.patch({ ...patch, id: saved.id, expectedRevision: saved.revision } as any),
     ).rejects.toThrow();
   expect((await store.read()).items[0]).toEqual(saved);
+});
+
+describe('todos moving with the companion', () => {
+  it('replaces items by id and removes tombstoned ones, keeping this computer\'s cursors', async () => {
+    const { file } = await fixture();
+    const store = createBotTodoStore(file, async () => ({}));
+    const keep = await store.patch({ ...p, key: 'keep' });
+    const gone = await store.patch({ ...p, key: 'gone' });
+    await store.ingest({ source: 'plugin:mail', sequence: 3, items: [] } as never).catch(() => undefined);
+    const before = await store.read();
+    const moved = { ...keep, title: '从另一台电脑来的标题', revision: 9 };
+    const arrived = { ...keep, id: 'todo:arrived', key: 'arrived', title: '新的' };
+    await store.importItems([moved, arrived], [gone.id]);
+    const after = await store.read();
+    expect(after.items.map((item) => item.id).sort()).toEqual(['todo:arrived', keep.id].sort());
+    expect(after.items.find((item) => item.id === keep.id)?.title).toBe('从另一台电脑来的标题');
+    expect(after.cursors).toEqual(before.cursors);
+  });
+
+  it('gives another companion\'s todo with a taken key a stable key of its own', async () => {
+    const { file } = await fixture();
+    const store = createBotTodoStore(file, async () => ({}));
+    const mine = await store.patch({ ...p, key: 'quote:1' });
+    const theirs = { ...mine, id: 'todo:theirs', title: '另一个 Cindy 的' };
+    await store.importItems([theirs], []);
+    await store.importItems([theirs], []);
+    const items = (await store.read()).items;
+    expect(items).toHaveLength(2);
+    const merged = items.find((item) => item.id === 'todo:theirs')!;
+    expect(merged.key).toMatch(/^quote:1~[0-9a-f]{10}$/);
+    expect(items.find((item) => item.id === mine.id)!.key).toBe('quote:1');
+    // Still a valid store for the next write.
+    await store.patch({ id: mine.id, expectedRevision: mine.revision, progress: '继续' });
+  });
+
+  it('links a travelled legacy todo back to its workbench entry instead of adding a twin', async () => {
+    const { file } = await fixture();
+    const j = { project: '/cindy', title: '旧工具创建', verdict: 'unfinished' as const, next: '准备草稿',
+      ref: 'https://example.test/legacy', updatedAt: '2026-10-01T00:00:00Z' };
+    // On the old computer: the legacy entry became a todo, which travels without its link.
+    const old = createBotTodoStore((await fixture()).file, async () => ({ 'idea:later': j }));
+    const original = (await old.read()).items[0]!;
+    const { legacyId: _id, legacyFingerprint: _fp, legacyVerdict: _v, ...travelled } = original;
+    const store = createBotTodoStore(file, async () => ({ 'idea:later': j }));
+    await store.importItems([{ ...travelled, title: '新电脑上看到的标题' } as typeof original], []);
+    const items = (await store.read()).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: original.id, legacyId: 'idea:later', title: '新电脑上看到的标题' });
+    await store.patch({ id: items[0]!.id, expectedRevision: items[0]!.revision, progress: '继续' });
+    expect((await store.read()).items).toHaveLength(1);
+  });
 });

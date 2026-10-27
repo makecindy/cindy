@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 import {
   beginInteractionRoute,
   installDesktopInteractionHandler,
@@ -8,10 +8,10 @@ import {
 import type { SharedPermission } from '../sharedPermission';
 
 function setup() {
-  let dispatch!: InteractionHandler;
+  let dispatch!: InteractionResolver;
   const session = {
     id: 'session',
-    setInteractionListener(handler: InteractionHandler | null) {
+    setInteractionListener(handler: InteractionResolver | null) {
       if (handler) dispatch = handler;
     },
   };
@@ -43,7 +43,7 @@ function setup() {
     input: {},
   } as InteractionRequest;
   return {
-    dispatch: () => dispatch(request),
+    dispatch: (signal?: AbortSignal) => dispatch(request, signal),
     desktopHandler,
     imHandler,
     lease,
@@ -85,11 +85,24 @@ describe('shared permission route', () => {
     await expect(test.im.result).resolves.toMatchObject({ behavior: 'deny' });
   });
 
+  // 远程凭证请求的取消经 Session listener 进入；旧覆盖只有整轮结束，缺单请求取消(unit)。
+  it('settles Desktop and IM with the same denial when a provider request is cancelled', async () => {
+    const test = setup();
+    const abort = new AbortController();
+    const result = test.dispatch(abort.signal);
+    try {
+      abort.abort();
+      await expect(result).resolves.toMatchObject({ behavior: 'deny', reason: 'session_aborted' });
+      await expect(test.desktop.result).resolves.toEqual(await test.im.result);
+      expect(test.im.decide({ kind: 'permission', behavior: 'allow' })).toBe(false);
+    } finally { test.lease.release(); }
+  });
+
   it('applies a channel restriction before either confirmation is exposed', async () => {
-    let dispatch!: InteractionHandler;
+    let dispatch!: InteractionResolver;
     const session = {
       id: 'restricted',
-      setInteractionListener(handler: InteractionHandler | null) {
+      setInteractionListener(handler: InteractionResolver | null) {
         if (handler) dispatch = handler;
       },
     };

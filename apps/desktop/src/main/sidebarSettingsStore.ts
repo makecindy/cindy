@@ -566,7 +566,8 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
 }
 
 /** Persist one plugin main-view visibility override in Main's owner-scoped store. */
-async function setMainViewHidden(rawRequest: unknown): Promise<string[]> {
+async function setMainViewHidden(rawRequest: unknown, assertCurrent?: () => void): Promise<string[]> {
+  assertCurrent?.();
   const request = requireWriteRequest(rawRequest);
   const ghostId = requireGhostId(request.ghostId);
   if (typeof request.hidden !== 'boolean') {
@@ -586,6 +587,7 @@ async function setMainViewHidden(rawRequest: unknown): Promise<string[]> {
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
+        assertCurrent?.();
         requireSidebarStoreAccess({ rejectSnapshotChange: true });
         const currentIds = current.value.hiddenMainViewGhostIds;
         const alreadyHidden = currentIds.includes(ghostId);
@@ -614,6 +616,11 @@ async function setMainViewHidden(rawRequest: unknown): Promise<string[]> {
     broadcastHiddenMainViewGhostIdsChanged(nextSettings.hiddenMainViewGhostIds, ownerStamp);
   }
   return Array.from(nextSettings.hiddenMainViewGhostIds);
+}
+
+export async function setLocalMainViewHidden(ghostId: string, hidden: boolean, assertCurrent: () => void): Promise<void> {
+  const { dataOwnerId, ownerGeneration } = loadSidebarSettingsSnapshot();
+  await setMainViewHidden({ dataOwnerId, ownerGeneration, ghostId, hidden }, assertCurrent);
 }
 
 type SidebarPathState = 'missing' | 'regular-file' | 'blocked';

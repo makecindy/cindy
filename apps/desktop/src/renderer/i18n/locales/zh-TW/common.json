@@ -1,4 +1,119 @@
 {
+  "providerAccountUsage": {
+    "openDashboard": "開啟 DeepSeek 用量頁",
+    "deepSeek": {
+      "balanceLine": "餘額 {{total}}（儲值 {{toppedUp}} / 贈送 {{granted}}）",
+      "chipBalance": "餘額 {{balance}}",
+      "unavailable": "DeepSeek 帳戶目前無法用於儲值消耗，請開啟用量頁確認帳戶狀態。"
+    },
+    "zhipuCodingPlan": {
+      "usage": "查看智譜套餐用量",
+      "noPlan": "這把金鑰沒有訂閱 GLM Coding Plan（可能是按用量付費帳戶），請在官網確認。"
+    },
+    "error": {
+      "no-credentials": "這個供應商沒有可用的 API 金鑰，請編輯供應商並補齊金鑰。",
+      "auth": "供應商拒絕了這個 API 金鑰，請檢查或更換金鑰後重試。",
+      "rate-limited": "供應商限制了餘額查詢頻率，請稍後重試。",
+      "network": "Cindy 無法連線供應商，請檢查網路後重試。",
+      "server": "供應商暫時無法回傳餘額，請稍後重試。",
+      "invalid-response": "供應商回傳了無法辨識的餘額資料，請稍後重試。",
+      "throttled": "剛剛重新整理過餘額，請稍後重試。",
+      "unknown": "Cindy 無法載入供應商餘額，請稍後重試。"
+    }
+  },
+  "localAgent": {
+    "title": "本機應用程式連線",
+    "empty": "尚未連接應用程式",
+    "description": "允許已授權的本機應用程式使用 Cindy 的模型與執行能力。供應商登入仍由 Cindy 管理。",
+    "revoke": "撤銷連線",
+    "failed": "無法讀取應用程式連線。",
+    "connectTitle": "連接本機應用程式",
+    "connectMessage": "允許「{{app}}」使用 Cindy？",
+    "connectDetail": "此應用程式可以查看模型與供應商目錄、建立自己的執行並提供工具。原生執行可以依目前系統使用者的權限讀寫檔案、執行命令；工作目錄不限制存取範圍。供應商憑證保留在 Cindy。可在設定 → 遠端連線 → 本機應用程式連線中個別撤銷連線。",
+    "cancel": "取消",
+    "allow": "允許連接",
+    "revokeMessage": "撤銷所有本機應用程式連線？",
+    "revokeDetail": "所有本機應用程式連線將失效，正在執行的接入任務會停止。需要時可重新申請連線。",
+    "clientIdentity": "應用程式自報編號：{{id}}\n版本：{{version}}\n名稱與編號由申請方提供，不代表 Cindy 已驗證其發行者。",
+    "revokeOneMessage": "撤銷「{{app}}」的這條連線？",
+    "revokeOneDetail": "透過此連線執行的任務會停止。其他應用程式連線不受影響，需要時可重新申請連線。",
+    "revokeConnection": "撤銷「{{app}}」的連線",
+    "clientId": "應用程式編號：{{id}}",
+    "operationFailed": "無法確認本機應用程式操作的結果，請先查看目前狀態。",
+    "invalidConnection": "應用程式連線編號無效。",
+    "revokeFailed": "無法確認撤銷結果，請查看目前連線狀態。",
+    "loading": "正在讀取應用程式連線…",
+    "revoking": "正在撤銷連線…",
+    "authorizationRequired": "此操作需要有效的本機應用程式授權。",
+    "pairExpired": "連線申請已過期或取消，請從應用程式重新申請連線。",
+    "busy": "本機應用程式仍有執行正在運行，或已達執行上限，請先結束不用的執行。",
+    "limitReached": "已達本機應用程式連線上限，請在設定中撤銷不用的連線。",
+    "invalidWorkspace": "應用程式須指定此電腦上已存在的絕對工作目錄。",
+    "sessionExists": "此應用程式連線已在使用該執行編號。",
+    "executionUnavailable": "所請求的執行或工具呼叫無法使用，訊息與工具操作未被重播。",
+    "selectionUnavailable": "所選模型、供應商或推理強度無法使用，請在應用程式中重新選擇。",
+    "requestNotReplayed": "此請求未被重複執行，請在應用程式中查看原操作結果。",
+    "storageUnavailable": "無法讀取或儲存本機應用程式連線資料，已保留現有授權紀錄。",
+    "stopUnconfirmed": "已阻止繼續向此執行傳送訊息，但尚未確認程序已停止。",
+    "interactionUnavailable": "引擎需要此應用程式無法接收的互動操作。",
+    "interrupted": "本次傳送已中斷。",
+    "toolTimeout": "應用程式工具呼叫已逾時，未自動重試。",
+    "connectResult": "請返回申請連線的應用程式查看結果，授權由 Cindy 確認視窗決定。",
+    "invalidRequest": "應用程式請求無效，或該操作不受支援。",
+    "hostInUse": "此設定檔的本機應用程式連線正由另一個 Cindy 執行個體管理，請在該執行個體中查看連線。",
+    "developerConnection": "開發連線",
+    "copyCode": "複製連線碼",
+    "codeCopied": "連線碼已複製",
+    "codeCopyFailed": "無法複製連線碼",
+    "developerState": {
+      "ready": "供此電腦上的應用程式暫時連線，仍需在此 Cindy 中授權。重新啟動後需重新複製。",
+      "starting": "正在準備連線…",
+      "owner-unavailable": "請先登入或進入本機模式",
+      "host-in-use": "此資料目錄的連線正由另一個 Cindy 管理",
+      "failed": "本機連線未能啟動",
+      "stopped": "本機連線已停止"
+    }
+  },
+  "mailReader": {
+    "showExternalImages": "顯示外部圖片",
+    "markReadFailed": "未能同步已讀狀態，請檢查信箱授權後重新開啟。",
+    "title": "郵件",
+    "openMailbox": "在信箱中開啟",
+    "loading": "正在讀取郵件…",
+    "failed": "未能讀取這封郵件。可以重試，或在信箱中開啟。",
+    "unavailable": "目前沒有可用的郵件插件，可以在信箱中開啟這封郵件。",
+    "notReady": "郵件插件尚未完成設定。請先連接信箱，或直接開啟原連結。",
+    "retry": "重試",
+    "to": "收件人",
+    "cc": "副本",
+    "bcc": "密件副本",
+    "subject": "主旨",
+    "currentMessage": "目前郵件",
+    "messageCount_other": "共 {{count}} 封郵件",
+    "messageCount_one": "共 {{count}} 封郵件",
+    "showMessages_other": "展開 {{count}} 封郵件",
+    "showMessages_one": "展開 {{count}} 封郵件",
+    "expandMessage": "展開來自 {{from}} 的郵件",
+    "collapseMessage": "收起來自 {{from}} 的郵件",
+    "conversationFailed": "暫時無法讀取前後郵件。",
+    "messageCount": "共 {{count}} 封郵件",
+    "showMessages": "展開 {{count}} 封郵件",
+    "choosePlugin": "選擇用哪個插件開啟這封郵件。",
+    "personalPlugin": "個人插件"
+  },
+  "taskActionConfirmation": {
+    "title": "確認任務操作",
+    "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。",
+    "delegation": "請核對獨立任務的目標與設定。允許後將啟動任務，並可在本次委託結束前傳送範圍內的訊息或停止任務。代答、恢復暫停與切換模型仍需另行確認。"
+  },
+  "logSupport": {
+    "title": "日誌與回饋",
+    "localFiles": "選擇問題當天的日誌。檔案未經去識別化處理，請先檢查。",
+    "uploaded": "日誌已上傳，上傳編號：{{code}}。回報時請附上編號。",
+    "close": "關閉",
+    "uploadDescription": "上傳後，請在回報中附上上傳編號。",
+    "uploadDetails": "查看上傳內容"
+  },
   "taskMove": {
     "upgradeComputer": "這台電腦的 Cindy 版本暫不支援移動任務。請更新「{{name}}」上的 Cindy 後再試。",
     "sourceProjects": "任務所在電腦的專案",
@@ -153,8 +268,8 @@
     "runsOnThisDevice": "執行在這台電腦",
     "inviteNotice": "持有邀請連結的使用者登入後即可加入，擁有與房主相同的 Agent 使用權限。",
     "offlineAutoClose": "房主電腦持續離線後，共享會自動結束。",
-    "inviteBoxHint": "將連結傳送給夥伴，對方點擊即可加入。手機端也可複製連結後開啟 Cindy。",
-    "invitationMessage": "邀請你加入「{{title}}」\n{{link}}\n點擊連結加入；手機端也可複製連結後開啟 Cindy，確認加入。",
+    "inviteBoxHint": "將連結傳送給夥伴，對方點擊即可加入，也可在 Cindy 中點「加入共享任務」貼上連結。",
+    "invitationMessage": "邀請你加入「{{title}}」\n{{link}}\n點擊連結加入；如果沒能開啟 Cindy，可在 Cindy 中點「加入共享任務」並貼上這條連結。",
     "membersWithLimit": "成員 · {{count}} 人（最多 2 位訪客）",
     "me": "我",
     "thisDevice": "這台電腦",
@@ -189,12 +304,29 @@
     "invitationDifferentServer": "此邀請屬於其他 Cindy 服務，請用對應的用戶端開啟連結",
     "managementIntro": "管理你發起和加入的共享。",
     "returnToTasks": "返回任務清單",
-    "invitationDetected": "發現共享任務邀請",
-    "notNow": "暫不加入",
     "closeAllLabel": "取消全部共享",
     "closeAllDescription": "所有訪客將無法繼續存取，任務記錄保留。"
   },
   "providerShare": {
+    "modelAccess": {
+      "title": "允許遠端呼叫的模型",
+      "description": "僅限制遠端呼叫，不影響本機使用。儲存後，建立任務、切換模型及傳送下一輪訊息時生效。",
+      "all": "全部模型",
+      "selected": "已開放 {{count}} 個模型",
+      "choose": "選擇模型",
+      "memberTitle": "可用模型",
+      "memberDescription": "設定 {{name}} 可以使用的模型，僅能選擇遠端已開放的模型。也適用於經此人轉分享的呼叫。",
+      "inherit": "跟隨遠端開放範圍",
+      "allFuture": "允許全部模型（含之後新增）",
+      "search": "搜尋模型",
+      "notOpen": "遠端未開放",
+      "empty": "沒有相符的模型",
+      "none": "未選擇模型，將無法遠端呼叫。",
+      "loading": "正在讀取模型範圍…",
+      "loadFailed": "無法讀取模型範圍，請重新開啟此設定。",
+      "saveFailed": "無法儲存模型範圍，請重試。",
+      "needsUpdate": "請更新供應商所在電腦的 Cindy 後再設定模型範圍。"
+    },
     "entry": {
       "label": "遠端與分享",
       "pending_other": "{{count}} 個分享申請待處理",
@@ -203,8 +335,6 @@
       "descriptionOff": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型。關閉期間，已有的分享暫時無法使用，不會被刪除。"
     },
     "manage": {
-      "description": "分享給他人後，對方可以在自己的任務裡選用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}；對方的檔案和指令仍在對方電腦上執行。",
-      "descriptionWithDevice": "分享給他人後，對方可以在自己的任務裡選用 {{provider}} 的模型。Agent 在這臺電腦（{{device}}）上執行，用量計入你的 {{provider}}；對方的檔案和指令仍在對方電腦上執行。",
       "createLink": "產生分享連結",
       "loading": "正在讀取分享…",
       "notReady": "分享服務暫時無法使用。確認已登入且網路正常後會自動重試。",
@@ -246,12 +376,43 @@
           "output": "輸出",
           "amount": "估算金額"
         },
-        "estimateNote": "金額按本機單價估算，不代表供應商實際帳單。"
+        "estimateNote": "金額按本機單價估算，不代表供應商實際帳單。",
+        "moreAria": "{{name}} 的更多操作"
       },
       "removeConfirm": {
         "title": "刪除對 {{name}} 的分享？",
         "description": "{{name}} 將立即無法使用 {{provider}}，正在執行的任務會停止。之後要再分享，需要重新產生連結。用量紀錄會保留。",
         "confirm": "刪除分享"
+      },
+      "reshare": {
+        "applying": "想經 {{owner}} 的供應商組使用",
+        "requestedAt": "{{time}}請求",
+        "usageHint": "同意後，{{name}} 的任務可以在這臺電腦上執行，用量算在 {{owner}} 名下",
+        "approve": "同意",
+        "reject": "拒絕",
+        "summaryUsing_other": "{{count}} 人經 {{owner}} 的供應商組使用",
+        "summaryOwner": "經 {{owner}} 的供應商組",
+        "summaryDeclined_other": "{{count}} 人未同意",
+        "stateApproved": "已同意",
+        "stateRejected": "未同意",
+        "revoke": "撤回同意",
+        "revokeAria": "撤回對 {{name}} 的同意",
+        "approveAria": "同意 {{name}} 使用",
+        "toastApproved": "已同意 {{name}} 經 {{owner}} 的供應商組使用 {{provider}}",
+        "toastRejected": "已拒絕 {{name}} 的請求",
+        "toastRevoked": "已撤回對 {{name}} 的同意，正在執行的任務已停止",
+        "listTitle": "經 {{owner}} 的供應商組使用"
+      },
+      "memberNote": {
+        "add": "設定備註",
+        "edit": "修改備註",
+        "title": "設定使用者備註",
+        "label": "備註",
+        "username": "使用者名稱：{{name}}",
+        "hint": "最多 {{count}} 字，留空可清除。僅你可見",
+        "save": "儲存備註",
+        "saving": "正在儲存備註…",
+        "saveFailed": "未能儲存備註"
       }
     },
     "toast": {
@@ -263,7 +424,7 @@
     },
     "link": {
       "title": "分享 {{provider}} 的連結已產生",
-      "description": "把連結傳給你想分享的人。對方開啟後會先看到說明，確認後向你傳送申請，你在這臺電腦上同意後分享才會生效。",
+      "description": "將連結傳給對方，收到申請並同意後分享生效",
       "fieldLabel": "分享連結",
       "copy": "複製連結",
       "copied": "已複製",
@@ -285,7 +446,9 @@
       "title": "{{name}} 申請使用你分享的 {{provider}}",
       "requestedAt": "{{time}}透過你的分享連結申請",
       "pairingHint": "同意前可以透過傳連結的管道問對方一句：「你看到的配對碼是多少？」一致再同意。",
-      "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}。你可以隨時在「分享 {{provider}}」裡關閉或刪除。",
+      "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡關閉或刪除。",
+      "calloutGroup": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。由供應商組選一台電腦執行 Agent，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡關閉或刪除。",
+      "calloutRemote": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在供應商所在的電腦上執行，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡關閉或刪除。",
       "calloutClaudeEmail": "{{name}} 使用時，Agent 能看到你登入 Claude 用的電子郵件地址。",
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
       "approve": "同意分享",
@@ -300,7 +463,7 @@
       "factFiles": "你的專案檔案和指令仍在你自己的電腦上執行",
       "factFilesDetail": "由你的任務權限把關",
       "factPrivacy": "對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上",
-      "factPrivacyDetail": "{{name}} 只會看到你的暱稱和頭像",
+      "factPrivacyDetail": "{{name}} 和需要同意你使用的其他電腦主人只會看到你的暱稱和頭像",
       "factApproval": "傳送申請後，需要 {{name}} 同意才會生效",
       "factApprovalDetail": "{{name}} 可以隨時關閉或刪除這個分享",
       "send": "傳送申請",
@@ -369,6 +532,12 @@
         "cancel": "取消"
       },
       "detailNote": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上執行，使用的是對方的登入和配額。對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上。新建任務時在模型列表裡選擇它就能用。",
+      "credentialConsent": {
+        "label": "信任 {{name}}",
+        "description": "開啟後，用這個分享的任務讀取金鑰等敏感資訊時不再跳出確認，和用自己的供應商一樣。只對這台電腦生效。",
+        "ariaLabel": "信任 {{name}}（{{provider}}）",
+        "writeFailed": "未能儲存信任設定"
+      },
       "modelsTitle": "可用的模型",
       "modelsLoading": "正在讀取對方開放的模型…",
       "modelsRefused": "對方電腦暫時不讓讀取這個分享：可能沒有允許遠端控制、關了這個供應商的「允許遠端呼叫」，也可能對方的 Cindy 剛啟動、還沒準備好。請稍後重試，或請對方檢查這兩項設定。",
@@ -414,13 +583,69 @@
       "approvedTitle": "分享申請已通過",
       "approvedBody": "{{name}} 已同意分享 {{provider}}",
       "rejectedTitle": "分享申請未通過",
-      "rejectedBody": "{{name}} 沒有同意分享 {{provider}}"
+      "rejectedBody": "{{name}} 沒有同意分享 {{provider}}",
+      "reshareTitle": "新的使用請求",
+      "reshareBody": "{{name}} 想經 {{owner}} 的供應商組使用你分享的 {{provider}}"
+    },
+    "runLimits": {
+      "title": "遠端任務數量",
+      "description": "適用於這台電腦提供的所有供應商，包括自己的其他電腦和分享給他人的裝置。已回答完的任務在被收回前也佔名額，本機直接執行的任務不計入。",
+      "perDevice": "每台使用裝置最多保留的任務數",
+      "total": "所有使用裝置合計最多保留的任務數",
+      "invalid": "請填寫 1～{{max}} 的整數，單台裝置的上限不能超過合計上限。",
+      "idleMinutes": "閒置收回（分鐘）",
+      "idleHint": "任務閒置滿這個時長後，這台電腦會結束它的 Agent，名額隨即釋放；對方再傳訊息時會自動接回原來的對話。正在執行的任務不會被收回。填 0 表示從不收回。",
+      "idleInvalid": "請填寫 0～{{max}} 的整數。",
+      "usage": "目前佔用 {{used}} / {{total}}，來自 {{devices}} 台裝置；單台裝置最多佔用 {{largest}} 個。",
+      "applyHint": "儲存後立即生效。調低上限不會中斷現有任務，只會限制新增。供應商組轉送按直接連線的裝置計數。",
+      "save": "儲存",
+      "reset": "恢復預設",
+      "saved": "遠端任務數量設定已儲存",
+      "retry": "重新載入",
+      "loading": "正在載入…"
+    },
+    "insights": {
+      "visibilityTitle": "分享可見內容",
+      "visibilityNote": "對目前供應商的所有受邀者生效。關閉查看權限不影響模型使用。",
+      "allowQuota": "允許查看剩餘額度",
+      "allowUsage": "允許查看用量明細",
+      "saveFailed": "無法儲存分享查看權限",
+      "quotaTitle": "剩餘額度",
+      "quotaNote": "這是帳號共用額度，不是分配給你的專屬額度。",
+      "groupNote": "按帳號分別顯示，不合計百分比。可能只顯示部分帳號，不包含向他人分享借來的帳號；同一帳號在多台電腦登入時也可能分列。",
+      "account": "帳號 {{number}}",
+      "noOwnAccounts": "此群組沒有可公開額度的自有帳號",
+      "usageNote": "可查看分享者與目前使用者的歷史用量，金額為估算值。",
+      "relayNote": "轉來的用量無法識別最終使用者，單獨彙總，不計入分享者本人。",
+      "relay": "轉來的用量",
+      "you": "你",
+      "owner": "分享者",
+      "notShared": "分享者尚未開放剩餘額度",
+      "usageNotShared": "分享者尚未開放用量明細",
+      "usageUnavailable": "暫時無法讀取用量明細",
+      "denied": "此分享暫時無法查看",
+      "unsupported": "此供應商暫不支援讀取額度",
+      "unavailable": "暫時無法讀取額度或用量",
+      "offline": "分享者電腦離線或連線已中斷",
+      "needs-update": "分享者的 Cindy 更新後才能查看",
+      "unlimited": "未設定個人限額",
+      "session": "目前週期",
+      "week": "每週",
+      "scoped": "獨立週期",
+      "remaining": "剩餘 {{percent}}%",
+      "resets": "重置時間：{{time}}",
+      "updated": "更新於 {{time}}",
+      "usageTitle": "用量明細",
+      "allowUsageDescription": "開啟後，此分享的所有使用者都能查看分享者及其他所有使用者的暱稱和歷史用量明細。"
     }
   },
   "providerGroup": {
+    "management": {
+      "note": "正在管理 {{device}} 上的供應商組。修改會儲存到那台電腦，請保持它在線。",
+      "unsupported": "建立組的電腦上的 Cindy 版本暫不支援遠端管理。請先更新那台電腦上的 Cindy。"
+    },
     "page": {
-      "title": "{{provider}} · 遠端與分享",
-      "shareTitle": "分享"
+      "title": "{{provider}} · 遠端與分享"
     },
     "usage": {
       "title": "用量",
@@ -432,7 +657,8 @@
         "total": "總用量",
         "amount": "估算金額",
         "people": "使用方",
-        "models": "模型"
+        "models": "模型",
+        "computers": "用到的電腦"
       },
       "selfTag": "你",
       "relayName": "經 {{device}} 轉來",
@@ -445,7 +671,44 @@
       "collapseAria": "收起 {{name}} 的用量明細",
       "table": {
         "member": "電腦 / 模型"
-      }
+      },
+      "filter": {
+        "partyAria": "篩選使用方",
+        "allParties": "所有人",
+        "selfDetail": "本機和你其他電腦的合計",
+        "relayDetail": "看不到具體是誰",
+        "computerAria": "篩選組內電腦",
+        "allComputers": "所有組內電腦"
+      },
+      "focus": {
+        "clear": "看全部",
+        "only": "只看 {{name}}"
+      },
+      "byParty": {
+        "title": "按人",
+        "col": {
+          "party": "使用方",
+          "computers": "用到的電腦",
+          "actions": "操作"
+        }
+      },
+      "byComputer": {
+        "title": "按電腦",
+        "col": {
+          "computer": "組內電腦",
+          "parties": "使用方"
+        }
+      },
+      "stack": {
+        "aria": "柱子按什麼分色",
+        "party": "按人",
+        "computer": "按電腦",
+        "model": "按模型"
+      },
+      "loadFailed": "暫時讀不到用量，稍後會自動重試。",
+      "legacyNote": "{{device}} 的 Cindy 需要更新，暫時只能看所有時間的合計。",
+      "coverage": "按天統計從 {{date}} 起",
+      "emptyRange": "這段時間沒有用量"
     },
     "section": {
       "title": "供應商組",
@@ -462,13 +725,12 @@
       "round": "輪詢",
       "order": "依順序",
       "weight": "依權重",
-      "usage": "用量均衡",
+      "quotaFirst": "能讀取訂閱用量時，先用快重置、還剩得多的電腦，各帳號會依時間均勻用掉；差不多時依組策略",
       "description": {
         "least": "給最閒的那臺",
         "round": "依序輪流",
         "order": "排前面的優先",
-        "weight": "依權重比例",
-        "usage": "按5小時和每週用量分配"
+        "weight": "依權重比例"
       }
     },
     "autoSwitch": {
@@ -488,6 +750,8 @@
       "sourceShare": "來自 {{name}} 的分享",
       "shareComputer": "{{name}} 的電腦",
       "shareComputerUnknown": "分享來的電腦",
+      "accountCount_other": "{{count}} 個帳號",
+      "accountFallback": "帳號 {{index}}",
       "quota": {
         "loading": "正在讀取配額…",
         "unavailable": "暫時讀不到這台電腦的配額",
@@ -527,7 +791,31 @@
         "lastDescription": "它是組裡最後一臺電腦，移出後會刪除 {{provider}} 的供應商組。",
         "confirm": "移出組"
       },
-      "sourceGroupOwner": "組所在電腦"
+      "sourceGroupOwner": "組所在電腦",
+      "reshare": {
+        "allApproved": "分享的人可以用",
+        "waiting_other": "{{count}} 位分享的人等待 {{owner}} 同意",
+        "rejected_other": "{{owner}} 未同意 {{count}} 位分享的人",
+        "needsUpdate": "{{owner}} 的 Cindy 更新後才能同意給分享的人用",
+        "unknown": "還不知道 {{owner}} 是否同意給分享的人用",
+        "title": "分享的人能否用這臺電腦",
+        "description": "需要 {{owner}} 逐人同意。沒同意的人，任務不會分到這臺電腦。",
+        "state": {
+          "approved": "已同意",
+          "pending": "等待同意",
+          "rejected": "未同意",
+          "unknown": "還沒問到"
+        }
+      }
+    },
+    "rebalance": {
+      "title": "換到 {{label}} 繼續？",
+      "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
+      "quota": "還剩 {{left}}%",
+      "quotaReset": "還剩 {{left}}%，{{reset}}",
+      "confirm": "換過去",
+      "cancel": "取消",
+      "remember": "以後自動換，不再詢問（僅此任務）"
     },
     "deleteConfirm": {
       "title": "刪除 {{provider}} 的供應商組？",
@@ -547,10 +835,12 @@
       "confirm": "加入供應商組",
       "cancel": "取消",
       "linkDescription": "貼上別人分享的 {{provider}} 連結，對方同意後，回到「已經能用的」裡勾選加入。",
+      "remoteLinkDescription": "請在供應商組所在電腦的「模型供應商」設定中輸入分享連結。對方同意後，再回到「已經能用的」勾選加入。",
       "pasteLink": "貼上分享連結"
     },
     "toast": {
       "added_other": "已把 {{count}} 臺電腦加入 {{provider}} 的供應商組",
+      "addedAccounts_other": "已把 {{count}} 個帳號加入 {{provider}} 的供應商組",
       "removed": "已把 {{name}} 移出供應商組",
       "deleted": "已刪除 {{provider}} 的供應商組"
     }
@@ -570,11 +860,12 @@
     "windowsTitle": "鎖定畫面控制",
     "windowsready": "已為本次執行的 Cindy 啟用。重新啟動 Cindy 後需要再次由管理員授權。",
     "windowsmissing": "允許操作鎖定畫面和管理員提示，需要管理員授權。",
-    "windowsinstallRequired": "請將 Cindy 安裝到 Program Files 並選擇為所有使用者安裝，再啟用此功能。",
+    "windowsinstallRequired": "找不到 Cindy 的安裝位置，請重新啟動 Cindy 後重試。",
     "windowsunavailable": "系統服務無法使用，請重新安裝 Cindy 後重試。",
     "windowsEnable": "授權啟用",
     "windowsDisable": "移除服務",
     "windowsError": "尚未完成授權，請在這台電腦上重試。",
+    "windowsErrorDetail": "錯誤碼 {{code}}",
     "permissionsTitle": "遠端桌面權限",
     "permissionsIntro": "檢視桌面需要螢幕錄製權限；操作桌面還需要輔助使用權限。請在電腦上完成授權，結果會自動更新。",
     "permissionsReady": "系統權限已就緒，可以重新連線。",
@@ -604,6 +895,9 @@
     "controlledByDevice": "{{name}} 正在遠端控制桌面",
     "viewedByDevice": "{{name}} 正在遠端檢視桌面",
     "disconnect": "中斷連線",
+    "disconnectChoiceDetail": "中斷後本次遠端桌面結束，對方之後仍可重新連線。",
+    "disconnectRevoke": "同時撤銷這台裝置的訪問權限",
+    "disconnectRevokeHint": "撤銷後對方無法再遠端連線本機，需在「設定 → 遠端連線」中恢復。",
     "back": "返回",
     "connect": "連線",
     "connecting": "連線中…",
@@ -717,8 +1011,10 @@
     "clipboardSync": "剪貼簿同步",
     "clipboardSyncConflict": "兩端剪貼簿都發生了變更，已分別保留。請在任一裝置上重新複製以同步。",
     "clipboardSyncFailed": "同步暫時失敗，正在自動重試。開關保持開啟。",
-    "clipboardSyncSkipped": "目前內容無法同步，已略過。請檢查貼上權限，或複製文字、圖片後重試。",
-    "clipboardSyncPermission": "同步已暫停，請允許貼上權限後重試。開關保持開啟。",
+    "clipboardSyncSkipped": "此格式暫不支援剪貼簿同步，已略過",
+    "clipboardSyncTooLarge": "內容超出剪貼簿同步大小限制，已略過",
+    "clipboardSyncPermission": "剪貼簿同步需要貼上權限，授權後回到視窗即可恢復",
+    "clipboardSyncWaiting": "遠端電腦的剪貼簿暫時無法存取（可能已鎖定螢幕），解鎖後會自動繼續同步。",
     "lockingOnExit": "正在鎖定電腦…",
     "lockOnExit": "退出後鎖定電腦",
     "lockOnExitHint": "離開遠端桌面時鎖定螢幕。重新連線或切換 App 不會觸發。",
@@ -743,12 +1039,19 @@
     "copy": "複製到本機",
     "paste": "貼上到遠端電腦",
     "clipboardSyncHint": "此視窗在前景時，雙向同步文字、圖片和富文字。",
-    "credentialRequired": "請完成 Mac 密碼驗證。如果無法驗證，請更新兩台電腦上的 Cindy。"
+    "credentialRequired": "請完成 Mac 密碼驗證。如果無法驗證，請更新兩台電腦上的 Cindy。",
+    "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
+    "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
+    "handoffWindow": "代輸入 · {{app}}"
   },
   "ipcError": {
+    "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+    "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+    "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
     "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
+    "PROVIDER_GROUP_CHANGED": "供應商組已在別處修改，本次操作未執行。請查看最新設定後重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切換：無法確認目前任務已使用的上下文。請保留目前模型，或新增任務後再選擇",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切換：無法確認目前模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請保留目前模型或新增任務",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未切換：無法確認目標模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請選擇其他模型或新增任務",
@@ -791,11 +1094,12 @@
     "REMOTE_AGENT_SHARE_PAUSED": "模型未切換：對方已暫停對你的分享。請換一個模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未切換：這個分享已無法使用（對方刪除了分享或你已退出）。請換一個模型。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。",
-    "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已變更"
+    "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已變更",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
   },
   "providerError": {
-    "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
-    "AUTH_FORBIDDEN": "金鑰有效但無權訪問（403），請檢查套餐或模型權限",
+    "AUTH_INVALID": "目前介面驗證失敗，請檢查位址、金鑰和驗證方式",
+    "AUTH_FORBIDDEN": "目前介面拒絕存取，請檢查方案、模型或地區權限",
     "RATE_LIMITED": "請求被限流（429），請稍後重試",
     "QUOTA_EXCEEDED": "配額或餘額不足，請檢查供應商帳戶",
     "MODEL_NOT_FOUND": "模型不存在或無權使用，請檢查模型 ID",
@@ -816,6 +1120,15 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "schemaLease": {
+      "title": "暫時無法開啟本機資料",
+      "retry": "重新開啟本機資料",
+      "writer-active": "另一個 Cindy 執行個體正在維護本機資料。請等待維護結束後重新開啟。",
+      "readers-active": "其他 Cindy 執行個體正在使用這份本機資料。請結束這些執行個體後重新開啟。",
+      "lock-corrupt": "本機資料的維護鎖記錄損壞，暫時無法確認是否仍有程式在使用它。請重新啟動電腦後開啟 Cindy；若仍無法開啟，請聯絡支援人員。請勿刪除資料庫檔案。",
+      "lock-unreadable": "無法讀取或儲存本機資料的維護鎖。請檢查資料目錄的存取權限；恢復存取後重新開啟。若仍失敗，請聯絡支援人員。",
+      "recovery-busy": "另一個 Cindy 執行個體正在檢查本機資料的維護鎖。請稍後重新開啟。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中斷",
       "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
@@ -840,6 +1153,9 @@
   },
   "agentIsland": {
     "native": {
+      "markRead": "標為已讀",
+      "archive": "歸檔",
+      "actionFailed": "操作未完成，提醒已保留，請重試。",
       "newConversationTitle": "新建任務",
       "newConversationHint": "開始一個新的任務",
       "muteSound": "關閉靈動島聲音",
@@ -1080,9 +1396,28 @@
       "tasks": "任務",
       "tokenUnit": "token",
       "noTasksToday": "今天還沒有任務",
+      "tabUnread": "未讀",
+      "tabOngoing": "進行中",
+      "tabUsage": "今日用量",
+      "noUnread": "已全部讀完",
+      "noOngoing": "目前沒有進行中的任務",
+      "allTasks": "全部任務",
+      "collapseTasks": "收起",
+      "activityRunning": "執行中",
+      "activityWaiting": "等你確認",
+      "activityCompleted": "已完成",
+      "activityError": "需要處理",
+      "privateCompanion": "夥伴訊息",
+      "untitledTask": "未命名任務",
+      "activityNow": "剛剛",
+      "activityMinutes": "{{n}} 分鐘前",
+      "activityHours": "{{n}} 小時前",
+      "activityDays": "{{n}} 天前",
       "moreTasks_other": "另外 {{n}} 個任務",
       "running": "執行中",
       "openApp": "打開 Cindy",
+      "remoteControlTitle": "遠端控制中",
+      "remoteControlBody": "其他裝置正在存取這台電腦上的 Cindy",
       "gateTitle": "登入後查看餘量",
       "gateBody": "在 Cindy 裡登入，或選擇跳過登入，這裡就會顯示訂閱餘量和今天的用量。",
       "settings": "管理",
@@ -1112,12 +1447,9 @@
       "today": "今天",
       "manageTitle": "管理",
       "done": "完成",
-      "manageHero": "選單裡顯示什麼，\n按什麼順序。",
-      "manageHeroSub": "拖動調整順序；關掉的來源不在選單裡出現，也不參與上面的餘量判斷。",
       "sources": "餘量來源",
       "sourcesShown": "{{a}} / {{b}} 顯示",
       "statusIcon": "選單列圖示",
-      "statusIconSub": "單色，隨選單列深淺變化",
       "statusIconMode": {
         "icon": "只圖標",
         "lowest": "最低餘量",
@@ -1126,11 +1458,9 @@
       },
       "other": "其他",
       "lowAlert": "快用完時通知",
-      "lowAlertSub": "所有還有餘量的來源都快見底時，發一則系統通知",
       "privacy": "隱藏個人資訊",
-      "privacySub": "帳號只顯示首尾字母，任務標題也會隱藏，適合錄影和截圖",
       "usageScope": "用量統計範圍",
-      "manageFoot": "帳號登入和連線在 Cindy 設定 › 模型供應商 裡管理。",
+      "manageFoot": "管理模型供應商",
       "showSource": "在選單裡顯示 {{name}}",
       "reorderHint": "拖動，或用操作選單調整順序",
       "moveUp": "上移",
@@ -1138,6 +1468,11 @@
     }
   },
   "settings": {
+    "imConnection": {
+      "reconnect": "重新連線",
+      "savedNote": "繫結資訊已保留，可直接重試連線。",
+      "failed": "機器人連線失敗"
+    },
     "title": "設定",
     "search": {
       "ariaLabel": "搜尋設定",
@@ -1156,6 +1491,7 @@
     "tabs": {
       "storage": "儲存空間",
       "general": "通用",
+      "appearance": "外觀",
       "billing": "用量和計費",
       "usage": "用量歷史",
       "personalization": "個性化",
@@ -1422,7 +1758,7 @@
         "noCompatibleModel": "沒有可用於 SSH 遠端的模型，請先在模型設定中連接相容的供應商",
         "errorWorkdirIsFile": "{{path}} 已存在但不是目錄，換一個路徑",
         "confirmCreateTitle": "目錄不存在，建立嗎？",
-        "confirmCreateDescription": "{{path}} 在 {{hostId}} 上不存在。點確認會在遠端跑 mkdir -p 建立它，然後進入任務。",
+        "confirmCreateDescription": "{{path}} 在 {{hostId}} 上不存在；確認後在遠端建立並進入任務。",
         "confirmCreateOk": "建立並繼續"
       },
       "codexSync": {
@@ -1482,6 +1818,7 @@
     "appearance": {
       "title": "外觀",
       "modeLabel": "顯示模式",
+      "sidebarAndPanels": "側邊欄與面板",
       "themeLabel": "主題",
       "themeAriaLabel": "主題選擇",
       "localBadge": "(本地)",
@@ -1508,6 +1845,7 @@
       },
       "font": {
         "reset": "恢復預設",
+        "title": "字體",
         "defaultPreset": "預設",
         "presets": "預設",
         "custom": "自定義",
@@ -1533,6 +1871,16 @@
           "description": "僅調整程式碼區塊、修改比較和編輯器字級；不影響行內程式碼、狀態數字、徽章和路徑標籤",
           "aria": "調整程式碼字號"
         },
+        "terminalFamily": {
+          "label": "終端字型",
+          "description": "僅用於內建終端，建議使用等寬字型。",
+          "aria": "選擇終端字型"
+        },
+        "terminalSize": {
+          "label": "終端字號",
+          "description": "調整內建終端中的文字大小。",
+          "aria": "調整終端字號"
+        },
         "presetsUi": {
           "default": "Inter（預設）",
           "codexStyle": "Codex 風格",
@@ -1542,12 +1890,20 @@
           "default": "Codex 風格（預設）",
           "jetbrainsMono": "JetBrains Mono"
         },
+        "presetsTerminal": {
+          "default": "等寬字型（預設）"
+        },
         "previewSamples": {
-          "ui": "中文字型預覽，清晰銳利 ABC xyz · a/b/c/d · a,b · 0123456789 !?@&"
+          "ui": "中文字型預覽，清晰銳利 ABC xyz · a/b/c/d · a,b · 0123456789 !?@&",
+          "terminal": "$ echo \"終端字型預覽\"\n終端字型預覽\n0123456789 0O 1lI"
         }
       },
-      "missingLightNotice": "{{name}} 主題沒有提供淺色方案，已顯示其深色方案。",
-      "missingDarkNotice": "{{name}} 主題沒有提供深色方案，已顯示其淺色方案。",
+      "singleVariant": {
+        "lightOnly": "僅淺色",
+        "darkOnly": "僅深色",
+        "lightNotice": "{{name}} 只有淺色方案，顯示模式固定為淺色；換成其他主題後恢復你的選擇。",
+        "darkNotice": "{{name}} 只有深色方案，顯示模式固定為深色；換成其他主題後恢復你的選擇。"
+      },
       "theme": {
         "light": "淺色",
         "dark": "深色",
@@ -1568,13 +1924,6 @@
         "hint": "未置頂任務：文字單行，列表附預覽",
         "aria": "切換任務列表顯示方式"
       },
-      "ghostPanelRestore": {
-        "label": "插件面板恢復入口",
-        "hint": "選擇最小化插件面板後從哪裡恢復。",
-        "aria": "選擇插件面板恢復入口",
-        "bubble": "浮動氣泡",
-        "sidebar": "側邊欄"
-      },
       "wallpaper": {
         "title": "桌布",
         "description": "為整個應用程式選擇 Cindy 場景、自己的圖片或影片，主題保持獨立。",
@@ -1586,6 +1935,19 @@
           "cindy-window": "Cindy · 窗邊陪伴",
           "cindy-studio": "Cindy · 未來工作室",
           "cindy-dream": "Cindy · 夢境漫遊",
+          "cindy-whisper": "Cindy · 悄悄話",
+          "cindy-night-glance": "Cindy · 夜色回眸",
+          "cindy-scarlet-stroll": "Cindy · 赤夜漫步",
+          "cindy-neon": "Cindy · 霓光側影",
+          "cindy-prism": "Cindy · 稜鏡碎光",
+          "night-launch": "夜航流光",
+          "silent-orbits": "靜謐星軌",
+          "dune-dawn": "沙海晨光",
+          "planet-dawn": "星海晨曦",
+          "indigo-folds": "靛藍層疊",
+          "dune-sphere": "沙丘圓石",
+          "ocean-clouds": "滄海流雲",
+          "rose-quartz": "薔薇晶礦",
           "custom": "自訂桌布"
         },
         "visibilityLabel": "桌布可見度",
@@ -1603,7 +1965,10 @@
         "customPlaybackFailed": "無法播放此影片，請選擇使用 H.264 編碼的 MP4 影片。",
         "customHint": "PNG、JPEG、WebP 圖片最大 20 MB，MP4 影片最大 100 MB。僅儲存在此裝置，影片在動態模式下靜音循環播放。",
         "customInvalid": "請選擇有效的 PNG、JPEG 或 WebP 圖片（不超過 20 MB、4000 萬像素），或不超過 100 MB 的 MP4 影片。",
-        "customFailed": "無法儲存桌布，請重試。"
+        "customFailed": "無法儲存桌布，請重試。",
+        "downloading": "正在下載桌布…",
+        "downloadFailed": "部分桌布資源未下載，暫用可用背景",
+        "retryDownload": "重試下載"
       },
       "layout": {
         "label": "面板佈局",
@@ -1611,7 +1976,7 @@
         "reset": "恢復預設佈局",
         "resetSuccess": "已恢復預設面板佈局",
         "resetFailed": "無法恢復面板配置",
-        "saved": "面板位置已儲存；可在「設定 → 一般」的「外觀」區段恢復預設配置",
+        "saved": "面板位置已儲存；可在「設定 → 外觀」恢復預設配置",
         "saveFailed": "無法儲存面板位置"
       }
     },
@@ -1634,6 +1999,7 @@
         "done": "已完成 ✓",
         "error": "執行失敗",
         "needsReply": "需要你回覆",
+        "inputHandoff": "需要你代為輸入",
         "externalDone": "Cindy · 任務「{{title}}」已完成 ✓",
         "externalError": "Cindy · 任務「{{title}}」執行失敗",
         "externalNeedsReply": "Cindy · 任務「{{title}}」需要你回覆",
@@ -1654,7 +2020,20 @@
       "wecomGroupToggleFailed": "企業微信群通知開關更新失敗",
       "wecomGroupClear": "移除",
       "wecomGroupCleared": "Webhook 已移除",
-      "wecomGroupClearFailed": "Webhook 移除失敗"
+      "wecomGroupClearFailed": "Webhook 移除失敗",
+      "chat": {
+        "image": "圖片",
+        "audio": "語音",
+        "video": "影片",
+        "file": "檔案",
+        "message": "新訊息",
+        "teammate": "夥伴",
+        "sender": "未知傳送者",
+        "mention": "提到了你",
+        "reply": "回覆了你",
+        "threadReply": "話題新回覆",
+        "thread": "話題"
+      }
     },
     "windowBehavior": {
       "menubar": {
@@ -1830,11 +2209,23 @@
         "nameHint": "留空則保持當前名字",
         "changeAvatar": "更換頭像",
         "resetAvatar": "恢復預設頭像",
+        "adjustAvatar": "調整頭像",
         "save": "儲存資料",
         "cancel": "取消",
         "syncHint": "名字和頭像會儲存到帳號，並同步到你的所有裝置",
-        "avatarInvalid": "請選擇 5MB 以內的 PNG / JPG / WebP 圖片",
-        "saveFailed": "儲存失敗，請重試"
+        "avatarInvalid": "請選擇 20MB 以內的 PNG / JPG / WebP 圖片",
+        "saveFailed": "儲存失敗，請重試",
+        "crop": {
+          "title": "調整頭像",
+          "description": "拖曳調整位置，捲動或雙指縮放",
+          "done": "完成頭像調整",
+          "stageLabel": "頭像取景區域：用方向鍵移動，用加號或減號縮放",
+          "zoomLabel": "縮放",
+          "zoomValue": "{{percent}}%",
+          "zoomIn": "放大",
+          "zoomOut": "縮小",
+          "exportFailed": "未能匯出調整後的頭像"
+        }
       }
     },
     "help": {
@@ -2004,6 +2395,11 @@
         "statsFailed": "統計暫時無法使用",
         "refreshStatsButton": "重新整理儲存空間用量",
         "legacyUsage": "舊版本資料(只讀，不參與清理)：{{size}}",
+        "remoteMediaLabel": "遠端圖片快取",
+        "remoteMediaDescription": "下載過的圖片保留在這台電腦上，重新啟動 Cindy 後仍可重複使用。",
+        "remoteMediaClearButton": "清理遠端快取",
+        "remoteMediaClearTitle": "清理遠端圖片快取？",
+        "remoteMediaClearDescription": "釋放本機 {{size}}。再次檢視時會重新下載，原始檔案和已儲存的附件會保留。",
         "legacyImagesLabel": "圖片快取目錄",
         "legacyImagesDescription": "Cindy 不會自動掃描或清理此目錄。刪除檔案後，歷史訊息中的圖片可能無法顯示，請自行確認後操作。",
         "legacyImagesOpenButton": "開啟目錄",
@@ -2142,7 +2538,8 @@
         "basics": "基礎",
         "refinement": "潤色",
         "preferences": "偏好",
-        "usageData": "用量"
+        "usageData": "用量",
+        "speakerFilter": "聲紋過濾"
       },
       "serviceSource": {
         "label": "語音服務",
@@ -2439,6 +2836,81 @@
           "copied": "已複製",
           "copyFailed": "複製失敗"
         }
+      },
+      "speakerFilter": {
+        "label": "辨識我的聲音",
+        "hint": "語音輸入時將旁人的聲音靜音，只把你說的話送去辨識。需要先錄製聲紋；別人和你同時說話時無法完全濾掉。",
+        "ariaLabel": "切換辨識我的聲音",
+        "unsupported": "這台電腦的系統暫不支援聲紋辨識。",
+        "privacy": "聲紋只儲存在這台電腦上並加密保存，不會上傳，也不會同步到其他裝置。",
+        "actionFailed": "操作失敗，請稍後再試。",
+        "model": {
+          "needed": "首次使用需要下載約 {{size}} 的辨識模型。",
+          "download": "下載",
+          "downloading": "正在下載辨識模型（{{done}} / {{total}}）",
+          "cancel": "取消",
+          "retry": "重試",
+          "failed": {
+            "network": "辨識模型下載失敗，請檢查網路後重試。",
+            "disk": "辨識模型無法儲存，請檢查磁碟空間後重試。",
+            "checksum": "下載的辨識模型驗證未通過，請重試。",
+            "unavailable": "暫時無法取得辨識模型，請稍後再試。"
+          }
+        },
+        "profile": {
+          "missing": "尚未錄製聲紋",
+          "missingHint": "錄入聲紋後才會生效。",
+          "enrolled": "已錄製聲紋",
+          "enrolledAt": "{{date}} 錄製",
+          "enroll": "錄製聲紋",
+          "reenroll": "重新錄製",
+          "delete": "刪除聲紋",
+          "deleted": "聲紋已刪除",
+          "deleteConfirm": {
+            "title": "刪除聲紋？",
+            "description": "刪除後語音輸入不再過濾旁人的聲音，直到你重新錄製。",
+            "confirm": "刪除",
+            "cancel": "取消"
+          }
+        },
+        "strictness": {
+          "label": "靈敏度",
+          "hint": "越嚴格越不容易放進旁人的聲音，但在吵雜環境中也更容易剪掉你自己的話。",
+          "options": {
+            "relaxed": "寬鬆",
+            "standard": "標準",
+            "strict": "嚴格"
+          }
+        },
+        "enroll": {
+          "title": "錄製聲紋",
+          "description": "請用平常的語氣朗讀下面 {{clips}} 段文字。每段最多錄音 {{seconds}} 秒，讀完點選結束錄音。請在平時使用語音輸入的地方錄製，避免其他人同時說話。",
+          "stepsAriaLabel": "朗讀段落",
+          "step": "第 {{current}} / {{total}} 段",
+          "record": "開始朗讀",
+          "stop": "結束錄音",
+          "rerecord": "重錄這段",
+          "recording": "正在錄音，還剩 {{seconds}} 秒",
+          "recorded": "這段已錄好",
+          "cancel": "取消",
+          "submit": "完成",
+          "done": "聲紋已錄製",
+          "passages": {
+            "p1": "今天上午我先整理一下這週的工作安排，下午再把需要討論的問題列出來，傳給大家提前看看。",
+            "p2": "如果明天天氣不錯，我們可以早點出發，路上順便買些水果和零食，中午就在公園裡吃飯。",
+            "p3": "請幫我把這段內容改得更簡潔一些，保留關鍵數字和結論，然後用三到五句話總結重點。"
+          },
+          "errors": {
+            "too_short": "第 {{index}} 段偵測到的語音不足，請重新錄製。",
+            "no_embedding": "第 {{index}} 段沒能辨識出聲紋，請重錄這段。",
+            "inconsistent": "第 {{index}} 段和其他幾段不像同一個人，可能混入了別人的聲音或噪音，請重錄這段。",
+            "models_missing": "辨識模型尚未下載完成，請稍後再試。",
+            "storage_unavailable": "系統鑰匙圈暫時無法使用，聲紋無法加密儲存，請稍後再試。",
+            "failed": "產生聲紋失敗，請重試。",
+            "microphone": "無法使用麥克風，請檢查麥克風權限和裝置。",
+            "noAudio": "麥克風沒有傳來聲音，請檢查裝置後重試。"
+          }
+        }
       }
     },
     "sessionImport": {
@@ -2708,7 +3180,7 @@
         },
         "useLocalAccount": "使用本機 Codex 帳號",
         "addIndependentAccount": "登入獨立帳號",
-        "accountSourcesDescription": "使用現有的本機 Codex 連線，或登入獨立儲存的帳號。兩種方式支援相同功能。",
+        "accountSourcesDescription": "使用本機 Codex 連線，或登入獨立儲存的帳號",
         "independentAccountDescription": "登入一個獨立儲存的 ChatGPT 帳號，或使用 API key 接入。",
         "localUnavailable": "目前沒有可直接使用的本機連線。現有供應商繫結的帳號不會被替換。"
       },
@@ -2766,6 +3238,7 @@
           "quotaTitle": "本期剩餘額度",
           "quotaUsed": "已用 {{used}} / 本期額度 {{total}}",
           "loading": "正在取得…",
+          "noPersonalLimit": "未設定個人限額",
           "unavailable": "暫時無法取得，請重新整理。",
           "refresh": "重新整理額度"
         },
@@ -2864,6 +3337,7 @@
           "claudeDesc": "Claude Code 遵循 Anthropic 協議(用 x-api-key 鑑權)。填該來源用於 Claude Code 的 baseURL、金鑰與模型，留空則此來源不提供 Claude Code。",
           "codex": "Codex",
           "codexDesc": "Codex 使用 OpenAI Responses 協議。上游可選擇原生 Responses，或由 Cindy 橋接 Chat Completions、Anthropic Messages。填該來源用於 Codex 的 baseURL、金鑰與模型，留空則此來源不提供 Codex。",
+          "codexUpstream": "目前上游協議：",
           "pi": "Pi",
           "piDesc": "Pi 是多協議 harness：你的自定義或本地模型（Ollama、vLLM、自建端點）原生直連，不經 Cindy 的相容 Proxy。先在下方選 API 型別，再填該來源給 Pi 用的 base URL、金鑰與模型；留空則本來源不配置 Pi。"
         },
@@ -2898,7 +3372,12 @@
           "testing": "測試中…",
           "ok": "連線成功（{{ms}}ms）",
           "needFields": "請先填寫基礎 URL 和至少一個模型 ID",
-          "unsupportedProtocol": "測試連線暫不支援此模型協定"
+          "unsupportedProtocol": "測試連線暫不支援此模型協定",
+          "inconclusive": "暫時無法確認連線。請檢查位址或網路後重試；上一個請求可能已執行。",
+          "exhausted": "已嘗試所有候選介面，暫未找到可用連線。",
+          "costHint": "測試會傳送簡短生成請求，可能產生少量費用。",
+          "details": "查看嘗試結果",
+          "stop": "停止測試"
         },
         "fetch": {
           "button": "獲取模型列表",
@@ -3015,6 +3494,7 @@
         "refreshingAria": "正在重新整理模型列表…",
         "refreshDone": "模型列表已重新整理",
         "refreshAdded": "已發現 {{count}} 個新模型",
+        "refreshSpeechAdded": "已更新模型，補充了 1 個語音參考型號",
         "refreshNoNew": "模型列表已是最新，無新增",
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
@@ -3022,7 +3502,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
-        "capabilityGroupHint": "不會出現在對話模型選擇中；開關控制影像、影片等功能是否列出",
+        "capabilityGroupHint": "不會出現在對話模型選擇中；開關控制對應功能是否列出",
         "accessWriteFailed": "停用設定未能儲存，請重試",
         "visibilityWriteFailed": "模型顯示設定未能儲存，請重試；如果仍然失敗，請重新啟動 Cindy。",
         "disabledGroup": "已停用",
@@ -3139,7 +3619,8 @@
             "compatibility": "相容模式",
             "compatibilityHint": "相容模式可能出現執行不穩定或功能異常，建議有經驗的使用者使用。",
             "matching": "原生支援",
-            "unknown": "協定待確認"
+            "unknown": "協定待確認",
+            "automatic": "自動選擇"
           },
           "lifecycle": {
             "alpha": "試用版",
@@ -3155,7 +3636,7 @@
           "aria": "依模型類型篩選",
           "chat": "對話"
         },
-        "hiddenGroup": "未啟用",
+        "hiddenGroup": "未顯示",
         "management": {
           "brand": "廠商"
         },
@@ -3182,7 +3663,7 @@
         "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。",
         "rowLabelGroup": "{{provider}} · {{device}} · 供應商組",
         "groupBadge_other": "供應商組 · {{count}} 台電腦",
-        "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。要修改組，請到 {{device}} 的「設定 → 模型供應商」。",
+        "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。{{device}} 在線時，你可以從這裡的「遠端與分享」管理這個組和分享。",
         "groupMembersTitle": "組內電腦",
         "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
       },
@@ -3300,7 +3781,7 @@
         "manualModelPlaceholder": "例如 local-model",
         "addManualModel": "新增模型",
         "recommended": "推薦",
-        "modelsHint": "勾選的模型將出現在對話的模型選擇器中，對可用的 CLI 同時生效；之後可在供應商詳情裡隨時調整。",
+        "modelsHint": "勾選模型會加入對話模型清單，也適用於可用的 CLI",
         "noModelSelected": "請至少勾選一個模型",
         "createdToast": "已新增「{{name}}」",
         "createFailed": "新增失敗，請重試",
@@ -3487,7 +3968,11 @@
         "manualModel": "模型 ID（無法自動取得時填寫）",
         "modelTypeAutomatic": "自動辨識",
         "manualModelTypeHint": "相同 ID 可更新類型；自動辨識會恢復目錄中的類型。",
-        "mediaOnlyTestHint": "此連線僅含非對話模型。可取得模型列表檢查目錄存取，此處不驗證模型呼叫。"
+        "mediaOnlyTestHint": "此連線僅含非對話模型。可取得模型列表檢查目錄存取，此處不驗證模型呼叫。",
+        "manualAdd": "手動新增模型",
+        "manualId": "模型 ID",
+        "saveProvider": "儲存供應商",
+        "removeModel": "移除模型"
       },
       "byok": {
         "managed": "由企業管理連線與模型",
@@ -3496,7 +3981,37 @@
         "pending": "憑證準備中",
         "unavailable": "暫時無法使用"
       },
-      "claudeAccountRetired": "Cindy 已不再支援透過這筆舊版 Claude 連線登入訂閱，不影響你的 Claude 帳號和訂閱。請改用「使用 Claude Code 登入」連線訂閱"
+      "claudeAccountRetired": "Cindy 已不再支援透過這筆舊版 Claude 連線登入訂閱，不影響你的 Claude 帳號和訂閱。請改用「使用 Claude Code 登入」連線訂閱",
+      "speechSetup": {
+        "title": "語音",
+        "add": "新增語音模型",
+        "referenceHint": "參考型號來自公開模型資料，不代表目前帳號已開通。是否可用以實際呼叫為準。",
+        "discoveryHint": "以下型號由供應商目錄傳回，尚未驗證語音呼叫。",
+        "saved": "已新增",
+        "reference": "參考型號",
+        "discovered": "目錄傳回",
+        "more": "更多語音型號（{{count}}）",
+        "manual": "手動輸入語音型號",
+        "modelId": "語音模型 ID",
+        "modelsHint": "儲存語音模型不會啟動語音合成。音色和逐句朗讀可在夥伴語音設定中調整。",
+        "otherModels": "對話與其他模型",
+        "separateKey": "語音服務需要 API Key。將建立獨立連線，原有訂閱或裝置碼連線會保留。",
+        "fetchFailed": "暫時無法取得模型目錄，仍可選擇參考型號新增。",
+        "saveFailed": "新增失敗，請重新開啟此頁面後重試。",
+        "manualSource": "手動新增",
+        "manualHint": "輸入供應商提供的語音模型 ID。"
+      },
+      "detection": {
+        "keyRequired": "填寫 API 金鑰後繼續。",
+        "authRejected": "驗證未通過，請檢查位址和 API 金鑰，修改後會自動重試。",
+        "hint": "填寫網址和 API 金鑰後自動識別供應商。儲存後可在編輯連線中調整協定。",
+        "pending": "正在識別供應商…",
+        "matched": "已識別為 {{name}}",
+        "ambiguous": "符合多個設定，請繼續自訂或選擇供應商。",
+        "custom": "繼續自訂設定，可取得模型清單或手動新增。",
+        "configure": "前往設定",
+        "keepCustom": "繼續自訂"
+      }
     },
     "experimental": {
       "title": "實驗性功能",
@@ -3577,7 +4092,12 @@
         "connectingNote": "已儲存機器人憑證，正在建立連線。",
         "reconnectingNote": "已儲存機器人憑證，正在恢復連線。",
         "conflictNote": "已儲存機器人憑證，但該 App ID 當前被其他裝置佔用。",
-        "errorNote": "已儲存機器人憑證，但當前連線失敗。請點選重新連線重試。",
+        "errorNote": "已保留機器人繫結，目前無法連線。",
+        "errorHeading": "{{service}} 機器人連線失敗",
+        "reconnect": "重新連線",
+        "networkErrorNote": "暫時無法存取 IM 服務，請檢查網路連線。",
+        "timeoutErrorNote": "連線逾時，可重新連線。無須解綁機器人。",
+        "credentialsErrorNote": "App ID 或 App Secret 不正確，請核對設定。",
         "idleNote": "已儲存機器人憑證，當前尚未連線。請點選重新連線。"
       },
       "appIdLabel": "App ID",
@@ -3690,6 +4210,15 @@
         "workingDirSaved": "微信新對話工作目錄已更新",
         "workingDirReset": "微信新對話已恢復使用預設目錄",
         "workingDirFailed": "更新工作目錄失敗，請重新選擇"
+      },
+      "companion": {
+        "assigned": "由繫結的夥伴回覆",
+        "description": "在微信中與 {{name}} 對話，共用記憶和主要任務。此電腦上的微信連線一次只能交給一位夥伴。",
+        "other": "微信已交給另一位夥伴。請先在該夥伴的連線設定或個人微信設定中移除繫結。",
+        "permissionNote": "你在微信中傳給夥伴的訊息沿用夥伴的權限設定，包括完全存取。可在 Cindy 的夥伴對話輸入框下方切換權限；其他人的訊息仍受權限限制。",
+        "remove": "移除夥伴繫結",
+        "useExisting": "使用已連線的微信與 {{name}} 對話",
+        "updateFailed": "無法更新繫結。請等微信中的工作結束後重試，並確認夥伴仍可用。"
       }
     },
     "discordBot": {
@@ -3762,7 +4291,7 @@
         },
         "step4": {
           "title": "複製使用者 ID",
-          "body": "在 Discord 使用者設定開啟 Developer Mode，右鍵自己的頭像，選擇 Copy User ID。"
+          "body": "在 Discord 使用者設定開啟 Developer Mode，右鍵自己的頭像並選擇 Copy User ID"
         }
       }
     },
@@ -3784,7 +4313,7 @@
       "secretPlaceholder": "企業微信後臺中的機器人 Secret",
       "showSecret": "顯示 Secret",
       "hideSecret": "隱藏 Secret",
-      "setupHint": "在企業微信管理後臺建立智慧機器人並啟用長連線，然後填入 Bot ID 和 Secret。",
+      "setupHint": "建立智慧機器人並啟用長連線，填入 Bot ID 和 Secret",
       "ownerHint": "連線後，首個向機器人傳送單聊訊息的成員會繫結為本機 owner；僅該成員可觸發 Agent。",
       "connect": "儲存並連線",
       "reconnect": "重新連線",
@@ -4141,7 +4670,7 @@
         "ariaLabel": "選擇第二備選輔助模型"
       },
       "emptySlot": "未選擇",
-      "customHint": "自訂後只按你選的順序嘗試；都無法使用時不會偷偷換成別的模型。",
+      "customHint": "輕量文字按所選順序嘗試；內建審核無法使用時，也用於自動審核備援。所選供應商會收到審核上下文，包括訊息與引用內容、任務與操作詳情及攔截記錄、身分與權限、檔案路徑和作業系統。",
       "signInHint": "登入 Cindy 後可使用自動推薦；未登入時請在自訂中選擇已設定的其他供應商模型。",
       "chooseAgent": "選擇 Agent",
       "backToAgents": "返回選擇 Agent",
@@ -4323,7 +4852,7 @@
     "agentResource": {
       "saveFailed": "儲存失敗，請重試。",
       "title": "Agent 資源佔用",
-      "description": "限制 Agent 命令列任務的系統資源佔用，避免並行測試、構建把機器拖卡。預設全速（不干預）。併發上限即刻生效；優先順序降檔對已在跑的 Agent 處理程序約 15 秒內生效；把優先順序調回正常和工具鏈限核只對新啟動的 Agent 處理程序生效。僅作用於本機 Agent；遠端（SSH）機器上的 Agent 不受本設定約束。",
+      "description": "限制 Agent 命令列任務佔用的系統資源，避免並行測試或構建拖慢電腦。預設全速，只作用於本機 Agent，不影響遠端（SSH）機器。",
       "preset": "檔位",
       "presets": {
         "full": "全速",
@@ -4339,26 +4868,27 @@
       "maxConcurrent": "併發命令上限",
       "maxConcurrentHint": "Claude Code 引擎所有命令的併發上限，超出的排隊等待；0 表示不限。Codex 命令在自身沙箱內執行、不經此閘門，由優先順序與限核層覆蓋。",
       "priority": "程序優先順序",
-      "priorityHint": "調低後 Agent 只用空閒資源，前臺應用優先。從低檔調回後只對新啟動的 Agent 程序生效。",
+      "priorityHint": "調低後 Agent 只用空閒資源，前臺應用優先；約 15 秒內對執行中的 Agent 生效，調回正常只對新啟動的 Agent 生效。",
       "priorityOptions": {
         "normal": "正常",
         "low": "低",
         "lowest": "最低"
       },
       "capThreads": "限制工具鏈並行度",
-      "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等環境變數，防止單條測試或構建命令佔滿全部 CPU 核心；你自己設定過的同名變數不會被覆蓋。"
+      "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等環境變數，防止單條測試或構建命令佔滿全部 CPU 核心；只對新啟動的 Agent 生效，你自己設定過的同名變數不會被覆蓋。"
     },
     "piPackages": {
       "title": "Pi 擴充功能",
       "entryTitle": "Pi 擴充功能設定",
+      "manageLabel": "管理擴充功能",
       "entryDescription": "安裝、啟用或解除安裝 Cindy 的 Pi 擴充功能",
       "backToGeneral": "返回一般",
       "description": "擴充功能安裝在這台裝置的 Cindy 中。無論任務由本機、手機或其他已連線用戶端發起，只要由這台裝置的普通 Pi 執行都會生效；Review 不載入。",
       "installSectionTitle": "安裝擴充功能",
-      "installSectionDescription": "貼上 pi.dev 頁面提供的安裝來源，或輸入 npm 套件名稱、Git 位址、本機絕對路徑。",
+      "installSectionDescription": "貼上安裝來源、npm 套件名稱、Git 位址或本機絕對路徑",
       "installedSectionTitle": "已安裝",
       "sourcePlaceholder": "npm 套件名稱、Git 位址或本機絕對路徑",
-      "inspectionHint": "Pi 套件由 Pi 原生套件系統安裝和載入。Cindy 只顯示建議性的相容性詳情；未知、不支援或分析失敗都不會阻止安裝或啟用。",
+      "inspectionHint": "相容性詳情僅供參考，不影響安裝和啟用",
       "install": "安裝",
       "update": "更新",
       "remove": "解除安裝",
@@ -4475,7 +5005,7 @@
         "title": "自動操作瀏覽器",
         "description": "一個 Agent 專用的獨立瀏覽器，與你日常的 Chrome 互不影響",
         "toggleAria": "切換瀏覽器自動化",
-        "toggleHint": "這個開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
+        "toggleHint": "僅對新建的 Agent 會話生效",
         "noProjectHint": "從專案任務中開啟「設定」可針對該專案開關瀏覽器自動化。",
         "detected": "已檢測到 {{browser}}",
         "notDetected": "未檢測到本機瀏覽器。安裝 Chrome 後即可使用瀏覽器自動化。",
@@ -4553,7 +5083,7 @@
         "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
         "toggleAria": "切換 Android 自動化",
         "refresh": "重新檢查",
-        "toggleHint": "這個全域性開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
+        "toggleHint": "影響這台電腦，僅對新建的 Agent 會話生效",
         "status": {
           "checking": "正在檢查 ADB 狀態…",
           "disabled": "Android 自動化未啟用。啟用後將檢測 ADB 與裝置。",
@@ -4793,10 +5323,6 @@
         "android": {
           "name": "Android 自動化",
           "description": "檢視、點擊和操作連接到本機的 Android 裝置。"
-        },
-        "ios-simulator": {
-          "name": "iOS 模擬器",
-          "description": "在 iOS 模擬器中安裝、執行和檢查應用程式。"
         },
         "browser": {
           "name": "瀏覽器",
@@ -5068,7 +5594,7 @@
             "usageLabel": "怎麼用",
             "usageBody": "在 X 上發一條推文 @askmycindy，任務就會派到這臺裝置上執行，結論以回帖發回給你。",
             "riskLabel": "回帖是公開的",
-            "riskPublicBody": "我們的回覆是一條公開推文，任何人都能看到。這個功能適合公開地找答案、解決問題，不適合處理私事 —— 那會有隱私暴露的風險。",
+            "riskPublicBody": "回覆是公開推文，任何人都能看到。適合公開提問、解決問題；不適合處理私事，以免暴露隱私。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設工作目錄，Agent 能讀寫其中檔案，而結論會公開回帖 —— 預設目錄指到私密倉庫時，檔案內容可能隨之公開。",
             "withdrawLabel": "想撤回",
             "withdrawBody": "提問者在要刪除的回答下回覆「@askmycindy /delete」（或「@askmycindy /删除」），正文中必須手動帶上 @askmycindy。只刪公開回帖，本地任務記錄保留。",
@@ -5149,6 +5675,7 @@
         "online": "已連線"
       },
       "connectionIssue": {
+        "device-removed": "裝置已從帳號中移除，請在本裝置登出後重新登入。",
         "auth-failed": "登入已失效，請重新登入",
         "replaced": "連線被另一處相同裝置頂替",
         "too-many-connections": "同帳號連線數已達上限",
@@ -5171,7 +5698,9 @@
       "renameConfirm": "確認",
       "renameCancel": "取消",
       "delete": "刪除",
-      "deleteOnlineHint": "線上裝置無法刪除",
+      "deleteTitle": "刪除「{{name}}」？",
+      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+      "deleteOnlineHint": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
       "error": {
         "unavailable": "裝置互聯服務暫不可用(服務端未啟用或網路異常)",
         "listFailed": "裝置列表獲取失敗"
@@ -5188,7 +5717,7 @@
         "keepAwakeToggleFailed": "切換保持喚醒失敗",
         "renameFailed": "重新命名失敗",
         "deleted": "裝置已刪除",
-        "deleteOnline": "裝置線上，無法刪除",
+        "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
         "deleteFailed": "刪除失敗",
         "disconnected": "已斷開所有遠端連線",
         "disconnectFailed": "斷開遠端連線失敗",
@@ -5219,10 +5748,14 @@
           "wecom": "企業微信新對話會使用這組 Agent、模型和權限模式；已有任務若沒有單獨改過模型，會在收到下一則訊息時換用這組 Agent 和模型，權限模式仍在已有對話傳送 /new 後應用。"
         },
         "agentLabel": "Agent",
-        "agentUnsupportedOnChannelHint": "{{agent}} Agent 不支援此渠道的逐條權限確認，訊息將無法處理。請改用 Claude Code 或 Codex。",
-        "agentUnsupportedOnChannelModeHint": "切換 Agent 後傳送 /new；若新的 Agent 仍提示權限模式問題，請再傳送 /permission 調整權限模式。",
+        "agentUnsupportedOnChannelHint": "此渠道用 {{agent}} 無法逐條授權及處理訊息；請改用 Claude Code 或 Codex。",
+        "agentUnsupportedOnChannelModeHint": "切換 Agent 後傳送 /new；仍有權限問題則傳送 /permission",
         "permissionModeUnsupportedOnChannelHint": "目前 Agent 不支援以此權限模式在該渠道執行，訊息將無法處理。請傳送 /permission 調整權限模式。",
         "modelLabel": "模型配置",
+        "automatic": "自動選擇 · 使用目前可用的推薦模型",
+        "fixed": "已固定模型",
+        "useAutomatic": "恢復自動選擇",
+        "automaticUnavailable": "暫無可用模型，請先在模型設定中連接或啟用模型。",
         "loading": "正在讀取新對話配置…",
         "loadFailed": "讀取新對話配置失敗",
         "saveFailed": "儲存新對話配置失敗",
@@ -5256,8 +5789,9 @@
           "descriptions": {
             "unsupported": "此保護僅可在 macOS 上使用。",
             "disabled": "Cindy 執行期間會阻止 Codex 連線至 Work Louder 鍵盤；不會限制 Cindy 本身。",
-            "recovery-required": "保護已停止，但 NODE_OPTIONS 尚未安全還原。請先重試還原，再重新開啟。",
-            "error": "Cindy 無法更新 Codex 保護；原有 NODE_OPTIONS 已保留或等待還原。"
+            "paused": "此保護因影響其他應用程式已暫停。若應用程式仍異常，請結束舊版 Cindy，再完全結束並重新開啟受影響的應用程式。",
+            "recovery-required": "保護已暫停，但舊的啟動設定尚未清理完成。請點擊「還原環境」，完成後完全結束並重新開啟受影響的應用程式。",
+            "error": "Cindy 無法讀取或清理舊的保護設定；此保護仍保持暫停。"
           },
           "restartRequired": "請完全結束並重新開啟 Codex 以生效"
         },
@@ -6031,7 +6565,8 @@
         "updateTo": "更新到 v{{version}}",
         "updateAria": "將 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 建立",
-        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完能力總覽、沙箱紅線與打包流程），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、後台能力（旁聽事件、應用內輕提示、未讀角標、確認彈窗）、是否聯網、是否需要設定頁、要不要隨包 Node 行程跑重活、要不要圖片影片等媒體能力；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 校驗並產生 .cindy 產物，不要聲稱已安裝。",
+        "createPrompt": "幫我建立一個 Cindy 插件。",
+        "creatorUnavailable": "內建插件建立技能暫時無法使用",
         "filterAll": "全部",
         "filtersAria": "按來源篩選插件",
         "origin": {
@@ -6048,7 +6583,6 @@
         "manageAction": "管理",
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自動呼叫",
-        "upToDate": "已是最新",
         "oauthAuthorizationExpired": "授權已失效，需重新連線",
         "installAria": "安裝 {{name}}"
       },
@@ -6090,7 +6624,12 @@
           "invalidPackage": "插件安裝包異常，無法安裝，請聯絡釋出者。",
           "downloadTimeout": "插件下載逾時，請稍後重試。",
           "downloadFailed": "插件下載失敗，請檢查網路後重試。",
-          "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。"
+          "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。",
+          "namespaceClientRequired": "目前版本無法查看企業插件，請更新 Cindy。已安裝的企業插件仍可使用。",
+          "organizationContextUnavailable": "暫時無法確認企業身份，請稍後重試。已安裝的企業插件仍可使用。",
+          "namespaceConfigRequired": "企業插件服務暫時無法使用。已安裝的企業插件仍可使用。",
+          "listChanged": "企業插件目錄已變化，請重試。",
+          "organizationUnavailable": "企業插件暫時無法使用。已安裝的企業插件仍可使用。"
         },
         "securityTitle": "安裝與權限",
         "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 插件清單校驗後原子安裝。安裝前會請你確認插件的權限，安裝好後即自動開啟，可隨時在插件頁停用；更新會保留當前生效狀態，新版本權限變多時會先請你確認。",
@@ -6141,7 +6680,7 @@
             "title": "自定義插件市場指南",
             "intro": "插件市場是一個帶有清單檔案的 Git 倉庫或本地資料夾，用來分發一組 Cindy 插件。",
             "structureTitle": "目錄結構",
-            "structureBody": "市場倉庫需要一份清單檔案，以及若干插件目錄。每個插件目錄必須包含合法的 ghost.json（插件身份卡）。",
+            "structureBody": "需提供清單及含有效 ghost.json 的插件目錄",
             "structureLabelManifest": "清單",
             "structureLabelGhostCard": "插件身份卡",
             "structureLabelEntry": "插件入口",
@@ -6164,7 +6703,7 @@
         "replaceAria": "以此市場版本取代 {{name}}",
         "replaceDescription": "已安裝相同 ID 的插件；繼續安裝會切換來源。原來源的資料將隔離保留，新來源不會繼承原帳號和金鑰，需要重新連接。"
       },
-      "install": "安裝插件…",
+      "install": "從檔案安裝…",
       "empty": "還沒有安裝任何插件",
       "emptyHint": "可從插件市場安裝，或點選右上角匯入 .cindy 檔案",
       "reapproval": {
@@ -6197,14 +6736,19 @@
       "projectDisabledTag": "本專案未生效",
       "projectSwitchLockedTip": "該插件已在全域性停用；請先切回「全域性」檢視開啟",
       "projectBanner": {
-        "title": "正在配置專案「{{name}}」",
-        "desc": "開關只影響此專案：關閉的插件在該專案中不可用",
+        "title": "目前專案：{{name}}",
+        "desc": "開關僅影響此專案；安裝、更新、解除安裝與設定會套用至{{device}}。",
         "backToGlobal": "返回全域性"
       },
       "scopePicker": {
         "global": "全域性(預設)",
         "ariaLabel": "選擇插件生效範圍",
-        "browse": "選擇其它目錄…"
+        "browse": "選擇其它目錄…",
+        "management": "管理範圍",
+        "globalScope": "全域",
+        "computers": "電腦",
+        "projectScope": "專案範圍",
+        "projectsForComputer": "{{device}}上的專案"
       },
       "enableAria": "使 {{name}} 生效",
       "uninstall": "解除安裝",
@@ -6262,7 +6806,7 @@
         "installMeta": "版本 {{version}} · {{source}}",
         "updateMeta": "版本 {{from}} → {{to}} · {{source}}",
         "installDescription": "確認後才會安裝，安裝好後立即啟用，可隨時在插件頁停用或解除安裝。",
-        "updateDescription": "新版本需要更多權限，確認後才會更新；在此之前舊版本照常可用。",
+        "updateDescription": "確認後才會更新；在此之前舊版本照常可用。",
         "grantsTitle": "安裝後它將擁有：",
         "noPermissions": "這個插件沒有宣告額外權限。",
         "addedTitle": "新增或變更的權限：",
@@ -6279,7 +6823,11 @@
         "confirmInstall": "安裝",
         "confirmUpdate": "更新",
         "cancel": "取消",
-        "updateNeedsConsent": "需確認新權限"
+        "updateNeedsConsent": "需確認新權限",
+        "targetIdentity": "安裝位置：{{name}}",
+        "personalTarget": "個人",
+        "sourceChanged": "這次更新會改為本機來源。舊帳號和資料會隔離保留，需要重新連接帳號。",
+        "otherCopies": "已有 {{count}} 份同名插件；它們不會被覆蓋或停用。另裝的插件需要單獨連接帳號。"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -6296,6 +6844,11 @@
         "unknownReviewerDetail": "包裡帶有稽核宣告，但當前 Cindy 不認識這把稽核公鑰，因此不會顯示為已稽核。"
       },
       "perm": {
+        "mail": "使用郵件草稿與傳送卡片",
+        "mailDetail": "可在卡片中編輯和同步草稿，並在傳送前提供確認與撤銷倒數。",
+        "mailReader": "在應用程式內查看郵件",
+        "mailReaderHost": "在應用程式內開啟 {{host}} 的郵件連結",
+        "mailMarkRead": "開啟郵件時可將其標記為已讀",
         "grantsTitle": "安裝後它將擁有：",
         "toolsGroup": "註冊工具",
         "toolsDiffGroup": "註冊工具變化",
@@ -6320,6 +6873,10 @@
         "agentTasksRequest": "確認任務權限",
         "agentTasks": "可建立和管理本插件的 Cindy 任務",
         "agentTasksDetail": "可傳送訊息、讀取結果和停止本插件的執行，任務對你可見。沿用插件的 AI 配置，可能產生模型費用；不授予其他任務的存取權。",
+        "agentTargets": "可向專案、現有任務和夥伴投遞訊息",
+        "agentTargetsDetail": "可查看本機專案目錄、任務和夥伴的名稱與識別碼，在專案中新建任務或向現有任務、夥伴傳送文字和圖片。可能觸發 AI 執行並產生模型費用；不授予其他任務的歷史讀取、設定修改或停止權限。",
+        "agentHiddenTasks": "可建立不顯示在任務列表裡的後臺任務",
+        "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「後臺任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
         "agentErrandDetail": "建立的任務會顯示在 Cindy 任務列表中，可查看過程並繼續交流。",
         "agentSchedule": "可以請你新建自動化",
@@ -6333,14 +6890,28 @@
         "nodeResidentDetail": "插件啟用期間會一直執行；停用、更新、解除安裝或退出 Cindy 時關閉。",
         "tool": "工具「{{name}}」",
         "command": "對話指令 ${{command}}",
-        "panelLeft": "面板「{{title}}」· 停靠主對話區左側",
+        "panelLeft": "面板「{{title}}」· 顯示在側邊欄",
         "panelTab": "面板「{{title}}」· 插件頁內開啟",
-        "mainView": "可在 Cindy 側邊欄新增「{{title}}」入口",
+        "mainView": "可在 Cindy 左側導航新增「{{title}}」入口",
         "mainViewDetail": "點擊後將在插件沙箱中開啟主視圖，不會因此取得檔案、網路或憑證存取權限。",
+        "taskView": "任務頁「{{title}}」· 在任務的側邊欄開啟",
+        "taskViewDetail": "頁籤隨任務切換，在插件沙箱中開啟，不會因此取得檔案、網路或憑證存取權限。",
         "code": "可執行程式碼",
         "codeDetail": "在獨立沙箱中執行，無法訪問你的檔案與網路。",
         "resident": "常駐執行(生效後即啟動，不呼叫也保持後臺處理程序)",
         "residentDetail": "空閒時也佔用少量記憶體；停用或解除安裝後進程立即關閉。",
+        "harnessRead": "讀取 AI 執行資訊：{{name}}",
+        "harnessReadDetail": "依宣告範圍讀取能力目錄、用量或上下文統計。不包含訊息、工具參數、結果或固定指令正文。",
+        "harnessMessages": "讀取已關聯任務的訊息",
+        "harnessMessagesDetail": "可讀取已獲准任務的使用者訊息、AI 回覆及已儲存歷史，其中可能包含敏感內容。不包含固定指令或隱藏思考。",
+        "harnessToolContent": "讀取工具參數和結果",
+        "harnessToolContentDetail": "可讀取已獲准任務的工具參數和結果，其中可能包含檔案內容、命令或敏感資訊。",
+        "harnessEvents": "旁聽 AI 執行動態：{{name}}",
+        "harnessEventsDetail": "依宣告範圍接收執行事件。訊息及工具正文須另行批准；事件可能有缺漏，不能作為完整歷史。",
+        "harnessHooks": "可阻止 AI 操作：{{name}}",
+        "harnessHooksDetail": "可在支援的執行前或審批邊界阻止操作，不能代你批准或改寫參數。最多等待 1.5 秒；逾時後繼續原有審批。",
+        "harnessActions": "控制 AI 執行：{{name}}",
+        "harnessActionsDetail": "只能呼叫已接通並個別批准的執行操作。",
         "subscribeTopics": "旁聽你的任務動態(每輪往來與任務事件，不含訊息內容)",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",
         "subscribeActivityDetail": "只知道時機：思考何時開始與結束，以及 AI 何時在等你批准或等你回答。看不到思考內容、待批准的操作、涉及的命令與檔案、計劃正文、問題與你的答案，也無法代你批准。",
@@ -6354,11 +6925,13 @@
         "notify": "可彈出系統提示(螢幕頂部的輕提示)",
         "notifyDetail": "提示內容由這個插件提供，提示上會標註它的名字；自動消失，不會打斷你的操作。",
         "badge": "可在插件入口點亮未讀提醒",
-        "badgeDetail": "有新內容時，它可以在側欄插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
+        "badgeDetail": "有新內容時，它可以在左側導航的插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
         "confirm": "可彈出確認框徵求你同意",
         "confirmDetail": "它動手前可以彈一個和 Cindy 同款的確認框來問你，問句由它提供、框上會標註它的名字；同意還是取消都由你親手點，它自己點不了。同時最多一個確認框，彈得太頻會被攔下。",
         "fsWrite": "可寫入檔案(建立/修改)",
         "fsWriteDetail": "它自己的專屬資料目錄隨時可寫；當前任務的工作目錄跟隨任務的權限模式(免批模式直接寫，逐條確認模式先徵求你同意)；其它目錄每次都需要你確認。檔案始終由主機代寫，插件本身無法直接訪問你的檔案系統。",
+        "deviceSync": "在你的電腦間同步插件資料",
+        "deviceSyncDetail": "與登入同一 Cindy 帳號的其他線上電腦上的同一插件加密交換資料。合併和刪除由插件處理，不共用憑證或其他插件的資料。",
         "libraryPersist": "可使用持久作品庫(大量檔案與資料庫)",
         "libraryPersistDetail": "它會取得一個由 Cindy 管理的獨立儲存區，用來保存你的作品資料(如畫布、圖片、資料庫)，不受一般插件資料配額限制。檔案與資料庫操作全部由主機代執行，插件只能使用庫內相對路徑，無法觸碰你的其它檔案。它還可以讓 Cindy 在系統資料夾中顯示庫內檔案，或彈出系統另存為視窗由你選擇拷貝位置；取消則不會拷出任何檔案。它還可以把 PNG 點陣圖寫入系統剪貼簿；沒有確認框，會覆蓋目前剪貼簿內容。解除安裝插件不會刪除這些資料；刪除必須在 Cindy 設定中單獨確認。",
         "networkHost": "訪問網路域名 {{host}}",
@@ -6430,8 +7003,9 @@
         "locationCopied": "安裝位置已複製",
         "locationCopyFailed": "複製安裝位置失敗，請手動複製",
         "openLocation": "開啟安裝位置",
-        "panelDocked": "已停靠 · 最小寬 {{min}}px",
-        "panelNotDocked": "未停靠(佈局中暫無位置記錄)",
+        "panelInSidebar": "顯示在右側欄（所有任務中保留）",
+        "panelDismissed": "已從右側欄關閉 · 可在此處或右側欄「+」選單重新開啟",
+        "openInSidebar": "在側邊欄中開啟",
         "panelPageHosted": "從插件頁開啟 · 離開插件頁自動關閉",
         "panelNone": "這個插件不含面板",
         "customSlotTitle": "插件自定義設定區",
@@ -6440,28 +7014,12 @@
         "infoVersion": "版本",
         "updateTitle": "更新版本",
         "updateDesc": "選擇新的 .cindy 檔案原位替換；生效狀態與面板位置保持不變。",
-        "cindyPrefs": {
-          "title": "Cindy 能力",
-          "desc": "這個插件申請的每項 Cindy 代辦能力，可單獨指定用哪個模型；預設跟隨系統(自帶 Proxy)。",
-          "cap": {
-            "image.generate": "出圖",
-            "image.edit": "改圖",
-            "video.generate": "生成影片",
-            "video.edit": "圖生影片",
-            "text.oneshot": "快問快答(文字)",
-            "embed.text": "文字轉向量"
-          },
-          "defaultOption": "{{model}}(預設)",
-          "defaultOptionDeclared": "{{model}}(插件宣告)",
-          "searchPlaceholder": "搜尋模型或供應商",
-          "budgetBadge": "折扣",
-          "noModels": "暫無可用模型"
-        },
         "errandPrefs": {
-          "title": "任務設定",
-          "desc": "用於插件建立的任務。預設沿用發起任務的模型；從面板新建時使用目前的新任務選擇。已有任務保留自己的模型。權限獨立設定，預設使用一般任務的預設權限，不繼承完全存取。",
-          "legacyDesc": "用於插件建立的任務。預設沿用發起任務的模型；從面板新建時使用目前的新任務選擇。已有任務保留自己的模型。舊介面保留原有權限行為；選擇權限後依你的設定執行。",
+          "title": "模型與任務",
+          "desc": "模型用於這個插件的快問快答和它新建的任務，預設跟隨系統輔助模型；新建任務預設沿用發起任務的模型。",
+          "descModelOnly": "模型用於這個插件的快問快答，預設跟隨系統輔助模型。",
           "legacyPermission": "保留原權限設定",
+          "legacyPermissionHint": "舊介面保留原有權限行為；選擇權限後依你的設定執行。",
           "agent": "Agent",
           "model": "模型",
           "permission": "動手權限",
@@ -6470,8 +7028,8 @@
           "workdirDefault": "插件專屬資料夾(預設)",
           "workdirPick": "選擇…",
           "workdirClear": "恢復預設目錄",
-          "sourceDefault": "跟隨發起任務；下方預覽面板新建模型",
-          "sourceCustom": "使用為此插件選擇的模型",
+          "followAuxiliary": "跟隨系統輔助模型 · {{model}}",
+          "followAuxiliaryUnset": "跟隨系統輔助模型",
           "restoreModel": "還原預設模型"
         },
         "toolsTitle": "Tools",
@@ -6493,19 +7051,21 @@
         "settingsUnavailableUntilRestore": "恢復插件後可繼續使用這項配置。",
         "oauthScopeStale": "當前授權未包含插件新增權限，請重新連線補齊授權。",
         "configurationTitle": "配置",
-        "sidebarEntryTitle": "側邊欄入口",
-        "showInSidebar": "顯示在側邊欄",
-        "sidebarEntryDescription": "開啟後，「{{title}}」會出現在側邊欄，顯示在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
+        "sidebarEntryTitle": "導航入口",
+        "showInSidebar": "顯示在左側導航",
+        "sidebarEntryDescription": "開啟後，「{{title}}」會出現在左側導航，和「自動化」「插件」並列。放在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
         "openTool": "檢視 Tool {{name}} 的詳情",
         "noToolDescription": "該 Tool 暫無描述。",
         "viewAllTools": "檢視更多",
         "collapseTools": "收起 Tool",
         "viewAllPermissions": "檢視更多",
         "permissionsDialogDescription": "該插件申請的全部 {{count}} 項權限",
-        "closeDialog": "關閉彈窗"
+        "closeDialog": "關閉彈窗",
+        "resetPlacement": "恢復預設位置"
       },
       "contents": {
         "mainView": "主視圖",
+        "taskView": "任務頁",
         "panel": "面板",
         "settingsUi": "自定義設定介面",
         "code": "可執行程式碼",
@@ -6524,6 +7084,25 @@
         "slotWorkspace": "工作區任務"
       },
       "commandPaletteTag": "插件指令",
+      "commandPaletteSource": {
+        "team": "團隊共享"
+      },
+      "backgroundTasks": {
+        "title": "後臺任務",
+        "description": "本插件放在後臺執行、不顯示在任務列表裡的任務。可以開啟查看，或顯示到任務列表後照常使用。",
+        "refresh": "重新整理後臺任務",
+        "loading": "正在讀取後臺任務…",
+        "loadFailed": "未能讀取後臺任務",
+        "empty": "暫無後臺任務",
+        "statusRunning": "執行中",
+        "statusIdle": "閒置",
+        "statusArchived": "已封存",
+        "lastActive": "最後活動 {{time}}",
+        "open": "開啟任務",
+        "reveal": "顯示到任務列表",
+        "revealed": "任務已顯示到任務列表",
+        "revealFailed": "未能將任務顯示到任務列表"
+      },
       "library": {
         "title": "持久作品庫",
         "loading": "正在讀取庫資訊…",
@@ -6570,7 +7149,23 @@
         "installLocationPickedPrefix": "已選擇：",
         "installLocationChange": "更改…",
         "bindAfterInstallFailed": "自訂儲存位置設定失敗，已回退預設位置",
-        "cancel": "取消"
+        "cancel": "取消",
+        "reattachTitle": "接回這個插件以前的作品資料？",
+        "reattachDescription": "這台電腦還保留著這個插件以前安裝時的作品資料，可能來自之前從本機匯入、後來解除安裝的版本。接回後，以前的畫布和圖片會繼續出現在這次安裝的插件裡；不接回則從空白開始，以前的資料仍保留在這台電腦上。",
+        "reattachConfirm": "接回",
+        "reattachSkip": "不接回",
+        "legacyFoundBanner": "這台電腦上還有這個插件以前留下的作品資料（{{size}} · {{count}} 個檔案），目前的安裝沒有使用它。",
+        "legacyReattach": "接回以前的作品資料",
+        "legacyReattachBusy": "正在接回…",
+        "legacyReattachConfirmTitle": "接回以前的作品資料？",
+        "legacyReattachConfirmDescription": "插件會改用以前留下的作品資料。目前的作品資料會移入回收站，保留 30 天，期滿後徹底清除。",
+        "legacyReattachConfirmText": "接回",
+        "legacyReattachDone": "已接回以前的作品資料",
+        "legacyReattachFailed": "接回失敗",
+        "legacyReattachNeedsRestart": "沒能清掉這個插件的快取。請重新啟動 Cindy 後再使用這個插件。",
+        "legacyInUseBanner": "這台電腦上另一個安裝（例如本機版）還在使用這個插件以前的作品資料。解除安裝那個版本後，可以在這裡接回。",
+        "legacyFoundUnknownBanner": "這台電腦上有一份可能是這個插件以前留下的作品資料（{{size}} · {{count}} 個檔案），沒有來源記錄，目前的安裝沒有使用它。",
+        "legacyReattachUnknownSource": "這份作品資料沒有來源記錄，可能是手動複製或用腳本搬過來的。請確認它屬於這個插件。"
       },
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
@@ -6676,11 +7271,73 @@
         "embeddedSimulator": {
           "title": "原內建模擬器已下線",
           "description": "Cindy 已移除原內建模擬器。",
-          "replacementName": "Baguette 模擬器",
-          "replacementDescription": "在 Cindy 側邊欄查看即時畫面、操作裝置、執行 App 和擷取畫面。",
+          "replacementName": "裝置模擬器",
+          "replacementDescription": "在 Cindy 側邊欄查看即時畫面、操作裝置、執行 App 和擷取畫面。基於開源專案 Baguette。",
           "requirements": "需要 Apple Silicon Mac、macOS 15 或更新版本及完整 Xcode。",
-          "dataNotice": "原模擬器的裝置和應用程式資料不會被刪除。安裝 Baguette 不會自動遷移裝置、App 或登入狀態。"
+          "dataNotice": "原模擬器的裝置和應用程式資料不會被刪除。安裝新的裝置模擬器不會自動遷移裝置、App 或登入狀態。"
         }
+      },
+      "remote": {
+        "device": "管理電腦",
+        "thisComputer": "目前電腦",
+        "offline": "離線",
+        "confirmOn": "在 {{device}} 上操作 {{name}}",
+        "targetOnly": "設定儲存在 {{device}}。",
+        "hostPreferencesUnavailable": "這台電腦暫不支援遠端編輯模型、任務與側欄偏好，請在{{device}}上配置。",
+        "taskWorkdirBoundary": "工作目錄沿用目標電腦的設定，請在目標電腦修改。",
+        "configurationLoading": "正在讀取設定…",
+        "configurationReadFailed": "未能讀取設定。",
+        "refreshConfiguration": "重新整理設定",
+        "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
+        "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",
+        "offlineNotice": "「{{device}}」已離線，暫時無法管理。連線恢復後即可繼續。",
+        "managingTarget": "正在管理「{{device}}」",
+        "managingDescription": "變更將儲存在這台電腦上。",
+        "viewingTarget": "「{{device}}」的已安裝插件",
+        "unsupported": "「{{device}}」的 Cindy 版本尚不支援遠端管理。目前可檢視它的已安裝插件；如需安裝、升級、解除安裝、啟用、停用、設定或專案管理，請先在該電腦更新 Cindy。",
+        "refresh": "重新整理插件",
+        "instanceId": "插件執行個體",
+        "detailLoading": "正在讀取插件詳情…",
+        "detailReadFailed": "未能讀取插件詳情",
+        "refreshDetail": "重新整理詳情",
+        "detailUnavailable": "該電腦未提供完整的插件詳情，此處僅顯示已傳回的資訊。",
+        "retry": "重試",
+        "readFailed": "無法讀取插件，請重試。",
+        "unknown": "操作結果尚未確認，可查詢原操作結果。",
+        "success": "目標電腦已完成操作。",
+        "cancelled": "已取消。",
+        "actionFailed": "操作失敗，請重新整理列表後重試。",
+        "changed": "插件已變更，請重新整理後重試。",
+        "uninstallOn": "從 {{device}} 卸載 {{name}}？",
+        "uninstall": "卸載",
+        "empty": "這台電腦尚未安裝插件。",
+        "marketUnavailable": "目標電腦的插件市場暫時無法使用。",
+        "personalInstall": "個人安裝",
+        "loading": "正在讀取插件…",
+        "installDestination": "安裝到：{{device}}",
+        "projectsUnsupported": "目標電腦尚不支援專案管理，請更新該電腦上的 Cindy。",
+        "noProjects": "這台電腦還沒有可選專案。",
+        "projectLoading": "正在讀取專案開關…",
+        "projectReadFailed": "專案開關讀取失敗，請重試。"
+      },
+      "usage": {
+        "title": "個人呼叫",
+        "explanationLabel": "統計口徑",
+        "explanation": "僅統計本機目前帳戶成功派發的工具呼叫，失敗、逾時或取消也計入。近 7 天為滾動 168 小時；面板、Skill 與除錯操作不計入。記錄預設保留，清除後重新開始。",
+        "clear": "清除記錄",
+        "loading": "正在讀取記錄…",
+        "unavailable": "個人記錄暫時無法使用",
+        "retry": "重試",
+        "lastUsed": "最近呼叫",
+        "last7Days": "近 7 日呼叫",
+        "never": "尚未呼叫",
+        "clearTitle": "清除此插件的使用記錄？",
+        "clearDescription": "清除本機目前帳戶的呼叫記錄及任務關聯，後續呼叫重新開始記錄。已共享的累計統計不會撤回。",
+        "downloadExplanation": "累計下載請求次數：成功取得安裝包下載位址後計一次，包括更新、重新安裝及重新取得位址的重試；不代表成功安裝次數。",
+        "clearAction": "清除",
+        "downloadsValue": "{{value}} 下載",
+        "usesValue": "{{value}} 使用",
+        "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。下方個人呼叫僅統計本機目前帳戶，口徑不同。"
       }
     },
     "mcp": {
@@ -6923,7 +7580,7 @@
       "create": {
         "title": "建立個人版本",
         "cancel": "取消",
-        "description": "說說你想讓 Cindy 做哪些改變。接下來會開啟製作任務，使用統一流程檢查環境、準備原始碼，再繼續製作。",
+        "description": "說說你想讓 Cindy 做哪些改變",
         "requestLabel": "你想做哪些改變？",
         "requestHint": "最多 {{max}} 字。提交後可在任務中繼續查看進度，離開設定頁不會停止準備。",
         "placeholder": "例如：在任務清單增加一個只看未完成任務的篩選按鈕。",
@@ -7601,8 +8258,8 @@
       "coverage": "按天統計從 {{date}} 起",
       "col": {
         "task": "任務",
-        "model": "模型",
-        "provider": "供應商",
+        "model": "目前模型",
+        "provider": "目前供應商",
         "tokens": "累計 token",
         "context": "上下文佔用",
         "lastActive": "最後活躍"
@@ -7677,19 +8334,7 @@
     "collapsePanel": "收起",
     "expandPanel": "展開"
   },
-  "panelChrome": {
-    "maximizeAria": "撐滿內容區",
-    "restoreAria": "還原面板大小",
-    "detachAria": "在獨立視窗中開啟",
-    "minimizeAria": "最小化面板",
-    "closeAria": "關閉面板並停用插件"
-  },
   "ghostPanel": {
-    "disableConfirm": {
-      "title": "停用「{{name}}」？",
-      "body": "關閉這個面板會停用插件並暫停其能力。你可以隨時在側邊欄「插件」中重新啟用。",
-      "confirm": "停用"
-    },
     "externalLinkConfirm": {
       "title": "是否要讓 Cindy 開啟外部網站",
       "message": "是否要讓 Cindy 開啟外部網站",
@@ -7697,19 +8342,11 @@
       "cancel": "取消"
     }
   },
-  "ghostPanelWindow": {
-    "mergeBack": "返回主視窗",
-    "unavailable": "該插件面板當前不可用"
-  },
-  "ghostPanelBubble": {
-    "restoreAria": "恢復 {{name}} 面板",
-    "stackExpandAria": "已收起 {{count}} 個插件面板，點選展開",
-    "stackCollapseAria": "收攏插件面板列表"
-  },
-  "ghostPanelRestore": {
-    "single": "恢復 {{name}}",
-    "multiple": "已收起的插件面板",
-    "multipleAria": "已收起 {{count}} 個插件面板，點擊選擇要恢復的面板"
+  "ghostMainView": {
+    "openInSidebar": "在側邊欄中開啟",
+    "openInPage": "在頁面中開啟",
+    "openInWindow": "在獨立視窗中開啟",
+    "resetPlacement": "恢復預設位置"
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
@@ -7723,16 +8360,33 @@
       "mergeBack": "合併回主視窗",
       "followPlaceholder": "側邊欄跟隨主視窗的當前任務"
     },
+    "tabWindow": {
+      "title": "側邊欄標籤",
+      "mergeBack": "合併回側邊欄",
+      "loading": "正在載入…",
+      "closed": "該標籤已關閉"
+    },
     "emptyTitle": "預留區域",
     "emptyDesc": "右側邊欄內容將在後續迭代加入",
     "tabs": {
       "addAria": "新增標籤",
       "addFailed": "新增標籤失敗",
       "tabCloseAria": "關閉標籤",
+      "pinnedAria": "全域頁籤，切換任務時保留",
       "menu": {
         "addLabel": "新增標籤",
         "comingSoon": "即將支援",
-        "alreadyOpen": "已開啟"
+        "alreadyOpen": "已開啟",
+        "pluginsLabel": "插件"
+      },
+      "descriptions": {
+        "fileBrowser": "瀏覽工作目錄中的檔案",
+        "review": "查看程式碼變更與審查結果",
+        "subagents": "查看子任務的進度與結果",
+        "backgroundTasks": "追蹤背景執行的進度與輸出",
+        "sideChat": "根據主任務的上下文獨立提問",
+        "browser": "在面板中瀏覽網頁",
+        "terminal": "執行命令，查看輸出"
       },
       "kinds": {
         "fileBrowser": "檔案瀏覽器",
@@ -7744,40 +8398,39 @@
         "resourceUsage": "資源監視器",
         "collaboration": "協同",
         "unknown": "未知標籤頁",
-        "ghostPanel": "插件面板"
+        "ghostPanel": "插件面板",
+        "pluginView": "插件視圖",
+        "pluginTask": "插件任務頁"
       },
       "controls": {
         "showAria": "顯示側欄",
         "maximizeAria": "最大化側欄",
         "restoreAria": "退出最大化",
         "closeAria": "關閉側欄",
-        "detachAria": "在新視窗中開啟側邊欄"
+        "detachAria": "在獨立視窗中開啟目前標籤"
       },
       "contextMenu": {
         "close": "關閉",
         "closeOthers": "關閉其他",
-        "closeAll": "關閉所有"
+        "closeAll": "關閉所有",
+        "openInWindow": "在獨立視窗中開啟",
+        "moveTo": "移到{{target}}",
+        "moveToWindow": "移到視窗："
       },
       "empty": {
         "eyebrow": "右側欄",
         "title": "開始一個面板",
-        "desc": "在右側開啟檔案、審查、資源監視器、內建瀏覽器或終端，與左側對話並行工作。",
-        "openFile": "開啟檔案",
-        "fileSub": "檔案",
-        "openReview": "開啟審查",
-        "reviewSub": "審查",
-        "openSubagents": "開啟 Subagent",
-        "subagentsSub": "可持續回看的子任務",
-        "openBackgroundTasks": "開啟後臺任務",
-        "backgroundTasksSub": "後臺任務",
+        "desc": "在右側追問、查看檔案或使用工具，與主任務並行工作。",
         "openResourceUsage": "開啟資源監視器",
-        "openBrowser": "開啟瀏覽器",
-        "browserSub": "瀏覽器",
-        "openTerminal": "開啟終端",
-        "terminalSub": "終端",
-        "addMoreHint": "可透過頂部 + 按鈕選擇更多面板型別"
+        "addMoreHint": "也可透過頂部 + 按鈕選擇面板"
       },
       "placeholderHint": "{{kind}} — 內容將在後續階段加入"
+    },
+    "tabGroups": {
+      "left": "左側",
+      "right": "右側欄",
+      "top": "上方",
+      "bottom": "下方"
     },
     "fileBrowser": {
       "noWorkdir": "當前任務未關聯本地工作目錄，檔案瀏覽器不可用",
@@ -7808,7 +8461,7 @@
       "screenshotFailed": "截圖失敗",
       "comment": "頁面評論",
       "exitCommentMode": "退出評論模式",
-      "commentModeHint": "點選元素或 Shift 拖拽框選區域 · Cmd/Ctrl+點選直接新增 · Esc 退出",
+      "commentModeHint": "點選元素 · Shift 拖拽框選 · Cmd/Ctrl+點選直接新增 · Esc 退出",
       "commentPlaceholder": "描述這裡需要怎麼改…",
       "commentSubmit": "新增評論",
       "commentCancel": "取消",
@@ -8324,7 +8977,8 @@
       "terminateConfirmTitle": "終止 {{name}} 處理程序？",
       "terminateConfirmDescription": "將強制終止該 Agent 處理程序，使用該處理程序的所有任務都會中斷；之後在任一受影響任務裡繼續發訊息，即可按需重新啟動 Agent。",
       "terminated": "已終止 {{name}} 處理程序",
-      "terminateFailed": "無法終止該處理程序，它可能已自行退出；列表會隨下一次取樣自動更新"
+      "terminateFailed": "無法終止該處理程序，它可能已自行退出；列表會隨下一次取樣自動更新",
+      "sessionDetail": "任務：{{title}}"
     }
   },
   "update": {
@@ -8344,6 +8998,23 @@
       "preparingAria": "正在準備新版本，請稍候",
       "confirmTitle": "仍有任務在執行中",
       "confirmBusyHint": "重啟會中斷執行中的任務",
+      "confirmBusyActivities": "重啟會中斷{{activities}}。",
+      "activityJoiner": "、",
+      "activityJoinerPair": "、",
+      "activityJoinerLast": "、",
+      "activityNameJoiner": "、",
+      "activityNameJoinerPair": "、",
+      "activityNameJoinerLast": "、",
+      "activity": {
+        "companion": "夥伴的回覆",
+        "companionOne": "夥伴 {{names}} 的回覆",
+        "companionOther": "夥伴 {{names}} 的回覆",
+        "conversation": "正在進行的對話",
+        "backgroundCommand": "背景命令",
+        "scheduledTask": "定時任務",
+        "generation": "生成任務",
+        "subtask": "子任務"
+      },
       "confirmButton": "仍要重啟應用",
       "cancel": "取消",
       "confirmTooltip": "仍有任務在執行中，重啟會中斷它",
@@ -8525,108 +9196,69 @@
   },
   "bots": {
     "workbench": {
-      "title": "工作台",
-      "open": "打開工作台",
-      "emptyTitle": "交給{{name}}一個專案",
-      "emptyDescription": "把電腦裡已有的工作交給{{name}}接著做。它會先看一遍專案的文件、最近的提交和 PR、做過的任務，挑出沒做完和值得做的，再問你接著做哪件。",
-      "scanning": "正在尋找電腦上的專案…",
-      "noProjects": "還沒找到有任務的專案，可以選一個資料夾交給{{name}}。",
-      "pickFolder": "選其他資料夾",
-      "cancelAdd": "取消",
-      "projectTasks_other": "{{count}} 個任務",
-      "projectAutomations_other": "{{count}} 個自動化",
-      "sourceCindy_other": "Cindy {{count}} 個任務",
-      "sourceClaude_other": "Claude Code {{count}} 個任務",
-      "sourceCodex_other": "Codex {{count}} 個任務",
-      "moreProjects": "還有 {{count}} 個",
-      "hideMoreProjects": "收起",
-      "grant": "{{name}}可以查看、繼續和停止 {{project}} 裡的{{scope}}，也會替你開新任務。",
-      "grantTasks_other": "{{count}} 個任務",
-      "grantCindy_other": "Cindy 的 {{count}} 個任務",
-      "grantClaude_other": "Claude Code 的 {{count}} 個任務",
-      "grantCodex_other": "Codex 的 {{count}} 個任務",
-      "grantAutomations_other": "{{count}} 個自動化",
-      "grantEverything": "任務和自動化",
-      "handOver": "交給{{name}}",
-      "handoverMessage": "把 {{project}} 交給你了。",
-      "addProject": "再交給{{name}}一個專案",
-      "removeProject": "不再交給{{name}}：{{project}}",
-      "dirMissing": "找不到這個資料夾",
-      "dirUnavailable": "這個資料夾打不開，換一個試試",
-      "tooManyDirs": "最多交給{{name}} {{count}} 個專案",
-      "sendFailed": "沒能傳給{{name}}，請重試",
-      "tasksEmpty": "還沒有需要接著做的任務。",
-      "understanding": "{{name}}正在了解 {{project}}…",
-      "untitled": "未命名任務",
-      "continueMessage": "接著做「{{title}}」：{{text}}",
-      "verdict": {
-        "unfinished": "沒做完",
-        "idea": "聊過沒下文"
+      "followingMark": "{{names}}在跟進這個任務"
+    },
+    "glance": {
+      "open": "{{name}}的近況",
+      "dueUnseen": "有待辦到期",
+      "computers": "電腦",
+      "runningHere": "正在這台上執行",
+      "online": "線上",
+      "offline": "離線",
+      "current": "目前",
+      "offlineCount_other": "離線 {{count}} 台",
+      "todos": "待辦",
+      "showMore": "顯示更多",
+      "showLess": "收起",
+      "doneCount_other": "已完成 {{count}}",
+      "delete": "刪除",
+      "deleted": "已刪除，同一件事之後不再記錄",
+      "undo": "復原",
+      "undoFailed": "無法復原，請重試",
+      "deleteFailed": "無法刪除，請重試",
+      "check": "幫我查查",
+      "checkMeta": "在已連接的郵件和訊息裡找新待辦",
+      "checkPrompt": "幫我查查已連接的信箱、訊息等來源裡，有沒有需要我處理的新事項，有就記成待辦。",
+      "checkFailed": "沒能傳送，請重試",
+      "dailyCheck": "每天幫我查一次",
+      "dailyCheckMeta": "工作日 9:00，沒有新待辦不打擾",
+      "dailyCheckFailed": "沒能儲存，請重試",
+      "outputs": "輸出內容",
+      "outputMeta": "{{time}} · {{task}}",
+      "openFailed": "無法開啟檔案",
+      "source": {
+        "conversation": "你交代的",
+        "mail": "來自郵件",
+        "feishu": "來自飛書",
+        "github": "來自 GitHub",
+        "community": "來自社群",
+        "task": "來自任務"
+      }
+    },
+    "autonomy": {
+      "title": "跟進我的任務",
+      "descriptionOn": "{{name}}會在任務有變化時查看摘要並提醒你。",
+      "movedFrom": "已從{{name}}移到這裡",
+      "heldBy": "現在由{{name}}負責，打開就移到這裡。",
+      "routineScopeHint": "把你自己建立的任務也交給我跟進；下方內建跟進負責回應這些任務的變化。",
+      "heldByNobody": "尚未開啟",
+      "restoreDefault": "恢復預設（{{name}}）",
+      "saveFailed": "沒能儲存，請重試",
+      "turnOff": {
+        "title": "關閉自動跟進所有任務？",
+        "description": "關閉後沒有夥伴統一跟進所有任務。",
+        "confirm": "關閉",
+        "cancel": "取消"
       },
-      "detail": {
-        "back": "返回工作台",
-        "stop": "停止這件任務",
-        "openInTasks": "在任務頁開啟",
-        "placeholder": "補一句，讓{{name}}接著做…",
-        "send": "傳送",
-        "sent": "已經告訴{{name}}了",
-        "judgment": "{{name}}的判斷",
-        "empty": "還沒有可顯示的內容。",
-        "loadFailed": "讀不到這件任務的記錄。",
-        "truncated": "只顯示最近的內容",
-        "ref": "參考",
-        "noRef": "沒有附參考連結。",
-        "openPr": "在 GitHub 開啟 PR #{{number}}",
-        "refBlocked": "這個路徑不在交給夥伴的專案裡，沒有開啟。"
+      "allowSchedulerFollow": {
+        "title": "它開的任務也交給{{name}}跟進",
+        "description": "預設{{scheduler}}只看不跟。打開後，{{name}}開的任務沒做完時，{{scheduler}}也會接著跟進。"
       },
-      "openTask": "開啟「{{title}}」（{{state}}）",
-      "outputs": "產出",
-      "outputsEmpty": "{{name}}做出的檔案會放在這裡。",
-      "state": {
-        "running": "在做",
-        "waiting": "等你",
-        "queued": "排隊",
-        "stopped": "停著",
-        "automation": "自動化",
-        "done": "做完"
-      },
-      "group": {
-        "waiting": "等你",
-        "running": "在做",
-        "todo": "待做",
-        "done": "做完"
-      },
-      "followUp": {
-        "label": "跟進",
-        "message": "跟進「{{title}}」",
-        "aria": "跟進「{{title}}」"
-      },
-      "followingMark": "{{names}}在跟進這個任務",
-      "olderCount_other": "更早的 {{count}} 個",
-      "kind": {
-        "existing": "原有任務",
-        "delegated": "你交代的",
-        "claudeCode": "來自 Claude Code",
-        "codex": "來自 Codex",
-        "pi": "來自 Pi",
-        "pr": "PR #{{number}}",
-        "issue": "Issue #{{number}}",
-        "idea": "建議",
-        "automationPlain": "自動化"
-      },
-      "cycle": {
-        "manual": "手動",
-        "once": "一次",
-        "event": "事件觸發"
-      },
-      "line": {
-        "waiting": "等你回覆",
-        "queued": "排隊中",
-        "interrupted": "上次沒跑完",
-        "errored": "上次出錯了",
-        "failed": "沒做完",
-        "paused": "已暫停",
-        "disabled": "已停用"
+      "consent": "開啟後，我會讀取這台電腦上你建立的任務摘要，分析進度並提醒你重要變化。這會使用模型額度，你可以隨時關閉。",
+      "invitation": {
+        "title": "要我幫你跟進任務嗎？",
+        "start": "開始跟進",
+        "notNow": "暫不開啟"
       }
     },
     "remoteSettings": {
@@ -8636,7 +9268,8 @@
       "conflict": "設定已在另一台裝置上變更，請重新讀取後再儲存。",
       "unsupported": "請更新另一台裝置上的 Cindy 以編輯這些設定。",
       "discardDescription": "重新讀取將放棄尚未儲存的設定。",
-      "leaveDescription": "離開後會放棄尚未儲存的設定。"
+      "leaveDescription": "離開後會放棄尚未儲存的設定。",
+      "finishOnHost": "請在「{{device}}」上完成。"
     },
     "devicePicker": {
       "local": "本機",
@@ -8677,7 +9310,9 @@
     "list": {
       "createMenu": "新增",
       "createTeammate": "新增夥伴",
+      "joinWithLink": "輸入邀請連結…",
       "startChat": "開始對話",
+      "selectChat": "選擇夥伴或群聊，開始對話",
       "typing": "正在輸入…",
       "unread": "{{count}} 則未讀訊息",
       "search": "搜尋夥伴或群聊",
@@ -8692,7 +9327,11 @@
       "pinned": "已置頂",
       "needsAttention": "需要處理",
       "duplicate": "複製夥伴",
-      "moreActions": "{{name}} 的更多操作"
+      "moreActions": "{{name}} 的更多操作",
+      "sectionExpand": "展開夥伴",
+      "showLess": "收起",
+      "sectionCollapse": "收起夥伴",
+      "noResults": "找不到符合的夥伴或群組"
     },
     "cancel": "取消",
     "save": "儲存",
@@ -8780,6 +9419,7 @@
       "title": "記憶",
       "enabled": "開啟記憶",
       "disabledHint": "已關閉，不會讀取或儲存記憶",
+      "aboutMe": "關於我的記憶",
       "search": "搜尋記憶",
       "empty": "還沒有記憶",
       "noResults": "找不到相關記憶",
@@ -8831,11 +9471,19 @@
       "composerPlaceholderLatin": "跟 {{name}} 說點什麼…"
     },
     "globalSettings": {
-      "restoreHint": "恢復預設後將跟隨用戶端預設模型設定，個別夥伴的自訂模型保持不變。",
+      "restoreHint": "恢復夥伴推薦模型，個別夥伴的自訂模型保持不變。",
       "restoreFailed": "恢復預設失敗，請重試。",
+      "defaultModel": "預設模型",
+      "defaultModelHint": "僅用於夥伴，與新任務的模型選擇獨立。個別夥伴可以另選。",
       "title": "伙伴",
       "description": "和伙伴有關的通用設定。單個伙伴的設定在{{pronoun}}自己的頁面裡。",
-      "rosterNote": "預置陣容會隨版本更新。"
+      "rosterNote": "預置陣容會隨版本更新。",
+      "showReplyTarget": "顯示回覆對應的訊息",
+      "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
+    },
+    "session": {
+      "ownedByBot": "{{name}} 的背景任務",
+      "backToBot": "回到 {{name}}"
     },
     "collab": {
       "backgroundTask": "背景任務",
@@ -8870,7 +9518,21 @@
         "daysHoursMinutes": "{{d}} 天 {{h}} 小時 {{m}} 分"
       },
       "viewResult": "查看結果",
-      "noWrittenResult": "沒有文字結果。"
+      "noWrittenResult": "沒有文字結果。",
+      "addNote": "補一句",
+      "addNotePlaceholder": "補充給背景任務的話，按 Enter 傳送",
+      "addNoteSent": "已傳給背景任務",
+      "stop": "停止",
+      "lookAt": "看看",
+      "awaitingConfirm": "等你確認：{{summary}}",
+      "awaitingConfirmGeneric": "等你確認",
+      "elapsed": "已做 {{duration}}",
+      "tookTime": "用時 {{duration}}",
+      "expandResult": "展開結果",
+      "collapseResult": "收起結果",
+      "expandDetails": "展開詳情",
+      "collapseDetails": "收起詳情",
+      "messageSentWithText": "已告訴背景任務：「{{text}}」"
     },
     "directMessage": {
       "sentTo": "已傳訊息給 {{name}}",
@@ -8881,13 +9543,47 @@
       "close": "關閉對話",
       "unavailable": "這則夥伴對話已無法使用。",
       "empty": "還沒有可查看的訊息。",
-      "limitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務"
+      "limitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務",
+      "sentHeader": "傳給 {{name}}",
+      "receivedHeader": "{{name}} 傳來",
+      "expandThread": "展開往來",
+      "exchangeCountShort": "{{count}} 則往來",
+      "exchangeCountShort_one": "{{count}} 則往來",
+      "exchangeCountShort_other": "{{count}} 則往來",
+      "expand": "展開",
+      "collapse": "收起",
+      "fullThread": "完整對話",
+      "threadClosed": "本輪夥伴對話已結束 · 僅供查看"
     },
     "groupChat": {
       "migrationPending": "部分舊記錄尚未上傳完成，將自動重試。目前群聊可繼續使用。",
       "memberSeparator": "、",
-      "memberCount_one": "{{count}} 位夥伴",
-      "memberCount_other": "{{count}} 位夥伴",
+      "ownerOf": "{{name}} 的主人",
+      "elapsed": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分鐘",
+        "hours": "{{hours}} 小時 {{minutes}} 分"
+      },
+      "progress": {
+        "step": "第 {{step}}/{{total}} 步",
+        "speaking": "{{name}} 正在說…",
+        "elapsed": "已做 {{time}}",
+        "viewProcess": "看過程",
+        "hideProcess": "收起過程",
+        "stop": "停止",
+        "stopping": "正在停止…",
+        "queued": "等待開始…",
+        "stopMine": "停止我發起的",
+        "stopAll": "全部停止",
+        "stopAllHint": "包括其他人發起的"
+      },
+      "header": {
+        "stepRunning": "{{name}} 正在做第 {{step}} 步",
+        "speaking": "{{name}} 正在說…",
+        "planning": "{{name}} 正在安排…"
+      },
+      "memberCount_one": "{{count}} 位成員",
+      "memberCount_other": "{{count}} 位成員",
       "nameLabel": "群聊名稱",
       "waitingConfirm": "{{name}}在等你確認",
       "loadFailedTitle": "無法載入這個群聊",
@@ -8899,6 +9595,8 @@
         "empty": "還沒有訊息",
         "preview": "{{name}}：{{text}}",
         "previewYou": "你：{{text}}",
+        "sharedReplyYou": "你貼回了一則話題回覆",
+        "sharedReply": "{{name}} 貼回了一則話題回覆",
         "waiting": "在等你確認",
         "planProposed": "{{name}}：安排好了，等你開始",
         "planProposedAnonymous": "安排好了，等你開始",
@@ -8942,16 +9640,33 @@
         "more": "更多操作",
         "division": "安排分工",
         "divisionDescription": "讓負責人先分好工，夥伴們一步步做",
+        "divisionDescriptionSteps": "按你寫的步驟，或由負責人來分；夥伴們一步步做",
         "divisionBusy": "正在分工，做完或停止後才能安排新的",
         "divisionTag": "分工",
         "removeDivision": "移除分工",
         "placeholderDivision": "說說要做成什麼，負責人會先分好工…",
+        "placeholderDivisionSteps": "寫好誰做什麼（@A 出方案，@B 實作），或只說目標讓負責人來分…",
         "placeholderPlanProposed": "想換人或改步驟，直接說…",
         "placeholderPlanWaiting": "想讓{{name}}改改，直接說…",
         "placeholderPlanRunning": "說的話會帶給正在做的{{name}}…",
+        "placeholderQueueRunning": "說的話會帶給正在說的{{name}}…",
         "tooManyAttachments": "附件太多了，一則訊息最多 {{max}} 個",
         "attachmentsFailed": "附件沒能送出，請檢查檔案是否還在，或移除後重試",
         "folderNotSupported": "資料夾不能作為附件，請選擇其中的檔案"
+      },
+      "outbox": {
+        "sending": "傳送中…",
+        "failed": "沒有送出",
+        "edit": "編輯",
+        "editBlocked": "輸入框裡還有內容，先送出或清空，再編輯這則訊息"
+      },
+      "quote": {
+        "replyingTo": "引用 {{name}}",
+        "remove": "取消引用",
+        "jumpLabel": "查看 {{name}} 的原訊息：{{summary}}",
+        "deleted": "原訊息已刪除",
+        "unavailable": "原訊息不在可查看的紀錄裡",
+        "attachments": "{{name}} 等 {{total}} 個附件"
       },
       "timeline": {
         "loadEarlier": "查看更早的訊息",
@@ -8959,6 +9674,8 @@
         "emptyTitle": "群聊裡還沒有訊息",
         "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
         "roundEnded": "夥伴們說完了",
+        "stepTag": "第 {{count}} 步",
+        "sending": "傳送中",
         "continue": "繼續討論",
         "continueFailed": "沒能繼續討論，請再試一次",
         "nextStep": "下一步：",
@@ -8970,7 +9687,8 @@
         "endPlan": "結束分工",
         "planDone_one": "{{count}} 步都做完了",
         "planDone_other": "{{count}} 步都做完了",
-        "planDoneGeneric": "分工做完了"
+        "planDoneGeneric": "分工做完了",
+        "endTalk": "結束"
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
@@ -9018,7 +9736,7 @@
         "speakingMode": "發言方式",
         "speakingModeAuto": "自動",
         "speakingModeSequential": "一律輪流",
-        "speakingModeAutoNote": "沒有 @ 人或 @所有人時，第一輪大家同時想，之後輪流接話；@ 了夥伴就按 @ 的先後輪流。",
+        "speakingModeAutoNote": "未 @ 人或 @所有人時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
         "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
         "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次",
         "setOrganizer": "設為負責人",
@@ -9031,6 +9749,9 @@
         "projectDirChange": "更換",
         "projectDirClear": "清除",
         "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+        "handoff": "分工交接",
+        "autoContinueNote": "開著時，你在這個群聊發起的分工做完一步就自動交給下一位；關著時每一步都等你點「繼續」。只在這台電腦上生效。",
+        "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試"
       },
       "errors": {
@@ -9051,7 +9772,11 @@
         "requestTimeout": "還未確認操作結果，請重新整理查看後再重試。",
         "permissionDenied": "你沒有執行此操作的群管理權限。",
         "serviceError": "群聊服務處理失敗，請稍後重試。",
-        "groupArchived": "本群已封存，無法執行此操作。"
+        "groupArchived": "本群已封存，無法執行此操作。",
+        "quoteUnavailable": "引用的訊息已刪除或無法查看，已取消引用，請再傳送一次",
+        "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
+        "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
+        "lastOwner": "請先轉讓群主或解散群聊，再退出。"
       },
       "organizer": "負責人",
       "plan": {
@@ -9060,8 +9785,10 @@
         "missing": "這個安排已經讀不到了",
         "start": "開始",
         "dismiss": "不用了",
-        "editHint": "想換人或改步驟，直接說",
+        "editHint": "點某一步可以換人",
         "pauseNote": "每做完一步會停下來，等你點「繼續」。",
+        "autoContinue": "做完一步自動交給下一位",
+        "autoNote": "做完一步會自動交給下一位。",
         "superseded": "已更新",
         "dismissed": "不用了",
         "stopped": "已停止",
@@ -9074,22 +9801,103 @@
         "keepOneStep": "至少留一步",
         "startFailed": "沒能開始分工，請再試一次",
         "dismissFailed": "沒能結束這個安排，請再試一次",
-        "editFailed": "這一步沒改成，請再試一次"
+        "editFailed": "這一步沒改成，請再試一次",
+        "talkTurn": "說說看法",
+        "stepSpeaking": "正在說",
+        "stepSpoken": "說完了",
+        "allTurns_one": "共 {{count}} 位",
+        "allTurns_other": "共 {{count}} 位",
+        "foldTurns": "收起"
       },
       "speaking": {
         "planning": "正在安排…"
       },
+      "task": {
+        "label": "任務",
+        "state": {
+          "started": "進行中",
+          "waiting": "等你確認",
+          "completed": "已完成",
+          "failed": "失敗了",
+          "cancelled": "已取消",
+          "timed-out": "已逾時"
+        }
+      },
       "files": {
-        "openFailed": "檔案沒能開啟，可能已被移動或刪除"
+        "openFailed": "檔案沒能開啟，可能已被移動或刪除",
+        "untitled": "附件",
+        "loading": "載入中…",
+        "unavailable": "暫時無法載入"
+      },
+      "addFromChat": {
+        "triggerFor": "將 {{name}} 新增至群聊",
+        "addTo": "將 {{name}} 新增至",
+        "newGroup": "發起群聊…",
+        "existingGroup": "新增至現有群聊",
+        "added": "已將 {{name}} 加入「{{group}}」",
+        "openGroup": "開啟群組",
+        "unavailable": "{{name}} 暫時無法加入群聊"
       },
       "server": {
-        "reply": "回覆",
+        "quoteReply": "引用回覆",
+        "startTopic": "建立話題",
+        "openTopic": "查看話題 · {{count}} 則回覆",
+        "topic": "話題",
         "replies": "回覆",
-        "replyCount": "{{count}} 則回覆",
+        "replyCount_one": "{{count}} 則回覆",
+        "replyCount_other": "{{count}} 則回覆",
+        "thread": {
+          "open_one": "開啟話題，{{count}} 則回覆",
+          "open_other": "開啟話題，{{count}} 則回覆",
+          "lastReply": "最後回覆 {{time}}",
+          "emptyReply": "沒有文字內容",
+          "image": "圖片",
+          "file": "檔案",
+          "attachmentsSummary": "{{label}} · {{name}} 等 {{count}} 個附件",
+          "alsoSent": "回覆了話題，也發到了群聊",
+          "sharedReplyFrom": "貼回了 {{name}} 的話題回覆",
+          "sharedReply": "貼回了一則話題回覆",
+          "edited": "已編輯",
+          "sourceUnavailable": "原回覆已刪除，或你無權查看。",
+          "viewThread": "查看話題",
+          "viewInMain": "在群聊中查看",
+          "postToMain": "貼回群聊",
+          "postedBySelf": "你已貼到群聊",
+          "postedToMain": "已貼到群聊",
+          "alsoSend": "同時發到群聊",
+          "alsoSendFailed_one": "回覆已發到話題，但沒能同時發到群聊。",
+          "alsoSendFailed_other": "有 {{count}} 則回覆已發到話題，但沒能同時發到群聊。",
+          "loadingSource": "正在讀取原回覆…",
+          "shareNotLoaded": "這則貼回在更早的群聊記錄裡，往上載入後可以看到。",
+          "retryPost": "重新發到群聊",
+          "alreadyPosted": "你已經把這則回覆貼到群聊了",
+          "shareUnavailable": "這則回覆已刪除或無法查看，不能貼到群聊。",
+          "newReplies_one": "{{count}} 則新回覆",
+          "newReplies_other": "{{count}} 則新回覆",
+          "mentionedYou": "@你",
+          "hintOne": "話題有新回覆",
+          "hintMany_one": "{{count}} 個話題有新回覆",
+          "hintMany_other": "{{count}} 個話題有新回覆",
+          "hintMentioned": "有人提到你",
+          "hintDismiss": "先不看",
+          "follow": "關注",
+          "following": "已關注",
+          "followTip": "關注後，有新回覆時在群聊右下角提示你",
+          "unfollowTip": "取消關注後，只在有人提到你時提示",
+          "listLabel": "這個群聊裡的話題",
+          "listNews": "有新回覆",
+          "listOthers": "其他話題",
+          "newSeparator": "新回覆"
+        },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
         "addReaction": "新增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人回應",
+        "reactionWho": "{{emoji}} · {{count}} 人回應：{{names}}",
+        "reactorSelf": "你",
+        "reactorFormer": "{{name}}（已不在群組中）",
+        "reactorsUnavailable_one": "另有 {{count}} 位成員的資訊暫不可用",
+        "reactorsUnavailable_other": "另有 {{count}} 位成員的資訊暫不可用",
         "invite": "邀請加入群聊",
         "join": "加入群聊",
         "inviteDescription": "對方接受邀請後會成為群組成員，可閱讀群聊記錄。",
@@ -9108,8 +9916,11 @@
         "copied": "已複製邀請連結",
         "createLink": "產生邀請連結",
         "accept": "接受並加入",
-        "openGroup": "開啟群組",
         "previewInvite": "查看邀請",
+        "linkDescription": "確認後你會成為群組成員，可閱讀群聊記錄。",
+        "loadingInvite": "正在讀取邀請…",
+        "retryInvite": "重新讀取邀請",
+        "malformedInvite": "邀請連結不完整或格式不正確，請向邀請人重新取得連結。",
         "invalidInvite": "邀請無效、已使用、已過期或已撤銷，請取得新的邀請連結。",
         "notAllowed": "目前帳號沒有權限，請檢查帳號或聯絡群主。",
         "loginRequired": "請先登入目前帳號，再重試。",
@@ -9121,7 +9932,9 @@
           "topic": "群組主題",
           "description": "群組簡介",
           "save": "儲存",
-          "myProfile": "我的資料",
+          "myProfile": "我在本群的資料",
+          "groupAvatar": "修改本群頭像",
+          "groupAvatarHint": "僅在本群顯示，不影響帳號或其他群。恢復預設後使用帳號頭像。",
           "editProfile": "修改暱稱與頭像",
           "nickname": "我在本群的暱稱",
           "nicknameHint": "僅在本群顯示；留空使用個人暱稱。",
@@ -9144,30 +9957,37 @@
           "transfer": "轉讓群主",
           "transferTitle": "將群主轉讓給 {{name}}？",
           "transferHint": "對方成為群主，你將成為管理員。夥伴也可以擔任群主。",
-          "remove": "移出群組",
           "removeTitle": "將 {{name}} 移出群組？",
           "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
           "addCompanion": "邀請我的夥伴",
           "leave": "退出群組",
-          "leaveHint": "你和你帶來的夥伴將退出群組。群主需要先轉讓身分。",
+          "leaveHint": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+          "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
           "archive": "封存群組",
-          "archiveHint": "封存後保留群聊記錄，停止新訊息和夥伴執行。",
+          "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
           "confirm": "確認",
           "lastOwner": "請先將群主轉讓給其他成員，再退出或移除目前的群主。",
           "conflict": "群組設定已更新，請重新整理後再試。",
-          "replyMode": "沒有 @ 時",
-          "speakingMode": "發言方式",
-          "all": "夥伴都可接話",
-          "mentioned": "僅被 @ 時接話",
-          "auto": "同時發言",
-          "sequential": "依序發言",
           "unarchive": "取消封存",
-          "unarchiveHint": "恢復新訊息與夥伴執行。",
+          "unarchiveHint": "取消封存後，本群組對所有成員恢復新訊息與夥伴執行。",
           "archived": "本群已封存，可繼續查看歷史記錄。",
           "noneHint": "本群只有夥伴的主人可以讓夥伴回應。",
           "companionPermissions": "夥伴權限",
-          "configureCapabilities": "工具與授權設定"
+          "configureCapabilities": "工具與授權設定",
+          "capabilityScope": "這是 {{name}} 自己的工具與授權，不是僅限本群的設定。"
         }
+      },
+      "lifecycle": {
+        "dissolve": "解散群聊",
+        "dissolveNote": "解散後無法恢復。所有成員將無法傳送訊息，進行中的工作會停止，邀請會失效。成員仍可查看原本有權存取的歷史訊息。",
+        "hide": "從我的列表移除",
+        "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
+        "leave": "退出群聊",
+        "leaveNote": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+        "unavailable": "目前伺服器或電腦尚不支援此操作。",
+        "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
+        "failed": "操作未完成，請重試。",
+        "lastOwner": "請先轉讓群主或解散群聊，再退出。"
       }
     },
     "joined": {
@@ -9226,10 +10046,15 @@
       "selectedHint": "此清單中，夥伴只使用已選取的項目。",
       "personalHint": "夥伴自己學到的技能，隨夥伴自動載入。",
       "unavailableHint": "本機或目前執行環境暫不可用，請先設定連線或系統授權。",
+      "notOnThisComputer": "這台電腦不可用",
       "configure": "前往設定",
       "empty_toolset": "目前執行環境沒有可用的內建工具。",
       "empty_mcp": "尚未新增自訂 MCP 服務。",
-      "empty_skill": "暫無可選的技能。"
+      "empty_skill": "暫無可選的技能。",
+      "inputHandoff": {
+        "title": "代輸入",
+        "description": "遇到需要你本人輸入的登入資訊、密碼或驗證碼時，允許這位夥伴請你在任意裝置上填寫。你填寫的內容不會交給它。"
+      }
     },
     "guided": {
       "title": "建立夥伴",
@@ -9331,12 +10156,429 @@
       "setupDeferred": "可在夥伴對話中繼續登入與驗證。",
       "automationInvalid": "自動化定義無法轉換，尚未建立。",
       "itemFailed": "此項未完成，可重試並查看匯入詳情。",
-      "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。"
+      "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。",
+      "imBotOwnerMissing": "沒找到主人的使用者 ID，請到夥伴的「訊息平台」頁把這個機器人連上。",
+      "imBotGatewayRunning": "原本的閘道還在使用這個機器人。先停掉它，再到「訊息平台」頁連線。",
+      "imBotInUse": "這個機器人已經在這台電腦上使用了：在 設定 → IM 機器人 裡，或是在另一位夥伴那裡。",
+      "imBotConnectFailed": "沒能連上這個機器人，請到夥伴的「訊息平台」頁重試。",
+      "imBotSourceStopUnconfirmed": "原本的機器人還沒停下，暫時沒有接給夥伴。可以稍後在夥伴的「訊息平台」頁連線。",
+      "imBotSourceChanged": "原本的機器人在預覽後換過了，沒有停用它。請重新讀取後再匯入。",
+      "bots": "訊息機器人",
+      "botsNote": "匯入後，{{source}} 裡的這些機器人會停用，由夥伴接管。",
+      "sourceDisabled": "原本已停用",
+      "botOwner": "主人 ID {{id}}"
     },
     "learning": {
       "memory": "已記住：{{title}}",
       "skillCreated": "已建立技能：{{title}}",
       "skillUpdated": "已更新技能：{{title}}"
+    },
+    "cloud": {
+      "homeLabel": "主力電腦",
+      "thisComputer": "這台電腦",
+      "homeOffline": "主力電腦「{{device}}」離線",
+      "homeControlOff": "主力電腦「{{device}}」沒有開放遠端控制",
+      "continueHere": "在這台電腦繼續",
+      "takeOverHint": "在這台電腦繼續後，{{name}} 改在這裡執行，下面的對話一起帶過來。",
+      "takingOver": "正在這台電腦上準備 {{name}}…",
+      "takeOverConflict": "{{name}} 已經換到「{{device}}」繼續了",
+      "takeOverOffline": "連不上伺服器，暫時無法在這台電腦繼續",
+      "takeOverFailed": "未能在這台電腦上接手 {{name}}",
+      "notEnabled": "目前的伺服器不支援更換主力電腦",
+      "readOnlyNote": "這裡是雲端儲存的對話，只能檢視",
+      "empty": "還沒有雲端對話",
+      "loadFailed": "未能讀取雲端對話",
+      "reload": "重新讀取對話",
+      "loadOlder": "載入更早的訊息",
+      "unknownDevice": "另一台電腦",
+      "loadingDevices": "正在讀取電腦清單…",
+      "devicesFailed": "未能讀取電腦清單",
+      "noTargets": "沒有可接手的電腦。另一台電腦需要上線、登入同一帳號，並開啟「允許同帳號裝置控制本機」",
+      "hereControlOff": "這台電腦還沒有開啟「允許同帳號裝置控制本機」，所以不能從這裡換過來。到 設定 → 遠端連線 開啟後再試",
+      "resumeToMove": "先恢復 {{name}}，再換到另一台電腦",
+      "transferBusy": "{{name}} 還在回覆，等這一輪結束再換電腦",
+      "targetUnavailable": "「{{device}}」現在無法使用，它需要上線並開啟遠端控制",
+      "shadowTitle": "這個夥伴已在「{{device}}」上執行",
+      "shadowHint": "這裡的對話只能檢視。",
+      "openOnHome": "開啟「{{device}}」上的夥伴",
+      "runsOn": "在「{{device}}」上執行",
+      "runsHere": "在這台電腦上執行",
+      "switchHint": "更換 {{name}} 執行的電腦",
+      "switchTo": "換到「{{device}}」",
+      "switchHere": "換到這台電腦",
+      "switchTitle": "把 {{name}} 換到「{{device}}」執行？",
+      "switchDescription": "從現在起 {{name}} 在「{{device}}」上執行，對話紀錄一起帶過去。工作目錄、連線和本機檔案留在原來的電腦上。",
+      "switchAction": "換到「{{device}}」",
+      "switched": "{{name}} 已換到「{{device}}」執行",
+      "switchConflict": "{{name}} 的主力電腦已經變了，這次沒有更換",
+      "switchOffline": "連線不上，{{name}} 的主力電腦沒有變",
+      "switchFailed": "未能把 {{name}} 換到「{{device}}」",
+      "homeOutdated": "主力電腦「{{device}}」上的 Cindy 版本較舊，請先更新它，或在那台電腦上更換",
+      "arrivingLater": "{{name}} 已換到這台電腦，還在準備中，稍後會出現在夥伴列表裡",
+      "arrivalPermissions": "{{name}} 已依這台電腦的預設權限運作。",
+      "arrivalModel": "{{name}} 先前選的模型在這台電腦上無法使用，已改用這台電腦的預設模型。",
+      "busyTitle": "{{name}} 還在回覆",
+      "busyDescription": "可以等這一輪結束後再換到「{{device}}」，也可以停止這一輪馬上換。",
+      "busyWait": "等回覆完再換",
+      "busyStop": "停止並換",
+      "waitingForTurn": "等 {{name}} 回覆完，再換到「{{device}}」…",
+      "mergeLabel": "合併重複的 Cindy",
+      "mergeHint": "你有 {{count}} 個 Cindy：{{devices}}",
+      "mergeTitle": "把 {{count}} 個 Cindy 合成一個？",
+      "mergeDescription": "合併後只留下一個 Cindy。其他 Cindy 的對話紀錄、記憶、技能、待辦和例行任務會併進來；同名但內容不同的記憶和技能另存一份，不會覆蓋。其他 Cindy 會停用，它們的資料仍保留在雲端和原來的電腦上。",
+      "mergeKeep": "保留哪一個的名字、個性和設定",
+      "mergeAction": "合成一個",
+      "merged": "{{count}} 個 Cindy 已合成一個，帶過來 {{messages}} 則訊息",
+      "mergedRenamed": "{{count}} 個 Cindy 已合成一個，帶過來 {{messages}} 則訊息；同名的內容另存為：{{renamed}}",
+      "mergeFailed": "沒能合併，可以稍後再試一次（已合併的部分不會重複）",
+      "mergeBusy": "有一個 Cindy 還在回覆，等它回覆完再合併",
+      "mergePaused": "有一個 Cindy 已暫停，先在它的設定裡恢復，再合併",
+      "mergeOffline": "「{{device}}」現在連不上，它上線後再合併",
+      "mergeOutdated": "「{{device}}」上的 Cindy 版本較舊，請先更新它再合併",
+      "homeOfflineShort": "主力電腦離線",
+      "homeReadOnly": "主力電腦：{{device}}",
+      "moveTo": "交給「{{device}}」",
+      "transferTitle": "把 {{name}} 交給「{{device}}」？",
+      "transferDescription": "從現在起 {{name}} 在「{{device}}」上執行。工作目錄和連線留在這台電腦，這台電腦上的對話變為歷史紀錄。",
+      "transferAction": "交給「{{device}}」",
+      "transferred": "{{name}} 已交給「{{device}}」",
+      "transferConflict": "{{name}} 的主力電腦已經變了，這次沒有交出",
+      "transferOffline": "連不上伺服器，{{name}} 仍在這台電腦執行",
+      "transferFailed": "未能把 {{name}} 交給「{{device}}」"
+    },
+    "market": {
+      "heading": "發現夥伴",
+      "description": "帶著方法和技能加入，與你一起把工作往前推進。",
+      "invite": "邀請加入",
+      "open": "打開夥伴",
+      "remove": "移除夥伴",
+      "back": "返回列表",
+      "loading": "正在載入夥伴…",
+      "empty": "沒有找到夥伴",
+      "loadFailed": "暫時無法載入夥伴清單，請稍後重新開啟。",
+      "installFailed": "尚未完成新增。已儲存的內容會保留，可以再試一次。",
+      "nameExists": "已有同名夥伴。請先在夥伴設定中改名，再邀請加入。",
+      "installing": "正在儲存夥伴資料和技能…",
+      "memoryDisabled": "記憶已關閉，方法知識尚未匯入；不會自動開啟記憶。",
+      "knowledge": "知識與記憶",
+      "skills": "技能",
+      "routines": "例行任務",
+      "capabilities": "關鍵能力",
+      "workTogether": "我的配置",
+      "tools": "工作工具",
+      "remembersLead": "會記住你的",
+      "pluginInstalled": "已安裝",
+      "pluginNotInstalled": "未安裝",
+      "routineOff": "預設關閉",
+      "itemFailed": {
+        "routine": "例行任務「{{name}}」沒能儲存。",
+        "skill": "技能「{{name}}」沒能儲存。",
+        "knowledge": "知識「{{name}}」沒能儲存。",
+        "other": "「{{name}}」沒能儲存。",
+        "unknown": "有一項內容沒能儲存。"
+      },
+      "partialReady": "其他內容已就緒，可以先開始使用。",
+      "partialUnsaved": "夥伴還沒有儲存，請重新儲存。",
+      "retry": "重新儲存"
+    },
+    "starterOptions": "起步選項",
+    "channels": {
+      "title": "訊息平台",
+      "platform": {
+        "telegram": "Telegram",
+        "feishu": "飛書",
+        "lark": "Lark",
+        "wecom": "企業微信",
+        "dingtalk": "釘釘",
+        "discord": "Discord"
+      },
+      "status": {
+        "connected": "已連線",
+        "connecting": "連線中…",
+        "offline": "已離線",
+        "conflict": "另一台裝置正在使用這個機器人",
+        "error": "發生錯誤",
+        "idle": "未連線"
+      },
+      "remove": "移除",
+      "removeAria": "移除 {{platform}}",
+      "empty": "新增你已有的機器人，或在下方連接個人微信，{{name}} 就會在那裡回覆。",
+      "externalNote": "傳訊息給這個機器人的人都是在和 {{name}} 對話。你自己的訊息依 {{name}} 的權限執行；其他人各有一條隱藏任務，權限受限。",
+      "sharedMemoryNote": "{{name}} 會把這裡和其它對話裡的資訊一起使用。想隔開記憶，請換一位夥伴。",
+      "groups": {
+        "title": "群組",
+        "hint": "{{name}} 進過的群組會出現在這裡。「全回應」= 每則訊息都看，{{name}} 自行判斷要不要插話（每則都會消耗 token）。",
+        "empty": "還沒有群組。把機器人拉進群組、有人說話後就會出現在這裡。",
+        "loadFailed": "無法讀取群組清單",
+        "saveFailed": "沒有儲存成功，已恢復原本的模式",
+        "retry": "重新讀取",
+        "mode": {
+          "mention": "僅 @",
+          "always": "全回應"
+        }
+      },
+      "lanes": {
+        "title": "{{platform}}任務",
+        "expand": "展開{{platform}}任務",
+        "collapse": "收起{{platform}}任務",
+        "hint": "每個群組、話題和其他人的私聊各有一條任務。哪條卡住或答非所問，可以讓它重新開始，記錄會保留。歸檔只收起清單記錄，不影響任務執行、上下文和歷史；有新訊息時會重新出現。",
+        "ownerName": "你的私聊",
+        "kind": {
+          "ownerDm": "主任務",
+          "group": "群組",
+          "topic": "話題",
+          "guestDm": "私聊"
+        },
+        "state": {
+          "running": "正在回覆",
+          "failed": "上次回覆出錯"
+        },
+        "noActivity": "還沒有訊息",
+        "messageCount_other": "目前上下文 {{count}} 則訊息",
+        "reset": "重新開始",
+        "resetAria": "讓「{{lane}}」重新開始",
+        "resetConfirm": {
+          "title": "讓「{{lane}}」重新開始？",
+          "description": "下一則訊息會從乾淨的上下文開始，進行中的回覆會停下。完整記錄仍留在這條任務裡，{{name}} 的記憶不變。",
+          "ownerDescription": "這是 {{name}} 的主任務，桌面上的對話和這裡的私聊共用它。下一則訊息會從乾淨的上下文開始，進行中的回覆會停下；記錄、記憶和檔案都會保留。",
+          "confirm": "重新開始",
+          "cancel": "取消"
+        },
+        "resetDone": "「{{lane}}」已重新開始，下一則訊息從乾淨的上下文開始。",
+        "resetFailed": "未能重新開始，請稍後再試",
+        "loadFailed": "無法讀取任務",
+        "empty": "還沒有群組或其他人的私聊。有人在群組或私聊裡和 {{name}} 說話後，會出現在這裡。",
+        "archiveAria": "歸檔「{{lane}}」",
+        "archiveFailed": "無法歸檔任務"
+      },
+      "add": {
+        "button": "新增平台",
+        "title": "為 {{name}} 新增平台",
+        "description": "貼上你在平台上申請的機器人憑證，只存在這台電腦上。",
+        "platformLabel": "平台",
+        "telegram": {
+          "tokenLabel": "Bot Token",
+          "tokenPlaceholder": "貼上 @BotFather 產生的 Token",
+          "ownerLabel": "你的 Telegram 使用者 ID",
+          "ownerPlaceholder": "純數字 ID（向 @userinfobot 查詢）",
+          "ownerHint": "來自這個 ID 的訊息依 {{name}} 自己的權限執行，其他人都視為訪客。"
+        },
+        "feishu": {
+          "serviceLabel": "服務",
+          "appIdLabel": "App ID",
+          "appIdPlaceholder": "cli_xxxxxxxxxxxxxxxx",
+          "appSecretLabel": "App Secret",
+          "appSecretPlaceholder": "貼上 App Secret"
+        },
+        "wecom": {
+          "botIdLabel": "Bot ID",
+          "botIdPlaceholder": "企業微信管理後台裡的 Bot ID",
+          "secretLabel": "Secret",
+          "secretPlaceholder": "企業微信管理後台裡的 Bot Secret",
+          "ownerHint": "首個私聊這個機器人的人會成為它的主人，按 {{name}} 自己的權限執行。請先建立智慧機器人並開啟長連線。"
+        },
+        "dingtalk": {
+          "appKeyLabel": "Client ID",
+          "appKeyPlaceholder": "貼上機器人應用的 Client ID",
+          "appSecretLabel": "Client Secret",
+          "appSecretPlaceholder": "貼上機器人應用的 Client Secret",
+          "ownerHint": "首個私聊這個機器人的人會成為它的主人，按 {{name}} 自己的權限執行。群組裡被 @ 時才回覆。"
+        },
+        "discord": {
+          "tokenLabel": "Bot Token",
+          "tokenPlaceholder": "貼上 Discord Bot Token",
+          "ownerLabel": "你的 Discord 使用者 ID",
+          "ownerPlaceholder": "17–20 位數字 ID",
+          "ownerHint": "只有來自這個 ID 的私聊會交給 {{name}}，按 {{name}} 自己的權限執行。"
+        },
+        "confirm": "連線",
+        "connecting": "連線中…",
+        "errors": {
+          "invalidToken": "這不像 Bot Token，格式應為 123456:ABC…",
+          "invalidOwner": "使用者 ID 應該是一串數字。",
+          "invalidFeishu": "App ID 和 App Secret 都要填。",
+          "invalidWecom": "Bot ID 和 Secret 都要填。",
+          "invalidDingtalk": "Client ID 和 Client Secret 都要填。",
+          "invalidDiscordToken": "這不像 Bot Token。",
+          "invalidDiscordOwner": "使用者 ID 應該是 17–20 位數字。",
+          "conflict": "這個機器人已經在這台電腦上使用了：在 設定 → IM 機器人 裡，或是在另一位夥伴那裡。",
+          "botUnavailable": "{{name}} 目前無法使用，等 TA 恢復後再試。",
+          "connectFailed": "未能連線：{{reason}}",
+          "failed": "未能完成，請稍後再試。",
+          "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
+        },
+        "source": {
+          "label": "連線方式",
+          "existing": "使用已在 Cindy 設定的機器人",
+          "manual": "填寫新的憑證",
+          "moveNote": "這個機器人會從 設定 → IM 機器人 移過來，那裡將變為空；原本的私訊和群組改由 {{name}} 接著回覆。"
+        }
+      },
+      "removeConfirm": {
+        "title": "移除 {{platform}}？",
+        "description": "這個機器人不再回覆，憑證會從這台電腦刪除，它的隱藏任務會封存。{{name}} 的記憶和個性不變。",
+        "confirm": "移除",
+        "cancel": "取消",
+        "failed": "未能移除，請稍後再試",
+        "ok": "知道了"
+      },
+      "officialX": {
+        "bind": "連結至這位夥伴",
+        "remove": "取消夥伴連結",
+        "bindTitle": "讓 {{name}} 處理 X 提問？",
+        "bindBody": "你對官方 @askmycindy 的公開提問將交給 {{name}}，使用夥伴的身分、能力、共享記憶和工作目錄；回答會公開回覆。X 專線與私聊記錄分開。若已連結其他夥伴，本次將替換原連結。",
+        "removeTitle": "取消夥伴的 X 連結？",
+        "removeBody": "保留 X 帳號授權，後續提問恢復為一般任務。已開始的回覆會繼續完成。",
+        "bound": "X 提問已交給 {{name}}。啟用 X 並完成帳號授權後即可使用。",
+        "boundElsewhere": "X 已交給另一位夥伴。連結到這裡會替換原夥伴。",
+        "unbound": "可將官方 @askmycindy 收到的你的提問交給 {{name}}。",
+        "managed": "X 提問由夥伴處理。可在該夥伴的訊息平台設定中更改連結。",
+        "riskBody": "X 提問會使用夥伴的共享記憶、能力和工作目錄，回答會公開。請勿透過 X 處理私人資訊。專線不會直接使用夥伴的私聊記錄。"
+      }
+    },
+    "voiceMode": {
+      "showDetails": "展開通話記錄",
+      "hideDetails": "收起通話記錄",
+      "transcriptTitle": "目前辨識文字",
+      "transcriptEmpty": "說話後，辨識文字會顯示在這裡。",
+      "composerPaused": "結束語音後，繼續輸入訊息…",
+      "microphoneMuted": "麥克風已關閉",
+      "exit": {
+        "idle": "暫時沒有說話，即將退出語音模式",
+        "farewell": "已聽到道別，即將退出語音模式",
+        "semantic": "即將結束語音模式",
+        "sending": "正在提交，成功後退出語音模式…",
+        "countdown": "{{seconds}} 秒後退出語音模式",
+        "cancel": "取消退出",
+        "hint": "繼續說話或點擊「取消退出」可保留語音模式。進行中的任務不受影響。",
+        "mutedHint": "麥克風仍已靜音，點擊「取消退出」可保留語音模式。進行中的任務不受影響。"
+      },
+      "settingsTitle": "語音",
+      "openSettings": "語音設定",
+      "startConversation": "開始語音對話",
+      "settingsHint": "選擇這位夥伴使用的朗讀模型和音色。設定完成後，從輸入框開始語音對話。",
+      "previewNeedsChat": "與夥伴開始對話後可試聽。",
+      "voiceId": "音色 ID",
+      "manualVoice": "手動輸入音色 ID",
+      "refreshVoices": "重新整理音色清單",
+      "voicesLoading": "正在取得音色…",
+      "voicesError": "無法取得音色清單。請重試，或手動輸入音色 ID。",
+      "voicesCustomError": "無法完整取得自訂音色。請重試，或手動輸入音色 ID。",
+      "voicesReference": "這是此型號的參考音色；相容服務的實際支援可能不同。",
+      "voicesTruncated": "僅顯示部分音色；未列出的音色可手動輸入 ID。",
+      "voicesManual": "此介面沒有可用的音色清單，請手動輸入音色 ID。",
+      "preview": "試聽",
+      "stopPreview": "停止試聽",
+      "previewVoice": "試聽 {{voice}}",
+      "stopPreviewVoice": "停止試聽 {{voice}}",
+      "previewText": "你好，這是我的聲音。很高興與你交流。",
+      "previewStatus": {
+        "idle": "試聽會呼叫所選模型，可能產生用量。",
+        "preparing": "正在產生試聽語音…",
+        "playing": "正在試聽…",
+        "complete": "試聽完成。",
+        "error": "試聽失敗"
+      },
+      "readAloud": "朗讀",
+      "stopReadAloud": "停止朗讀",
+      "finishBeforeReadAloud": "請先結束語音模式，再朗讀訊息。",
+      "readAloudFailed": "朗讀失敗",
+      "finishBeforeDictation": "請先結束語音模式，再開始聽寫。",
+      "title": "語音模式",
+      "model": "朗讀模型",
+      "refresh": "重新整理模型",
+      "voice": "音色",
+      "voiceHint": "填入所選模型支援的音色名稱，例如 alloy。",
+      "modelUnavailable": "先前選擇的朗讀模型已無法使用，請重新選擇。",
+      "noModels": "目前沒有可用的語音合成模型。",
+      "noModelsSupportedProtocols": "支援 MiniMax、ElevenLabs、Qwen / CosyVoice HTTP，以及 OpenAI 相容語音合成介面。",
+      "noModelsSetupHint": "連接供應商並啟用語音模型後，即可設定夥伴的朗讀聲音。",
+      "openProviders": "前往模型供應商",
+      "catalogError": "語音設定讀取或儲存失敗，請重試。",
+      "start": "開始說話",
+      "resume": "繼續",
+      "retrySend": "重新連線並傳送",
+      "mute": "靜音",
+      "interrupt": "停止朗讀",
+      "send": "傳送",
+      "end": "結束",
+      "unsent": "尚未傳送 · 可選取文字複製",
+      "hint": "停頓後自動傳送，回覆由 AI 語音朗讀。隨時開口即可插話。",
+      "status": {
+        "idle": "準備好就開始",
+        "connecting": "正在連接語音辨識…",
+        "listening": "正在聽",
+        "thinking": "正在思考…",
+        "speaking": "正在朗讀…",
+        "paused": "已暫停 · 麥克風已關閉",
+        "error": "已暫停 · 麥克風已關閉",
+        "question": "等待選擇 · 可說選項編號或名稱",
+        "confirmation": "等待你的確認 · 麥克風已關閉",
+        "preparing": "正在準備語音…",
+        "loading": "正在讀取語音設定…",
+        "microphone": "正在開啟麥克風…",
+        "muted": "麥克風已關閉 · 可以繼續收聽"
+      },
+      "errors": {
+        "connection": "語音連線中斷，未傳送的文字已保留。",
+        "microphone": "麥克風已停止，請檢查權限和裝置連線後繼續。",
+        "send": "這則訊息未被接收，文字已保留。",
+        "speech": "回覆朗讀失敗，文字回覆仍保留在對話中。",
+        "speechTimeout": "語音回應逾時"
+      },
+      "voiceIdHint": "填寫該供應商帳號可用的音色 ID。",
+      "speed": "語速",
+      "speedAdjusted": "已依所選模型調整為 {{speed}}×。",
+      "speedUnavailable": "目前模型暫不支援調整語速。",
+      "speedValue": "{{speed}}×",
+      "sentencePlayback": "逐句朗讀",
+      "sentencePlaybackHint": "回覆產生時，儘早按完整句子朗讀；關閉後等完整回覆再朗讀。需要等待回覆處理時，會自動延後。",
+      "preferenceHint": "語音設定僅為目前夥伴儲存。",
+      "resetPreference": "恢復預設",
+      "preferenceError": "無法讀取或儲存語音設定，請重試。",
+      "protocol": "語音介面",
+      "protocolOpenai": "OpenAI 相容",
+      "protocolHint": "選擇此位址實際支援的語音介面；切換介面不會更換供應商。",
+      "protocolCorrectedHint": "已依官方位址修正介面，請重新選擇音色。",
+      "unmute": "取消靜音",
+      "mutedHint": "麥克風已關閉，夥伴回覆仍會朗讀。取消靜音後可繼續說話。",
+      "microphoneResumeError": "無法開啟麥克風，仍可繼續收聽。請檢查權限和裝置後重試取消靜音。",
+      "callRecord": "本次通話",
+      "callHistoryTitle": "語音通話",
+      "you": "你",
+      "companion": "夥伴",
+      "callInProgress": "通話中",
+      "callSendFailed": "傳送失敗，原話已保留。",
+      "handoff": {
+        "sending": "正在交接…",
+        "accepted": "已交給夥伴處理",
+        "failed": "交接失敗，原話已保留",
+        "completed": "結果已返回"
+      },
+      "callSaved": "記錄已儲存",
+      "taskFromCall": "來自通話的工作",
+      "viewTaskProgress": "查看進度",
+      "liveDraft": "正在辨識",
+      "questionDraft": "待確認"
+    },
+    "dmThread": {
+      "newReply": "有新回覆",
+      "you": "你",
+      "rootNotLoaded": "原訊息不在已載入的紀錄裡",
+      "rootUnavailable": "原訊息已不在私聊裡，無法開話題",
+      "openFailed": "話題沒有開啟，請重試"
+    },
+    "projects": {
+      "title": "關聯專案",
+      "description": "需要時讀取專案資料。關聯不會接手專案內的任務，也不會啟動背景工作。",
+      "empty": "尚未關聯專案",
+      "choose": "選擇專案",
+      "add": "新增",
+      "remove": "移除 {{name}}",
+      "otherComputer": "位於另一台電腦",
+      "unavailable": "目錄暫不可用",
+      "failed": "專案未能更新，請重新載入核對儲存結果。",
+      "noAvailable": "更多專案可先在專案列表中新增。"
     }
   },
   "common": {
@@ -9688,6 +10930,22 @@
       "addRemoteProject": "新增遠端專案"
     },
     "modelSelector": {
+      "displayPricing": {
+        "million": "百萬",
+        "free": "免費",
+        "estimated": "約 {{price}}",
+        "startingAt": "{{price}} 起",
+        "units": {
+          "token": "tokens",
+          "character": "字元",
+          "image": "張",
+          "second": "秒",
+          "minute": "分鐘",
+          "request": "次",
+          "megapixel": "百萬像素",
+          "megapixelSecond": "百萬像素·秒"
+        }
+      },
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
       "paymentRequired": {
         "badge": "付費",
@@ -9758,9 +11016,10 @@
         "stt": "語音轉寫",
         "realtime": "即時語音",
         "embedding": "向量",
+        "decision": "決策",
         "compression": "壓縮",
         "ungrouped": "未分組",
-        "other": "其它"
+        "other": "其他"
       },
       "search": {
         "placeholder": "搜尋 {{source}} 的模型…",
@@ -9791,11 +11050,14 @@
       },
       "unified": {
         "railFavorites": "收藏",
+        "railRecent": "最近",
         "railAll": "全部",
         "railRemoteProvider": "{{provider}} · {{device}}",
         "remoteLoading": "正在讀取那臺電腦的模型…",
         "remoteFavoriteUnavailable": "{{source}} · 暫時讀不到那臺電腦的模型",
         "favoritesGroup": "收藏",
+        "recentGroup": "最近",
+        "recentEmpty": "還沒有最近使用——選一個模型後，它會出現在這裡",
         "favoritesSaveFailed": "未能儲存收藏變更",
         "favoritesCleanupFailed": "未能清理已失效的分享模型收藏",
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
@@ -9813,13 +11075,20 @@
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
         "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
+        "favoritesSyncFailedUnreachable": "收藏暫時沒有同步：那台電腦目前連不上。恢復連線後重新開啟即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "目前在 {{device}} 上執行",
         "providerGroupRunningHere": "目前在這台電腦上執行",
         "providerGroupUnassigned": "開始後由供應商組選一台電腦，用量依那台顯示"
       },
-      "modelListAria": "模型清單"
+      "modelListAria": "模型清單",
+      "speed": {
+        "label": "速度",
+        "standard": "標準",
+        "fast": "快速",
+        "ultrafast": "超快"
+      }
     },
     "permissionSelector": {
       "triggerAria": "選擇權限模式：{{label}}",
@@ -9915,8 +11184,11 @@
       "recent": "最近",
       "browseFolder": "選擇其他資料夾",
       "browseProjectFolder": "選擇其他專案資料夾",
+      "browseFailed": "無法開啟資料夾選擇視窗，請重試。",
       "dialogue": "對話",
       "dialogueOrSelectProject": "對話或選擇專案",
+      "searchProjects": "搜尋專案",
+      "noMatchingProjects": "沒有符合的專案",
       "remoteProjectsLoadFailed": "無法讀取 {{device}} 上的專案。請檢查連線後重試。",
       "retryRemoteProjects": "重新讀取專案",
       "removeFromList": "從列表中移除",
@@ -10022,12 +11294,15 @@
         "start": "開始語音輸入",
         "stop": "停止語音輸入",
         "releaseToStop": "語音輸入中，鬆開結束",
+        "holdComposer": "長按輸入框，語音輸入",
+        "speakRelease": "開始說話，鬆開結束",
+        "speakPressAgain": "開始說話，再按一下結束",
         "releaseToSend": "鬆開傳送",
         "finishAndSend": "結束語音輸入並傳送",
         "refining": "正在潤色",
         "permissionDialog": {
           "title": "需要麥克風權限",
-          "description": "App 需要麥克風權限才能在輸入框裡使用語音輸入。授權後，請再次點選語音輸入按鈕。",
+          "description": "請開啟麥克風權限，再點選語音輸入",
           "confirm": "去授權",
           "cancel": "取消"
         }
@@ -10067,6 +11342,7 @@
       },
       "credentialSwitchDeferred": "模型來源已切換，將在當前任務結束後生效。",
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
+      "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
       "modelSwitchContextGuard": {
@@ -10149,7 +11425,7 @@
       "saveEdit": "儲存文字"
     },
     "sharedProviderCredential": {
-      "description": "這個任務用的是分享來的供應商，Agent 讀到的內容會經過分享者或其安排的電腦。這一步可能涉及憑證（如金鑰、.env），需要你確認後才繼續。選擇「本任務總是允許」後，本任務後續憑證操作不再額外確認；重新開啟任務或切換權限模式後需再次確認。"
+      "description": "這個任務用的是分享來的供應商，Agent 讀到的內容會經過分享者或其安排的電腦。這一步可能涉及憑證（如金鑰、.env），需要你確認後才繼續。選擇「本任務總是允許」後，本任務後續憑證操作不再額外確認；切換權限模式、計畫模式或結束 Cindy 後需再次確認。"
     },
     "mediaDownload": {
       "title": "允許下載產生的媒體？",
@@ -10168,6 +11444,12 @@
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
       "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
+      "autoReviewReason": "自動審批需要你決定：{{reason}}",
+      "titleCommand": "允許執行這條指令？",
+      "titleFileRead": "允許讀取檔案？",
+      "titleFileWrite": "允許修改檔案？",
+      "titleBrowser": "允許瀏覽器執行這一步？",
+      "titlePlugin": "允許使用插件「{{plugin}}」？",
       "ruleSeparator": "、",
       "submitting": "正在送出確認…",
       "submissionFailed": "未收到確認結果。請檢查連線，若確認框仍在，可重新點擊。",
@@ -10200,6 +11482,38 @@
           "label": "把這封郵件整理成回覆草稿",
           "prompt": "幫我為這封郵件寫一份回覆草稿，結合郵件往來和我的想法，先不寄送。"
         }
+      }
+    },
+    "branchSync": {
+      "multiple-checkouts": "{{branch}} 在多個目錄中開啟，無法更新",
+      "changed": "分支狀態已變更，請重試",
+      "action": "取得 {{remote}}/{{remoteBranch}} 的最新提交",
+      "remoteAction": "取得 {{remote}}/{{remoteBranch}} 的最新提交",
+      "checkedOut": "會同步更新目前分支已提交的檔案，未提交的變更會保留",
+      "fetching": "正在取得更新…",
+      "updated_other": "已更新 {{count}} 個提交",
+      "current": "已是最新",
+      "keptAhead_other": "本機有 {{count}} 個尚未推送的提交，無需更新",
+      "failed": "取得更新失敗：{{reason}}",
+      "diverged": "本機與 {{remote}} 各有新提交，無法自動更新",
+      "conflict": "尚未提交的變更與遠端更新衝突，請先提交或 stash",
+      "missing-remote": "{{remote}} 上沒有 {{remoteBranch}}",
+      "no-remote": "未設定遠端儲存庫",
+      "not-local": "請先選擇本機分支或遠端主分支",
+      "ahead_other": "領先 {{remote}} {{count}} 個提交",
+      "behind_other": "落後 {{remote}} {{count}} 個提交",
+      "dirty_other": "尚未提交 {{count}} 個檔案",
+      "diverging_other": "領先 {{ahead}}、落後 {{behind}} 個提交（{{remote}}）",
+      "remoteGroup": "遠端",
+      "localGroup": "本機分支",
+      "errors": {
+        "git": "Git 無法更新分支，請檢查儲存庫存取權限後重試",
+        "timeout": "Git 操作逾時，請檢查網路連線後重試",
+        "auth": "Git 認證失敗，請檢查遠端儲存庫憑證",
+        "network": "無法連線至遠端儲存庫，請檢查網路連線",
+        "missing": "遠端分支已不存在",
+        "busy": "儲存庫忙碌中，請稍後重試",
+        "changed": "檢出的分支已變更，請重試"
       }
     }
   },
@@ -10309,9 +11623,25 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "imageDelivery": {
+      "stored": "圖片已交付",
+      "failed": "圖片交付失敗，可重試傳輸已有圖片。",
+      "retry": "重試交付",
+      "retrying": "正在交付…",
+      "retryFailed": "暫時無法交付，請確認產生圖片的電腦在線。"
+    },
+    "failedSamplingAttempt": "此回覆未完成，內容僅供參考。",
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+      "voice": {
+        "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
+        "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",
+        "confirm": "請檢查目前選擇，說「確認選擇」提交，或說「取消選擇」重選。",
+        "ambiguous": "無法確定你的選擇，請再說一個選項編號或完整名稱，也可以手動選擇。",
+        "unknown": "未辨識到明確選項，請說選項編號或完整名稱，也可以手動選擇。",
+        "cancelled": "已取消語音選擇，請重新選擇。"
+      },
       "skippedAnswer": "已跳過",
       "pendingTitle": "等待回答",
       "restoreAriaLabel": "展開問題卡片",
@@ -10320,6 +11650,8 @@
       "skip": "跳過",
       "next": "下一題",
       "submit": "提交",
+      "sendAndContinue": "傳送並繼續",
+      "close": "關閉",
       "customAnswer": "輸入其他回答…",
       "answerPlaceholder": "請輸入回答…"
     },
@@ -10418,6 +11750,7 @@
     },
     "messageActionBar": {
       "copy": "複製訊息",
+      "copied": "已複製",
       "reply": "回覆",
       "linkCopied": "連結已複製",
       "moreActions": "更多訊息操作",
@@ -10480,7 +11813,7 @@
     },
     "errorBanner": {
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
-      "replyFailed": "本次回覆未能完成。請查看錯誤詳情以瞭解原因。",
+      "replyFailed": "回覆未完成",
       "retryTitle": "重新傳送最後一條訊息",
       "cancelTitle": "關閉錯誤提示",
       "retry": "重試",
@@ -10516,10 +11849,12 @@
       "syncAuthSuccess": "已同步，請點選「重試」重新傳送",
       "syncAuthFailed": "同步失敗：{{msg}}",
       "syncAuthDaemonRestartFailed": "憑證已推送到遠端，但舊 daemon 沒重啟 — 請重連遠端後再點重試",
-      "invalidEncryptedContent": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用，或點此 Fork 丟棄協議加密內容並在新任務繼續。",
-      "forkStripEncrypted": "Fork 並剝離",
-      "forkStripEncryptedRunning": "Fork 中…",
-      "forkStripEncryptedTitle": "Fork 並剝離出新任務(去掉加密推理內容)",
+      "invalidEncryptedContent": "目前的供應商無法讀取部分歷史內容。可切回原供應商，或在新任務中繼續。",
+      "readableHistoryRecovery": "在新任務中繼續",
+      "readableHistoryRecoveryDescription": "可帶上既有對話記錄，在新任務中繼續。原任務會保留；建立後，請重新傳送剛才的訊息。",
+      "forkStripEncrypted": "在新任務中繼續",
+      "forkStripEncryptedRunning": "正在建立任務…",
+      "forkStripEncryptedTitle": "保留對話記錄，建立新任務",
       "forkStripOversizedHistory": "瘦身後繼續",
       "forkStripOversizedHistoryRunning": "Fork 中…",
       "forkStripOversizedHistoryTitle": "去掉過大的歷史圖片後 Fork 成新任務",
@@ -10535,8 +11870,11 @@
       "overloadBusyNoRetry": "模型服務繁忙，上游暫時沒有可用容量。可稍後重試，或換一個模型。",
       "streamInterrupted": "模型輸出中途中斷了。通常是上游暫時故障，可點選「重試」。",
       "streamInterruptedNoRetry": "模型輸出中途中斷了。通常是上游暫時故障，請稍後重試。",
-      "networkShowRaw": "檢視原始錯誤",
-      "networkHideRaw": "收起原始錯誤",
+      "networkShowRaw": "錯誤詳情",
+      "networkHideRaw": "收起詳情",
+      "diagnose": "診斷",
+      "diagnoseTitle": "在新任務中診斷這個錯誤",
+      "diagnosePrompt": "請幫我診斷這個錯誤：找出原因，並告訴我怎麼解決。\n\n出錯任務：{{sessionUrl}}\n錯誤提示：{{message}}\n錯誤詳情：\n{{details}}\n\n如果確認是 Cindy 本身的問題，請告訴我，我可以選擇向 Cindy 團隊提交 issue。",
       "gatewayProxyTokenInvalid": "Cindy AI 憑據已失效。請點「重試」。若仍失敗，請退出後重新登入",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 憑據已失效。若後續仍失敗，請退出後重新登入",
       "modelAccessDenied": "目前上游帳號無權存取此模型。請切換模型，或向供應商確認模型存取權限",
@@ -10545,7 +11883,9 @@
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
       "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
       "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。",
-      "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。"
+      "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。",
+      "attachmentAccessDeniedTitle": "Cindy 無法讀取來源附件，訊息未傳送。",
+      "attachmentAccessDeniedRecovery": "請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
@@ -10564,6 +11904,21 @@
       "continuing": "繼續中…",
       "continueTitle": "從中斷處繼續完成任務（不會重複已完成的步驟）",
       "dismissTitle": "關閉此中斷提示"
+    },
+    "interruptedResumeDialog": {
+      "title": "繼續上次中斷的任務",
+      "description_one": "{{appName}} 上次意外結束，有 {{count}} 個任務沒做完。選取的任務會根據對話紀錄判斷進度，從中斷的地方接著做。",
+      "description_other": "{{appName}} 上次意外結束，有 {{count}} 個任務沒做完。選取的任務會根據對話紀錄判斷進度，從中斷的地方接著做。",
+      "selectAll": "全選",
+      "selectedCount": "已選 {{selected}} / {{total}}",
+      "interruptedAgo": "{{time}}前中斷",
+      "interruptedJustNow": "剛剛中斷",
+      "continueSelected_one": "繼續 {{count}} 個任務",
+      "continueSelected_other": "繼續 {{count}} 個任務",
+      "continueNone": "繼續任務",
+      "later": "暫不繼續",
+      "continueFailed_one": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。",
+      "continueFailed_other": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。"
     },
     "unreadFailedScheduleBanner": {
       "text": "先前有自動執行失敗。",
@@ -10598,6 +11953,7 @@
       "imageCopied": "圖片已複製",
       "copyFailed": "複製失敗",
       "openFolderFailed": "開啟目錄失敗",
+      "longImagePreview": "長圖 · 點擊查看完整圖片",
       "copyImage": "複製圖片",
       "revealImage": "開啟圖片所在目錄",
       "revealImageSidebar": "在檔案瀏覽器中顯示",
@@ -10631,7 +11987,6 @@
       "modelLoading": "正在載入 3D 模型…",
       "modelLoadFailed": "載入 3D 模型失敗",
       "videoCopied": "影片已複製",
-      "videoMissing": "影片已丟失",
       "copyVideo": "複製影片",
       "revealVideo": "開啟影片所在目錄",
       "videoUnavailable": "影片不可用",
@@ -10701,6 +12056,9 @@
       "previewFailed": "無法準備網頁預覽，請檢查目錄和連線後重試",
       "previewNotFound": "找不到 HTML 檔案，請確認檔案仍然存在",
       "previewFetching": "正在準備網頁預覽…",
+      "previewConnectionBusy": "連線壅塞，網頁預覽尚未完成，請稍後重試",
+      "previewTimeout": "等待遠端網頁逾時，請稍後重試",
+      "previewDisconnected": "尚未連通遠端裝置，連線恢復後可重試",
       "previewTooLarge": "正在準備的預覽過多，請稍後重試",
       "previewUnsupported": "遠端裝置暫不支援目錄預覽，請更新該裝置上的 Cindy 後重試",
       "fetching": "正在從遠端獲取檔案…",
@@ -10711,6 +12069,12 @@
       "staleBadge": "歷史副本",
       "downloadToLocal": "下載到本機",
       "downloadPacking": "遠端電腦正在打包…已打包 {{size}}",
+      "folderPreparing": "正在準備資料夾…",
+      "cancelFolderPreparation": "取消準備資料夾",
+      "folderPacking": "正在打包…{{size}}",
+      "folderFailed": "資料夾準備失敗，請檢查連線和磁碟空間後重新拖入",
+      "folderUnsupported": "此連線暫不支援傳輸資料夾，請更新遠端電腦上的 Cindy 後重試",
+      "folderConnectionUnsupported": "此連線暫不支援傳輸資料夾，請先將資料夾放到目標電腦，再引用其目錄",
       "downloadProgress": "正在下載…{{percent}}% · {{speed}}",
       "downloadProgressUnknown": "正在下載…{{received}} · {{speed}}",
       "uploadProgress": "遠端正在上傳…{{percent}}% · {{speed}}",
@@ -10718,7 +12082,9 @@
       "downloadExtracting": "正在解壓縮…",
       "downloadUnsupported": "遠端電腦暫不支援下載資料夾，請更新該電腦上的 Cindy 後重試",
       "downloadNoSpace": "磁碟空間不足，無法完成下載",
-      "downloadSkipped": "已下載到「下載項目」資料夾，但有部分檔案未能下載"
+      "downloadSkipped": "已下載到「下載項目」資料夾，但有部分檔案未能下載",
+      "cancelTransfer": "取消",
+      "downloadsInProgress": "正在下載 {{count}} 個檔案"
     },
     "mivoAction": {
       "promptPlaceholder": "輸入提示詞，按 Enter 傳送",
@@ -10954,7 +12320,8 @@
         "relocatedHere": "Agent 已改到這台電腦上執行",
         "relocatedTo": "Agent 已改到 {{device}} 上執行",
         "relocatedTaskComputer": "Agent 已改到任務所在的電腦上執行",
-        "relocatedElsewhere": "Agent 已改到另一台電腦上執行"
+        "relocatedElsewhere": "Agent 已改到另一台電腦上執行",
+        "quotaRebalance": "這個帳號的配額更該先用"
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",
@@ -10962,7 +12329,8 @@
         "labelStrip": "已整理歷史圖片",
         "toggleHint": "檢視交接內容",
         "handoffTitle": "交接內容——整理後傳送給後續對話的上下文摘要(不計入對話記錄，僅在此展示)",
-        "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
+        "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)",
+        "labelIdleGap": "隔了一段時間再聊，已整理上下文後繼續"
       },
       "review": {
         "running": "正在審查當前成果",
@@ -10996,13 +12364,13 @@
       "copy": "複製",
       "blockCopied": "已複製",
       "duplicateFiles": "找到 {{count}} 個同名檔案，請改用絕對路徑",
+      "fileUnavailable": "無法找到或存取檔案，檔案可能已移動或刪除",
       "copyFile": "複製",
-      "copyFilePath": "複製檔案路徑",
+      "copyFilePath": "複製路徑",
       "copyLocation": "複製位置",
       "locationCopied": "位置已複製",
-      "openWith": "開啟方式",
       "openWithAppFailed": "無法用所選應用開啟",
-      "revealFile": "開啟檔案所在目錄",
+      "revealFile": "在資料夾中顯示",
       "openInBrowser": "在瀏覽器中檢視",
       "fileCopied": "檔案已複製",
       "pathCopied": "路徑已複製",
@@ -11013,16 +12381,20 @@
       "BROWSER_FILE_OPEN_FAILED": "在瀏覽器中開啟失敗",
       "openInBrowserFailed": "在瀏覽器中開啟失敗",
       "openLinkFailed": "開啟連結失敗",
+      "openLink": "開啟連結",
       "anchorNotFound": "未找到對應標題",
-      "openInSidebarBrowser": "在側邊欄瀏覽器中開啟",
-      "openInSidebarFileBrowser": "在側邊欄檔案瀏覽器中開啟",
+      "openInSidebarBrowser": "在側邊欄開啟",
+      "openInSidebarFileBrowser": "在檔案列表中定位",
       "openInSidebarFileBrowserFailed": "在側邊欄檔案瀏覽器中開啟失敗",
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
-      "openInDefaultBrowser": "在預設瀏覽器中開啟",
+      "openInDefaultBrowser": "在瀏覽器開啟",
       "copyLink": "複製連結",
       "linkCopied": "連結已複製",
-      "viewSourceFile": "檢視原始檔",
-      "openInSidebarFailed": "在側邊欄瀏覽器中開啟失敗"
+      "viewSourceFile": "檢視原始碼",
+      "openInSidebarFailed": "在側邊欄瀏覽器中開啟失敗",
+      "openInCurrentWindow": "在目前視窗開啟",
+      "locateProject": "定位到專案",
+      "shiftClick": "Shift+點擊"
     },
     "ghostSummon": {
       "directiveLabel": "追加給模型的指令",
@@ -11075,6 +12447,7 @@
       "pluginSent": "由插件傳送",
       "pluginViewDetail": "檢視插件",
       "sourceIds": {
+        "mcpApp": "$t(mcpApps.serverId)",
         "session": "任務 ID：{{id}}",
         "teammate": "夥伴 ID：{{id}}",
         "automation": "自動化 ID：{{id}}",
@@ -11114,7 +12487,11 @@
       "referencedMessages": "引用訊息（{{count}}）",
       "referencedContext": "引用訊息",
       "groupBackground": "群組背景",
-      "viewThread": "檢視 thread 上下文 ({{count}})"
+      "viewThread": "檢視 thread 上下文 ({{count}})",
+      "memberFromGroup": "{{name}} · 來自 {{platform}} 群組「{{group}}」",
+      "memberFromPlatform": "{{name}} · 來自 {{platform}} 群組",
+      "guestFromDm": "{{name}} · 來自 {{platform}} 私訊（非主人）",
+      "unknownSender": "群組成員"
     },
     "rewind": {
       "noFilesToRollback": "沒有偵測到可恢復的專案檔案改動",
@@ -11163,6 +12540,9 @@
       "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
+      "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+      "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+      "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
@@ -11187,17 +12567,23 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
       "REMOTE_AGENT_UNAVAILABLE": "暫時連不上執行 Agent 的電腦。確認那臺電腦在線並允許遠端控制後重試。",
-      "REMOTE_AGENT_PEER_TOO_OLD": "那臺電腦上的 Cindy 版本過舊，還不能替這臺電腦執行 Agent。請先在那臺電腦上更新 Cindy。",
+      "REMOTE_AGENT_PEER_TOO_OLD": "那臺電腦上的 Cindy 版本過舊，暫不支援此操作。請先在那臺電腦上更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
       "REMOTE_AGENT_NOT_FOUND": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
       "REMOTE_AGENT_BUSY": "那臺電腦上同時執行的任務太多。先結束一些任務後再試。",
       "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦沒有允許遠端呼叫這個供應商。請在那臺電腦的「設定 → 模型供應商」裡開啟「允許遠端呼叫」，或換一個模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。請讓電腦主人在「遠端與分享」中調整開放範圍，或換一個模型。",
+      "REMOTE_AGENT_FORK_FAILED": "執行 Agent 的電腦沒能從這裡開啟新任務。請重試，或換一則訊息再試。",
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對你的分享，恢復前不能使用這些模型。可以換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_REMOVED": "這個分享已無法使用（對方刪除了分享或你已退出）。可以換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供應商暫時無法使用：對方電腦可能不在線，或對方暫時關閉了分享。可以稍後再試，或換成其他模型繼續。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。"
+      "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。",
+      "REMOTE_AGENT_DEVICE_LIMIT": "這台裝置保留的遠端任務數已達上限。可封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
+      "REMOTE_AGENT_TOTAL_LIMIT": "遠端電腦保留的任務總數已達上限。請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
+      "REMOTE_AGENT_RESUME_LOST": "之前在那台電腦上的對話沒能接上，Agent 會在沒有之前上下文的情況下繼續。",
+      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
@@ -11297,7 +12683,17 @@
       "linkConfirmHint": "該連結由插件提供，將在系統瀏覽器中開啟：",
       "linkConfirmOpen": "開啟",
       "linkConfirmCancel": "取消",
-      "linkOpenFailed": "連結開啟失敗"
+      "expandFields": "展開",
+      "collapseFields": "收起",
+      "formSyncFailed": "卡片修改尚未同步，請檢查連線後繼續編輯；訊息尚未傳送。",
+      "linkOpenFailed": "連結開啟失敗",
+      "mailPreview": "郵件預覽",
+      "mailEnlarge": "放大檢視",
+      "mailInsertImage": "插入內文",
+      "mailAttach": "新增附件",
+      "mailRemoveAttachment": "移除 {{name}}",
+      "mailUpdated": "草稿已更新（唯讀）",
+      "mailLegacy": "歷史草稿（唯讀）"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
@@ -11318,9 +12714,43 @@
     "ghostPreview": {
       "opened": "打開了一個預覽頁面"
     },
-    "sessionLoading": "載入任務中"
+    "sessionLoading": "載入任務中",
+    "sideChat": {
+      "openPage": "開啟完整任務頁",
+      "returnMain": "返回主任務",
+      "new": "新增側邊追問",
+      "mainWindowDescription": "側邊追問目前在主視窗中使用。追問記錄仍然保留。",
+      "returnToMain": "回到主視窗繼續追問",
+      "commandDescription": "基於主任務開啟側邊追問。可在命令後附上問題，作為追問草稿。",
+      "title": "側邊追問",
+      "context": "基於主任務已有上下文獨立追問，回答不會自動寫回主任務。",
+      "opening": "正在開啟…",
+      "notReady": "請先等待主任務完成一次回答。",
+      "unsupported": "此 Agent 的遠端任務暫不支援側邊追問。",
+      "updateHost": "請先更新執行任務的電腦，再開啟側邊追問。",
+      "failed": "開啟側邊追問失敗，請稍後重試。",
+      "mainTaskOnly": "請從主任務開啟側邊追問。",
+      "closeTitle": "關閉側邊追問？",
+      "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
+      "closeConfirm": "關閉並刪除",
+      "closeFailed": "刪除追問失敗，請稍後重試。"
+    }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"找不到這條任務，它可能已被刪除。","denied":"目前帳號或電腦無法存取這條任務。","failed":"未能載入這條任務。","back":"返回任務列表","retry":"重新載入任務"},
+    "contextWindowBudget": {
+      "menuTitle": "任務上下文視窗",
+      "triggerLabel": "任務上下文視窗，目前 {{window}}",
+      "menuHint": "只影響本任務，下一則訊息生效。",
+      "optionDefault": "模型預設",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "輸入 {{price}}/M",
+      "remoteUnsupported": "被控裝置版本不支援調整任務上下文視窗",
+      "remoteTightenOnly": "被控裝置的上限無法讀取，這裡只提供調小檔。",
+      "readOnlyHint": "唯讀任務：可以查看檔位與價差，但不能修改。",
+      "shrinkWarning": "目前已用 {{used}}，換到更小檔位會先觸發壓縮或換窗。",
+      "saveFailed": "儲存上下文視窗檔位失敗"
+    },
     "agentStatus": {
       "readingMemory": "正在讀取記憶…",
       "savingMemory": "正在儲存記憶…",
@@ -11362,7 +12792,8 @@
       "degraded": "與遠端裝置的連線不穩定，正在自動重試…",
       "actionsUnavailable": "遠端裝置暫不可用，恢復連線後才能修改該任務",
       "resync": "重新同步",
-      "loading": "正在從遠端裝置載入任務…",
+      "loading": "正在讀取任務…",
+      "syncing": "正在同步任務…",
       "suspectStall": "本輪長時間無更新，可能已斷流",
       "finalizeStuck": "結束本輪",
       "issue": {
@@ -11529,7 +12960,8 @@
         "awaitingPermission": "等待授權",
         "awaitingQuestion": "等待你的回覆",
         "awaitingPlan": "等待計劃審閱",
-        "awaitingPluginSetup": "等待插件設定"
+        "awaitingPluginSetup": "等待插件設定",
+        "awaitingInputHandoff": "等待代輸入"
       },
       "showAllSessions": "顯示全部 {{count}} 項",
       "allSessions": "全部任務",
@@ -11707,8 +13139,31 @@
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
         "dirtyWorktreeWarning": "該任務的 worktree 有未提交的更改；歸檔前會自動儲存為 git 快照，之後可在任務內一鍵恢復。",
+        "scheduleWarning_one": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
+        "scheduleWarning_other": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
+        "scheduleWarningMany_one": "其中 {{count}} 個任務關聯了自動化，後續執行時會恢復這些任務。",
+        "scheduleWarningMany_other": "其中 {{count}} 個任務關聯了自動化，後續執行時會恢復這些任務。",
+        "scheduleName": "「{{name}}」",
+        "scheduleNameSeparator": "、",
         "confirm": "確認",
         "cancel": "取消"
+      },
+      "dialogueAction": {
+        "search": "在對話中搜尋",
+        "restoreAll": "全部恢復",
+        "remoteBulkUnavailable": "暫不支援含遠端任務的批次操作"
+      },
+      "dialogueArchiveAll": {
+        "description": "將歸檔此對話群組內全部 {{count}} 個任務。歸檔後將從列表中移除。",
+        "descriptionWithSkip": "將歸檔此對話群組內 {{count}} 個任務，{{skip}}的任務會被跳過。歸檔後將從列表中移除。",
+        "allPinnedOrRunning": "此對話群組內任務全部已置頂或在執行中，無可歸檔項",
+        "allPinned": "此對話群組內任務全部已置頂，不會歸檔",
+        "allRunning": "此對話群組內所有任務都在執行中，請先停止後再歸檔",
+        "empty": "此對話群組內沒有可歸檔的任務"
+      },
+      "dialogueRestoreAll": {
+        "description": "將恢復此對話群組內 {{count}} 個已歸檔任務。恢復後將從「已歸檔」列表移除，並回到「活躍」列表。",
+        "empty": "此對話群組內沒有可恢復的任務"
       },
       "archiveAll": {
         "title": "歸檔全部任務",
@@ -11790,6 +13245,7 @@
         "moveToProjectRunningBlocked": "任務正在執行，結束後再移動",
         "moveToProjectAttachedBlocked": "任務正在被接管，結束接管後再移動",
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
+        "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
@@ -11842,7 +13298,7 @@
         "unarchiveAll": "全部取消歸檔",
         "openInExplorer": "在檔案管理器中開啟",
         "newInDirectory": "在此目錄新建任務",
-        "copyDeepLink": "複製深度連結",
+        "copyDeepLink": "複製專案連結",
         "syncCodex": "同步此專案的 Codex 任務",
         "syncCodexDone": "Codex 同步完成：連結 {{inserted}} 條，更新 {{updated}} 條",
         "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
@@ -11851,7 +13307,7 @@
         "search": "在專案內搜尋任務"
       },
       "deepLink": {
-        "copied": "已複製深度連結",
+        "copied": "連結已複製",
         "copyFailed": "複製失敗，請手動複製",
         "projectNotFound": "找不到對應的專案，可能已被歸檔或不在本機"
       },
@@ -12018,7 +13474,10 @@
       "treeLoading": "正在載入檔案…",
       "treeAction": {
         "collapseAll": "收起所有",
-        "refresh": "重新整理"
+        "refresh": "重新整理",
+        "showIgnoredDirs": "顯示被忽略的目錄",
+        "hideIgnoredDirs": "隱藏被忽略的目錄",
+        "showIgnoredDirsUnsupported": "對方裝置的 {{appName}} 版本過舊，暫不支援顯示被忽略的目錄"
       },
       "treeMenu": {
         "newFile": "新建檔案",
@@ -12530,7 +13989,7 @@
         "card": {
           "open": "開啟任務",
           "unbind": "解除繫結",
-          "persistentNote": "任務歸檔後會自動重建並續綁",
+          "persistentNote": "任務歸檔後，下次執行會恢復原任務",
           "deleted": "繫結任務已刪除",
           "deletedPersistentNote": "下次執行時會自動建立新任務並續綁",
           "fallbackTitle": "任務 {{id}}"
@@ -12675,7 +14134,8 @@
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型選擇器",
         "categoryListAria": "{{category}} 模型",
-        "effortListAria": "Effort 級別"
+        "effortListAria": "Effort 級別",
+        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。"
       }
     },
     "toast": {
@@ -12741,6 +14201,13 @@
     },
     "builtinTemplates": {
       "schedule": {
+        "everyMinute": "每分鐘",
+        "hourlyAt": "每小時第 {{minutes}} 分",
+        "atTimes": "{{times}}",
+        "atHoursMinutes": "{{hours}} 時的第 {{minutes}} 分",
+        "monthDays": "每月 {{days}} 日",
+        "daysOrWeekdays": "{{days}}或每週 {{weekdays}}",
+        "inMonths": "{{months}}",
         "daily": "每天 {{time}}",
         "weekdays": "工作日 {{time}}",
         "weekly": "{{weekday}} {{time}}",
@@ -12834,7 +14301,7 @@
       "fetchFailedHint": "暫時取不到最新狀態，當前只顯示本機記錄的提交，列表可能不完整。",
       "fetchFailedPartialHint": "暫時取不到最新狀態，部分 Issue 的狀態可能顯示不全。",
       "enhancementFailedHint": "暫時沒能讀取你 GitHub 帳號名下的 Issue。可能是 Cindy GitHub 插件的訪問令牌權限不足，可到插件頁檢查。",
-      "enhancementFailedGenericHint": "暫時沒能讀取你 GitHub 帳號名下的 Issue，可能是網路問題或 GitHub 介面限流，稍後可以點右上角重試。",
+      "enhancementFailedGenericHint": "無法讀取 GitHub Issue，請點右上角重試",
       "truncatedHint": "Issue 較多，這裡只列出了一部分，完整列表請在 GitHub 上檢視。"
     },
     "redirect": {
@@ -13097,11 +14564,141 @@
       "deny": "拒絕"
     }
   },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "這個頁面沒有使用安全連線，輸入的內容可能被他人讀取。",
+      "ip-address": "這個頁面使用 IP 位址而不是網域名稱，請確認它是你預期的網站。",
+      "local-host": "這個頁面來自本機服務，請確認它是你預期的程式。",
+      "local-file": "這個頁面是本機檔案，請確認它是你預期的內容。",
+      "punycode": "這個網址包含特殊字元，可能在冒充其他網站，請仔細核對。",
+      "embedded-frame": "輸入框位於嵌入的其他網站中，請確認來源可信。"
+    },
+    "agentControlled": "這個介面由 Agent 開啟。填寫前請確認它確實是你要登入的地方。",
+    "error": {
+      "decision": "操作沒有送達，請重試。",
+      "stale": "介面已經變化，請依最新內容操作。",
+      "submit": "輸入沒有送達，請重試。"
+    },
+    "terminal": {
+      "succeeded": "已交還給 Agent。",
+      "cancelled": "已取消代輸入。",
+      "failed": "代輸入已結束。",
+      "expired": "等待時間過長，代輸入已結束。"
+    },
+    "failure": {
+      "permission": "Cindy 沒有讀取這台電腦介面的權限。請在系統設定的輔助使用中允許 Cindy。",
+      "target_gone": "目標視窗已關閉。",
+      "unreadable": "無法讀取這個介面。可以在主機電腦上直接完成，然後交還給 Agent。",
+      "action_failed": "剛才的操作沒有生效，請檢查介面後重試。",
+      "timeout": "等待時間過長，代輸入已結束。",
+      "unsupported": "這台電腦暫不支援代輸入。",
+      "origin_changed": "填寫前頁面已變化，什麼都沒有填入。請確認現在的頁面後再填寫。",
+      "picture_unavailable": "無法顯示這一步的畫面。請在系統設定中允許 Cindy 錄製螢幕，並確認視窗沒有被縮到最小。",
+      "screen_locked": "這台電腦的螢幕已鎖定（顯示器休眠也會鎖定螢幕）。請先喚醒並解鎖，再讓 Agent 重試。",
+      "nothing_to_fill": "這個介面沒有需要你輸入的內容，已交還給 Agent 繼續。"
+    },
+    "phase": {
+      "reading": "正在讀取介面…",
+      "working": "正在填寫…",
+      "finishing": "看起來已經完成，{{count}} 秒後交還給 Agent。",
+      "finishingNow": "看起來已經完成，正在交還給 Agent…"
+    },
+    "action": {
+      "stay": "還沒完成",
+      "done": "交還給 Agent",
+      "claim": "改在這裡處理",
+      "picture": "看畫面",
+      "backToForm": "回到表單",
+      "liveView": "即時畫面",
+      "fill": "填寫",
+      "skip": "略過",
+      "continue": "繼續",
+      "close": "取消",
+      "showPassword": "顯示密碼",
+      "hidePassword": "隱藏密碼",
+      "scan": "掃碼"
+    },
+    "remoteUnavailable": "這台電腦無法從遠端接收輸入。請在主機電腦上完成這一步，再交還給 Agent。",
+    "unnamedField": "輸入框",
+    "passwordField": "密碼",
+    "codeField": "驗證碼",
+    "filledHint": "已有內容；留空則保持不變。",
+    "record": {
+      "doneOn_one": "主人在 {{device}} 完成了 {{count}} 步輸入",
+      "doneOn_other": "主人在 {{device}} 完成了 {{count}} 步輸入",
+      "doneHost_one": "主人在宿主電腦上完成了 {{count}} 步輸入",
+      "doneHost_other": "主人在宿主電腦上完成了 {{count}} 步輸入",
+      "donePhone_one": "主人在手機上完成了 {{count}} 步輸入",
+      "donePhone_other": "主人在手機上完成了 {{count}} 步輸入",
+      "doneElsewhere_one": "主人在另一台裝置上完成了 {{count}} 步輸入",
+      "doneElsewhere_other": "主人在另一台裝置上完成了 {{count}} 步輸入",
+      "done": "代輸入已完成",
+      "nothingToFill": "無需輸入，已交還給 Agent",
+      "cancelled": "代輸入已取消",
+      "expired": "代輸入已逾時",
+      "failed": "代輸入未完成"
+    },
+    "holder": {
+      "elsewhere": "正在 {{device}} 上處理，也可以改在這裡處理。",
+      "host": "宿主電腦",
+      "phone": "手機",
+      "otherDevice": "另一台裝置"
+    },
+    "agentNote": "Agent 補充：{{note}}",
+    "picture": {
+      "hint": "點按畫面中的位置，Cindy 會在主機電腦上點按同一個位置。",
+      "open": "顯示這一步的畫面",
+      "alt": "目標視窗的畫面",
+      "loading": "正在取得畫面…",
+      "error": "無法取得畫面，請重試。",
+      "field": "目前的輸入框",
+      "type": "輸入",
+      "typeEnter": "輸入並按 Return"
+    },
+    "deviceCode": {
+      "prompt": "用這個代碼登入",
+      "copy": "複製代碼",
+      "copied": "已複製代碼",
+      "copyFailed": "複製失敗",
+      "open": "在本裝置開啟",
+      "openFailed": "無法開啟連結",
+      "then": "在開啟的頁面輸入代碼並完成登入，然後點「交還給 Agent」。"
+    },
+    "nothingLeft": "這裡沒有需要你填寫的了。",
+    "dialogNote": "只會填進電腦上的這一處，不會交給 Agent，也不會儲存。",
+    "qr": {
+      "open": "在本機打開 {{site}}",
+      "copyLink": "複製連結",
+      "copyText": "複製內容",
+      "copied": "已複製。",
+      "copyFailed": "無法複製，請重試。",
+      "loading": "正在取得 QR 碼…",
+      "scanned": "已掃碼，等你在手機上確認。確認後會自動繼續。",
+      "hint": "用手機掃描這個碼完成登入。登入後會自動繼續。",
+      "hintLink": "用手機掃描這個碼，或在本機打開連結完成登入。登入後會自動繼續。",
+      "copyImage": "複製圖片",
+      "imageCopied": "已複製圖片。",
+      "openFailed": "沒能打開這個連結。可以用手機掃描這個碼。",
+      "alt": "電腦上的 QR 碼。點擊會點在電腦上的這個碼上。",
+      "failed": "沒能取得 QR 碼，點擊重試。"
+    }
+  },
   "commandPalette": {
     "viewSkillDetails": "查看技能詳情",
     "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
   },
   "skillhub": {
+    "remote": {
+      "loading": "正在讀取技能…",
+      "readFailed": "無法讀取技能，請重試。",
+      "unsupported": "目標電腦暫不支援遠端技能管理，請更新其 Cindy。",
+      "confirm": {
+        "install": "在「{{device}}」安裝「{{name}}」？",
+        "update": "將「{{device}}」的「{{name}}」更新至 v{{version}}？",
+        "uninstall": "從「{{device}}」解除安裝「{{name}}」？",
+        "installDescription": "技能將寫入所選電腦，更新前保留原檔案備份。"
+      }
+    },
     "unifiedDetail": {
       "contentSource": "內容來源",
       "local": "本機",
@@ -13119,17 +14716,13 @@
     },
     "home": {
       "title": "技能",
-      "description": "管理本地技能，或從 Skill Hub 發現並安裝更多技能。",
+      "description": "管理已安裝的技能，或從 SkillHub 探索更多技能。",
       "descriptionLocalOnly": "管理本機安裝的本地技能。",
       "search": "搜尋技能",
       "clearSearch": "清除技能搜尋",
       "noSearchResults": "沒有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分類",
       "categoryFiltersAria": "按分類篩選技能",
-      "scrollCategoriesLeft": "向左查看更多分類",
-      "scrollCategoriesRight": "向右查看更多分類",
-      "categoryScrollAtStart": "已經是第一個分類",
-      "categoryScrollAtEnd": "已經是最後一個分類",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",
@@ -13161,6 +14754,9 @@
       },
       "learn": {
         "description": "從目前任務、描述的工作流程或 SkillHub 技能中提煉可重用技能，並透過 Cindy 的審查流程儲存。"
+      },
+      "pluginCreator": {
+        "description": "建立、修改、偵錯與打包 Cindy 插件，也可按需發佈。"
       }
     },
     "common": {
@@ -13764,7 +15360,7 @@
     "workingDirRequired": "需要工作目錄",
     "dialogUnavailable": "window.electronAPI.dialog 不可用",
     "notReadyHeading": "Maker Experimental",
-    "notReadyBody": "window.electronAPI.maker 不可用。請重啟應用並檢查控制台中的 IPC 註冊錯誤。",
+    "notReadyBody": "此功能暫不可用，請重啟應用程式",
     "title": "Maker Experimental — 一階段重構新鏈路",
     "description": "新鏈路驗證頁面。老鏈路（cc-agent / codex）不受影響。",
     "agentLabel": "Agent：",
@@ -13902,7 +15498,7 @@
       "codexBinaryMissingTitle": "Codex 元件未就緒",
       "codexBinaryMissingDescription": "Codex 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Codex 連線狀態。",
       "piBinaryMissingTitle": "Pi 元件未就緒",
-      "piBinaryMissingDescription": "Pi 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Pi 連線狀態。",
+      "piBinaryMissingDescription": "Pi 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「設定 → 關於」管理或恢復 Pi。",
       "goToSettings": "前往設定",
       "remoteCodexBinaryMissingTitle": "遠端電腦 Codex 元件未就緒",
       "remotePiBinaryMissingTitle": "遠端電腦 Pi 元件未就緒",
@@ -14001,19 +15597,55 @@
       "scrollWorkersRightEdge": "已是最右側的 Worker",
       "errorBadge": "錯誤",
       "errorBadgeAria": "有 Worker 出錯",
+      "awaitingBadgeAria": "有 Worker 等待你回覆",
       "executionDevice": "在 {{device}} 執行",
       "deviceUnreachable": "暫時無法取得狀態",
       "unknownDevice": "另一台電腦",
-      "archiveRemoteWorkerConfirmDesc": "它會從這個協同裡移除，並停止 {{device}} 上正在進行的這一輪。{{device}} 上的任務、記錄和檔案都會保留，標註「協同已結束」，可以在那台繼續查看。"
+      "archiveRemoteWorkerConfirmDesc": "它會從這個協同裡移除，並停止 {{device}} 上正在進行的這一輪。{{device}} 上的任務、記錄和檔案都會保留，標註「協同已結束」，可以在那台繼續查看。",
+      "editWorkerAria": "編輯 Worker {{name}}"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任務",
       "waitingForWorker": "等待 Worker",
+      "workerHiddenInSeparateWindow": "獨立視窗中不顯示 Worker 對話",
+      "viewWorkerInMainWindow": "在主視窗查看",
       "remoteWorkerLoading": "正在讀取 {{device}} 上的任務…",
       "remoteWorkerUnreachable": "{{device}} 目前無法連線，恢復後會自動顯示這個 Worker 的任務。",
       "closeAria": "關閉"
+    },
+    "workerProject": {
+      "missingDirectory": "目錄已不存在，請重新選擇。",
+      "label": "專案",
+      "current": "目前專案",
+      "shared": "與 Lead 共用：{{project}} · {{branch}}",
+      "direct": "將直接在 {{project}} 的 {{branch}} 分支上修改",
+      "inferred": "根據 Lead 最近的操作辨識",
+      "dirty": "這個目錄有尚未提交的變更，Worker 會在這些變更上繼續工作。",
+      "newWorktree": "為 Worker 新建 worktree",
+      "from": "從",
+      "fromSuffix": "建立（可更換）",
+      "splitWarning": "會從 {{branch}} 的最新提交建立新分支。Lead 尚未提交的變更不會帶過去，之後雙方的變更互不可見，需要再合併。",
+      "dialogue": "目前任務未指定專案，無法新建 worktree。Worker 將在 {{directory}} 工作。",
+      "notGit": "這個目錄不是 Git 儲存庫，無法新建 worktree。Worker 將在 {{directory}} 工作。",
+      "emptyRepo": "儲存庫還沒有任何提交，無法新建 worktree。Worker 將在 {{directory}} 工作。",
+      "detachedHead": "分離 HEAD · {{sha}}",
+      "directDetached": "將直接在 {{project}} 的 {{branch}} 上修改",
+      "loadFailed": "無法讀取專案目錄。"
+    },
+    "editWorker": {
+      "title": "編輯 Worker",
+      "submit": "儲存",
+      "closeAria": "關閉編輯 Worker 彈窗",
+      "labelLabel": "標識",
+      "labelHint": "標識用於在團隊內唯一識別這個 Worker，只能包含字母、數字、連字號與底線；改動後 Lead 與各處引用會依新標識定位。",
+      "labelHintAria": "標識說明",
+      "labelPlaceholder": "Worker 標識（留空表示不變更）",
+      "labelInvalid": "標識只能包含字母、數字、連字號與底線",
+      "duplicateLabel": "標識 {{label}} 已被本團隊其他 Worker 使用",
+      "saveFailed": "儲存失敗，請重試",
+      "labelLocked": "該 Worker 的標識已被活躍的插件團隊計畫引用，計畫結束前不能修改；可改角色名，或先釋放該 Worker。"
     }
   },
   "splitGroup": {
@@ -14028,6 +15660,7 @@
     "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試"
   },
   "extraDirs": {
+    "libraryReadOnlyLabel": "Mivo 作品庫（唯讀）",
     "retryRemotePlugins": "遠端插件載入失敗，點擊重試",
     "menuAria": "操作選單",
     "tooltipEmpty": "更多操作",
@@ -14216,7 +15849,7 @@
   "sessionShare": {
     "export": {
       "title": "匯出任務",
-      "sensitiveWarning": "匯出檔案包含此任務的完整對話記錄與工具輸出（可能含檔案內容、命令結果等敏感資訊），請確認接收方可信。",
+      "sensitiveWarning": "匯出包含完整對話和工具輸出，可能有敏感資訊，請確認接收方可信。",
       "encryptLabel": "使用密碼加密匯出檔案",
       "passwordPlaceholder": "密碼（至少 4 位）",
       "passwordConfirmPlaceholder": "再次輸入密碼",
@@ -14381,7 +16014,9 @@
         "description": "請將以下資訊寄送至客服信箱 {{email}}，以申請開立發票。",
         "requiredInfo": "郵件中請提供以下資訊：",
         "emailSubject": "申請開立訂單 {{orderId}} 的發票",
-        "emailBody": "您好，\n\n我想申請開立以下訂單的發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謝謝。",
+        "personalInvoicePolicy": "Cindy 個人版儲值預設開立<strong>個人抬頭發票</strong>，抬頭可填寫姓名或「個人」。如需開立企業抬頭發票用於公司報銷，請提供<strong>加蓋公司公章的報銷說明</strong>，並在說明中註明開票抬頭。",
+        "invoiceTitleHint": "填寫說明：個人抬頭請填寫姓名或「個人」；如需企業抬頭用於公司報銷，請隨郵件附上加蓋公司公章、註明開票抬頭的報銷說明。",
+        "emailBody": "您好，\n\n我想申請開立以下訂單的發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n{{invoiceTitleHint}}\n\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謝謝。",
         "sendAction": "寄送開票申請",
         "emailCopied": "客服信箱已複製",
         "emailCopyFailed": "複製客服信箱失敗，請再試一次",
@@ -14620,6 +16255,7 @@
     }
   },
   "modelDescriptions": {
+    "automaticRouting": "由供應商選擇模型。",
     "longContext": "可選的長上下文版本，長輸入可能產生更高費用。",
     "security": "用於安全分析與程式碼審查。",
     "research": "用於資料研究、複雜問題、程式開發與文件創作。",
@@ -14642,6 +16278,9 @@
     "compression": "用於精簡冗長內容。"
   },
   "routines": {
+    "onEvent": "事件：{{source}} · {{event}}",
+    "triggerDetails": "查看觸發條件（{{count}} 項，符合任一項即執行）",
+    "noTriggers": "尚未設定觸發條件",
     "unsavedTitle": "尚有未儲存的修改",
     "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
     "discard": "放棄修改",
@@ -14676,6 +16315,7 @@
     "save": "儲存例行任務",
     "deleteConfirm": "刪除這條例行任務，並取消等待中的執行？",
     "keep": "保留例行任務",
+    "openTask": "查看任務",
     "history": "執行歷史",
     "noRuns": "這條例行任務尚未執行",
     "field": "欄位",
@@ -14707,11 +16347,78 @@
       "not-equals": "不等於"
     },
     "quiet": "檢查沒事不說話",
+    "sessionMode": "執行方式",
+    "sessionModePersistent": "沿用同一任務（保留上下文）",
+    "sessionModeFresh": "每次新建任務（隔離上下文）",
+    "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
     "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
     "checkCommand": "前置檢查命令",
     "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
     "timeoutMs": "檢查逾時（毫秒，留空不限時）",
-    "advancedSettings": "進階設定"
+    "advancedSettings": "進階設定",
+    "builtinFollowUp": {
+      "name": "跟進已接手的任務（內建）",
+      "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
+    },
+    "builtinTodoCheck": {
+      "name": "每天查待辦（內建）",
+      "hint": "工作日 9:00 在已連接的來源裡找新待辦，沒有就不打擾；在近況裡開關，只能暫停或恢復。"
+    },
+    "builtinNightlyLearning": {
+      "name": "夜間學習（內建）",
+      "title": "夜間學習",
+      "hint": "每天 3:30 整理和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。",
+      "hintWeekly": "每週一 3:30 整理這一週和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。"
+    },
+    "nightly": {
+      "switchLabel": "到點自動整理",
+      "paused": "已暫停。對話照常計數，開啟後到點開始整理。",
+      "running": "正在整理…",
+      "memoryOff": "記憶已關閉，只整理技能。",
+      "pending": "待整理",
+      "pendingTurns_one": "{{count}} 輪對話",
+      "pendingTurns_other": "{{count}} 輪對話",
+      "pendingNone": "沒有新對話，到點會略過",
+      "last": "上次",
+      "lastNever": "還沒整理過",
+      "lastFailed": "沒整理完，下次會再試",
+      "lastLearned_one": "整理了 {{count}} 項",
+      "lastLearned_other": "整理了 {{count}} 項",
+      "nothing": "沒有需要整理的",
+      "viewHistory": "查看紀錄",
+      "notHere": "夜間學習只在夥伴的主力電腦上執行。",
+      "switchHint": "沒有新對話就略過，不呼叫模型",
+      "frequency": "頻率",
+      "daily": "每天",
+      "weekly": "每週",
+      "dailyHint": "每天 3:30",
+      "weeklyHint": "每週一 3:30",
+      "runNow": "現在整理",
+      "history": "紀錄",
+      "empty": "還沒有整理過。有新對話後，到點會第一次整理。",
+      "manual": "手動整理",
+      "readTurns_one": "看了 {{count}} 輪對話",
+      "readTurns_other": "看了 {{count}} 輪對話",
+      "undone": "已復原",
+      "undo": "復原",
+      "redo": "恢復",
+      "watching": "觀察中的做法",
+      "watchingHint": "只出現過一次的做法先放在這裡，不會載入。再遇到同類事才會總結成技能。",
+      "promote": "現在記成技能",
+      "decline": "不用學",
+      "changedSince": "這一條之後被改過，無法復原",
+      "failed": "沒能完成，請重試",
+      "item": {
+        "memoryCreated": "新記住「{{title}}」",
+        "memoryUpdated": "整理了記憶「{{title}}」",
+        "memoryDeleted": "刪除了記憶「{{title}}」",
+        "memoryMerged": "把記憶「{{title}}」併入「{{into}}」",
+        "skillCreated": "新學技能「{{title}}」",
+        "skillUpdated": "更新了技能「{{title}}」",
+        "skillDisabled": "停用了技能「{{title}}」",
+        "skillMerged": "把技能「{{title}}」併入「{{into}}」並停用"
+      }
+    }
   },
   "cindyMakeDoctor": {
     "description": "檢查本機建置 Cindy 所需的環境。用法：/cindy-make-doctor",
@@ -14882,7 +16589,8 @@
         "included": "目前執行版本已包含",
         "notIncluded": "目前執行版本未包含",
         "unknown": "是否包含尚未確認"
-      }
+      },
+      "failedContinue": "沒能查到官方是否已有類似修改，可以直接繼續製作。"
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 準備環境",
@@ -15277,7 +16985,8 @@
         "installerReady": "安裝程式已就緒"
       },
       "rounds_other": "{{count}} 輪修改",
-      "files_other": "改動 {{count}} 個檔案"
+      "files_other": "改動 {{count}} 個檔案",
+      "generatePersonal": "產生個人版"
     },
     "merge": {
       "getLatest": "同步最新原始碼",
@@ -15320,7 +17029,265 @@
         "interrupted": "操作已中斷，改動已保留，請重試。",
         "startFailed": "無法開啟處理任務，請重試。",
         "cancelFailed": "未能取消本次更新，請重試。個人版原始碼已保留。"
+      },
+      "combine": {
+        "taskTitle": "合併兩台電腦的修改",
+        "status": {
+          "fetching": "正在準備合併…",
+          "merging": "正在合併兩邊的修改…",
+          "conflict": "兩邊改到了同一處，需要處理",
+          "resolving": "正在處理衝突",
+          "checking": "正在檢查合併結果…",
+          "merged": "兩邊的修改已合併",
+          "failed": "合併沒有完成",
+          "cancelled": "已取消合併，兩邊的個人版都沒有變化"
+        },
+        "conflictConfirm": {
+          "title": "兩台電腦改到了同一處",
+          "description": "確認後會建立獨立任務，由 Agent 把兩邊的修改合在一起，兩邊的功能都會保留；無法同時保留時會先問你。取消將放棄本次合併，兩邊的個人版都不變。",
+          "confirm": "確認並處理",
+          "cancel": "取消合併"
+        }
       }
+    },
+    "storage": {
+      "title": "儲存位置",
+      "github": "你的 GitHub · {{repository}}",
+      "localOnly": "只在這台電腦",
+      "localOnlyHint": "連接 GitHub 後，可以在其他電腦上使用這個個人版，也能把修改提交給官方。換電腦或重裝系統後，只存在本機的個人版無法找回。",
+      "localChosenHint": "你選擇了只留在這台電腦。換電腦或重裝系統後，只存在本機的個人版無法找回。",
+      "disconnectedHint": "這台電腦還沒有連接 GitHub，連接後才能同步。",
+      "unavailableHint": "暫時無法確認 GitHub 連線。",
+      "actionFailed": "操作沒有完成，請重試。",
+      "running": {
+        "save": "正在儲存到你的 GitHub",
+        "sync": "正在同步到你的 GitHub",
+        "disconnect": "正在停止同步"
+      },
+      "step": {
+        "waiting": "等待其他工程操作完成",
+        "preparing": "整理這台電腦上的修改",
+        "fork": "在你的 GitHub 上建立副本",
+        "connecting": "連接你的 GitHub",
+        "retrieving": "取回另一台電腦的修改",
+        "uploading": "上傳個人版"
+      },
+      "status": {
+        "synced": "已同步",
+        "pendingBuild": "產生個人版後同步",
+        "retrieved": "已取回另一台電腦的修改，產生個人版後可用",
+        "pending": "還沒同步到 GitHub",
+        "remoteAhead": "GitHub 上有另一台電腦的新修改",
+        "diverged": "GitHub 和這台電腦各有新的修改，暫時沒辦法自動合在一起",
+        "account": "目前連接的 GitHub 帳號（{{login}}）不是這個儲存庫的擁有者，已暫停同步。",
+        "needsMerge": "GitHub 和這台電腦各有新修改，需要合併",
+        "buildFirst": "先產生個人版，再同步"
+      },
+      "errors": {
+        "github": "GitHub 連線已失效，請重新連接 GitHub。",
+        "account": "目前連接的 GitHub 帳號與儲存位置不一致，已暫停同步。",
+        "forkConflict": "沒能在你的 GitHub 上建立 Cindy 的副本：同名儲存庫不是官方儲存庫的副本，Cindy 沒有改動它。",
+        "forkUnavailable": "GitHub 上的副本遲遲沒有準備好，請稍後重試。",
+        "network": "連不上 GitHub，請檢查網路後重試。",
+        "workflowScope": "目前的 GitHub 授權缺少上傳工作流程檔案的權限，請重新連接 GitHub 後重試。",
+        "source": "個人版原始碼暫時無法使用，請先準備好原始碼再試。",
+        "gitOutdated": "這台電腦的 Git 版本太舊，請在「環境準備」裡更新 Git 後重試。",
+        "interrupted": "上次操作被中斷，沒有自動繼續。",
+        "failed": "同步沒有完成，請重試。",
+        "forkMissing": "在 GitHub 上找不到儲存個人版的儲存庫，它可能被刪除了。可以重新儲存到你的 GitHub。",
+        "forkArchived": "儲存個人版的 GitHub 儲存庫已封存，GitHub 不再接受上傳。在 GitHub 上取消封存後再同步。"
+      },
+      "card": {
+        "title": "把個人版儲存到你的 GitHub？",
+        "intro": "你已連接 GitHub 帳號 {{login}}。儲存後：",
+        "otherComputers": "使用同一個 GitHub 帳號的其他電腦，可以使用這個個人版",
+        "contribute": "以後可以把你的修改提交給 Cindy 官方",
+        "autoSync": "之後會自動同步，不用再管",
+        "public": "會儲存到你 GitHub 帳號下的 Cindy 副本（通常是 {{repository}}），它是官方儲存庫的公開副本：你的修改在 GitHub 上所有人都看得到。",
+        "unchanged": "這台電腦上的個人版、製作歷史和正在進行的製作都不會改變。",
+        "existingTitle": "你的 GitHub 上已經有個人版",
+        "existingIntro": "帳號 {{login}} 的 {{repository}} 裡有在其他電腦上儲存的個人版。儲存後，這台電腦也使用它，之後自動同步。",
+        "existingKeeps": "如果這台電腦還沒有自己的修改，會直接使用 GitHub 上的個人版；這台電腦已有的修改不會被覆蓋。",
+        "prepareFirst": "會先準備個人版原始碼，需要幾分鐘。"
+      },
+      "actions": {
+        "connect": "連接 GitHub",
+        "reconnect": "重新連接 GitHub",
+        "save": "儲存到 GitHub",
+        "keepLocal": "只留在這台電腦",
+        "syncNow": "立即同步",
+        "retry": "重試",
+        "recheck": "重新檢查",
+        "view": "在 GitHub 查看",
+        "stop": "停止同步",
+        "useExisting": "在這台電腦使用",
+        "saveAgain": "重新儲存到 GitHub",
+        "keepSeparate": "不用，這台電腦單獨做一個"
+      },
+      "stopConfirm": {
+        "title": "停止同步到 GitHub？",
+        "description": "這台電腦之後不再上傳個人版。你 GitHub 上的儲存庫和這台電腦上的個人版都會保留，之後可以重新開啟。",
+        "confirm": "停止同步",
+        "cancel": "取消"
+      },
+      "needsMergeHint": "點上方「同步」合併兩邊的修改，兩邊的功能都會保留；改到同一處時會自動開任務處理。",
+      "buildFirstHint": "兩台電腦都有新修改，這台電腦的還沒產生。先產生個人版，再點「同步」就能把兩邊合在一起。"
+    },
+    "contribution": {
+      "action": "提交給官方",
+      "update": "更新提交",
+      "resubmit": "重新提交",
+      "view": "在 GitHub 查看",
+      "submitted": "已提交給官方 #{{number}}",
+      "state": {
+        "submitted": "已提交給官方 #{{number}}",
+        "open": "已提交給官方 #{{number}} · 等待審核",
+        "merged": "已被官方採納 #{{number}}",
+        "closed": "官方未採納 #{{number}}"
+      },
+      "dialog": {
+        "title": "提交給官方",
+        "description": "把這項修改整理成一個 Pull Request，提交到 Cindy 官方儲存庫，由維護者審核。",
+        "loading": "正在整理這項修改…",
+        "existing": "這項修改已經提交過（#{{number}}），再次提交會更新它。",
+        "reopen": "這項修改上次提交的 #{{number}} 已關閉，再次提交會新開一個。",
+        "prTitle": "標題",
+        "prTitleHint": "建議以 feat、fix 等英文類型加英文冒號開頭",
+        "body": "說明",
+        "bodyHint": "已按官方的提交範本預填，可以直接修改。",
+        "author": "署名",
+        "name": "名字",
+        "email": "電子郵件",
+        "nameRequired": "請填寫名字",
+        "emailRequired": "請填寫有效的電子郵件",
+        "authorHint": "會作為修改的作者和簽名，公開顯示在 GitHub 上。",
+        "files": "包含 {{count}} 個檔案",
+        "onlyThis": "只包含這一項修改，你個人版裡的其他修改不會帶上。",
+        "public": "從你的 GitHub 儲存庫 {{repository}} 發起，所有人都看得到。",
+        "uiNote": "這項修改涉及介面。提交後請在 GitHub 上補充截圖，並寫明依據的設計規範。",
+        "dco": "我確認這項修改由我提交，同意以 {{name}} <{{email}}> 簽署開發者原創聲明（DCO）。",
+        "submit": "提交",
+        "update": "更新提交",
+        "cancel": "取消",
+        "close": "關閉",
+        "files_other": "包含 {{count}} 個檔案"
+      },
+      "errors": {
+        "notBound": "要提交給官方，先在本頁上方「儲存位置」把個人版儲存到你的 GitHub。",
+        "github": "GitHub 連線已失效，請在設定裡重新連接 GitHub 後再試。",
+        "account": "目前連接的 GitHub 帳號和儲存個人版的帳號不一致，請換回原來的帳號再試。",
+        "unavailable": "這台電腦上已經找不到這項修改的內容，無法提交。",
+        "changed": "請重新確認提交內容。關閉視窗後重新開啟，核對檔案清單再提交。",
+        "conflict": "這項修改和官方最新的程式碼改到了同一處，沒辦法自動整理成只含這項修改的提交。可以在最新的個人版上重新製作這項修改，再提交給官方。",
+        "empty": "官方最新的程式碼已經包含這項修改，不需要再提交。",
+        "invalid": "請檢查標題、名字和電子郵件是否填寫正確。標題只能寫一行。",
+        "network": "連不上 GitHub，請檢查網路後重試。",
+        "workflowScope": "這項修改改動了 GitHub 工作流程檔案，目前的 GitHub 授權不能上傳。請重新連接 GitHub 後再試。",
+        "failed": "沒有提交成功，請稍後重試。"
+      }
+    },
+    "summary": {
+      "personal": "個人版",
+      "latestLabel": "官方最新",
+      "official": "官方 {{version}}",
+      "officialUnknown": "官方版本",
+      "development": "官方開發中的版本",
+      "withChanges": "{{version}} ＋ 你的 {{count}} 項修改",
+      "withOwnChanges": "{{version}} ＋ 你的修改",
+      "noChanges": "{{version}}，還沒有你的修改",
+      "latest": {
+        "release": "正式版 {{version}}",
+        "beta": "beta 版 {{version}}",
+        "dev": "GitHub 上的官方最新程式碼",
+        "unavailable": "暫時查不到",
+        "unknown": "還沒查詢"
+      },
+      "included": {
+        "upToDate": "個人版已包含",
+        "updateAvailable": "個人版還沒包含",
+        "unverified": "還不能確認個人版是否已包含"
+      },
+      "technical": "技術詳情（給開發者）",
+      "withChanges_other": "{{version}} ＋ 你的 {{count}} 項修改"
+    },
+    "sync": {
+      "action": "同步",
+      "hint": "把個人版更新到官方版本；儲存到 GitHub 時還會取回其他電腦的修改並上傳。有衝突會自動開任務處理。",
+      "buildingHint": "個人版正在產生，完成或停止後才能同步。",
+      "step": {
+        "resuming": "正在繼續上次沒完成的同步…",
+        "github": "正在取回其他電腦的修改…",
+        "combine": "正在合併兩邊的修改…",
+        "official": "正在更新到官方版本…",
+        "upload": "正在上傳到你的 GitHub…"
+      },
+      "done": "已同步到官方 {{ref}}",
+      "doneDevelopment": "已同步到官方最新程式碼",
+      "held": "官方 {{ref}} 已發布，但它更新了資料格式：先切換到原版並更新 Cindy，再同步即可包含。",
+      "errors": {
+        "busy": "其他操作正在進行，請稍後再同步。",
+        "source": "個人版原始碼還沒準備好，或剛剛有了變化，請稍後再同步。",
+        "github": "連接 GitHub 時出錯，請在下方「儲存位置」檢查連線後再同步。",
+        "network": "連不上網路，請檢查後再同步。",
+        "diverged": "GitHub 上的個人版和這台電腦基於互不相關的官方版本，暫時沒辦法自動合併。",
+        "unavailable": "暫時查不到官方版本資訊，請稍後再同步。",
+        "cancelled": "已放棄這次合併，個人版和 GitHub 上的版本都沒有變化。",
+        "failed": "同步沒有完成，請重試。",
+        "changed": "同步期間另一台電腦又上傳了新修改，再點一次「同步」即可取回。",
+        "featurePending": "修改記錄裡有一項修改正在加入或撤銷，處理完後再同步。",
+        "gitOutdated": "這台電腦的 Git 版本太舊，沒辦法和 GitHub 同步。請把 Git 更新到 2.36 或更新的版本。",
+        "forkMissing": "找不到儲存個人版的 GitHub 儲存庫，它可能被刪除了。可以在下方「儲存位置」重新儲存到 GitHub。",
+        "forkArchived": "儲存個人版的 GitHub 儲存庫已封存，GitHub 不再接受上傳。在 GitHub 上取消封存後再同步。"
+      },
+      "doneCurrent": "已同步",
+      "ahead": "個人版已在比這台電腦的 Cindy 更新的官方版本上（來自另一台電腦）。如果切換時提示版本不相容，請先切換到原版並更新 Cindy。",
+      "abandon": {
+        "action": "放棄這次合併",
+        "title": "放棄處理這個衝突？",
+        "description": "處理任務會停止，中間結果會刪除。個人版保持原樣，儲存在 GitHub 上的版本也不會變，之後可以再同步。",
+        "confirm": "放棄",
+        "cancel": "繼續處理"
+      },
+      "uploadAfterBuild": "這台電腦的修改會在產生個人版後自動上傳到你的 GitHub。",
+      "waiting": {
+        "working": {
+          "combine": "兩台電腦改到了同一處，正在一個任務裡合併，處理完會自動繼續同步。",
+          "official": "官方更新和你的修改改到了同一處，正在一個任務裡處理，處理完會自動繼續同步。"
+        },
+        "input": "處理衝突的任務在等你回答，打開任務看看。",
+        "interrupted": {
+          "task": "處理衝突時 Cindy 被關閉了。打開任務說一句「繼續」就能接著處理，也可以放棄。",
+          "start": "上次同步被中斷了。放棄後再點一次「同步」即可。"
+        },
+        "missing": "合併結果裡少了 {{count}} 項你的修改。可以在任務裡讓它補回，或者確認不需要後仍然使用這個結果。",
+        "stale": "處理期間個人版又有了變化，這次合併已經過時，請放棄後重新同步。",
+        "failed": "這次合併沒能完成。可以打開任務看看，或者放棄後重新同步。",
+        "abandoning": "正在放棄這次合併…",
+        "paused": "這次合併的處理任務不在了。點「繼續處理」開一個新任務接著做，已經做好的部分會保留。",
+        "otherAccount": "這次合併是用另一個帳號登入時開始的，切回那個帳號後才能繼續或放棄。"
+      },
+      "waitingHint": "先處理完正在進行的合併，或者放棄它。",
+      "accept": {
+        "action": "仍然使用",
+        "title": "仍然使用這個合併結果？",
+        "description": "結果裡沒有的 {{count}} 項修改不會出現在個人版裡。兩邊原來的版本都留有備份。",
+        "confirm": "仍然使用",
+        "cancel": "再想想"
+      },
+      "buildFirst": "這台電腦有還沒產生的修改。先產生個人版，再同步就能取回另一台電腦的修改。",
+      "needsGenerate": "個人版有了新的變化，產生後才會在這台電腦上用上。",
+      "keep": {
+        "hint": "兩邊的修改合不到一起時，可以選一邊為準；另一邊會留有備份。",
+        "github": "以 GitHub 上的為準",
+        "local": "以這台電腦的為準",
+        "githubTitle": "以 GitHub 上的個人版為準？",
+        "githubDescription": "這台電腦會改用 GitHub 上的個人版（來自另一台電腦）。這台電腦現在的個人版會留有備份，修改記錄裡的修改之後還可以重新加入。",
+        "localTitle": "以這台電腦的個人版為準？",
+        "localDescription": "GitHub 上的個人版會被這台電腦的取代。取代前會在你的 GitHub 儲存庫裡留一個備份分支，另一台電腦的修改可以從那裡找回。",
+        "cancel": "再想想"
+      },
+      "resume": "繼續處理",
+      "generateFirst": "個人版裡有還沒產生的修改。先產生個人版，再同步到官方 {{ref}}。"
     }
   },
   "taskTags": {
@@ -15402,85 +17369,6 @@
     "privateUnconfirmed": "尚未確認私訊送達，請使用相同的重試識別碼重試。",
     "verificationUnavailable": "暫時無法核驗群聊授權，請在連線恢復後重試。"
   },
-  "teammateTodo": {
-    "title": "待辦",
-    "new": "新增待辦",
-    "search": "搜尋待辦",
-    "open": "未完成",
-    "done": "已完成",
-    "hidden": "已忽略 / 稍後",
-    "empty": "暫無待辦",
-    "noMatch": "沒有符合的待辦",
-    "loading": "正在讀取…",
-    "retry": "重試",
-    "error": "操作未完成，請重試。",
-    "conflict": "待辦已更新，請重新查看後再修改。",
-    "received": "已收到",
-    "accepted": "查看進度",
-    "unknown": "核實進度",
-    "failed": "重試下一步",
-    "view": "查看詳情",
-    "evidence": "查看依據",
-    "more": "更多操作",
-    "discovered": "發現",
-    "assigned": "交辦",
-    "suggested": "建議",
-    "candidate": "待確認",
-    "overdue": "已逾期",
-    "today": "今天",
-    "next": "下一步",
-    "outcome": "完成條件",
-    "value": "為何值得處理",
-    "sources": "來源依據",
-    "associations": "關聯",
-    "deadline": "到期時間",
-    "sourceDeadline": "來源期限",
-    "clearDate": "清除到期",
-    "date": "日期",
-    "time": "確切時間（選填）",
-    "zone": "時區",
-    "save": "儲存",
-    "cancel": "取消",
-    "delete": "刪除此項",
-    "mute": "此問題不再提示",
-    "later": "稍後處理",
-    "until": "稍後至",
-    "restore": "恢復",
-    "reopen": "重新開啟",
-    "complete": "標記完成",
-    "summary": "完成依據",
-    "confirmDate": "確認日期",
-    "deadlineReason": "日期待確認的原因",
-    "override": "你設定的期限",
-    "reminder": "稍後至",
-    "edit": "編輯待辦",
-    "name": "標題",
-    "progress": "目前進度",
-    "link": "依據連結（選填）",
-    "saved": "已儲存",
-    "page": "{{start}}–{{end}} / {{count}}",
-    "previous": "上一頁",
-    "following": "下一頁",
-    "order": "排序",
-    "dueOrder": "到期優先",
-    "createdOrder": "建立順序",
-    "origin": "來源類型",
-    "all": "全部",
-    "close": "關閉",
-    "laterConflict": "稍後處理不延長真實期限",
-    "legacyEvidence": "舊記錄的完成依據待核實",
-    "noPermission": "此來源未連接或尚未授權",
-    "copy": "複製",
-    "undo": "復原",
-    "history": "完成記錄",
-    "clockNote": "僅日期按所示時區當天結束；確切時刻保留時區。",
-    "deleted": "已刪除",
-    "muted": "不再提示",
-    "deferred": "稍後處理",
-    "continue": "繼續",
-    "addTime": "新增時間",
-    "dateOnly": "僅日期"
-  },
   "codexResets": {
     "retryReset": "重試重置",
     "retryPending": "重置結果尚未確認，請重試原請求。",
@@ -15504,6 +17392,91 @@
     "nothingToReset": "目前沒有需要重置的用量上限",
     "offerExpired": "帳號或重置狀態已變更，請重新整理用量後再使用重置",
     "resetFailed": "無法確認重置結果，請重新整理用量查看額度是否已恢復",
-    "limitAction": "使用重置 · 剩餘 {{count}} 次"
+    "limitAction": "使用重置 · 剩餘 {{count}} 次",
+    "autoUse": {
+      "label": "自動使用",
+      "rules": "自動使用規則",
+      "lowQuota": "每週剩餘低於 1% 時自動用",
+      "resetDistance": "距離配額重設還剩",
+      "days": "{{count}} 天以上",
+      "unlimited": "不限",
+      "custom": "自訂…",
+      "customDays": "自訂天數",
+      "dayUnit": "天以上",
+      "apply": "套用",
+      "expiring": "臨近卡到期時自動用",
+      "leadTime": "提前多久使用",
+      "minutes": "到期前 {{count}} 分鐘",
+      "hours": "到期前 {{count}} 小時",
+      "hint": "任一條件滿足時，優先用最早到期的卡。配額全滿時略過。由這台電腦執行，需保持 Cindy 執行。",
+      "failed": "儲存失敗，請重試。",
+      "restore": "恢復預設"
+    }
+  },
+  "mcpApps": {
+    "sharedTaskReadOnly": "此卡片僅任務擁有者可操作。",
+    "retry": "重新載入",
+    "loadFailed": "應用程式載入失敗。請檢查連線後重新載入。",
+    "updateRequired": "這台電腦尚不支援 MCP Apps，請更新電腦上的 Cindy 後再試。",
+    "appName": "MCP App",
+    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "messageSource": "由 $t(mcpApps.appName)「{{name}}」傳送",
+    "serverId": "MCP 伺服器 ID：{{id}}",
+    "exitFullscreen": "離開全螢幕"
+  },
+  "richAnswer": {
+    "send": "傳送訊息",
+    "sending": "正在傳送…",
+    "sent": "已提交",
+    "sendFailed": "訊息未提交，已保留填寫內容",
+    "playVideo": "播放影片",
+    "openVideoSource": "開啟原影片",
+    "calculationUnavailable": "此項暫時無法計算。",
+    "incomplete": "部分內容未能顯示。"
+  },
+  "forwardedRequest": {
+    "sourcePresent": "[來源] 使用者原話由宿主原樣保留，作為請求背景；目前的請求在 Agent補充。",
+    "sourceMissing": "[來源] 未找到可核驗的使用者原話。",
+    "userPrefix": "使用者原話：",
+    "agentPrefix": "Agent補充：",
+    "taskSource": "[任務來源] 本任務由夥伴發起。",
+    "taskId": "任務 ID：",
+    "contextReferences": "參考資料："
+  },
+  "sharing": {
+    "includeAttribution": "附上我的暱稱和頭像",
+    "recipientHint": "對方可開啟連結或掃描圖片查看插件，在電腦版 Cindy 中使用。",
+    "linkLabel": "分享連結",
+    "imageLabel": "分享圖片",
+    "title": "分享",
+    "close": "關閉",
+    "loading": "正在準備分享素材…",
+    "notConfigured": "分享服務尚未開放",
+    "unavailable": "插件已下架或不再公開，無法分享",
+    "loadFailed": "無法讀取分享素材，請重新讀取",
+    "retry": "重新讀取",
+    "imageAlt": "{{name}} 的分享圖片",
+    "copyLink": "複製連結",
+    "copyImage": "複製圖片",
+    "saveImage": "儲存圖片",
+    "linkCopied": "連結已複製",
+    "imageCopied": "圖片已複製",
+    "imageSaved": "圖片已儲存",
+    "copyLinkFailed": "無法複製連結",
+    "copyImageFailed": "無法複製圖片，可再次複製",
+    "saveImageFailed": "無法儲存圖片，可再次儲存",
+    "previewFailed": "無法顯示圖片預覽，仍可複製連結"
+  },
+  "subscriptionFastPolicy": {
+    "label": "允許使用 Fast",
+    "providerHint": "關閉後，此訂閱帳號使用普通模式，包括自己使用和分享使用。也適用於 Ultrafast。",
+    "groupHint": "關閉後，經此組執行的任務使用普通模式，也適用於 Ultrafast。",
+    "pending": "部分電腦尚未確認設定。請保持連線，並更新不支援此設定的組內電腦。",
+    "saveFailed": "設定可能已儲存，但執行中的任務尚未全部確認切換為普通模式。請檢查連線後重試。"
+  },
+  "attachmentAccessConfirmation": {
+    "title": "確認附件存取",
+    "message": "Cindy 無法讀取這個附件。請選擇原始檔案，確認後繼續傳送這則訊息；取消會保留草稿。",
+    "button": "使用原始檔案"
   }
 }

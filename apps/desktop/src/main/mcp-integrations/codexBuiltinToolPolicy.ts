@@ -27,6 +27,16 @@ export function readAllowedBuiltinPluginIds(
   return readStringArray(vendorOptions, CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY);
 }
 
+/** Custom App transports follow the same frozen mounts at configuration and use time. */
+export function isFrozenMcpServerAllowed(
+  vendorOptions: Readonly<Record<string, unknown>> | undefined,
+  serverName: string,
+): boolean {
+  if (readAllowedBuiltinPluginIds(vendorOptions) === null) return true;
+  const mounted = vendorOptions?.cindyRuntimeMcpServerNames;
+  return Array.isArray(mounted) && mounted.includes(serverName);
+}
+
 /** Frozen per-runtime policy always wins over live/stable provider exceptions. */
 export function isFrozenBuiltinPluginAllowed(
   vendorOptions: Readonly<Record<string, unknown>> | undefined,

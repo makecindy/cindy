@@ -204,7 +204,9 @@ export async function buildCcRemoteHttpMcpServers(
   // 这个改动只会**收窄**注入(allowed 键不存在时行为逐字不变),不会放开任何原本
   // 被禁的东西。names 变化会经 computeRemoteMcpFingerprint 变成新代际,策略变更
   // 触发 forceFresh 正是既定语义。
+  const mounted = vendorOptions?.cindyRuntimeMcpServerNames;
   const names = selectRemoteInjectableServerNames(started.serverNames, {
+    appServerNames: args.botSession ? (Array.isArray(mounted) ? mounted.filter((name): name is string => typeof name === 'string') : []) : undefined,
     collabEnabled:
       (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,

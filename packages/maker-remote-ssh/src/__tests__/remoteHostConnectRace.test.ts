@@ -305,6 +305,7 @@ describe('RemoteHost arm/disconnect race', () => {
     // Before the fix these joined waitForTerminal() with no attempt in
     // flight and hung until a manual disconnect.
     const joined = Promise.all([host.connect(), host.connect()]);
+    // real-wait: enforce the real connection timeout in this rekey race.
     const timedOut = new Promise((_, reject) => setTimeout(() => reject(new Error('connect hung after rekey')), 500));
     await expect(Promise.race([joined, timedOut])).resolves.toBeDefined();
     expect(host.getStatus()).toBe('ready');

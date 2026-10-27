@@ -19,6 +19,7 @@ import {
   type ProviderGroupView,
 } from '../../shared/providerGroup.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './cooling.js';
 
 /** 留出 invoke 路由头的空间，同时适配可靠传输和旧端普通帧；预算按 JSON 的 UTF-8 字节数计。 */
 export const PROVIDER_GROUP_USAGE_REQUEST_MAX_BYTES = Math.min(MAX_FRAME_BYTES, MAX_TRANSPORT_MESSAGE_BYTES) - 64 * 1024;
@@ -37,15 +38,17 @@ export interface ProviderGroupRemoteClient {
     agentKind: 'claude-code' | 'codex' | 'pi';
     model: string;
     exclude: readonly string[];
+    quotaRebalance?: string;
   }): Promise<ProviderGroupRemotePick>;
   cool(ownerDeviceId: string, input: {
     providerId: string;
     memberKey: string;
     cause: ProviderGroupRemoteCoolCause;
     resetAt?: number | null;
+    model?: string;
   }): Promise<void>;
   leases(ownerDeviceId: string, seq: number, entries: readonly ProviderGroupRemoteLease[]): Promise<void>;
-  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
+  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
   /** 报告经组、在组里别的电脑上运行的用量；组所在电脑是旧版本时抛 ProviderGroupRemoteUnsupportedError。 */
   usage(ownerDeviceId: string, report: { seq: number; sinceDay: string | null; rows: readonly ProviderGroupRemoteUsageRow[] }, beforeSend?: () => void): Promise<void>;
 }
@@ -58,7 +61,22 @@ export class ProviderGroupRemoteUnsupportedError extends Error {
   }
 }
 
-export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvoke): ProviderGroupRemoteClient {
+/** Start recovery before catalog probes without delaying the owner's group snapshot. */
+export function recoverProviderGroupViewShares(
+  view: ProviderGroupView,
+  recoverShares?: (agentDeviceIds: readonly string[]) => Promise<void>,
+): void {
+  const usable = new Set(view.members.filter((member) => member.state === 'available' || member.state === 'full').map((member) => member.key));
+  const shares = view.config?.members.filter((member) => member.kind === 'share' && usable.has(member.key))
+    .flatMap((member) => member.agentDeviceId ? [member.agentDeviceId] : []) ?? [];
+  // Catalog resolution waits within the settings page's existing per-member deadline.
+  void recoverShares?.(shares).catch(() => undefined);
+}
+
+export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvoke, options: {
+  /** Capture the account before the request; only verified same-account group responses can restore shares. */
+  captureShareRecovery?(): (agentDeviceIds: readonly string[]) => Promise<void>;
+} = {}): ProviderGroupRemoteClient {
   async function call(ownerDeviceId: string, request: Record<string, unknown>, preSend?: () => void): Promise<unknown> {
     const result = preSend
       ? await invoke(ownerDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [request], { preSend })
@@ -73,6 +91,7 @@ export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvok
 
   return {
     async pick(ownerDeviceId, input) {
+      const recoverShares = options.captureShareRecovery?.();
       try {
         const raw = await call(ownerDeviceId, {
           action: 'pick',
@@ -81,8 +100,16 @@ export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvok
           agentKind: input.agentKind,
           model: input.model,
           exclude: [...input.exclude],
+          ...(input.quotaRebalance ? { quotaRebalance: input.quotaRebalance } : {}),
         });
-        return parseProviderGroupRemotePick(raw, input.providerId);
+        // 旧组所在电脑可能忽略这个可选约束：只有明确执行并回显的结果才用于主动换号。
+        if (input.quotaRebalance && (!raw || typeof raw !== 'object'
+          || (raw as { quotaRebalance?: unknown }).quotaRebalance !== true)) return { kind: 'none' };
+        const pick = parseProviderGroupRemotePick(raw, input.providerId);
+        if (pick.kind === 'member' && pick.member.kind === 'share' && pick.member.agentDeviceId) {
+          await recoverShares?.([pick.member.agentDeviceId]);
+        }
+        return pick;
       } catch (error) {
         if (error instanceof ProviderGroupRemoteUnsupportedError) return { kind: 'none' };
         throw error;
@@ -90,13 +117,23 @@ export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvok
     },
 
     async cool(ownerDeviceId, input) {
-      await call(ownerDeviceId, {
-        action: 'cool',
+      const scoped = input.cause === 'usage-limit' && !!input.model;
+      const request = {
+        action: scoped ? 'cool-model' : 'cool',
         providerId: input.providerId,
         memberKey: input.memberKey,
         cause: input.cause,
+        ...(input.model ? { model: input.model } : {}),
         ...(typeof input.resetAt === 'number' ? { resetAt: input.resetAt } : {}),
-      });
+      };
+      try {
+        await call(ownerDeviceId, request);
+      } catch (error) {
+        // Old owners reject unknown actions. A short legacy cooldown must not carry the model's weekly reset.
+        if (!scoped || !(error instanceof Error) || !/unknown provider group action/.test(error.message)) throw error;
+        await call(ownerDeviceId, { ...request, action: 'cool', model: undefined,
+          resetAt: Date.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS });
+      }
     },
 
     async leases(ownerDeviceId, seq, entries) {
@@ -104,14 +141,19 @@ export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvok
     },
 
     async view(ownerDeviceId, providerId, modelOrOptions) {
+      const recoverShares = options.captureShareRecovery?.();
       const model = typeof modelOrOptions === 'string' ? modelOrOptions : modelOrOptions?.model;
+      const agentKind = typeof modelOrOptions === 'object' ? modelOrOptions?.agentKind : undefined;
       const includeGuestSupport = typeof modelOrOptions === 'object' && modelOrOptions?.includeGuestSupport === true;
-      return parseProviderGroupRemoteView(await call(ownerDeviceId, {
+      const view = parseProviderGroupRemoteView(await call(ownerDeviceId, {
         action: 'view',
         providerId,
         ...(model ? { model } : {}),
+        ...(agentKind ? { agentKind } : {}),
         ...(includeGuestSupport ? { includeGuestSupport: true } : {}),
       }), providerId);
+      recoverProviderGroupViewShares(view, recoverShares);
+      return view;
     },
 
     async usage(ownerDeviceId, report, beforeSend) {

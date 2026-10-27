@@ -15,6 +15,9 @@ import type { LedgerDb } from '../ledger';
 import type { StorageIpcDeps } from '../storageIpc';
 
 let tmpUserData = '';
+vi.mock('../../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: () => ({}), isDataOwnerBroadcastScopeCurrent: () => true,
+}));
 
 vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
@@ -65,6 +68,37 @@ afterEach(() => {
 
 const OLD_MS = 100 * 60 * 60 * 1000;
 
+it('clears only remote cache candidates, preserving attachments, shared bytes and other integrations', async () => {
+  const remote = await seedBlob('remote', { isCache: true });
+  const other = await seedBlob('other', { isCache: true });
+  const shared = await seedBlob('shared', { isCache: true });
+  const pinned = await seedBlob('pinned', { isCache: false });
+  const live = await seedBlob('draft', { isCache: true });
+  for (const row of [remote, shared, pinned, live]) await ledger.addRef({
+    hash: row.hash, refKind: 'integration-cache', refId: `remote-media:${row.hash}`,
+    originId: 'remote-media', originKind: 'integration',
+  }, db);
+  for (const row of [other, shared]) await ledger.addRef({
+    hash: row.hash, refKind: 'integration-cache', refId: `other:${row.hash}`,
+    originId: 'other', originKind: 'integration',
+  }, db);
+  const clearRemoteMediaMemory = vi.fn();
+  const handlers = makeHandlers({ clearRemoteMediaMemory });
+  const scan = await handlers.scan({ scope: 'remote-media', draftUrls: [live.url] });
+  expect(scan.cache.evictable.map((entry) => entry.hash)).toEqual([remote.hash]);
+  expect(scan.zeroRef.hashes).toEqual([]);
+  const result = await handlers.cleanup({
+    scope: 'remote-media', draftUrls: [live.url],
+    evictCacheHashes: [remote, other, shared, pinned, live].map((entry) => entry.hash),
+    zeroRefHashes: [pinned.hash], deadDirNames: ['images'], cleanTmpFiles: true,
+  });
+  expect(result.cacheEvicted.deleted).toBe(1);
+  expect(result.freedBytes).toBe(remote.bytes);
+  expect(await ledger.getBlobInfo(remote.hash, db)).toBeNull();
+  for (const row of [other, shared, pinned, live]) expect(await ledger.getBlobInfo(row.hash, db)).not.toBeNull();
+  expect(clearRemoteMediaMemory).toHaveBeenCalledTimes(2);
+});
+
 async function seedBlob(
   content: string,
   opts?: { isCache?: boolean; aged?: boolean; mimeType?: string },
@@ -105,6 +139,7 @@ function makeHandlers(overrides?: {
   clearChatAttachmentsDir?: () => Promise<void>;
   getLegacyImagesDirStats?: StorageIpcDeps['getLegacyImagesDirStats'];
   getChatAttachmentsDirStats?: StorageIpcDeps['getChatAttachmentsDirStats'];
+  clearRemoteMediaMemory?: () => void;
 }) {
   return createStorageIpcHandlers({
     getQueueScanTexts: () => overrides?.queueTexts ?? [],
@@ -118,6 +153,7 @@ function makeHandlers(overrides?: {
     clearChatAttachmentsDir: overrides?.clearChatAttachmentsDir ?? (async () => undefined),
     getLegacyImagesDirStats: overrides?.getLegacyImagesDirStats,
     getChatAttachmentsDirStats: overrides?.getChatAttachmentsDirStats,
+    clearRemoteMediaMemory: overrides?.clearRemoteMediaMemory,
   });
 }
 

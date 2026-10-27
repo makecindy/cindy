@@ -1,9 +1,9 @@
 /**
- * 市场缓存删除的**结构门禁**。
+ * 市场缓存删除租约的行为回归。
  *
  * 这块反复出过七八轮同一类事故:每轮都是"又发现一个删除点没查租约"——交换旧
  * 目录、清理历史版本、清理暂存目录、移除来源、失败回滚,各自直接 `fs.rm`。行为
- * 用例只能覆盖已知的那几条路径;真正防止下一轮的是这里的两条约束:
+ * 用例覆盖已知路径;跨文件结构门禁由 ipcErrorBoundary.test.ts 的 guard 执行:
  *
  * 1. `sources/index.ts` 不得出现任何直接的文件系统删除——所有删除必须经
  *    `cacheLease.removeCachePath` 这个唯一入口。新增删除点会在这里失败。
@@ -13,7 +13,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -174,38 +173,5 @@ describe('cacheLease 删除守卫', () => {
     releaseCachePath(tree.version);
     await settleCachePathRemovals(tree.version);
     expect(fs.existsSync(tree.version)).toBe(false);
-  });
-});
-
-describe('缓存删除收口(结构门禁)', () => {
-  const sourcesDir = path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '..',
-    'sources',
-  );
-  // 容忍链式换行(fs.promises\n.rm(…)):否则漏数 cacheLease/git 的真实删除点。
-  const countRawDeletions = (file: string): number =>
-    [
-      ...fs
-        .readFileSync(path.join(sourcesDir, file), 'utf8')
-        .matchAll(/fs\s*\.\s*(?:promises\s*\.\s*)?rm(?:Sync|dir)?\s*\(/g),
-    ].length;
-
-  // 门禁扩到整个 sources/,而不只 index.ts:任一 lease 管理的文件新增直接删除点
-  // 就是又一个绕过租约守卫的口子——这正是此前每一轮返工的形态。
-  it.each(['index.ts', 'store.ts', 'discover.ts', 'parse.ts', 'preflight.ts'])(
-    'sources/%s never deletes filesystem paths directly',
-    (file) => {
-      expect(countRawDeletions(file)).toBe(0);
-    },
-  );
-
-  it('git.ts only deletes its own private clone staging, nothing else', () => {
-    // git.ts 的唯一直接删除是它自己 clone 出的 `<dest>.staging-<uuid>` 私有目录
-    // (UUID 私有、同函数内建同函数内删、从不被租约持有),是经过审阅的例外。
-    // 断言"只删 stagingPath":出现任何删别的路径的调用都要重新确认边界。
-    const git = fs.readFileSync(path.join(sourcesDir, 'git.ts'), 'utf8');
-    const deletions = [...git.matchAll(/\.\s*rm(?:Sync|dir)?\s*\(\s*([A-Za-z]+)/g)].map((m) => m[1]);
-    expect(deletions).toEqual(['stagingPath']);
   });
 });

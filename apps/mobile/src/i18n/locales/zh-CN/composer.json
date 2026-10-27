@@ -72,6 +72,7 @@
     "noFileRead": "没有读取到可上传的文件。"
   },
   "voice": {
+    "cancelled": "语音输入已取消。",
     "recordingEmpty": "录音为空，不能转写。",
     "recordingTooLarge": "录音超过上限 {{size}}MB。",
     "invalidUploadUrl": "服务端没有返回有效的语音上传地址。",
@@ -97,11 +98,26 @@
     "sessionExpiredOrForbidden": "{{appName}} 语音服务的登录已失效或没有权限，请确认登录状态后重试（状态码 {{status}}）。",
     "incomplete": "语音输入未完成，请重试。",
     "missingRefinerTargetProvider": "语音润色暂不可用，请重新登录 {{appName}} 后重试。",
-    "emptyTranscript": "检测到语音但未识别出文本，请重试。",
+    "emptyTranscript": "语音识别未返回文字，请重新录音。",
     "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
     "micPermission": "麦克风权限未开启，请在系统设置里允许 {{appName}} 使用麦克风。",
     "realtimeAudioUnavailable": "当前安装包不支持实时语音输入，请安装包含原生录音模块的测试版。"
+  },
+  "incomingShare": {
+    "title": "发送到 Cindy",
+    "empty": "没有待接收的分享",
+    "file": "文件",
+    "fileCount": "{{count}} 个文件",
+    "hint": "选择去向后，可以补充交代再发送。",
+    "search": "搜索任务和伙伴",
+    "newTask": "新建任务",
+    "companions": "伙伴",
+    "tasks": "已有任务",
+    "unavailable": "暂不可接收分享",
+    "noCompanions": "还没有伙伴",
+    "noTasks": "还没有任务",
+    "retry": "部分内容未能读取，点此重试。"
   }
 }

@@ -1,3 +1,4 @@
+import { serializeModelRoutes, normalizeModelRoute, type ModelRoute } from '@cindy/maker-shared/model-route';
 import { findCatalogModel } from '@cindy/model-providers';
 import { buildMobileModelSections } from './providerModelSections';
 import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
@@ -17,13 +18,15 @@ import { ModelPickerSheet } from './ModelPickerSheet';
 import { normalizeMobileAgentCapabilities } from './agentCapabilities';
 import type { MobileModelConfiguration } from './unifiedMobileModels';
 import type { ProfileValues } from './companionProfileData';
-export interface CompanionModelRoute { harness: 'claude' | 'codex' | 'pi'; model: string; providerId: string | null; effort: string; fastMode: boolean }
+import { useRemoteAgentCatalogs } from './useRemoteAgentCatalogs';
+export type CompanionModelRoute = ModelRoute;
 export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
   if (typeof value !== 'string') return [];
   try {
     const rows: unknown = JSON.parse(value);
-    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || typeof r.fastMode !== 'boolean')) return [];
-    return rows;
+    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || (typeof r.fastMode !== 'boolean' && r.fastMode !== 'ultrafast'))) return [];
+    const normalized = rows.map(normalizeModelRoute);
+    return normalized.every((row): row is ModelRoute => row !== null) ? normalized : [];
   } catch { return []; }
 }
 export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, single = false, inheritanceLabel }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; single?: boolean; inheritanceLabel?: string }) {
@@ -32,18 +35,22 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
   // Only a ready catalog for this device may name a route. Never borrow a cached other-device account.
   const providers = catalog.ready ? catalog.providers : [];
   const chain = readCompanionModelChain(values.modelChain);
+  const routeCatalogs = useRemoteAgentCatalogs({ enabled: chain.some(route => !!route.agentDeviceId),
+    controlledDeviceId: deviceId, keepDeviceIds: chain.flatMap(route => route.agentDeviceId ? [route.agentDeviceId] : []), keepOnly: true });
   const following = values.followsDefault === true;
-  const update = (chain: CompanionModelRoute[]) => onChange({ ...values, modelChain: JSON.stringify(chain) });
+  const update = (chain: CompanionModelRoute[]) => onChange({ ...values, modelChain: serializeModelRoutes(chain) });
   const [showBackups, setShowBackups] = useState(false);
   const routeRow = (route: CompanionModelRoute, index: number) => {
     const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
-    const providerId = route.providerId ?? buildMobileModelSections({ providers, agentKind: agent, selectedModelId: route.model, selectedProviderId: null, existingSessionRoute: true, visibilityOverrides: catalog.modelVisibilityOverrides }).activeSourceId;
-    const provider = providers.find(item => item.id === providerId);
+    const remote = route.agentDeviceId ? routeCatalogs.find(item => item.deviceId === route.agentDeviceId) : undefined;
+    const routeProviders = route.agentDeviceId ? remote?.providers ?? [] : providers;
+    const providerId = route.providerId ?? buildMobileModelSections({ providers: routeProviders, agentKind: agent, selectedModelId: route.model, selectedProviderId: null, existingSessionRoute: true, visibilityOverrides: catalog.modelVisibilityOverrides }).activeSourceId;
+    const provider = routeProviders.find(item => item.id === providerId);
     const model = provider ? findCatalogModel(provider, route.model, agent) : undefined;
-    const source = provider ? mobileProviderAccountTitle(provider) : route.providerId;
-    return <View key={`${route.harness}:${route.providerId}:${route.model}`} style={styles.row}>
+    const source = [provider ? mobileProviderAccountTitle(provider) : route.providerId, remote?.name].filter(Boolean).join(' · ');
+    return <View key={JSON.stringify([route.agentDeviceId ?? null, route.harness, route.providerId, route.model])} style={styles.row}>
       <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
-        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? 'Fast' : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? t(route.fastMode === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
       </Pressable>
       {/* Desktop BotModelChainEditor: the first model stays primary (change it with the picker);
           backups reorder among themselves and can be removed. */}
@@ -71,14 +78,16 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
   const { user } = useAuth(); const { t } = useTranslation();
   const catalog = useDeviceProviders(visible ? deviceId : undefined, visible);
   const maker = useMobileMakerTransport(deviceId);
+  const remoteCatalogs = useRemoteAgentCatalogs({ enabled: visible, controlledDeviceId: deviceId,
+    keepDeviceIds: route?.agentDeviceId ? [route.agentDeviceId] : [] });
   const agent = route?.harness === 'claude' ? 'claude-code' : route?.harness ?? 'pi';
-  const select = async (config: MobileModelConfiguration) => onSelect({ harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
+  const select = async (config: MobileModelConfiguration, source?: { deviceId: string | null }) => onSelect({ agentDeviceId: source?.deviceId ?? null, harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
   return <ModelPickerSheet visible={visible} onClose={onClose} onClosed={onClosed} providers={catalog.ready ? catalog.providers : []}
     modelVisibilityOverrides={catalog.modelVisibilityOverrides} providersReady={catalog.ready}
     flatOptions={[]} agentKind={agent} capabilities={null} activeModelId={route?.model ?? ''} selectedProviderId={route?.providerId ?? null}
     selectedEffort={route?.effort ?? ''} selectedFastMode={route?.fastMode ?? false} existingSessionRoute
     disabled={!catalog.ready} loading={catalog.loading} emptyHint={catalog.error ?? t('devices.companionProfile.modelsUnavailable')}
-    unified={{ scope: JSON.stringify([user?.id, deviceId]), agents: ['claude-code', 'codex', 'pi'],
+    unified={{ remote: { catalogs: remoteCatalogs, selectedDeviceId: route?.agentDeviceId ?? null, hostDeviceId: deviceId }, scope: JSON.stringify([user?.id, deviceId]), agents: ['claude-code', 'codex', 'pi'],
       loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; }, onSelect: select }}
     onSelectFlatModel={() => {}} onSelectProviderRow={() => {}} permissionOptions={[]} activePermissionMode="ask" onSelectPermissionMode={() => {}} hidePermissionTrigger keyboardAvoidingBehavior="padding" />;
 }

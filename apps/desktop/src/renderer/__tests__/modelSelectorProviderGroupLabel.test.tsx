@@ -11,6 +11,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -147,6 +150,7 @@ vi.mock('@/features/provider-group/useLocalProviderGroups', () => ({
 }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
   ensureProviderShareReceivedStarted: vi.fn(),
+  requestProviderShareFavoriteRegions: vi.fn(),
   useProviderShareReceived: () => ({
     received: [{ shareId: 's1', providerLabel: 'X', deviceName: "Magi's Mac Mini", owner: { displayName: 'Magi' } }],
     loaded: true,
@@ -244,5 +248,24 @@ describe('模型列表里供应商组的标题', () => {
     expect(within(list()).getByText('A Model')).toBeTruthy();
     expect(headings()).toEqual(['A Local · 供应商组 · 2 台电脑']);
     expect(screen.getByRole('button', { name: 'A Plain' })).toBeTruthy();
+  });
+
+  it('同一台电脑上的几个账号只算一台', async () => {
+    type Group = { members: unknown[] };
+    const second = { key: 'device:device-d:d-second', kind: 'device', agentDeviceId: 'device-d', providerId: 'd-second', label: 'Laptop', paused: false };
+    const remote = (catalogs.byDevice['device-c'][0] as { group: Group }).group;
+    const local = catalogs.localGroups['a-local'] as Group;
+    const [remoteMembers, localMembers] = [remote.members, local.members];
+    remote.members = [...remoteMembers, second];
+    local.members = [...localMembers, second];
+    try {
+      renderLocalTaskPanel();
+      expect(screen.getByRole('button', { name: 'A Local · 供应商组 · 2 台电脑' })).toBeTruthy();
+      await browse('C Open · Studio · 供应商组 · 3 台电脑');
+      expect(headings()).toEqual(['C Open · Studio · 供应商组 · 3 台电脑']);
+    } finally {
+      remote.members = remoteMembers;
+      local.members = localMembers;
+    }
   });
 });

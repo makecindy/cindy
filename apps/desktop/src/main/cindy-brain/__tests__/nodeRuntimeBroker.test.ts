@@ -2,6 +2,7 @@
 
 import { EventEmitter } from 'node:events';
 import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -161,6 +162,23 @@ function rpcRequest(method = 'echo', params: unknown = { value: 1 }) {
 }
 
 describe('nodeRuntimeBroker owner boundary races', () => {
+  it('does not spawn a worker for an instance the host holds stopped until restart', async () => {
+    const ghost = fakeGhost();
+    const spawnProcess = vi.fn(() => new FakeNodeProcess() as unknown as NodeWorkerProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess,
+      startBlockedReason: (id) => (id === 'node-ghost' ? 'restart Cindy' : null),
+    });
+    try {
+      await expect(broker.handleRequest('node-ghost', rpcRequest('blocked'))).resolves.toMatchObject({ ok: false });
+      await expect(broker.startForRecovery(ghost)).rejects.toThrow('restart Cindy');
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally {
+      broker.destroyAll();
+    }
+  });
+
   it('owner boundary change during startup kills the worker and fails closed', async () => {
     let generation = 1;
     const invalidated = vi.fn();
@@ -395,6 +413,50 @@ afterEach(() => {
 });
 
 describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
+  describe.each(['darwin', 'win32', 'linux'] as const)('%s 系统权限责任归属', (platform) => {
+    it.each([
+      { mode: '普通工作进程', childArgs: undefined },
+      { mode: '宿主代启子进程', childArgs: ['--probe'] },
+    ])('$mode 保留平台对应的启动策略', ({ childArgs }) => {
+      const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      const child = new FakeUtilityProcess();
+      const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
+        void modulePath;
+        void entryArgs;
+        void options;
+        return child;
+      });
+      const pluginDir = path.join(os.tmpdir(), 'demo');
+      let worker: NodeWorkerProcess | undefined;
+
+      try {
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+        worker = createUtilityNodeWorkerProcess(
+          path.join(pluginDir, 'worker.cjs'),
+          pluginDir,
+          'demo',
+          fork as never,
+          childArgs,
+        );
+
+        expect(fork).toHaveBeenCalledOnce();
+        const options = fork.mock.calls[0][2];
+        expect(options).toHaveProperty(
+          'serviceName',
+          `cindy-ghost-node:demo${childArgs === undefined ? '' : ':child'}`,
+        );
+        if (platform === 'darwin') {
+          expect(options).toHaveProperty('disclaim', false);
+        } else {
+          expect(options).not.toHaveProperty('disclaim');
+        }
+      } finally {
+        Object.defineProperty(process, 'platform', platformDescriptor);
+        worker?.kill();
+      }
+    });
+  });
+
   it('不依赖 RunAsNode，过滤宿主秘密，并只用 parentPort 推送 stdin', () => {
     vi.stubEnv('PATH', '/usr/bin');
     vi.stubEnv('NODE_OPTIONS', '--inspect=0.0.0.0:9229');

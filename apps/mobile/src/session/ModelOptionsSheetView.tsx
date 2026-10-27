@@ -52,9 +52,9 @@ export interface ModelOptionsSheetViewProps {
   /** 目标行是否为当前选中行(live vs 记忆的分界)。 */
   selected: boolean;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   agentKind: AgentKind;
   capabilities: MobileAgentCapabilities | null;
@@ -206,7 +206,7 @@ export function ModelOptionsSheetView({
     if (providerId)
       modelMemory?.setEffort(agentKind, providerId, model.id, effort);
   };
-  const setFast = (enabled: boolean): void => {
+  const setFast = (enabled: boolean | 'ultrafast'): void => {
     if (selected) {
       void onChangeSelectedFastMode?.(enabled);
       return;
@@ -246,7 +246,27 @@ export function ModelOptionsSheetView({
           ) : null}
         </View>
       ) : null}
-      {fastEditable ? (
+      {fastEditable && agentKind === 'codex' && model.supportsUltrafastMode ? (
+        <View>
+          <Text style={styles.sectionLabel}>{t("models.options.speed.label")}</Text>
+          {(["standard", "fast", "ultrafast"] as const).map(speed => {
+            const value = speed === "ultrafast" ? "ultrafast" : speed === "fast";
+            return (
+              <Pressable
+                key={speed}
+                disabled={disabled}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: fastOn === value, disabled }}
+                style={styles.fastRow}
+                onPress={() => setFast(value)}
+              >
+                <Text style={styles.fastRowLabel}>{t(`models.options.speed.${speed}`)}</Text>
+                {fastOn === value ? <Check size={iconSize.action} color={colors.textPrimary} /> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : fastEditable ? (
         <View style={styles.fastRow}>
           <Text style={styles.fastRowLabel}>
             {t("models.options.fastMode")}
@@ -257,7 +277,7 @@ export function ModelOptionsSheetView({
             onValueChange={setFast}
             seedColor={colors.inputCaret}
             testID={`${testID}.fastToggle`}
-            value={fastOn}
+            value={!!fastOn}
           />
         </View>
       ) : null}

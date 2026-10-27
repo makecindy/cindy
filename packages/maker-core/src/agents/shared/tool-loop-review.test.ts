@@ -134,6 +134,29 @@ describe('ToolLoopMonitor', () => {
     expect(t.stops).toEqual([]);
   });
 
+  // greptile P1(#6388):突发重复不计数,但也不能当作「模式已打破」取消进行中的复核。
+  it('keeps a pending review when a burst repeat is ignored', async () => {
+    vi.useFakeTimers();
+    const { reviewer, pending } = deferredReviewer();
+    const stops: HardToolLoopVerdict[] = [];
+    const monitor = new ToolLoopMonitor(new ToolLoopGuard({ burstRepeatGapMs: 2_000 }), {
+      reviewer, context: () => ({ sessionId: 's1', agentKind: 'codex', model: 'm1' }),
+      onReviewedStop: (verdict) => stops.push(verdict), logger,
+    });
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(3_000);
+      monitor.onToolUse(`r${i}`, 'read', { path: 'same.ts' });
+      expect(monitor.onToolResult(`r${i}`, `changed ${i}`).kind).toBe('ok');
+    }
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    monitor.onToolUse('burst', 'read', { path: 'same.ts' });
+    expect(monitor.onToolResult('burst', 'changed again').kind).toBe('ok');
+    expect(pending[0]?.signal.aborted).toBe(false);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stops).toHaveLength(1);
+  });
+
   it('discards a pending review once a different call replaces the flagged pattern', async () => {
     const { reviewer, pending } = deferredReviewer();
     const t = setup(reviewer);

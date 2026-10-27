@@ -1,8 +1,11 @@
+import { modelWithInterface } from '@cindy/model-providers';
+import { sessionModelInterface } from './session-model-interface.js';
+import { ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
-import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -33,6 +36,7 @@ import { app } from 'electron';
 
 import { readModelContextLimit } from './model-context-limit-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
+import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
 import {
   PiAgent,
@@ -96,6 +100,7 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
@@ -118,6 +123,7 @@ import {
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor, resolveModelDefaultContextWindow, resolveModelContextProviderId } from './catalog-to-descriptors.js';
+import { readPiNativeCompatOverride } from './pi-native-compat-overrides-store.js';
 import {
   resolveManagedPiNativePackagePaths,
   resolveManagedPiPackageResources,
@@ -154,6 +160,7 @@ export type PiBundledModelCatalog = ReadonlyMap<string, ReadonlyMap<string, PiBu
 export type PiListedModelIds = ReadonlyMap<string, ReadonlySet<string>>;
 
 const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | null>>();
+const resolvedPiBundledModelsByBinary = new Map<string, PiBundledModelCatalog>();
 const listedIdsByCatalog = new WeakMap<PiBundledModelCatalog, PiListedModelIds>();
 let latestPiBundledModelCatalog: PiBundledModelCatalog | null = null;
 
@@ -405,8 +412,12 @@ export async function readPiBundledModels(
   const cached = piBundledModelsByBinary.get(binaryPath);
   if (cached) {
     const catalog = await cached;
+    if (catalog) resolvedPiBundledModelsByBinary.set(binaryPath, catalog);
     latestPiBundledModelCatalog = catalog;
-    if (catalog === null) piBundledModelsByBinary.delete(binaryPath);
+    if (catalog === null) {
+      piBundledModelsByBinary.delete(binaryPath);
+      resolvedPiBundledModelsByBinary.delete(binaryPath);
+    }
     return catalog;
   }
   // A model-switch preview may inspect a live task without launching another Pi
@@ -490,10 +501,14 @@ export async function readPiBundledModels(
   })();
   piBundledModelsByBinary.set(binaryPath, pending);
   const catalog = await pending;
+  if (catalog) resolvedPiBundledModelsByBinary.set(binaryPath, catalog);
   latestPiBundledModelCatalog = catalog;
   // A temp-dir/timeout/parse failure is transient evidence, not a permanent property of this
   // binary. Keep successful probes cached, but let the next session retry a null result.
-  if (catalog === null) piBundledModelsByBinary.delete(binaryPath);
+  if (catalog === null) {
+    piBundledModelsByBinary.delete(binaryPath);
+    resolvedPiBundledModelsByBinary.delete(binaryPath);
+  }
   return catalog;
 }
 
@@ -850,8 +865,11 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
   const ripgrepPath = getRipgrepBinaryPath();
   const config: AgentRuntimeConfig = {
     behaviorFlags: (ctx) => ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv(),
+    // 代输入: sudo / ssh / git password prompts of this task go to the owner.
+    taskShellEnv: inputHandoffTaskShellEnv,
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
-    systemPrompt: composePiSystemPrompt(hostSystemPrompt, piSystemPrompt),
+    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
+    answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
     managedExecutablePaths: { ripgrep: ripgrepPath },
@@ -1206,6 +1224,7 @@ export function buildPiNativeProvidersFromConfigs(
           reasoningEfforts?: PiReasoningEffort[];
           api?: PiModelApi;
           piApi?: PiModelApi;
+          selectedInterface?: import('@cindy/model-providers').ModelInterfaceSnapshot;
           route?: {
             baseUrl: string;
             wireProtocol: ProviderWireProtocol;
@@ -1242,8 +1261,15 @@ export function buildPiNativeProvidersFromConfigs(
     }
   };
   for (const cfg of configs) {
-    const rt = cfg.runtimes.pi;
-    if (!rt) continue;
+    const savedRuntime = cfg.runtimes.pi;
+    if (!savedRuntime) continue;
+    const resolvedProvider = resolvedCatalog?.providers.find(p => p.id === runtimeCustomProviderId(cfg.id));
+    const rt = { ...savedRuntime, models: savedRuntime.models.map(model => {
+      const resolved = resolvedProvider?.models.pi?.find(item => item.id === model.id);
+      return resolved?.selectedInterface ? { ...model, api: resolved.api, piApi: resolved.piApi,
+        route: resolved.route, selectedInterface: resolved.selectedInterface } : model;
+    }) };
+
     const authMethod = cfg.auth?.method ?? 'apiKey';
     if (authMethod === 'oauth' && (!cfg.auth?.oauth || !oauthProxyEndpoint)) {
       onSkip?.(cfg.id, 'oauth proxy not ready for pi native');
@@ -1378,6 +1404,7 @@ export function buildPiNativeProvidersFromConfigs(
       // The proxy already retains the supplier base path (e.g. /api/v1).
       // OpenAI SDKs append /chat/completions or /responses themselves.
       baseUrl: authMethod === 'oauth' ? oauthProxyEndpoint! : rt.baseUrl,
+      ...(authMethod === 'oauth' ? { cacheIdentityBaseUrl: rt.baseUrl } : {}),
       api: providerApi,
       apiKeyEnvVar,
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
@@ -1410,11 +1437,18 @@ export function buildPiNativeProvidersFromConfigs(
         // bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
         // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
+        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
+        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        const nativeGoogleBaseUrl =
+          modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
+            ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
         const modelBaseUrl =
           m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
         const spec = {
           id: m.id,
+          ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
+          ...(authMethod === 'oauth' ? { cacheIdentityBaseUrl: modelBaseUrl ?? rt.baseUrl } : {}),
           ...(resolved?.supportsFastMode !== undefined ? { supportsFastMode: resolved.supportsFastMode } : {}),
           ...(m.api || m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(authMethod === 'oauth'
@@ -1616,18 +1650,24 @@ function isPiGatewayModelApi(api: PiBundledModelInfo['api']): api is PiModelApi 
   );
 }
 
-function resolveProbedPiGatewayModel(modelId: string): PiBundledModelInfo | undefined {
+function resolveProbedPiGatewayModel(
+  modelId: string,
+  runtimeBinaryPath?: string,
+): PiBundledModelInfo | undefined {
+  const catalog = runtimeBinaryPath
+    ? resolvedPiBundledModelsByBinary.get(runtimeBinaryPath)
+    : latestPiBundledModelCatalog;
   const normalized = modelId.replace(/\[1m\]$/, '');
   const identity = resolveBundledPiGatewayCatalogIdentity(normalized);
   if (identity) {
-    const matched = latestPiBundledModelCatalog?.get(identity.provider)?.get(identity.modelId);
+    const matched = catalog?.get(identity.provider)?.get(identity.modelId);
     if (matched) return matched;
   }
   // Future namespaced models may use Pi's exact provider/model identity without a client alias.
   // This is an exact pair lookup, never a bare-id or family guess.
   const slash = normalized.indexOf('/');
   if (slash <= 0) return undefined;
-  return latestPiBundledModelCatalog
+  return catalog
     ?.get(normalized.slice(0, slash))
     ?.get(normalized.slice(slash + 1));
 }
@@ -1635,7 +1675,7 @@ function resolveProbedPiGatewayModel(modelId: string): PiBundledModelInfo | unde
 export function resolvePiCindyGatewayModelApi(
   _selectedProviderId: string | null | undefined,
   modelId: string,
-  context?: { remote: boolean },
+  context?: { remote: boolean; runtimeBinaryPath?: string },
 ): PiModelApi | null | undefined {
   // Gateway membership remains the account-availability gate, but its protocol is the last hint.
   const gatewayApi = resolveXdPiGatewayHintApi(modelId);
@@ -1646,15 +1686,25 @@ export function resolvePiCindyGatewayModelApi(
   // sessions skip that probe but still use this client version's explicit static configuration
   // before the last-priority Gateway hint.
   if (context?.remote) return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
-  const probed = resolveProbedPiGatewayModel(modelId);
+  const probed = resolveProbedPiGatewayModel(modelId, context?.runtimeBinaryPath);
   if (probed) return isPiGatewayModelApi(probed.api) ? probed.api : null;
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+// #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.
+// Keep this Gateway policy independent of whether a Pi catalog version lists the model.
+const PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS = new Set([
+  'deepseek/deepseek-v4.1-flash',
+  'deepseek/deepseek-flash',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-vision-exp',
+  'deepseek/deepseek-v4-flash',
+]);
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
-  context?: { remote: boolean },
+  context?: { remote: boolean; runtimeBinaryPath?: string },
 ): Pick<
   PiNativeModelSpec,
   'api' | 'compat' | 'samplingParams' | 'thinkingLevelMap'
@@ -1662,10 +1712,19 @@ export function resolvePiCindyGatewayModelSpec(
   const api = resolvePiCindyGatewayModelApi(_selectedProviderId, modelId, context);
   if (api === undefined || api === null) return api;
   const bundled = resolveBundledPiGatewayModelProfile(modelId);
-  const probed = context?.remote ? undefined : resolveProbedPiGatewayModel(modelId);
+  const probed = context?.remote
+    ? undefined
+    : resolveProbedPiGatewayModel(modelId, context?.runtimeBinaryPath);
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (
+    api === 'openai-completions' &&
+    PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS.has(modelId) &&
+    compat?.requiresReasoningContentOnAssistantMessages === undefined
+  ) {
+    compat = { ...compat, requiresReasoningContentOnAssistantMessages: true };
+  }
   if (api === 'anthropic-messages') compat = pruneAnthropicCompatForGateway(compat);
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
@@ -1711,10 +1770,13 @@ export function resolvePiCindyGatewayModelSpec(
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
 export async function resolvePiNativeProviders(ctx: {
+  sessionId?: string;
   workingDir: string;
   remoteHostId?: string | null;
   providerId?: string | null;
   model: string;
+  /** Local Pi binary frozen by maker-core for this session. */
+  runtimeBinaryPath?: string;
   resumeSessionId?: string;
   purpose?: 'startup' | 'preview' | 'live-refresh';
 }): Promise<PiNativeProvidersResult> {
@@ -1735,7 +1797,7 @@ export async function resolvePiNativeProviders(ctx: {
     });
     throw new PiNativeProviderProxyNotReadyError();
   }
-  const piBinaryPath = resolvePiBinaryPath();
+  const piBinaryPath = ctx.runtimeBinaryPath ?? resolvePiBinaryPath();
   // Never treat the Desktop executable as the catalog of a different remote Pi binary.
   const bundledModels = !ctx.remoteHostId && piBinaryPath
     ? await readPiBundledModels(piBinaryPath, { cachedOnly: ctx.purpose === 'preview' })
@@ -1799,12 +1861,23 @@ export async function resolvePiNativeProviders(ctx: {
       }
     }
   }
+  const sessionCatalog = getActiveCatalog();
+  const pinnedCatalog = ctx.sessionId && ctx.purpose !== 'preview' ? { ...sessionCatalog,
+    providers: sessionCatalog.providers.map(provider => provider.id !== ctx.providerId ? provider : {
+      ...provider, models: { ...provider.models, pi: provider.models.pi?.map(model => {
+        if (model.id !== ctx.model) return model;
+        const selected = sessionModelInterface(ctx.sessionId!, provider.id, 'pi', model, sessionCatalog.modelRegistry,
+          ctx.resumeSessionId ? provider.routing.pi?.wireProtocol : undefined);
+        return modelWithInterface(model, selected);
+      }) },
+    }),
+  } : sessionCatalog;
   const custom = buildPiNativeProvidersFromConfigs(
     mergeByokNativeConfigs(configs, getActiveCatalog().providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,
-    getActiveCatalog(),
+    pinnedCatalog,
     !isRemote && compatProxyReady ? getClaudeEndpoint() : undefined,
   );
   // Remote PI cannot use the local native overlay. Preserve upstream's exact
@@ -1877,6 +1950,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
+    // 上游拒收可选请求字段（如 prompt_cache_retention / prompt_cache_key）后学到的 per-model
+    // compat 修正，写 models.json 时合并；只改 compat，不动路由与凭证。
+    resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+      readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
     resolveModelContextLimit: (providerId, modelId) => {

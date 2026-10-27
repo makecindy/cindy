@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { Maker } from './maker.js';
+import { createAsyncQueue, type AsyncQueue } from './agents/shared/async-queue.js';
 import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
 import { NotSupportedError } from './types/capabilities.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
@@ -76,6 +77,31 @@ function localAgent(): BaseAgent & { startSession: ReturnType<typeof vi.fn> } {
 }
 
 describe('Maker: agent on another computer', () => {
+  it('starts local and hosted tasks as standard after relaxation when the task has not re-enabled Fast', async () => {
+    const agent = localAgent();
+    const policy = {
+      isAllowed: () => true,
+      isRequestAllowed: () => false,
+      subscribe: () => () => {},
+    };
+    const maker = new Maker({
+      agents: { pi: agent }, storage: storage(), logger,
+      lifecycleHooks: { prepareStartOptions: (_id, opts) => { opts.fastModePolicy = policy; } },
+    });
+    await maker.createSession({ id: 'task-standard', agentKind: 'pi', workingDir: '/repo', model: 'm', fastMode: true });
+    expect(agent.startSession.mock.lastCall?.[0].fastMode).toBe(false);
+    const hosted = await maker.startHostedAgentSession('pi', {
+      workingDir: '/shadow', model: 'm', fastMode: true, fastModePolicy: policy,
+      deviceHosted: {
+        workingDir: '/repo', extraDirs: [], writableDirs: [], platform: 'darwin', shell: 'zsh', isGitRepo: false,
+        tunnelUrl: 'http://127.0.0.1:1', tunnelToken: 't', mcpServers: [],
+      },
+    });
+    expect(agent.startSession.mock.lastCall?.[0].fastMode).toBe(false);
+    await hosted.close();
+    await maker.shutdown();
+  });
+
   it('starts the agent through the device starter and records the computer on the task', async () => {
     const store = storage();
     const agent = localAgent();
@@ -181,5 +207,193 @@ describe('Maker: agent on another computer', () => {
     });
     expect(agent.startSession).toHaveBeenCalledTimes(1);
     await maker.shutdown();
+  });
+});
+
+// ── 远程 Claude Code：fork 出的新编号要等这一轮成功才写成持久编号 ──────────────────
+const SDK_A = '11111111-1111-4111-8111-111111111111';
+const SDK_B = '22222222-2222-4222-8222-222222222222';
+
+function claudeAgent(): BaseAgent {
+  return {
+    kind: 'claude-code',
+    capabilities: {
+      availableModels: [], effortLevels: [], permissionModes: [], reasoning: { supported: false },
+      images: { supported: false }, slashCommands: { supported: false }, customSlashCommands: { supported: false },
+      memory: { supported: false }, fork: { supported: false }, rewind: { supported: true }, extraDirs: { supported: false },
+    },
+    startSession: vi.fn(async () => {
+      throw new Error('local Claude start is not wired in this test');
+    }),
+    filterActiveSkillCommands: (result: unknown) => result,
+    async dispose() {},
+  } as unknown as BaseAgent;
+}
+
+/** 一个把事件交给测试的 Claude 句柄；`remote` 决定它走设备通道还是本机通道。 */
+async function openClaudeTask(input: { id: string; remote: boolean; persistedSdkSessionId?: string }) {
+  const store = storage();
+  await store.create({
+    id: input.id,
+    agentKind: 'claude-code',
+    workDir: '/repo',
+    title: 't',
+    model: 'claude-opus-4-6',
+    ...(input.persistedSdkSessionId ? { sdkSessionId: input.persistedSdkSessionId } : {}),
+    ...(input.remote ? { agentDeviceId: 'dev-b' } : {}),
+  } as SessionMeta);
+
+  const queues: Array<AsyncQueue<AgentEvent>> = [];
+  const open = async (): Promise<AgentSessionHandle> => {
+    const events = createAsyncQueue<AgentEvent>();
+    queues.push(events);
+    return {
+      id: input.persistedSdkSessionId ?? '<pending>',
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-6',
+      async send() {},
+      async steer() {},
+      async abort() {},
+      async close() { events.end(); },
+      events: () => events,
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+  };
+
+  const agent = claudeAgent();
+  (agent.startSession as ReturnType<typeof vi.fn>).mockImplementation(open);
+  const startDeviceAgentSession = vi.fn<(request: { options: { resumeSessionId?: string } }) => Promise<AgentSessionHandle>>(open);
+  const maker = new Maker({
+    agents: { 'claude-code': agent },
+    storage: store,
+    logger,
+    ...(input.remote ? { startDeviceAgentSession } : {}),
+  });
+  const create = (resumeSessionId?: string) => maker.createSession({
+    id: input.id,
+    agentKind: 'claude-code',
+    workingDir: '/repo',
+    model: 'claude-opus-4-6',
+    ...(resumeSessionId ? { resumeSessionId } : {}),
+    ...(input.remote ? { agentDeviceId: 'dev-b' } : {}),
+  });
+  /** 让已推入的事件和它们排队的持久化都跑完。 */
+  const settle = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  return { maker, store, queues, startDeviceAgentSession, create, settle };
+}
+
+const connectionLostError: AgentEvent = {
+  type: 'error',
+  data: {
+    message: '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.',
+    isTerminal: true,
+    reason: 'remote_agent_closed',
+  },
+  source: 'claude-code',
+};
+
+describe('Maker: remote Claude keeps the last good sdkSessionId when a turn is lost', () => {
+  it('keeps A after resume reports a new id B and the turn then fails with REMOTE_AGENT_EXPIRED', async () => {
+    const task = await openClaudeTask({ id: 'remote-lost', remote: true, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    task.queues[0].push(connectionLostError);
+    await task.settle();
+
+    // 修复前这里是 B：B 在对方电脑上没有对话记录，下一次 resume 会开出空会话。
+    expect((await task.store.get('remote-lost'))?.sdkSessionId).toBe(SDK_A);
+
+    // 失败后重发走 lazy create-session：它读库里的编号去 resume，必须还是 A。
+    task.queues[0].end();
+    await task.settle();
+    const persisted = (await task.maker.getSessionMeta('remote-lost'))?.sdkSessionId;
+    await task.create(persisted);
+    expect(task.startDeviceAgentSession).toHaveBeenCalledTimes(2);
+    expect(task.startDeviceAgentSession.mock.calls[1][0].options.resumeSessionId).toBe(SDK_A);
+    await task.maker.shutdown();
+  });
+
+  it('keeps A when the remote session closes before the turn finished', async () => {
+    const task = await openClaudeTask({ id: 'remote-closed', remote: true, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    task.queues[0].end();
+    await task.settle();
+
+    expect((await task.store.get('remote-closed'))?.sdkSessionId).toBe(SDK_A);
+    await task.maker.shutdown();
+  });
+
+  it('keeps A when the remote stream crashes after reporting B', async () => {
+    const task = await openClaudeTask({ id: 'remote-crashed', remote: true, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    task.queues[0].push({
+      type: 'error',
+      data: { message: 'stream crashed', isTerminal: true },
+      source: 'claude-code',
+    });
+    // 崩溃收尾：终止错误之后还会补一条 done(reason: sdk_stream_crashed)，它不能把 B 提交掉。
+    task.queues[0].push({ type: 'done', data: { reason: 'sdk_stream_crashed' }, source: 'claude-code' });
+    await task.settle();
+
+    expect((await task.store.get('remote-crashed'))?.sdkSessionId).toBe(SDK_A);
+    await task.maker.shutdown();
+  });
+
+  it('still commits B when the user stops the remote turn', async () => {
+    const task = await openClaudeTask({ id: 'remote-stopped', remote: true, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    // Stop 之后 Claude 已写下这一轮的记录，下一轮要接着 B 走。
+    task.queues[0].push({ type: 'done', data: { reason: 'user_stop_unconfirmed_wake_tasks' }, source: 'claude-code' });
+    await task.settle();
+
+    expect((await task.store.get('remote-stopped'))?.sdkSessionId).toBe(SDK_B);
+    await task.maker.shutdown();
+  });
+
+  it('commits B once the remote turn finishes', async () => {
+    const task = await openClaudeTask({ id: 'remote-ok', remote: true, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    await task.settle();
+    expect((await task.store.get('remote-ok'))?.sdkSessionId).toBe(SDK_A);
+
+    task.queues[0].push({ type: 'done', data: { reason: 'completed' }, source: 'claude-code' });
+    await task.settle();
+    expect((await task.store.get('remote-ok'))?.sdkSessionId).toBe(SDK_B);
+    await task.maker.shutdown();
+  });
+
+  it('saves the first id right away when there is nothing to fall back to', async () => {
+    const task = await openClaudeTask({ id: 'remote-first', remote: true });
+    await task.create();
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    await task.settle();
+
+    expect((await task.store.get('remote-first'))?.sdkSessionId).toBe(SDK_B);
+    await task.maker.shutdown();
+  });
+
+  it('still saves a local Claude session_id right away', async () => {
+    const task = await openClaudeTask({ id: 'local-claude', remote: false, persistedSdkSessionId: SDK_A });
+    await task.create(SDK_A);
+
+    task.queues[0].push({ type: 'session_id', data: SDK_B, source: 'claude-code' });
+    task.queues[0].push(connectionLostError);
+    await task.settle();
+
+    expect((await task.store.get('local-claude'))?.sdkSessionId).toBe(SDK_B);
+    await task.maker.shutdown();
   });
 });

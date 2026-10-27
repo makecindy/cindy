@@ -46,6 +46,11 @@ export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
  * 发给别人既无意义又可能泄露身份;正文保留。
  */
 export const SHARE_SOURCE_ATTR = 'data-share-source';
+/**
+ * 流里尚未加载完、暂时隐藏的图片(ChatLoadingImage)。分享管线自己读图片字节,
+ * 克隆时恢复显示,不能因为流里还在转圈就让图从产物里消失。
+ */
+export const SHARE_PENDING_IMAGE_ATTR = 'data-share-image-pending';
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -127,6 +132,14 @@ export function stripMessageSources(root: HTMLElement): void {
   root.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`).forEach((el) => el.remove());
 }
 
+/** 恢复流里仍在加载、被隐藏的图片(见 SHARE_PENDING_IMAGE_ATTR)。 */
+export function revealPendingImages(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>(`[${SHARE_PENDING_IMAGE_ATTR}]`).forEach((el) => {
+    el.removeAttribute(SHARE_PENDING_IMAGE_ATTR);
+    el.style.removeProperty('display');
+  });
+}
+
 /** 清掉会污染全局 querySelector 的锚点属性(见 CLONE_STRIPPED_ATTRS 注释)。 */
 export function stripCloneAnchors(root: HTMLElement): void {
   for (const attr of CLONE_STRIPPED_ATTRS) {
@@ -151,6 +164,7 @@ export function prepareShareMessageClone(node: HTMLElement): HTMLElement | null 
   const clone = node.cloneNode(true) as HTMLElement;
   stripInteractiveElements(clone);
   stripMessageSources(clone);
+  revealPendingImages(clone);
   expandCollapsedMessages(clone);
   stripCloneAnchors(clone);
   if ((clone.textContent ?? '').trim().length > 0) return clone;
@@ -463,6 +477,20 @@ export function buildShareImageGapMarker(): HTMLElement {
 }
 
 /**
+ * 冻结 stage 内的入场动画。克隆体挂进 document 时,图片淡入、消息浮入等动画会
+ * 从头重播,html-to-image 按动画中途的 computed style 内联。2026-10-14 实测:聊天
+ * 图片带 ChatLoadingImage 的 `animate-fade-in` 时,产物里整块留白、图片不见;
+ * 冻结后正常。样式表挂在 host 上、不在 stage 内,不会被序列化进产物。
+ */
+export function buildShareStageMotionFreeze(): HTMLStyleElement {
+  const style = document.createElement('style');
+  style.textContent =
+    '[data-share-export],[data-share-export] *,[data-share-export] *::before,' +
+    '[data-share-export] *::after{animation:none!important;transition:none!important}';
+  return style;
+}
+
+/**
  * 同源资源 → data URL。页脚 logo 是打包 asset,html-to-image 本可自行内联,
  * 但预先转掉能把「产物里 logo 空白」这类不确定性彻底消掉。
  */
@@ -574,6 +602,7 @@ export async function buildShareImageBlob({
   host.style.top = '0';
   host.style.zIndex = '-1';
   host.style.pointerEvents = 'none';
+  host.appendChild(buildShareStageMotionFreeze());
 
   const stage = document.createElement('div');
   stage.setAttribute('data-share-export', '');

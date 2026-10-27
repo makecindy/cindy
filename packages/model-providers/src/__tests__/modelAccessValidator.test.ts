@@ -1168,3 +1168,75 @@ describe("public model registry contract", () => {
     }
   });
 });
+
+
+describe('V5 display pricing extension', () => {
+  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'] };
+  it('accepts display-only media without inventing token prices', () => {
+    const value = { schemaVersion: 5, accountTier: 'paid', models: [{
+      id: 'example-video', name: 'Example Video', mode: 'video_generation', agents: [],
+      availability: 'available', currency: 'USD', displayPricing,
+    }] };
+    expect(parseListModelsResponse(value)).toEqual({ ok: true, value });
+  });
+  it.each([
+    undefined,
+    null,
+    {},
+    { items: [] },
+    { items: [{ ...displayPricing.items[0], priceType: 'future_type' }] },
+    { items: [{ ...displayPricing.items[0], price: '0.5' }] },
+    { ...displayPricing, notes: { text: 'Future notes shape' } },
+  ])('omits absent or unsupported presentation data without rejecting models: %j', (quote) => {
+    const model = VALID_V5_RESPONSE.models[0];
+    const other = { ...model, id: 'another-model', displayPricing };
+    const result = parseListModelsResponse({
+      ...VALID_V5_RESPONSE,
+      models: [{ ...model, displayPricing: quote }, other],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { ...VALID_V5_RESPONSE, models: [model, other] },
+    });
+  });
+  it('ignores added fields within quotes and preserves unfamiliar units', () => {
+    const row = { ...displayPricing.items[0], unit: 'future_unit' };
+    const model = VALID_V5_RESPONSE.models[0];
+    expect(parseListModelsResponse({
+      ...VALID_V5_RESPONSE,
+      models: [{ ...model, displayPricing: { items: [{ ...row, future: true }], extra: {} } }],
+    })).toEqual({
+      ok: true,
+      value: { ...VALID_V5_RESPONSE, models: [{ ...model, displayPricing: { items: [row] } }] },
+    });
+  });
+  it('still validates supplied model currency and preserves strict legacy shapes', () => {
+    expect(parseListModelsResponse({ ...VALID_V5_RESPONSE, models: [{ ...VALID_V5_RESPONSE.models[0], displayPricing, currency: 'INVALID' }] }).ok).toBe(false);
+    expect(parseListModelsResponse({ ...VALID_V4_RESPONSE, models: [{ ...VALID_V4_RESPONSE.models[0], displayPricing }] }).ok).toBe(false);
+  });
+});
+
+// Tier: unit. Reject an entire malformed V6 snapshot before cache/route activation.
+describe('V6 interface contract', () => {
+  const registry = (): ModelRegistry => ({ schemaVersion: 6, updatedAt: '2099-01-01T00:00:00.000Z',
+    interfaceProfiles: [{ id: 'messages', providerId: 'vendor', api: 'anthropic-messages',
+      baseUrl: 'https://vendor.example/messages', inputBaseUrls: ['https://vendor.example/v1'] }],
+    models: [{ id: 'model', name: 'Model', nativeApis: ['anthropic-messages', 'openai-responses'],
+      routes: [{ providerId: 'vendor', modelId: 'model', agents: ['codex'],
+        interfaces: [{ profileId: 'messages' }], preferredInterfaces: { codex: ['messages'] } }] }],
+  });
+  it.each([
+    (value: ModelRegistry) => { value.interfaceProfiles![0].baseUrl = 'https://other.example'; },
+    (value: ModelRegistry) => { value.interfaceProfiles![0].requestPath = '/%2e%2e/private'; },
+    (value: ModelRegistry) => { value.interfaceProfiles!.push(value.interfaceProfiles![0]); },
+    (value: ModelRegistry) => { value.models[0].routes[0].interfaces![0].profileId = 'missing'; },
+    (value: ModelRegistry) => { value.models[0].routes[0].preferredInterfaces!.codex = ['missing']; },
+  ])('rejects malformed references or credential scope', mutate => {
+    const value = registry(); mutate(value);
+    expect(parseModelRegistry(value).ok).toBe(false);
+  });
+  it('retains unknown required capabilities as data for execution-time exclusion', () => {
+    const value = registry(); value.interfaceProfiles![0].requires = ['future-runtime-v99'];
+    expect(parseModelRegistry(value)).toEqual({ ok: true, value });
+  });
+});

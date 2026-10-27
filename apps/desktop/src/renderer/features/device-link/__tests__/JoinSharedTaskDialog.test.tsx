@@ -8,11 +8,13 @@ import { SharedTaskDialog } from '../SharedTaskDialog';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 
-const state = vi.hoisted(() => ({ account: vi.fn(), host: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), mergeSessions: vi.fn(), pin: vi.fn(), captureRead: vi.fn(), removeDevice: vi.fn(), getSessions: vi.fn(), bind: vi.fn(), reset: vi.fn() }));
+const state = vi.hoisted(() => ({ account: vi.fn(), host: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), mergeSessions: vi.fn(), pin: vi.fn(), captureRead: vi.fn(), removeDevice: vi.fn(), getSessions: vi.fn(), rawSessions: vi.fn(), findById: vi.fn(), bind: vi.fn(), reset: vi.fn(), logToMain: vi.fn() }));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: state.findById } }));
+vi.mock('@/lib/sessionService', () => ({ get: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { title?: string }) => key + (args?.title ? ':' + args.title : '') }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'guest', isAuthenticated: true, user: { name: 'Account Guest' } }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, setDeviceSessions: state.setSessions, mergeDeviceSessions: state.mergeSessions, pinSessionOrigin: state.pin, captureSessionRead: state.captureRead, removeDevice: state.removeDevice, getMergedRemoteSessions: state.getSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
+vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, setDeviceSessions: state.setSessions, mergeDeviceSessions: state.mergeSessions, pinSessionOrigin: state.pin, captureSessionRead: state.captureRead, removeDevice: state.removeDevice, getVisibleMergedRemoteSessions: state.getSessions, getDeviceSessions: state.rawSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ bindSharedTaskPushOwner: state.bind, resetRemoteDataOwnerPushFence: state.reset }));
 const owned = [
   { sharedTaskId: 'own-1', sessionId: 'local-task', ownerAccountId: 'guest', hostDeviceId: 'pc', revision: 1, title: 'First owned task', local: true },
@@ -32,6 +34,10 @@ beforeEach(() => {
     if (action === 'close') { ownedItems = ownedItems.filter(item => item.sharedTaskId !== sharedTaskId); return { closed: [sharedTaskId], failed: [] }; }
   });
   state.getSessions.mockReturnValue([]);
+  state.findById.mockImplementation(sessionId => ({ id: sessionId, source: 'desktop' }));
+  state.rawSessions.mockImplementation((deviceId: string) => [...ownedItems, ...joinedItems]
+    .filter(task => task.hostDeviceId === deviceId || sharedTaskHostPeer(task.sharedTaskId, task.hostDeviceId) === deviceId)
+    .map(task => ({ id: task.sessionId, source: 'desktop' })));
   state.captureRead.mockReturnValue(Object.assign(() => true, { mergeActivity: (value: unknown) => value }));
   state.invoke.mockImplementation(async (_device, channel, [command]) => {
     if (channel === 'maker:shared-task' && command.action === 'close') {
@@ -41,9 +47,115 @@ beforeEach(() => {
     return { id: joinedTask.sessionId };
   });
   state.closeLink.mockResolvedValue(undefined); state.openLink.mockResolvedValue(undefined);
-  Object.assign(window, { electronAPI: { sharedTask: { account: state.account, host: state.host }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } } });
+  Object.assign(window, { electronAPI: { logToMain: state.logToMain, sharedTask: { account: state.account, host: state.host }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } } });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+it.each(['cindy-make', 'cindy-make-merge'])('filters %s from owned and joined account management without the host upgrading', async source => {
+  state.rawSessions.mockReturnValue([]);
+  state.invoke.mockImplementation(async (_peer, _channel, [sessionId]) => ({ id: sessionId, source }));
+  state.findById.mockReturnValue({ id: owned[0].sessionId, source });
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={vi.fn()} /></MemoryRouter>);
+  await screen.findByText('sharedTask.ownedEmptyTitle');
+  expect(screen.queryByText(owned[0].title)).toBeNull();
+  expect(screen.queryByText(owned[1].title)).toBeNull();
+  tab('joined');
+  await screen.findByText('sharedTask.joinedEmptyTitle');
+  expect(screen.queryByText(joinedTask.title)).toBeNull();
+  expect(state.invoke).toHaveBeenCalledWith('other-pc', 'local-db:sessions:get', [owned[1].sessionId]);
+  expect(state.invoke).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId), 'local-db:sessions:get', [joinedTask.sessionId]);
+  expect(state.account).toHaveBeenCalledWith({ action: 'leave', sharedTaskId: joinedTask.sharedTaskId });
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
+});
+
+it.each(['cindy-make', 'cindy-make-merge'])('commits ordinary joined shares while %s cleanup fails and retries on focus', async source => {
+  const hidden = { ...joinedTask, sharedTaskId: 'hidden-share', sessionId: 'hidden-task', title: 'Hidden Make share' };
+  ownedItems = []; joinedItems = [hidden, joinedTask];
+  state.rawSessions.mockImplementation((deviceId: string) => joinedItems
+    .filter(item => sharedTaskHostPeer(item.sharedTaskId, item.hostDeviceId) === deviceId)
+    .map(item => ({ id: item.sessionId, source: item.sessionId === hidden.sessionId ? source : 'desktop' })));
+  const original = state.account.getMockImplementation()!;
+  let failing = true;
+  state.account.mockImplementation(command => command.action === 'leave' && failing
+    ? Promise.reject(new Error('offline')) : original(command));
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={vi.fn()} /></MemoryRouter>);
+  await screen.findByText('sharedTask.ownedEmptyTitle');
+  tab('joined');
+  expect(await screen.findByRole('button', { name: joinedTask.title })).toBeTruthy();
+  expect(screen.queryByText(hidden.title)).toBeNull();
+  expect(screen.queryByText('sharedTask.joinedLoadFailed')).toBeNull();
+  expect(state.removeDevice).not.toHaveBeenCalled();
+  expect(state.logToMain).toHaveBeenCalledWith('warn', 'SharedTaskVisibility', 'Hidden shared task membership cleanup failed; will retry on refresh');
+  const attempts = state.account.mock.calls.filter(([command]) => command.action === 'leave').length;
+  failing = false;
+  fireEvent(window, new Event('focus'));
+  const peer = sharedTaskHostPeer(hidden.sharedTaskId, hidden.hostDeviceId);
+  await waitFor(() => expect(state.removeDevice).toHaveBeenCalledExactlyOnceWith(peer));
+  expect(state.closeLink).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(state.account.mock.calls.filter(([command]) => command.action === 'leave')).toHaveLength(attempts + 1);
+  expect(state.account).not.toHaveBeenCalledWith({ action: 'leave', sharedTaskId: joinedTask.sharedTaskId });
+  expect(screen.getByRole('button', { name: joinedTask.title })).toBeTruthy();
+});
+
+it.each([
+  ['cindy-make', false], ['cindy-make-merge', false],
+  ['cindy-make', true], ['cindy-make-merge', true],
+] as const)('undoes a legacy %s invitation before showing success or entering (link=%s)', async (source, automatic) => {
+  ownedItems = []; joinedItems = [];
+  state.rawSessions.mockReturnValue([]);
+  state.invoke.mockResolvedValue({ id: joinedTask.sessionId, source });
+  const close = vi.fn();
+  const invitation = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
+  render(<MemoryRouter><JoinSharedTaskDialog open initialInvitation={automatic ? invitation : undefined} onOpenChange={close} /></MemoryRouter>);
+  if (!automatic) {
+    fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: invitation } });
+    click('join');
+  }
+  await waitFor(() => expect(state.account).toHaveBeenCalledWith({ action: 'leave', sharedTaskId: joinedTask.sharedTaskId }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('sharedTask.invitationUnavailable'));
+  const peer = sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId);
+  expect(state.invoke).toHaveBeenCalledExactlyOnceWith(peer, 'local-db:sessions:get', [joinedTask.sessionId]);
+  expect(state.closeLink).toHaveBeenCalledWith(peer);
+  expect(state.reset).toHaveBeenCalledWith(peer);
+  expect(state.removeDevice).toHaveBeenCalledWith(peer);
+  expect(state.setSessions).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+  expect(screen.queryByText('sharedTask.joinedTitle:' + joinedTask.title)).toBeNull();
+  expect((screen.getByLabelText('sharedTask.invitation') as HTMLTextAreaElement).value).toBe(invitation);
+});
+
+it('does not show join success until ordinary source metadata arrives', async () => {
+  ownedItems = []; joinedItems = []; state.rawSessions.mockReturnValue([]);
+  let finish!: (session: unknown) => void;
+  state.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  open(); fill();
+  await waitFor(() => expect(finish).toBeTypeOf('function'));
+  expect(screen.queryByText('sharedTask.joinedTitle:' + joinedTask.title)).toBeNull();
+  await act(async () => finish({ id: joinedTask.sessionId, source: 'desktop' }));
+  await screen.findByText('sharedTask.joinedTitle:' + joinedTask.title);
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'leave' }));
+});
+
+it('does not revoke a new account when hidden join metadata arrives late', async () => {
+  ownedItems = []; joinedItems = []; state.rawSessions.mockReturnValue([]);
+  let finish!: (session: unknown) => void;
+  state.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  open(); fill();
+  await waitFor(() => expect(finish).toBeTypeOf('function'));
+  await act(async () => { setDataOwnerGeneration('other'); finish({ id: joinedTask.sessionId, source: 'cindy-make' }); });
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'leave' }));
+  expect(state.closeLink).not.toHaveBeenCalled();
+  expect(state.setSessions).not.toHaveBeenCalled();
+});
+it('does not expose unconfirmed offline shares in account management and retries on focus', async () => {
+  ownedItems = [owned[1]]; joinedItems = [];
+  state.rawSessions.mockReturnValue([]); state.invoke.mockRejectedValue(new Error('offline'));
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={vi.fn()} /></MemoryRouter>);
+  await screen.findByText('sharedTask.ownedEmptyTitle');
+  expect(screen.queryByText(owned[1].title)).toBeNull();
+  state.invoke.mockResolvedValue({ id: owned[1].sessionId, source: 'desktop' });
+  fireEvent(window, new Event('focus'));
+  expect(await screen.findByRole('button', { name: owned[1].title })).toBeTruthy();
+});
 function open(onOpenChange = vi.fn()) {
   render(<MemoryRouter><SharedTaskDialog open onOpenChange={onOpenChange} /></MemoryRouter>);
   return onOpenChange;

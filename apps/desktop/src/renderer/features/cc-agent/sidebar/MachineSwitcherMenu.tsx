@@ -86,7 +86,7 @@ import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
 const SCOPE_TITLE_CLASS =
-  'text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
+  'text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
 export function MachineSwitcherMenu({
   onOpenDisplaySettings,
@@ -200,7 +200,7 @@ export function MachineSwitcherMenu({
             'data-[state=open]:text-[var(--sidebar-nav-text)]',
           )}
         >
-          <span className="truncate leading-none">{triggerText}</span>
+          <span className="truncate">{triggerText}</span>
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
           {remoteSessionBootstrapLoading && (
             <span

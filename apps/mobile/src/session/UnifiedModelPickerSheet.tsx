@@ -575,7 +575,8 @@ export function UnifiedModelPickerSheet(
           ? { ...selection, providerId: directory.sourceId ?? "" }
           : undefined,
         pinned: p.existingSessionRoute ? p.agentKind : undefined,
-        fastCapable,
+        // Remote catalog capabilities are independent of the host installation.
+        fastCapable: () => true,
       });
     const details = describe(entry, config, catalog.providers);
     return {
@@ -591,7 +592,7 @@ export function UnifiedModelPickerSheet(
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
       selected,
-      disabled: !caps[config.agent],
+      disabled: !entry.capabilities[config.agent],
       // 「收藏」一节没有带电脑名的分段标题,电脑名写进说明行,和本机同名模型的收藏区分开。
       subtitle: favorite
         ? [catalog.name, details].filter(Boolean).join(" · ")
@@ -786,7 +787,7 @@ export function UnifiedModelPickerSheet(
     row &&
     resolveMobileModelConfig(row.entry, {
       pinned: p.existingSessionRoute ? p.agentKind : undefined,
-      fastCapable,
+      fastCapable: row.remoteDevice ? () => true : fastCapable,
     });
   const resetAgents = row
     ? [...new Set([row.config.agent, recommendedConfig!.agent])]
@@ -1148,7 +1149,7 @@ export function UnifiedModelPickerSheet(
                 ALL_AGENTS.includes(agent),
               ),
               fastCapable:
-                !!cap?.supportsFastMode && fastCapable(row.config.agent),
+                !!cap?.supportsFastMode && (!!row.remoteDevice || fastCapable(row.config.agent)),
               onChange: change,
               context: [
                 rowProviderName(row),
@@ -1185,7 +1186,7 @@ export function UnifiedModelPickerSheet(
                         original: { ...originFavorite },
                         config: resolveMobileModelConfig(row.entry, {
                           favorite: originFavorite,
-                          fastCapable,
+                          fastCapable: row.remoteDevice ? () => true : fastCapable,
                         }),
                       });
                       setNotice(null);

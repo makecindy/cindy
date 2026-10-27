@@ -72,29 +72,6 @@ export interface CindyMediaCatalogConfig {
 }
 
 /**
- * 仅在旧 cindy-request 入口收窄候选；失效默认随清单一起恢复，交给既有偏好
- * 迁移逻辑持久化，不能只在执行时换型号而保留页面上的旧配置。
- */
-export function filterLegacyCindyMediaConfig<T extends CindyMediaCatalogConfig['models'][number]>(
-  config: { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] },
-  isExecutable: (model: T) => boolean,
-): { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] } {
-  const models = config.models.filter(isExecutable);
-  if (models.length === 0) return { models, defaults: null };
-  const valid = (id: string | undefined) =>
-    id !== undefined && models.some((model) => model.id === id) ? id : null;
-  const standard = valid(config.defaults?.standard) ?? models[0]!.id;
-  return {
-    models,
-    defaults: {
-      standard,
-      draft: valid(config.defaults?.draft) ?? standard,
-      best: valid(config.defaults?.best) ?? standard,
-    },
-  };
-}
-
-/**
  * 向量派单唯一的执行来源。图像已经是多来源(imageChannelRegistry 按 providerId
  * 取通道),向量还没有对应的分流层,所以这里必须写死。
  * 加 provider-aware 路由时,把这个常量连同下面的 `kind === 'embed'` 守卫一起去掉。

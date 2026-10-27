@@ -8,6 +8,7 @@ const driveMenu = vi.hoisted(() => ({ props: null as any }));
 vi.mock("react-native", () => ({
   View: ({ children }: any) => <div>{children}</div>,
   ActivityIndicator: () => <span>loading</span>,
+  StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
   useWindowDimensions: () => ({ width: 400, height: 800 }),
 }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -25,8 +26,10 @@ vi.mock("@/theme", () => ({
   spacing: {},
   typeScale: {},
   useTheme: () => ({ colors: {} }),
+  useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
 vi.mock("lucide-react-native", () => ({
+  CircleAlert: () => null,
   ArrowUp: () => null,
   ChevronRight: () => null,
   Folder: () => null,
@@ -135,6 +138,19 @@ it("selects a device and retains the native presentation until its closing anima
   render({ page: null });
   expect(modal.props.visible).toBe(false);
   expect(modal.props.nativePresentation).toBe(true);
+});
+
+// #7237 / unit: the real selection sheet must disambiguate two ID-as-name
+// computers, a missing input in the single-device tests, and keep routing IDs.
+it("distinguishes unnamed device choices without changing their selection targets", () => {
+  render({ devices: [
+    { deviceId: "host-b", name: "host-b" },
+    { deviceId: "host-a", name: "host-a" },
+  ] });
+  const rows = [...container.querySelectorAll('[data-testid="newSession.deviceOption"]')] as HTMLButtonElement[];
+  expect(rows.map(row => row.textContent)).toEqual(["another computer (2)", "another computer (1)"]);
+  act(() => rows[0].click());
+  expect(props.onDevice).toHaveBeenCalledExactlyOnceWith("host-b");
 });
 it("keeps directory Back separate from backdrop dismissal and uses remote paths", () => {
   render({ page: "directory" });

@@ -49,6 +49,20 @@ describe('SkillHub helper tools', () => {
     expect((await registry.call('publish_skill', { ...publication, sessionId: 'forged' })).isError).toBe(true);
     expect(execute).not.toHaveBeenCalled();
   });
+  it('unwraps the XML-style {item:[...]} folded slug arrays on publish', async () => {
+    // glm 兼容层把数组参数序列化成 <item> 重复标签(images/queued_message_ids 同病)。
+    const { registry, execute } = fixture();
+    const result = await registry.call('publish_skill', {
+      ...publication,
+      tags: { item: ['release-notes', 'team'] },
+    });
+    expect(result.isError).toBeUndefined();
+    expect(execute).toHaveBeenCalledWith(
+      { action: 'publish', input: { ...publication, tags: ['release-notes', 'team'] } },
+      expect.objectContaining({ sessionId: 'task' }),
+    );
+  });
+
   it.each([
     { ...publication, visibility: undefined },
     { ...publication, name: '../other' },

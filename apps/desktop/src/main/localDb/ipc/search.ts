@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 
 import { searchConversations } from '../conversationSearch.js';
 import type {
@@ -36,7 +37,7 @@ export function registerSearchIpc(): void {
       | undefined;
     const filters = parseFilters(body.filters);
     const unnamedLabel = parseUnnamedLabel(body.unnamedLabel);
-    return searchConversations({
+    const request = {
       query,
       limit,
       includeArchived,
@@ -44,7 +45,10 @@ export function registerSearchIpc(): void {
       semanticMode,
       filters,
       unnamedLabel,
-    });
+    };
+    return isDeviceLinkInvoke()
+      ? searchConversations(request, { remoteVisibleOnly: true })
+      : searchConversations(request);
   });
 }
 

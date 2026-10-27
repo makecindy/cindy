@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, rm, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AutoReviewRequest, AutoReviewDecision } from '@cindy/maker-core';
+import { fastModeToStorage } from '@cindy/maker-shared';
 import { withAutoReviewContext } from '../../../../../../packages/maker-core/src/agents/shared/auto-review-decision.js';
 import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
 import { readPluginTaskPlanReceipt } from '../pluginTaskService.js';
@@ -76,7 +77,7 @@ function fixture() {
   const deps={setAutoReviewContextResolver:(fn:typeof resolve)=>{resolve=fn;},
     createPluginTaskReviewResolver:(fn:typeof load)=>{load=fn;return createPluginTaskReviewResolver(fn);},
     fsp: {realpath: resolvePath},
-    getCurrentDbClientSnapshot:()=>control.accountChanged ? null : epoch,sessions,orcaWorkers,orcaTeams,eq,
+    getCurrentDbClientSnapshot:()=>control.accountChanged ? null : epoch,sessions,orcaWorkers,orcaTeams,eq,fastModeToStorage,
     createPluginTaskStore:()=>({get:async()=>db.prepare('SELECT id,target_id AS targetId,plugin_id AS pluginId,operation,payload,revision FROM plugin_task_requests').get()}),
     drainPersistQueue:async()=>mutate('drain'),pluginTaskServiceForCurrentOwner:()=>({get:async()=>{mutate('ownership');if(!control.ownershipValid)throw Error('ownership revoked');}}),
     readPluginTaskConfig:()=>({permissionMode:control.permissionMode}),readPluginTaskPlanReceipt,

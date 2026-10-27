@@ -59,7 +59,7 @@ describe('Chat Server invitation contract', () => {
     members = [{ id: selfId, ownerActorId: selfId, state: 'joined', role: 'owner' }];
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId } } };
-      if (route.endsWith('/snapshot')) return { body: { members } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: groupId, kind: 'group', dissolved_at: null }, members, cursor: '0' } };
       if (route === `/conversations/${groupId}/invite-links`) return { body: { token, expiresAt, ...(reusable !== undefined ? { reusable } : {}) } };
       if (route === '/invite-links/preview') return { body: { groupId, name: 'Group', inviterName: 'Host', expiresAt, ...(reusable !== undefined ? { reusable } : {}), joined: false } };
       if (route.endsWith('/invite-links/revoke')) return { body: { revoked: true } };
@@ -82,6 +82,34 @@ describe('Chat Server invitation contract', () => {
   it.each([undefined, false])('does not accept a null expiry without reusable=true (%s)', async flag => {
     reusable = flag;
     expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: false, errorCode: 'CHAT_RESPONSE_INVALID' });
+  });
+  it('previews and accepts the public page link through this account’s own Chat Server with only the token', async () => {
+    const page = `https://device-link.other-region.example/chat-invite/join#${token}?app=cindycn`;
+    fixture.urls.length = 0;
+    expect((await service.chatServer!.previewInvite({ link: `邀请你加入群聊：${page}` })).ok).toBe(true);
+    const accepted = vi.fn(() => ({ body: { groupId } }));
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...rest) => route === '/invite-links/accept' ? accepted() : original(route, ...rest));
+    expect(await service.chatServer!.acceptInvite({ link: page, clientId })).toEqual({ ok: true, groupId });
+    expect(fixture.handle).toHaveBeenCalledWith('/invite-links/preview', 'POST', { token }, expect.anything());
+    expect(fixture.handle).toHaveBeenCalledWith('/invite-links/accept', 'POST', { token, operationId: clientId }, expect.anything());
+    // The link's host is never a request target, and the token never enters a URL.
+    expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/'))).toBe(true);
+    expect(fixture.urls.some(url => url.includes(token))).toBe(false);
+  });
+  it.each([
+    `https://relay.example.test/chat-invite/join?t=1#${token}`,
+    `https://user@relay.example.test/chat-invite/join#${token}`,
+    `https://relay.example.test/chat-invite/join#${token}?app=other`,
+    `https://relay.example.test/chat-invite/join#${token}#more`,
+    `ftp://relay.example.test/chat-invite/join#${token}`,
+    `cindy://chat-invite/${token.slice(1)}`,
+  ])('rejects %s before contacting the service and without echoing the token', async input => {
+    for (const result of [await service.chatServer!.previewInvite({ link: input }), await service.chatServer!.acceptInvite({ link: input, clientId })]) {
+      expect(result).toEqual({ ok: false, errorCode: 'INVALID_INPUT' });
+      expect(JSON.stringify(result)).not.toContain(token.slice(1));
+    }
+    expect(fixture.handle.mock.calls.some(([route]) => String(route).startsWith('/invite-links/'))).toBe(false);
   });
   it('preserves server denial and never accepts an invitation during preview', async () => {
     fixture.handle.mockImplementation(route => route === '/invite-links/preview'

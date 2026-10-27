@@ -14,12 +14,17 @@ const read = (relativePath: string): string =>
   readFileSync(resolve(__dirname, '..', '..', '..', relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 const sessionView = read('features/cc-agent/CCAgentSessionView.tsx');
+const sessionHeader = read('features/cc-agent/SessionContentHeader.tsx');
 const messageStream = read('components/chat/MessageStream.tsx');
 const messageActionBar = read('components/chat/MessageActionBar.tsx');
 const chatInput = read('components/new-chat/ChatInput.tsx');
 const botSettings = read('features/bots/BotsHomeView.tsx');
 
 describe('Bot 对话的判定条件', () => {
+  it('is mounted next to the ordinary task title', () => {
+    expect(sessionHeader).toContain('{!isEditing && <BotTaskOwnerChip session={session} />}');
+  });
+
   it('气泡头像只在 Bot 对话下传给消息流', () => {
     expect(sessionView).toContain('assistantAvatar={botAssistantAvatar}');
     expect(sessionView).toContain('<BotAvatar bot={botChatIdentity} size="sm" />');
@@ -33,10 +38,11 @@ describe('Bot 对话的判定条件', () => {
   });
 
   it('伙伴对话换掉任务顶栏,而不是在它旁边再加一个', () => {
-    expect(sessionView).toContain(
-      '<BotSessionContentHeaderRegistration bot={botChatIdentity} />',
-    );
+    expect(sessionView).toMatch(/botChatIdentity\s*\?\s*\(\s*<BotSessionContentHeaderRegistration bot=\{botChatIdentity\}/);
     expect(sessionView).toContain('<SessionContentHeaderRegistration');
+    const botHeader = sessionView.match(/<BotSessionContentHeaderRegistration\b[\s\S]*?\/>/)?.[0];
+    expect(botHeader).toBeTruthy();
+    expect(botHeader).not.toMatch(/\bonVoice(?:Active)?\s*=/);
   });
 });
 
@@ -49,15 +55,24 @@ describe('消息流的头像挂载', () => {
 
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // Assistant text shows the avatar; both task references reserve the same
-    // space invisibly. User messages and internal tool/work cards still bypass it.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
-    expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\)\s*\? withAssistantAvatar\(/);
+    // Assistant text shows the avatar; task and teammate-message cards plus the
+    // work fold reserve the same space invisibly. User messages bypass it.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(4);
+    expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
+    expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');
   });
 });
 
 describe('伙伴输入框只保留对话动作', () => {
+  it('语音对话入口接入输入框，并传递可用与通话状态', () => {
+    expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked}');
+    expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
+    const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
+    expect(voiceGate).toContain('pendingInputHandoff');
+  });
+
   it('伙伴保留标准权限 chip，仅隐藏模型选择器', () => {
     expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(1);
     expect(chatInput.indexOf('<PermissionSelector')).toBeLessThan(chatInput.indexOf('!hideRuntimeControls ? ('));
@@ -87,16 +102,19 @@ describe('伙伴设置包含独立能力选择入口', () => {
   });
 });
 
-describe('伙伴消息流收起内部工作过程', () => {
-  it('只对伙伴收拢过程，运行期间保留单一状态出口', () => {
+describe('伙伴消息流与普通任务同一套工作过程', () => {
+  it('工作组按普通任务渲染，输入框上方只保留普通状态栏', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
     expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)');
     // Text/tool grouping is covered by botConversationPresentation behavioral tests.
     expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
-    expect(messageStream).toContain('compact={simplifiedBotConversation}');
+    expect(messageStream).toContain('compact={false}');
+    expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
+    expect(messageStream).toContain('replyColumnSpacer={botReplyColumnSpacer}');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
-    expect(sessionView).toContain('<BotWorkingStatus');
-    expect(sessionView).toContain('visible={composerRuntimeVisible}');
+    expect(sessionView).not.toContain('<BotWorkingStatus');
+    expect(sessionView).toContain('<RunningStatusBar');
+    expect(sessionView).toContain('visible={composerRuntimeVisible');
     expect(sessionView).not.toContain('botAssistantOutputStarted');
   });
 

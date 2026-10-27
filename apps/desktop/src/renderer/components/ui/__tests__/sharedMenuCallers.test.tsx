@@ -5,11 +5,12 @@
  * (DESIGN §4 Select & Dropdown). Each one is opened, chosen from by keyboard, and its
  * callback arguments match what the hand-written version passed.
  */
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VersionDropdown } from '@/components/UpdateNoticeDialog';
 import { TabStrip } from '@/features/right-sidebar/TabBar';
+import { FolderTree } from 'lucide-react';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -94,7 +95,10 @@ describe('right sidebar · add tab', () => {
         onActivate={vi.fn()}
         onClose={vi.fn()}
         onReorder={vi.fn()}
-        onAdd={onAdd}
+        creationMenu={{ select: onAdd, items: [
+          { kind: 'file-browser', labelKey: 'rightSidebar.tabs.kinds.fileBrowser', icon: FolderTree, order: 1, enabled: true, disabled: false, busy: false },
+          { kind: 'review', labelKey: 'rightSidebar.tabs.kinds.review', icon: FolderTree, order: 2, enabled: true, disabled: false, busy: false },
+        ] }}
       />,
       container ? { container: container.appendChild(document.createElement('div')) } : undefined,
     );
@@ -115,10 +119,10 @@ describe('right sidebar · add tab', () => {
       'rightSidebar.tabs.kinds.fileBrowser',
     );
     await chooseByKeyboard(1);
-    expect(onAdd).toHaveBeenCalledWith('cindy-make');
+    expect(onAdd).toHaveBeenCalledWith('review');
     expect(screen.queryByRole('menu')).toBeNull();
     // Esc / select returns focus to the "+" button.
-    expect(document.activeElement).toBe(add);
+    await waitFor(() => expect(document.activeElement).toBe(add));
   });
 
   it('closes on Escape without adding a tab and returns focus to "+"', async () => {
@@ -127,7 +131,7 @@ describe('right sidebar · add tab', () => {
     await key('Escape');
     expect(screen.queryByRole('menu')).toBeNull();
     expect(onAdd).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(add);
+    await waitFor(() => expect(document.activeElement).toBe(add));
   });
 
   it('closes when the host pane collapses and leaves focus off the hidden "+"', async () => {

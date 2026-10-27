@@ -1,9 +1,13 @@
 /**
  * 设置类页面共用的分组卡片与行(设置页、设置子页、设备管理列表)。
  *
- * 行布局规则(用户定稿):左侧标签 / 说明可换行;右侧取值右对齐、不收缩(过长时截断在
- * 行宽 60% 内)。行标题 16/22 500 textPrimary,取值 16/22 400 textSecondary,
- * 说明 13/18 400 textSecondary;分组标题 13/18 600 textTertiary。
+ * 行布局规则(用户定稿):左侧标签可换行;右侧取值右对齐、不收缩(过长时截断在
+ * 行宽 60% 内)。行标题 16/22 500 textPrimary,取值 16/22 400 textSecondary;
+ * 分组标题 13/18 600 textTertiary。
+ *
+ * 卡片里只放「名称 + 取值 / 开关 / 箭头」。成句的说明、操作结果与报错一律写在分组下方的
+ * footer(13/18 400 textSecondary,iOS Section footer / Android 列表辅助文字惯例),
+ * 所以行组件不再提供 hint / detail;一组需要多段说明时拆成多个分组(2026-10-19 用户定稿)。
  */
 import { Children, isValidElement, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -14,23 +18,30 @@ import { NativeSwitch } from '@/platform/chrome';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
-import { DisclosureItem, useDisclosurePrepare } from './listDisclosureTransition';
+import { DisclosureItem } from './listDisclosureTransition';
 
 export const useSettingsRowStyles = () => useThemedStyles(makeSettingsRowStyles);
 
+export type SettingsGroupMessage = { text: string; testID?: string } | null | undefined | false;
+
 /**
  * iOS 风格分组:组标题在外侧 gutter,组内一块统一卡片,行间用 inset 分隔线。
- * rows 为空则不渲染卡片;footer 为卡片下方 gutter 里的说明文字(iOS 分组 footer 惯例)。
+ * rows 为空则不渲染卡片;footer 为卡片下方 gutter 里的说明文字(iOS 分组 footer 惯例),
+ * messages 是接在说明后面的临时状态(保存失败、权限被拒、上传结果等),同一档样式。
  */
 export function SettingsGroup({
   children,
   footer,
+  footerTestID,
+  messages,
   testID,
   title,
   titleAccessory,
 }: {
   children: ReactNode;
-  footer?: string;
+  footer?: string | null;
+  footerTestID?: string;
+  messages?: ReadonlyArray<SettingsGroupMessage>;
   testID?: string;
   title?: string;
   titleAccessory?: ReactNode;
@@ -59,10 +70,34 @@ export function SettingsGroup({
           ))}
         </DisclosureItem>
       ) : null}
-      {footer && rows.length > 0 ? (
-        <Text style={styles.groupFooter}>{footer}</Text>
+      {rows.length > 0 ? (
+        <SettingsGroupFooter footer={footer} messages={messages} testID={footerTestID} />
       ) : null}
     </DisclosureItem>
+  );
+}
+
+function SettingsGroupFooter({
+  footer,
+  messages,
+  testID,
+}: {
+  footer?: string | null;
+  messages?: ReadonlyArray<SettingsGroupMessage>;
+  testID?: string;
+}) {
+  const styles = useSettingsRowStyles();
+  const lines = messages?.filter((message): message is { text: string; testID?: string } => Boolean(message)) ?? [];
+  if (!footer && lines.length === 0) return null;
+  return (
+    <View style={styles.groupFooterStack}>
+      {footer ? <Text style={styles.groupFooter} testID={testID}>{footer}</Text> : null}
+      {lines.map((message, index) => (
+        <Text accessibilityLiveRegion="polite" key={message.testID ?? index} style={styles.groupFooter} testID={message.testID}>
+          {message.text}
+        </Text>
+      ))}
+    </View>
   );
 }
 
@@ -100,14 +135,12 @@ export function ChoicePickerRow({
   );
 }
 
-/** 只读信息行:标签左、值右;可选 detail 另起一行。 */
+/** 只读信息行:标签左、值右。 */
 export function InfoRow({
-  detail,
   label,
   testID,
   value,
 }: {
-  detail?: string;
   label: string;
   testID?: string;
   value: string;
@@ -119,16 +152,18 @@ export function InfoRow({
         <Text style={styles.rowLabel}>{label}</Text>
         <Text style={styles.rowValue} numberOfLines={1}>{value}</Text>
       </View>
-      {detail ? <Text style={styles.rowDetail}>{detail}</Text> : null}
     </View>
   );
 }
 
-/** 可点击信息行:进入子页、轻量编辑或打开外部信息;右侧统一 lg + textTertiary 箭头。 */
+/**
+ * 可点击信息行:进入子页、轻量编辑或打开外部信息;右侧统一 lg + textTertiary 箭头。
+ * 原地执行的动作(检查更新、清空日志)传 chevron={false},不画进入箭头。
+ */
 export function ActionInfoRow({
   accessibilityLabel,
   accessibilityRole = 'button',
-  detail,
+  chevron = true,
   disabled = false,
   label,
   onPress,
@@ -137,7 +172,7 @@ export function ActionInfoRow({
 }: {
   accessibilityLabel: string;
   accessibilityRole?: 'button' | 'link';
-  detail?: string;
+  chevron?: boolean;
   disabled?: boolean;
   label: string;
   onPress(): void;
@@ -159,67 +194,25 @@ export function ActionInfoRow({
       <View style={styles.rowLine}>
         <Text style={styles.rowLabel}>{label}</Text>
         {value ? <Text style={styles.rowValue} numberOfLines={1}>{value}</Text> : null}
-        <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-      </View>
-      {detail ? <Text style={styles.rowDetail}>{detail}</Text> : null}
-    </Pressable>
-  );
-}
-
-/** 卡片内的折叠开关行(如「调试 / 开发者」):展开后其余行接在同一张卡片里。 */
-export function SettingsDisclosureRow({
-  expanded,
-  label,
-  onPress,
-  testID,
-}: {
-  expanded: boolean;
-  label: string;
-  onPress(): void;
-  testID?: string;
-}) {
-  const styles = useSettingsRowStyles();
-  const { colors } = useTheme();
-  const prepareDisclosure = useDisclosurePrepare();
-  const Chevron = expanded ? ChevronDown : ChevronRight;
-  return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ expanded }}
-      onPress={onPress}
-      onPressIn={() => prepareDisclosure()}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-      testID={testID}
-    >
-      <View style={styles.rowLine}>
-        <Text style={styles.rowLabel}>{label}</Text>
-        <Chevron color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+        {chevron ? <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} /> : null}
       </View>
     </Pressable>
   );
 }
 
-/** 开关行:标签 + 说明在左(可换行),系统开关在右;accessory 可追加开关右侧的次级入口。 */
+/** 开关行:标签在左(可换行),系统开关在右;说明与提示写在所在分组的 footer。 */
 export function SettingsSwitchRow({
-  accessory,
   accessibilityLabel,
   disabled,
-  hint,
   label,
-  messages,
   onValueChange,
   switchTestID,
   testID,
   value,
 }: {
-  accessory?: ReactNode;
   accessibilityLabel?: string;
   disabled?: boolean;
-  hint?: string;
   label: string;
-  /** 开关下方的附加提示(保存失败、权限被拒等),按 13/18 说明档呈现。 */
-  messages?: ReadonlyArray<{ text: string; testID?: string } | null | undefined>;
   onValueChange(value: boolean): void;
   switchTestID?: string;
   testID?: string;
@@ -229,13 +222,7 @@ export function SettingsSwitchRow({
   const { colors } = useTheme();
   return (
     <View style={styles.switchRow} testID={testID}>
-      <View style={styles.switchTexts}>
-        <Text style={styles.rowLabel}>{label}</Text>
-        {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-        {messages?.map((message, index) => message ? (
-          <Text key={message.testID ?? index} style={styles.hint} testID={message.testID}>{message.text}</Text>
-        ) : null)}
-      </View>
+      <Text style={styles.rowLabel}>{label}</Text>
       <NativeSwitch
         accessibilityLabel={accessibilityLabel ?? label}
         disabled={disabled}
@@ -244,7 +231,6 @@ export function SettingsSwitchRow({
         testID={switchTestID}
         value={value}
       />
-      {accessory}
     </View>
   );
 }
@@ -260,6 +246,7 @@ const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
+  groupFooterStack: { gap: spacing.xs },
   groupFooter: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
@@ -280,6 +267,7 @@ const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
   // 左侧标签可换行(flex 1 + shrink);右侧取值右对齐、不收缩,过长截断在行宽 60% 内。
   rowLabel: { color: colors.textPrimary, flex: 1, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body, minWidth: 0 },
   rowValue: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.body, fontWeight: fontWeight.regular, lineHeight: lineHeight.body, maxWidth: '60%', textAlign: 'right' },
+  // 行内次级文字只留给列表条目自身的元数据(如词典别名)与录入流程的步骤提示,不放设置说明。
   rowDetail: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
   switchRow: {
     alignItems: 'center',
@@ -289,7 +277,5 @@ const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  switchTexts: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  hint: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
   pressed: mobileInteractionStyles.pressed,
 });

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AppearanceSection } from '../AppearanceSection';
 
+const themeState = vi.hoisted(() => ({ familyId: 'cindy' }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -15,9 +17,8 @@ vi.mock('@/hooks/useTheme', () => ({
   useTheme: () => ({
     theme: 'system',
     setTheme: vi.fn(),
-    familyId: 'cindy',
+    familyId: themeState.familyId,
     setFamily: vi.fn(),
-    fallbackFromType: null,
   }),
 }));
 
@@ -28,14 +29,20 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
     codeFamily: '',
     uiSize: 14,
     codeSize: 14,
+    terminalFamily: '',
+    terminalSize: 13,
     setUiFamily: vi.fn(),
     setCodeFamily: vi.fn(),
     setUiSize: vi.fn(),
     setCodeSize: vi.fn(),
+    setTerminalFamily: vi.fn(),
+    setTerminalSize: vi.fn(),
     resetUiFamily: vi.fn(),
     resetCodeFamily: vi.fn(),
     resetUiSize: vi.fn(),
     resetCodeSize: vi.fn(),
+    resetTerminalFamily: vi.fn(),
+    resetTerminalSize: vi.fn(),
   }),
 }));
 
@@ -96,7 +103,7 @@ vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
-  it('labels the UI and code font-size number inputs', () => {
+  it('labels the UI, code and terminal font-size number inputs', () => {
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
       name: 'settings.appearance.wallpaper.visibilityLabel',
@@ -120,9 +127,19 @@ describe('AppearanceSection accessibility', () => {
       wallpapers.getAllByRole('radio').map((option) => option.getAttribute('aria-label')),
     ).toEqual([
       'settings.appearance.wallpaper.options.none',
-      'settings.appearance.wallpaper.options.cindy-window',
-      'settings.appearance.wallpaper.options.cindy-studio',
-      'settings.appearance.wallpaper.options.cindy-dream',
+      'settings.appearance.wallpaper.options.cindy-whisper',
+      'settings.appearance.wallpaper.options.cindy-night-glance',
+      'settings.appearance.wallpaper.options.cindy-scarlet-stroll',
+      'settings.appearance.wallpaper.options.cindy-neon',
+      'settings.appearance.wallpaper.options.cindy-prism',
+      'settings.appearance.wallpaper.options.night-launch',
+      'settings.appearance.wallpaper.options.silent-orbits',
+      'settings.appearance.wallpaper.options.dune-dawn',
+      'settings.appearance.wallpaper.options.planet-dawn',
+      'settings.appearance.wallpaper.options.indigo-folds',
+      'settings.appearance.wallpaper.options.dune-sphere',
+      'settings.appearance.wallpaper.options.ocean-clouds',
+      'settings.appearance.wallpaper.options.rose-quartz',
       'settings.appearance.wallpaper.options.custom',
     ]);
     expect(
@@ -131,5 +148,43 @@ describe('AppearanceSection accessibility', () => {
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole('spinbutton', { name: 'settings.appearance.font.terminalSize.label' }),
+    ).toBeTruthy();
+  });
+
+  it('locks the appearance mode to the only variant of a single-variant theme', () => {
+    themeState.familyId = 'eclipse';
+    try {
+      render(<AppearanceSection />);
+
+      const modes = within(
+        screen.getByRole('radiogroup', { name: 'settings.appearance.modeLabel' }),
+      ).getAllByRole('radio');
+      expect(modes.map((mode) => (mode as HTMLButtonElement).disabled)).toEqual([true, true, true]);
+      expect(modes.map((mode) => mode.getAttribute('aria-checked'))).toEqual([
+        'false',
+        'true',
+        'false',
+      ]);
+      expect(screen.getByText('settings.appearance.singleVariant.darkNotice')).toBeTruthy();
+    } finally {
+      themeState.familyId = 'cindy';
+    }
+  });
+
+  it('keeps the saved appearance mode selectable for two-variant themes', () => {
+    render(<AppearanceSection />);
+
+    const modes = within(
+      screen.getByRole('radiogroup', { name: 'settings.appearance.modeLabel' }),
+    ).getAllByRole('radio');
+    expect(modes.some((mode) => (mode as HTMLButtonElement).disabled)).toBe(false);
+    expect(modes.map((mode) => mode.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ]);
+    expect(screen.queryByText(/settings\.appearance\.singleVariant\..*Notice/)).toBeNull();
   });
 });

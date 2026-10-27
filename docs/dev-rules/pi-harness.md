@@ -16,6 +16,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   (`anthropic-compat-proxy-host.ts`)。凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。
 - **system prompt**:`--append-system-prompt` 追加 host 产品段 + 用户段,**保留 pi 默认
   prompt**(不用 `--system-prompt` 整体替换 —— 那会丢掉 pi 自己调好的工具用法/工程约定)。
+  追加段的文本写在会话 `configHome/append-system-prompt.md`,命令行只传该文件路径(pi 接受
+  `<text|path>`):伙伴提示词轻易两三万字符,内联会顶穿 Windows 的 spawn 命令行预算。
 - **权限执行**:pi 原生无工具审批(security.md 明确:非沙箱、不限制工具)。Cindy 用注入的
   `cindy-bridge.ts` 扩展在 pi 进程内 `pi.on('tool_call')` 拦截,经 `extension_ui_request`
   子协议冒泡到 `index.ts handleExtensionUiRequest`,映射成 `InteractionRequest` 交 Cindy
@@ -55,7 +57,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
   始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
   input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
-  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
+  当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
+  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
+  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
+  正常过一次权限）。上下文压缩成功后，bridge 会在下一次运行开始前注入一条一次性的已披露
+  工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
+  失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
@@ -64,9 +72,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
-- **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
-  时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
-  并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
+- **plan 模式**:自动挂载 Pi 分发包自带的 plan-mode 扩展，无需用户另装。UI 勾选是下一条
+  消息的一次性意图，与原生运行态分开；`StartSessionOptions.planMode` 设置起始档，
+  `SendOptions.planMode` 快照决定本轮，切档与 prompt 在同一 RPC 串行段执行。发送后消耗
+  勾选不关闭在途计划轮；下一条普通消息恢复普通工具。扩展缺失或切档失败时拒绝计划请求，
+  不悄悄按普通模式执行。缺失扩展不阻止会话启动，启动计划意图保留到发送时拒绝；
+  取消计划后普通消息仍可发送。resume 和原生 Execute/Refine 续轮从本机 session JSONL
+  校正运行态；远端仍走 `get_entries`。原生续轮校正期间 Host 写操作保持不可用。
+  启动校正失败且没有显式计划意图时，发送前重新读取原生状态；仍未知则拒绝发送及包变更，
+  读回后沿用原生档位并按正常接受边界消耗一次性计划意图，不默认关闭计划模式。
 
 > Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
 
@@ -86,9 +100,31 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 时仍保持仅文本；此默认值不写回用户配置，也不代表上游接口保证支持图片。活动任务沿用启动时
 能力快照。回归见 `pi-provider-routing.test.ts` 与 `piNativeProviders.test.ts`。
 
+Codex / Claude Code 复用的 `pi-provider-transport.ts` 原生桥接也沿用此缺省口径：
+活动目录的显式图片开关或模态声明优先于原生兜底资料，只有均未声明时才允许图片。
+此行为只决定图片是否进入原生 SDK 请求，不保证上游识图；回归见 `piProviderTransport.test.ts`。
+
 Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
-`set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
+`set_auto_compaction{enabled:true}` / `set_thinking_level`。切换模型成功后按目标模型的思考意图
+再下发一次 `set_thinking_level`（Pi 的 `set_model` 不重置 level；不收敛会让上一个模型的 off/旧档位
+漂移给新模型——实测推理模型在 off 下把思考写进正文）。思考意图由 renderer 的原子 selection 携带
+（主进程只对 Pi 转成 `thinkingEnabled`，点选暂存与 deferred 重放一并回放）；目标档位不在启动快照内时
+按默认档/首档回落（同 `reconcilePiStartupEffort` 口径），目标声明不支持思考时明确 `off`，能力未知
+则不动。**载体缺失（旁路入口热切模型）时同样按目标快照收敛**：目标支持思考就按会话档位重新下发一次，
+否则保留现有档位——历史实现的「无意图就不动」会让这类切换静默丢思考通道（2026-10-06 实报：Orca lead
+切到 `commandcode/deepseek-v4.1-flash` 后 `usage.reasoning` 归零、推理整段写进正文，Pi 侧无任何
+`set_thinking_level` 记录，直到用户手动改一次档位才恢复）。实现见
+`packages/maker-core/src/agents/pi/index.ts` 的 `switchModel` 末尾，
+回归见 `pi-provider-routing.test.ts` 的 thinking-level 用例。跨引擎切换提交时还会把这次选择写进
+本机偏好镜像（普通 send 走 lazy-create 只读镜像、不经过 bootstrap），避免远端推送未回流时新建会话
+用旧值。**仍未覆盖**：Bot 设置保存、agent/scheduler/IM 回滚等**旁路入口**热切 Pi 模型时没有 thinking
+载体（`SessionRuntimeProfile` 不含该字段）。按目标快照收敛保证推理模型不丢通道；用户明确关过的
+思考（`setThinkingEnabled(false)` / 显式 `thinkingEnabled:false` / 启动关闭）由运行期意图标记
+保护，无载体切换不会重新开启。剩下的是本机偏好镜像里的 per-model 开关意图（记忆里关了、运行期
+从未显式下发过）仍无法携带，要完全对齐需给这些入口补载体（镜像已有 `getThinkingEnabledFromMemory`，
+目前只在会话启动钩子接入）。
+Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复
 Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveTokens`
@@ -360,6 +396,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 
+- 代输入 askpass(2026-10-13):Pi 本机任务的 Agent 进程 env 合入 `runtimeConfig.taskShellEnv`,
+  只在 `!remote && !hosted && !reviewMode` 时合入,且按 sessionId 确定(respawn 字节一致)。这只是给
+  sudo/ssh/git 提供口令来源,不改 Pi 原生命令、扩展或权限行为;Pi 自身的 bash 工具照常执行,口令由宿主
+  核验进程链后写回发起进程。见 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md)
+  「代输入：任务 shell 环境与工具说明」。
+
 ## 5. 已交付(2026-07 里程碑)
 
 - redacted thinking 不再显示为空卡片;PI 会话图标(π);Auto-review 核心 + pi adapter + auto 档;
@@ -391,6 +433,22 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   `/review` 对 SSH 远端会话前置拦截(device-link 同款);无自动重连(用户手动 Retry,
   与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
   后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
+
+### 本机普通会话空闲回收(2026-10)
+
+- **动机**：`pi --mode rpc` 每个约 150~300MB，普通会话此前只有退出应用/切换 Agent
+  才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
+  持续累积（upstream #5830）。
+- **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
+  5min 扫描）。候选只取本机桌面来源、无 Orca 角色、非远程、未隐藏的 pi 会话
+  （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
+  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
+  `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
+  （手动压缩 / rewind / 切模）在途的会话（pi 侧由 `runExclusivePiRpc` 计数，
+  见 `hasPendingHostOperation`）。
+- **重建语义**：释放不影响会话数据；下一次发送走既有 lazy create-session，resume 自
+  `sdk_session_id`，与冷启动一致。闲置后首次发送因此可能多等一次冷启动。
+- **回归**：`apps/desktop/src/main/maker-ipc/__tests__/piIdleReleaseWatcher.test.ts`。
 
 ## 6. 上线门禁
 
@@ -431,8 +489,33 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；
       invalid resume 在适配层先校验文件存在并遵守 CAS，precise rewind/fork 后 resume 有真二进制测试。
-- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；不支持的 provider
-      忽略该选项。已用 ChatGPT 订阅实例确认 `cacheRead` 命中会端到端落库与展示。
+- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；明确拒收该可选字段的
+      provider 由 compat 自愈学习并关掉该字段(见下条)。已用 ChatGPT 订阅实例确认 `cacheRead`
+      命中会端到端落库与展示。
+- [x] **provider compat 自愈**:上游以 `invalid_request_error` 明确拒收某个可选请求字段时
+      (已知形态:Console Go / OpenCode Zen-Go 的 GLM 上游拒收 `prompt_cache_retention`,提示改用
+      `prompt_cache_options`;自定义政企/内网网关只拒 `prompt_cache_key`
+      ，见 issue #5878),Pi translator 打稳定 reason `unsupported-request-option`。
+      仅接受被点名字段与明确拒收关系；普通 400、鉴权、限流、其他参数错误不学习。
+      Desktop 先将 `supportsLongCacheRetention: false` 原子记入
+      `<userData>/pi-native-compat-overrides.json` 的 `routes` 表；键为 JSON 数组
+      `[连接 ID, wire 模型 ID, SHA256(协议 + 真实端点)]`，端点包含路径、端口、查询参数，
+      不保存原始 URL 或错误正文。连接、端点或协议变化均不复用旧记录；无身份不学习，
+      损坏文件保留原样且不授权恢复。未发布 #4791 的无端点记录无法精确归属，不自动套用。
+      当前运行时另持有启动/原生 registry 刷新成功时的应用快照；磁盘已学习不代表旧进程
+      已应用。成功落盘后仅退役空闲的旧实例，新进程重建 models.json 并校验同一路由已应用。
+      Pi 1.0.2 普通 URL 下 compat 会移除两字段，但 URL 含 api.openai.com 时 key 仍可发送；
+      因此既有 before_provider_request hook 按私有运行时规则的 provider/model/baseUrl 精确
+      删除这两个字段，其他路由保持原生行为。原生子代理冻结继承相同规则；刷新失败回滚
+      models/settings 与规则文件，不保留半套配置。
+      自动恢复只对本地 `source=desktop` Pi：整轮无文字/思考/工具调用或执行，原输入仍是
+      最新输入，实例/轮次未更换、未取消、未切路由且无外部恢复 owner。同一输入最多一次，
+      必须存在原生 user entry，使用原生分支重试以保持一条有效输入；缺失 entry 或应用确认
+      时直接失败，禁止追加重复输入。恢复后仍拒收正常报错，不循环、不自动扩展降级。
+      外部派单可学习并退役空闲旧实例，重试由原 owner 负责；原生子代理继承已有学习但不将
+      子错误归给父任务学习/重放。SSH 不消费本地记录；设备互联/手机控制本地桌面任务走同一
+      宿主路径，无新 IPC/UI。恢复只影响出错任务的空闲 Pi 实例，不重启应用、连接或其它任务。
+      删除精确记录并重新创建运行时可重新探测；无后台探测、无自动到期，避免恢复失败循环。
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 

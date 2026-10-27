@@ -14,6 +14,7 @@ import type { RemoteAgentReply } from '@cindy/device-link';
 import { CINDY_EXEC_MCP_SERVER, handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorRequestError, type RemoteExecutor } from '../executor/executor';
 import { resolveExecutorShell } from '../executor/shell';
+import { pathTextContext } from '../executor/workspace';
 
 /** 本任务可用的一个本机 MCP 服务：完整地址(已带本任务身份)与要附加的请求头。 */
 export interface LocalMcpTarget {
@@ -30,6 +31,14 @@ export interface ReverseHttpRouterDeps {
 
 const FORWARD_REQUEST_HEADERS = new Set(['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']);
 const FORWARD_RESPONSE_HEADERS = new Set(['content-type', 'mcp-session-id', 'mcp-protocol-version']);
+
+/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase，正文和插件业务参数不做文本替换。 */
+const PATH_ARGUMENTS = new Set([
+  'path', 'paths', 'filepath', 'filepaths', 'directory', 'directories', 'dir', 'dirs',
+  'workingdir', 'workdir', 'cwd', 'root', 'libraryroot', 'sourcepath', 'destinationpath',
+  'savedir', 'outpath', 'htmlpath', 'imagepath', 'iconsource', 'attachments', 'extradirs', 'writabledirs',
+  'debugimageout',
+]);
 
 function json(status: number, value: unknown): Extract<RemoteAgentReply, { type: 'http' }> {
   return {
@@ -65,15 +74,23 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
 
   const mapArguments = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {
+      if (key === 'args') {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object') return JSON.stringify(mapArguments(parsed));
+        } catch { /* 普通字符串参数保持原样。 */ }
+      }
       if (/^(?:cmd|command)$/.test(key)) return workspace.mapCommand(value, resolveExecutorShell().dialect);
-      if (/^(?:path|filePath|file_path|directory|workingDir|cwd|root|libraryRoot|sourcePath|destinationPath)$/i.test(key)) return workspace.mapAlias(value);
+      const fieldContext = pathTextContext(key);
+      if (fieldContext === 'ambiguous-path') return workspace.mapTextFromAgent(value, fieldContext);
+      if (fieldContext === 'path' || PATH_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase())) return workspace.mapAlias(value);
       return value;
     }
     if (Array.isArray(value)) return value.map((item) => mapArguments(item, key));
     if (!value || typeof value !== 'object') return value;
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, name)]));
   };
-  const projectResult = (value: unknown): unknown => {
+  const projectResult = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {
       if (value.startsWith('file://')) {
         try {
@@ -86,11 +103,11 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
           }
         } catch { /* 普通字符串或非本机 file URL，交给文本投影。 */ }
       }
-      return workspace.mapTextForAgent(value);
+      return workspace.mapTextForAgent(value, pathTextContext(key));
     }
-    if (Array.isArray(value)) return value.map(projectResult);
+    if (Array.isArray(value)) return value.map((item) => projectResult(item, key));
     if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, projectResult(item)]));
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, projectResult(item, name)]));
   };
 
   async function forwardMcp(
@@ -112,7 +129,9 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       ...(body && method !== 'GET' && method !== 'HEAD' ? { body: new Uint8Array((() => {
         try {
           const message = JSON.parse(body.toString('utf8'));
-          if (message.method === 'tools/call' && message.params?.arguments) message.params.arguments = mapArguments(message.params.arguments);
+          if (message.method === 'tools/call' && message.params?.arguments) {
+            message.params.arguments = mapArguments(message.params.arguments);
+          }
           return Buffer.from(JSON.stringify(message));
         } catch { return body; }
       })()) } : {}),

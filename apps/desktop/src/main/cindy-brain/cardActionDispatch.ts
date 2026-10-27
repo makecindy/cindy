@@ -17,6 +17,8 @@
  * 依赖注入(规则 14):归属查询 / 唤醒 / 投递全经 deps,单测直测零 Electron。
  */
 
+import { parseGhostCardFormValues, readMailCard } from '@cindy/maker-shared/ghost-card-form';
+import type { MailAttachmentUpload, PreparedMailAttachment, prepareMailAttachmentUpload } from './mailAttachmentUpload.js';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_ACTION_PROMPT_MAX_LEN,
@@ -31,7 +33,7 @@ export interface CardActionDispatchDeps {
   /** 内存卡片服务:in-flight + 宽限窗内的条目(归属 + 会话;命中最快)。 */
   resolveLiveInfo(callId: string): { ghostId: string; sessionId: string | null } | null;
   /** 持久卡库兜底:settle 后 / 重启后仍能查到卡的归属 + 会话(内存查无时用)。 */
-  resolvePersistedCard(callId: string): Promise<{ ghostId: string; sessionId: string | null } | null>;
+  resolvePersistedCard(callId: string): Promise<{ ghostId: string; sessionId: string | null; html?: string } | null>;
   /**
    * 重开卡片更新窗口:让意识在结算很久后 / 重启后仍能 card-update 换新卡
    * (cardService.reopenForAction)。sessionId 仅在内存条目已被清扫、需重建时用。
@@ -59,6 +61,8 @@ export interface CardActionDispatchDeps {
   onActivityStart?(key: string, sessionId: string): void;
   ownerScope?: GhostOwnerScope;
   now?(): number;
+  pickMailAttachment?(inline: boolean, sessionId: string): Promise<PreparedMailAttachment | null>;
+  prepareMailUpload?: typeof prepareMailAttachmentUpload;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -84,7 +88,9 @@ export class GhostCardActionDispatcher {
    * (IPC 层对 renderer 恒可回,reason 仅诊断)。prompt 仅 data-ghost-prompt
    * 类动作有(宿主输入框收集的用户文字),可选;非法形状整次拒。
    */
-  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string): Promise<CardActionResult> {
+  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string, formValues?: unknown, change = false, upload?: MailAttachmentUpload): Promise<CardActionResult> {
+    const fields = formValues === undefined ? undefined : parseGhostCardFormValues(formValues);
+    if (fields === null || (change && !fields)) return { ok: false, reason: 'bad-form-values' };
     if (typeof callId !== 'string' || callId.length === 0 || callId.length > MAX_CALL_ID_LEN) {
       return { ok: false, reason: 'bad-call-id' };
     }
@@ -137,7 +143,45 @@ export class GhostCardActionDispatcher {
       this.deps.log?.warn('card-action rejected: ghost unavailable', { ghostId, callId });
       return { ok: false, reason: 'ghost-unavailable' };
     }
-    if (!ghost.manifest.card) {
+    let mailAction = false;
+    let mailAttachment: PreparedMailAttachment['attachment'] | null = null;
+    let staged: PreparedMailAttachment | undefined;
+    let deliveryFields = fields;
+    let attachmentView: ReturnType<typeof readMailCard> = null;
+    if (upload && (!mobilePageId || change || !actionId.startsWith('mail:attach:'))) return { ok: false, reason: 'bad-mail-upload' };
+    if (actionId.startsWith('mail:')) {
+      const stored = await this.deps.resolvePersistedCard(callId);
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      const mail = stored?.html ? readMailCard(stored.html) : null;
+      if (ghost.manifest.mail !== true) return { ok: false, reason: 'no-mail-slot' };
+      if (!mail || mail.supersededBy || stored?.ghostId !== ghostId) return { ok: false, reason: 'mail-view-expired' };
+      const countdownAction = !change && !!mail.pendingSend &&
+        (actionId === `mail:cancel:${mail.key}` || actionId === `mail:now:${mail.key}`);
+      const expected = change ? 'change' : mail.state === 'sent' && mail.continueLabel ? 'continue' : 'send';
+      const attachmentAction = !change && mail.fields.some(f => f.kind === 'mail-attachments') &&
+        (actionId === `mail:attach:${mail.key}` || actionId === `mail:image:${mail.key}`);
+      const deleteAction = !change && !!mail.deleteLabel && actionId === `mail:delete:${mail.key}`;
+      if (deleteAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
+      if (attachmentAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
+      if (!countdownAction && ((!attachmentAction && !deleteAction && actionId !== `mail:${expected}:${mail.key}`) || ['sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail.state) ||
+          (mail.state === 'sent' && expected !== 'continue'))) return { ok: false, reason: 'mail-view-readonly' };
+      if (!countdownAction && !deleteAction && expected !== 'continue' && (!fields || Object.keys(fields).length !== mail.fields.length || mail.fields.some(f => !(f.name in fields)))) return { ok: false, reason: 'bad-mail-fields' };
+      if (attachmentAction) {
+        attachmentView = mail;
+        if (!sessionId || (mobilePageId ? (!upload || !this.deps.prepareMailUpload) : !this.deps.pickMailAttachment)) return { ok: false, reason: 'mail-attachment-picker-unavailable' };
+        try {
+          if (mobilePageId) {
+            staged = await this.deps.prepareMailUpload!(upload!, sessionId!);
+          } else staged = await this.deps.pickMailAttachment!(actionId.startsWith('mail:image:'), sessionId) ?? undefined;
+          mailAttachment = staged?.attachment ?? null;
+        }
+        catch { return { ok: false, reason: 'mail-attachment-read-failed' }; }
+        if (!ownerUsable()) { await staged?.discard(); return rejectStaleOwner(ghostId); }
+        if (!mailAttachment) return { ok: true };
+      }
+      mailAction = ghost.manifest.mail === true;
+    }
+    if (!ghost.manifest.card && !mailAction) {
       // 卡片是它发的却没声明 card 能力 = 不该发生;保险起见拒。
       this.deps.log?.warn('card-action rejected: no card capability', { ghostId, callId });
       return { ok: false, reason: 'no-card-slot' };
@@ -151,32 +195,61 @@ export class GhostCardActionDispatcher {
     const root = ghostCardRootCallId(callId);
     let spawnCallId = `${root}${GHOST_CARD_SPAWN_SEP}${this.now().toString(36)}`;
     if (spawnCallId.length > MAX_CALL_ID_LEN) spawnCallId = callId;
+    if (change || mailAction) spawnCallId = callId;
     if (spawnCallId !== callId) {
       this.deps.reopenForAction(spawnCallId, { ghostId, sessionId });
     }
 
     try {
-      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (!ownerUsable()) { await staged?.discard(); return rejectStaleOwner(ghostId); }
       if (!this.deps.isRunning(ghostId)) {
         await this.deps.wake(ghost);
-        if (!ownerUsable()) return rejectStaleOwner(ghostId);
+        if (!ownerUsable()) { await staged?.discard(); return rejectStaleOwner(ghostId); }
+      }
+      if (attachmentView && mailAttachment) {
+        // Selection/materialization and wake may outlive edits in another view.
+        // Rebase only the click's actual edits onto the latest host fields;
+        // never replay its entire old form over a newer draft.
+        const latest = await this.deps.resolvePersistedCard(callId);
+        if (!ownerUsable()) { await staged?.discard(); return rejectStaleOwner(ghostId); }
+        const current = latest?.html ? readMailCard(latest.html) : null;
+        if (!current || latest?.ghostId !== ghostId || latest.sessionId !== sessionId ||
+            current.key !== attachmentView.key || current.supersededBy || !['draft', 'syncing', 'error'].includes(current.state) ||
+            current.fields.length !== attachmentView.fields.length || current.fields.some(f => !attachmentView!.fields.some(base => base.name === f.name))) {
+          await staged?.discard(); return { ok: false, reason: 'mail-view-expired' };
+        }
+        const rebased: Record<string, string> = {};
+        for (const field of current.fields) {
+          const base = attachmentView.fields.find(f => f.name === field.name)!.value;
+          const local = fields![field.name];
+          if (local !== base && field.value !== base && local !== field.value) {
+            await staged?.discard(); return { ok: false, reason: 'mail-view-expired' };
+          }
+          rebased[field.name] = local !== base ? local : field.value;
+        }
+        deliveryFields = rebased;
       }
       // 卡片路径只发这一张一次性票；不另记面板手势，避免一次点击两份凭据。
-      const userActionToken = this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
-      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      const userActionToken = change ? null : this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
+      if (!ownerUsable()) { await staged?.discard(); return rejectStaleOwner(ghostId); }
       this.deps.sendToGhost(ghostId, {
         type: 'event',
         name: 'card-action',
+        ...(change ? { formChange: true } : {}),
         ...(mobilePageId ? { mobilePageId } : {}),
         callId,
         actionId,
         ...(sessionId ? { sessionId } : {}),
         ...(userActionToken ? { userActionToken } : {}),
         ...(promptText !== undefined ? { prompt: promptText } : {}),
+        ...(deliveryFields ? { formValues: deliveryFields } : {}),
+        ...(mailAttachment ? { mailAttachment } : {}),
         spawnCallId,
         ts: this.now(),
       });
+      try { staged?.accepted(); } catch { /* Delivered files must stay available to the adapter. */ }
     } catch (err) {
+      await staged?.discard();
       this.deps.log?.warn('card-action deliver failed', {
         ghostId,
         callId,
@@ -187,9 +260,9 @@ export class GhostCardActionDispatcher {
 
     // 呼吸起点:投递成功即亮(意识后台干活从这一刻开始;结束/兜底由
     // 活动跟踪器按 card-update state / TTL 收口)。
-    if (sessionId) this.deps.onActivityStart?.(spawnCallId, sessionId);
+    if (sessionId && !change) this.deps.onActivityStart?.(fields ? callId : spawnCallId, sessionId);
 
-    this.deps.log?.info('card-action delivered', { ghostId, callId, actionId, spawnCallId });
+    if (!change) this.deps.log?.info('card-action delivered', { ghostId, callId, actionId, spawnCallId });
     return { ok: true };
   }
 }

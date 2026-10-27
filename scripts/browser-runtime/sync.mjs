@@ -292,6 +292,53 @@ const LOCAL_PATCHES = {
   ],
   'extension/src/browser/routes/agent.act.ts': [
     {
+      desc: 'resolve the selected tab alias before comparing or executing action targets',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "openclaw/plugin-sdk/browser-action-targets";`,
+        ],
+        [
+          `      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {`,
+          `      const requestedAction = action;
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;`,
+        ],
+        [
+          `          if (action.targetId && action.targetId !== tab.targetId) {
+            return jsonActError(
+              res,
+              403,
+              ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId",
+            );
+          }
+`,
+          ``,
+        ],
+      ]),
+    },
+    {
       desc: 'carry the effective browser proxy mode through interaction navigation guards',
       transform: (source) => applyExactReplacements(source, [
         [
@@ -826,7 +873,16 @@ const LOCAL_PATCHES = {
     cleanup();
   }
 }`,
-          `        await waitForStep(page.waitForFunction(fn, { timeout }));
+          `        // Pass a real function so Playwright caches its compilation between
+        // polls (string expressions re-eval and can fail under Trusted Types).
+        // Compile only on the host; execution stays in the page context.
+        const predicate = new Function(
+          "const value = (" + normalizeBrowserEvaluateFunctionSource(fn) + ")(); " +
+            "if (value && typeof value.then === 'function') { " +
+            "Promise.resolve(value).catch(() => {}); throw new Error('wait.fn requires a synchronous predicate'); } " +
+            "return value;",
+        ) as () => unknown;
+        await waitForStep(page.waitForFunction(predicate, undefined, { timeout }));
       }
     }
       },
@@ -1457,6 +1513,30 @@ const UNTORN_DOWN_BROWSER_MESSAGE =
   ],
   'extension/src/browser/pw-session.ts': [
     {
+      desc: 'use Playwright local-path uploads only for a live browser managed by this runtime',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import path from "node:path";`,
+          `import path from "node:path";
+import { getBrowserControlState } from "../browser-control-state.js";
+import { isManagedLocalCdpConnection } from "openclaw/plugin-sdk/cdp-locality";`,
+        ],
+        [
+          `          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)`,
+          `          const headers = getHeadersWithAuth(target);
+          const isLocal = isManagedLocalCdpConnection(
+            normalized, target, getBrowserControlState()?.profiles.values() ?? [],
+          );
+          // Bypass proxy for loopback CDP connections (#31219)`,
+        ],
+        [
+          `chromium.connectOverCDP(target, { timeout, headers })`,
+          `chromium.connectOverCDP(target, { timeout, headers, isLocal })`,
+        ],
+      ]),
+    },
+    {
       desc: 'export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)',
       find: `// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,
       replace: `/**
@@ -1594,6 +1674,72 @@ export async function quarantineTargetWithoutClosing(opts: {
     },
   ],
   'extension/src/browser/chrome.ts': [
+    {
+      desc: 'reuse the bounded CDP command helper for graceful Windows Chrome shutdown',
+      find: `  openCdpWebSocket,\n} from "./cdp.helpers.js";`,
+      replace: `  openCdpWebSocket,\n  withCdpSocket,\n} from "./cdp.helpers.js";`,
+    },
+    {
+      desc: 'close Windows Chrome via CDP and wait for actual process exit before force-stop',
+      find: `    if (proc.killed) {
+      return;
+    }
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!proc.exitCode && proc.killed) {
+        break;
+      }
+      if (
+        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
+      ) {
+        return;
+      }
+      const remainingMs = timeoutMs - (Date.now() - start);`,
+      replace: `    if (proc.exitCode != null || proc.signalCode != null) {
+      return;
+    }
+    // LOCAL PATCH (Cindy, via sync.mjs): Windows SIGTERM force-kills too.
+    // Ask Chrome to flush and close via CDP, within the existing grace period.
+    const start = Date.now();
+    if (!proc.killed && process.platform === "win32" && timeoutMs > 0) {
+      try {
+        // Discovery, WebSocket handshake and command each share the budget.
+        const cdpTimeoutMs = Math.max(1, Math.floor(timeoutMs / 3));
+        const wsUrl = await getChromeWebSocketUrl(
+          cdpUrlForPort(running.cdpPort), cdpTimeoutMs,
+        );
+        if (wsUrl && proc.exitCode == null && proc.signalCode == null && Date.now() - start < timeoutMs) {
+          await withCdpSocket(wsUrl, (send) => send("Browser.close"), {
+            handshakeTimeoutMs: cdpTimeoutMs,
+            commandTimeoutMs: cdpTimeoutMs,
+            handshakeRetries: 0,
+          });
+        }
+      } catch {
+        // Closing Chrome can drop CDP before replying. Still wait for exit.
+      }
+    } else if (!proc.killed && process.platform !== "win32") {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    }
+
+    while (true) {
+      // CDP can disappear while Chrome is still flushing its profile.
+      if (proc.exitCode != null || proc.signalCode != null) {
+        return;
+      }
+      const remainingMs = timeoutMs - (Date.now() - start);
+      if (remainingMs <= 0) break;`,
+    },
     {
       desc: 'start headed automation Chrome without an empty foreground window',
       find: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  }`,

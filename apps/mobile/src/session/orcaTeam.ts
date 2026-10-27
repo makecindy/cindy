@@ -44,9 +44,11 @@ export type { OrcaTeamWorker, OrcaCollaborationSettings, OrcaWorkerAgentKind, Or
 /** 创建 Worker 表单(开启协同与追加 Worker 共用)。 */
 export interface OrcaWorkerFormValue {
   role: string;
+  /** 手动选择或恢复的完整路线；仅供控制端表单使用，不进入创建协议。 */
+  modelSelectionExplicit?: boolean;
   agent: OrcaWorkerAgentKind;
   /** null = 跟随被控端默认(该 Agent 上次新建任务的选择,回落 Lead 模型)。 */
-  model: { id: string; providerId: string | null; effort: string | null; fast: boolean } | null;
+  model: { id: string; providerId: string | null; effort: string | null; fast: boolean | 'ultrafast' } | null;
   permissionMode: OrcaWorkerPermissionMode;
   initialTask: string;
   /** 缺省为 Lead 所在电脑；指定后模型与目录都属于该运行设备。 */
@@ -76,6 +78,7 @@ export function parseOrcaExecutionDevices(value: unknown): OrcaExecutionDeviceVi
       name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
       platform: typeof row.platform === 'string' ? row.platform : null,
       supported: row.supported === true,
+      ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
     }];
   });
 }
@@ -126,7 +129,7 @@ export function convergeOrcaWorkerModel(
   return {
     ...model,
     effort,
-    fast: model.fast && option.supportsFastMode && capabilities.hasFastMode,
+    fast: option.supportsFastMode && capabilities.hasFastMode && (model.fast !== 'ultrafast' || option.supportsUltrafastMode) ? model.fast : false,
   };
 }
 
@@ -151,6 +154,8 @@ export function narrowOrcaWorkerProvider(
     && chatEligibleSourcesForModel(views, model.id, form.agent).some((candidate) => candidate.id === model.providerId)
     ? model.providerId
     : null;
+  // 独立记忆不能把失效来源悄悄换成另一套凭证；保留原选择由宿主明确拒绝。
+  if (form.modelSelectionExplicit && model.providerId && providerId !== model.providerId) return form;
   const narrowed = providerId === model.providerId ? form : { ...form, model: { ...model, providerId } };
   const sourceId = providerId ?? effectiveSourceIdForModel(views, null, model.id, form.agent);
   const provider = sourceId ? views.find((candidate) => candidate.id === sourceId) : undefined;
@@ -167,7 +172,7 @@ export function narrowOrcaWorkerProvider(
       : model.effort && efforts.includes(model.effort)
       ? model.effort
       : entry.defaultEffort ?? efforts[0] ?? null;
-  const fast = model.fast && entry.supportsFastMode === true;
+  const fast = entry.supportsFastMode === true && (model.fast !== 'ultrafast' || entry.supportsUltrafastMode) ? model.fast : false;
   return effort === model.effort && fast === model.fast
     ? narrowed
     : { ...narrowed, model: { ...model, providerId, effort, fast } };

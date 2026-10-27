@@ -106,7 +106,7 @@ describe('feature retirement upgrade', () => {
   it('detects legacy consumers without confusing independent Baguette', async () => {
     await seed(true, manifestFor('custom-simulator', true));
     expect(manager().list()[0].retirement?.eligible).toBe(true);
-    expect(findFeatureRetirement(manifestFor('baguette-simulator'))).toBeUndefined();
+    expect(findFeatureRetirement(manifestFor('cindy-simulator'))).toBeUndefined();
     expect(findFeatureRetirement({ id: 'legacy', slots: ['ios-simulator'] })?.id).toBe(
       'embedded-ios-simulator',
     );

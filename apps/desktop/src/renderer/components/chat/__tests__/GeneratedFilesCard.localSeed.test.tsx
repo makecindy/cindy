@@ -10,7 +10,9 @@ import {
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
 
 vi.mock('../useFileChipContextMenu', () => ({
-  useFileChipContextMenu: () => ({ menu: null, onContextMenu: vi.fn() }),
+  useFileChipContextMenu: () => ({ menu: null, onContextMenu: vi.fn(),
+    onActivate: (_event: unknown, openDefault: () => void) => openDefault(),
+  }),
 }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),

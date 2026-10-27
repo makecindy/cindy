@@ -9,6 +9,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { MAKER_PUSH } from '../../maker-ipc/channels';
+import {
+  RSB_WINDOW_COMMAND_CHANNEL,
+  RSB_WINDOW_CONTEXT_CHANGED_CHANNEL,
+  RSB_WINDOW_STATE_CHANGED_CHANNEL,
+} from '../../../shared/rightSidebarWindow';
+
 const PRELOAD_PATH = path.resolve(
   process.cwd().toLowerCase().endsWith((path.sep + 'apps' + path.sep + 'desktop').toLowerCase())
     ? process.cwd()
@@ -109,6 +116,8 @@ const deviceLinkKeys = exposedNestedKeys(source, 'deviceLink');
 const mirrorCacheKeys = exposedNestedKeys(source, 'mirrorCache');
 const localDbBody = extractBlock(source, 'localDb') ?? '';
 const localDbKeys = objectKeys(localDbBody);
+const botsKeys = exposedNestedKeys(localDbBody, 'bots');
+const botAutonomyKeys = exposedNestedKeys(localDbBody, 'autonomy');
 const rightSidebarTabsKeys = exposedNestedKeys(localDbBody, 'rightSidebarTabs');
 const subagentRunsKeys = exposedNestedKeys(localDbBody, 'subagentRuns');
 const orcaWorkflowKeys = exposedNestedKeys(localDbBody, 'orcaWorkflows');
@@ -188,7 +197,7 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
       'listDir', 'listAllFiles', 'readFile', 'writeFile', 'createFile', 'createFolder',
       'deleteEntry', 'renameEntry', 'stat', 'startWatch', 'stopWatch', 'onEvent',
       'fetchRemote', 'readCached', 'cachePut', 'onTransferProgress', 'chatFetch', 'chatDownload',
-      'chatStat',
+      'chatCancel', 'chatStat',
     ]));
     expect(terminalKeys).toEqual(expect.arrayContaining([
       'create', 'write', 'resize', 'dispose', 'restart', 'onData', 'onExit',
@@ -211,6 +220,18 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
     ]));
   });
 
+  it('exposes only the workbench read, change event, and permission action', () => {
+    expect(localDbKeys).toContain('bots');
+    expect(botsKeys).toEqual(['autonomy']);
+    expect(botAutonomyKeys).toEqual(['glance']);
+    expect(makerKeys).toEqual(expect.arrayContaining([
+      'onBotAutonomyChanged', 'getPendingInteractions', 'allowBotWorkbenchPermission',
+    ]));
+    expect(makerKeys).not.toContain('resolveInteraction');
+    expect(source).toContain("ipcRenderer.invoke('local-db:bots:autonomy:glance', botId)");
+    expect(source).toContain("ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId })");
+  });
+
   it('涓嶆毚闇?maker / agent / voice / login 鑷不鑳藉姏', () => {
     const forbidden = [
       'agent', 'voiceInput', 'login', 'settings',
@@ -224,7 +245,7 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
     }
     for (const key of [
       'install', 'uninstall', 'inspect', 'devRuntime', 'devCall',
-      'approve', 'revokeApproval', 'setCindyPref', 'listCardsBySession',
+      'approve', 'revokeApproval', 'setErrandConfig', 'listCardsBySession',
     ]) {
       expect(ghostKeys).not.toEqual(expect.arrayContaining([key]));
     }
@@ -313,5 +334,40 @@ describe('sidebar nested namespace contract', () => {
       'getPendingInteractions',
     ]));
     expect(makerKeys).not.toContain('iosSimulator');
+  });
+});
+
+/**
+ * 通道名一致性回归（2026-10-20）：
+ * 子窗口 preload 曾经按不存在的 `maker:push:rsb-window:*` 订阅，而 main 端
+ * MAKER_PUSH.RSB_WINDOW_* 发的是 `maker:rsb-window:*`，导致主窗转发过来的
+ * open-web-browser 命令（链接触发 / 插件预览 / 文件审查）静默丢失，
+ * 分离侧栏表现为“点了没反应、页签不出现”(#3390 / #4403)。这里锁定两侧同源。
+ */
+describe('RSB 子窗口通道名与 main 推送一致', () => {
+  it('preload 的订阅调用使用 main 实际发送的 state/context/command 通道', () => {
+    // 断言的是真实的 onPayload(...) 调用点,而不是"文件里出现过常量名" ——
+    // 后者只靠 import 就能满足,订阅写错(如 maker:rsb-window:commad)时不会失败。
+    const rightSidebarWindowBody = extractBlock(source, 'rightSidebarWindow') ?? '';
+    expect(rightSidebarWindowBody).toContain('onPayload(RSB_WINDOW_STATE_CHANGED_CHANNEL, cb)');
+    expect(rightSidebarWindowBody).toContain('onPayload(RSB_WINDOW_CONTEXT_CHANGED_CHANNEL, cb)');
+    expect(rightSidebarWindowBody).toContain('onPayload(RSB_WINDOW_COMMAND_CHANNEL, cb)');
+    expect(rightSidebarWindowBody).not.toMatch(/onPayload\(\s*['"`]/);
+    expect(MAKER_PUSH.RSB_WINDOW_STATE_CHANGED).toBe(RSB_WINDOW_STATE_CHANGED_CHANNEL);
+    expect(MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED).toBe(RSB_WINDOW_CONTEXT_CHANGED_CHANNEL);
+    expect(MAKER_PUSH.RSB_WINDOW_COMMAND).toBe(RSB_WINDOW_COMMAND_CHANNEL);
+  });
+
+  it('不再出现不存在的 maker:push:* 通道名', () => {
+    expect(source).not.toContain('maker:push:');
+  });
+
+  it('guest 浏览器快捷键命令与 main 端常量一致', () => {
+    expect(source).toContain("onPayload('rsb:browser-command'");
+    const securitySource = readFileSync(
+      path.join(path.dirname(PRELOAD_PATH), '..', 'main', 'webview-security.ts'),
+      'utf-8',
+    );
+    expect(securitySource).toContain("RSB_BROWSER_COMMAND_CHANNEL = 'rsb:browser-command'");
   });
 });

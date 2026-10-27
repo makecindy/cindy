@@ -22,7 +22,7 @@ vi.mock('../botStore', () => ({
 }));
 
 import { BotFollowMark, useSessionFollowers } from '../BotFollowMark';
-import { __testing } from '../botFollowScopes';
+import { __testing, useSessionDelegatingBot } from '../botFollowScopes';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 function Row({ session: value }: { session: Session }) {
@@ -37,7 +37,8 @@ const session = (patch: Partial<Session> = {}) => ({
 }) as Session;
 
 let changed: (() => void) | null = null;
-const followScopes = vi.fn(async () => [{ botId: 'bot-1', sessionIds: ['s1', 's2'] }]);
+const followScopes = vi.fn(async (): Promise<Array<{ botId: string; sessionIds?: string[]; delegatedSessionIds?: string[] }>> =>
+  [{ botId: 'bot-1', sessionIds: ['s1', 's2'] }]);
 
 beforeEach(() => {
   __testing.reset();
@@ -116,6 +117,37 @@ it('does not infer responsibility from an older host directory-only payload', as
   await act(async () => render(<Row session={session()} />));
   expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
 });
+describe('useSessionDelegatingBot', () => {
+  function Owner({ session: value }: { session: Session }) {
+    const bot = useSessionDelegatingBot(value);
+    return <span data-testid="owner">{bot ? bot.name : 'none'}</span>;
+  }
+
+  it("names the Bot only for its own background task, not for an ordinary task it took over", async () => {
+    followScopes.mockResolvedValueOnce([
+      { botId: 'bot-1', sessionIds: ['s1', 's2'], delegatedSessionIds: ['s2'] },
+      { botId: 'bot-2', sessionIds: ['s1'], delegatedSessionIds: [] },
+    ]);
+    await act(async () => render(<><Owner session={session()} /><Owner session={session({ id: 's2' })} /></>));
+    // s1 is the owner's task both Bots follow; s2 is Dash's background task.
+    expect(screen.getAllByTestId('owner').map((node) => node.textContent)).toEqual(['none', 'Dash']);
+    expect(followScopes).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps naming the Bot for its archived background task, while the follow mark stays active-only', async () => {
+    followScopes.mockResolvedValueOnce([{ botId: 'bot-1', sessionIds: ['s2'], delegatedSessionIds: ['s2'] }]);
+    const archived = session({ id: 's2', status: 'archived' });
+    await act(async () => render(<><Owner session={archived} /><Row session={archived} /></>));
+    expect(screen.getByTestId('owner').textContent).toBe('Dash');
+    expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
+  });
+
+  it('does not guess from an older host that only lists responsibilities', async () => {
+    await act(async () => render(<Owner session={session()} />));
+    expect(screen.getByTestId('owner').textContent).toBe('none');
+  });
+});
+
 it('removes marks when a task is released', async () => {
   await act(async () => render(<Row session={session()} />));
   expect(screen.getByTestId('bot-follow-mark')).toBeTruthy();

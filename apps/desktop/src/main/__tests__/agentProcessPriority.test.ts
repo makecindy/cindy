@@ -37,6 +37,29 @@ vi.mock('node:os', () => {
   };
 });
 
+// scanWindows 经 execFileAsync 拉 powershell;测试里喂 CIM 输出行,不真起进程。
+// 真实 execFile 的 promisify 版走 custom symbol 解析成 {stdout, stderr},mock 同构;
+// lastArgs 记录实际调用参数,供断言查询脚本真的由名单常量拼出(greptile P2)
+const cpMock = vi.hoisted(() => ({ stdout: '', lastArgs: [] as unknown[] }));
+vi.mock('node:child_process', () => ({
+  execFile: Object.assign(
+    (
+      _file: unknown,
+      _args: unknown,
+      _opts: unknown,
+      cb: (err: null, stdout: string, stderr: string) => void,
+    ) => {
+      cb(null, cpMock.stdout, '');
+    },
+    {
+      [Symbol.for('nodejs.util.promisify.custom')]: (...callArgs: unknown[]) => {
+        cpMock.lastArgs = callArgs;
+        return Promise.resolve({ stdout: cpMock.stdout, stderr: '' });
+      },
+    },
+  ),
+}));
+
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
 import {
@@ -45,6 +68,7 @@ import {
   createAgentProcessPriorityWatcher,
   parsePosixAgentProcesses,
   registerUserDataMarkers,
+  WINDOWS_AGENT_PROCESS_NAMES,
   type AgentProcessRow,
   type ApplyPriorityResult,
 } from '../agent-process-priority';
@@ -227,6 +251,8 @@ describe('agent process discovery', () => {
   const devClaudeCmd = '/repo/apps/claude-code-bin/darwin-arm64/claude';
   const devCodexPackageCmd = '/repo/apps/codex-package-bin/darwin-arm64/bin/codex app-server';
   const externalClaudeCmd = '/usr/local/bin/claude';
+  const piCmd = `/users/me/library/application support/${userDataDir}/pi/1.3.0-9272a77/pi --mode rpc`;
+  const devPiCmd = '/repo/apps/pi-bin/darwin-arm64/pi --mode rpc';
 
   it('classifies bundled claude/codex command lines and rejects external installs', () => {
     expect(classifyAgentCommandLine(claudeCmd)).toBe('claude');
@@ -236,6 +262,21 @@ describe('agent process discovery', () => {
     expect(classifyAgentCommandLine(devCodexPackageCmd)).toBe('codex');
     expect(classifyAgentCommandLine(externalClaudeCmd)).toBeNull();
     expect(classifyAgentCommandLine('/usr/bin/node some-script.js')).toBeNull();
+  });
+
+  it('classifies bundled pi command lines (priority governance covers pi sessions)', () => {
+    // 回归依据:pi 会话此前对治理完全失明(2026-10-25 本机:pi 会话全速清理
+    // 脚本占满一核,设置里降优先级对它无效)。最小失败输入 = 托管安装的 pi 命令行
+    expect(classifyAgentCommandLine(piCmd)).toBe('pi');
+    expect(
+      classifyAgentCommandLine(
+        `c:\\users\\me\\appdata\\roaming\\${userDataDir}\\pi\\1.3.0-9272a77\\pi.exe --mode rpc`,
+      ),
+    ).toBe('pi');
+    expect(classifyAgentCommandLine(devPiCmd)).toBe('pi');
+    expect(classifyAgentCommandLine(`/home/u/.config/${userDataDir}/pi/1.3.0-9272a77/pi`)).toBe('pi');
+    // 外部自装的 pi(如全局 npm)不认领,与 claude/codex 同一条安全边界
+    expect(classifyAgentCommandLine('/usr/local/bin/pi --mode rpc')).toBeNull();
   });
 
   it('classifies packaged Linux layouts (legacy managed + agent-runtime fallback)', () => {
@@ -266,10 +307,12 @@ describe('agent process discovery', () => {
     expect(
       classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/claude-code/bin/claude`),
     ).toBeNull(); // 注册前:不认识
+    expect(classifyAgentCommandLine(`${redirected.toLowerCase()}/pi/1.3.0/pi --mode rpc`)).toBeNull();
     registerUserDataMarkers(redirected);
     expect(
       classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/claude-code/bin/claude`),
     ).toBe('claude');
+    expect(classifyAgentCommandLine(`${redirected.toLowerCase()}/pi/1.3.0/pi --mode rpc`)).toBe('pi');
     expect(
       classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/codex/bin/codex`),
     ).toBe('codex');
@@ -323,6 +366,7 @@ describe('agent process discovery', () => {
     const psOutput = [
       `  100  ${selfPid} ${claudeCmd}`,
       `  101  ${selfPid} ${codexCmd}`,
+      `  105  ${selfPid} ${piCmd}`,
       `  102  9999 ${claudeCmd}`, // 别的进程的孩子(如另一个 Cindy 实例)
       `  103  ${selfPid} ${externalClaudeCmd}`,
       `  104  ${selfPid} /applications/cindy.app/contents/macos/cindy helper`,
@@ -331,6 +375,25 @@ describe('agent process discovery', () => {
     expect(parsePosixAgentProcesses(psOutput, selfPid)).toEqual([
       { pid: 100, kind: 'claude' },
       { pid: 101, kind: 'codex' },
+      { pid: 105, kind: 'pi' },
     ]);
+  });
+
+  it('windows CIM scan queries pi.exe and keeps only direct children', async () => {
+    // Windows 侧按进程名过滤;pi.exe 不在查询名单 = 整条 pi 治理在 Windows 失明
+    expect([...WINDOWS_AGENT_PROCESS_NAMES]).toContain('pi.exe');
+    const piCmdLine = `C:\\Users\\u\\AppData\\Roaming\\${userDataDir}\\pi\\1.3.0\\pi.exe --mode rpc`;
+    cpMock.stdout = [
+      `9001|${process.pid}|${piCmdLine}`,
+      `9002|999999|${piCmdLine}`, // 别的实例的孩子,绝不碰
+      `9003|${process.pid}|C:\\Windows\\System32\\cmd.exe /c dir`, // 非 agent 子进程
+    ].join('\r\n');
+    await expect(__testing.scanWindows()).resolves.toEqual([{ pid: 9001, kind: 'pi' }]);
+    // 查询脚本必须真的由名单常量拼出:若实现改回硬编码绕开常量,这里即红
+    const argv = (cpMock.lastArgs[1] as string[] | undefined) ?? [];
+    const script = String(argv[argv.indexOf('-Command') + 1] ?? '');
+    for (const name of WINDOWS_AGENT_PROCESS_NAMES) {
+      expect(script).toContain(`Name='${name}'`);
+    }
   });
 });

@@ -11,6 +11,8 @@
  *     • awaiting   → TapTap 蓝 `--card-status-awaiting`:等待用户回复/选择(Claude
  *       权限 / AskUserQuestion / 计划审阅;Codex 无此态)。与灵动岛 needs-interaction 同色。
  *     • error      → 红 `--card-status-error`:任务出错(终止错误)。红专职表示出错。
+ *     • info       → 信息蓝 `--status-info`(双模式取 info-700 的深浅两档):新功能入口
+ *       提示,不表示任何任务状态。
  *   running 不走本组件:橙(Thinking Orange)专职表达"正在跑"(vendor mark 呼吸 /
  *   spinner),不再用于任何"完成"语义。不用黑/前景色。
  *
@@ -34,14 +36,15 @@
 import { cn } from '@/lib/utils';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 
-/** 展示用 tone == store 的 AttentionKind(done/awaiting/error),不再有派生档。 */
-export type DotTone = AttentionKind;
+/** 展示用 tone == store 的 AttentionKind(done/awaiting/error);另有不属于会话状态的 info。 */
+export type DotTone = AttentionKind | 'info';
 
 /** tone → 背景色 token。 */
 const TONE_BG: Record<DotTone, string> = {
   done: 'bg-[var(--card-status-done)]',
   awaiting: 'bg-[var(--card-status-awaiting)]',
   error: 'bg-[var(--card-status-error)]',
+  info: 'bg-[var(--status-info)]',
 };
 
 export interface AttentionDotProps {
@@ -49,7 +52,7 @@ export interface AttentionDotProps {
   breathing?: boolean;
   /** 直径(px),默认 6。 */
   size?: number;
-  /** 语义色:done(绿,默认)/ awaiting(TapTap 蓝)/ error(红)。 */
+  /** 语义色:done(绿,默认)/ awaiting(TapTap 蓝)/ error(红)/ info(信息蓝,新功能入口提示,非会话状态)。 */
   tone?: DotTone;
   /** 定位/偏移等由调用方给(如 absolute right-x top-y)。 */
   className?: string;

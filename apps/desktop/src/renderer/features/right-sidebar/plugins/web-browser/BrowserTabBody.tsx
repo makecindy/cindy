@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * BrowserTabBody —— web-browser tab 的 TabBody。
  *
@@ -13,8 +14,9 @@ import { Button } from '@/components/ui/button';
  *
  * webview slot 是一个 `<div ref>` —— useBrowserWebview 给我们 wrapper(模块级
  * pool 持有的同一个 DOM 节点),useLayoutEffect 里用 vanilla `appendChild` 把
- * wrapper 搬过来。TabBody 卸载时 cleanup 把 wrapper 挪回 pool container(
- * off-screen),保证 webContents 不被销毁。
+ * wrapper 首次附着到 slot。之后由 Shell 保持池内存活浏览器的宿主与祖先位置，
+ * 切换只隐藏宿主。真正卸载时 cleanup 把仍归 pool 的 wrapper 停回 container
+ * 暂存 DOM；这次跨父节点移动可能重建 guest，不保证页面运行上下文保留。
  *
  * webview 事件 → 同步 plugin state:
  *   - did-navigate / did-navigate-in-page → state.url
@@ -29,7 +31,7 @@ import { Button } from '@/components/ui/button';
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
+import { Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
@@ -137,8 +139,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
-  // Shell 会常驻挂载所有 TabBody，并用父节点 display:none 隐藏后台 tab；wrapper
-  // 一旦进入自己的 slot 就不要再随 active 切换搬回 parking。Electron 的 webview
+  // Shell 常驻挂载池内存活的浏览器 TabBody，后台仅隐藏；wrapper 一旦进入
+  // 自己的 slot 就不要再随 active 切换搬回 parking。Electron 的 webview
   // 在跨父节点 reparent 时可能重建 guest WebContents，这会销毁 window.open 的
   // opener browsing context，连带 outlivesOpener:false 的原生 popup 一起销毁。
   // 只有 TabBody 真正卸载或 wrapper 代际变化时 effect cleanup 才停回 parking。
@@ -398,7 +400,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const pageUrlRef = useRef(browser.url || state.url || 'about:blank');
   pageUrlRef.current = browser.url || state.url || 'about:blank';
   const getPageUrl = useCallback(() => pageUrlRef.current, []);
-  const comment = useBrowserComment(tabId, sessionId, browser.webview, getPageUrl);
+  const comment = useBrowserComment(tabId, sessionId, browser.webview, getPageUrl, tabVisible);
   // 页面评论的落点是主窗 composer 的「N 条注释」胶囊。detached 独立子窗口
   // (SidebarWindowLayout)只挂 RightSidebarShell、不挂 ChatInput,评论写进
   // 子窗口自己的 composerDraftStore 无处可发(还会误报成功 toast),故子窗口里
@@ -477,6 +479,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     <div ref={rootRef} className="flex h-full w-full flex-col bg-content-area">
       <BrowserChrome
         ref={chromeRef}
+        visible={tabVisible}
         url={state.url || 'about:blank'}
         isLoading={browser.isLoading}
         canGoBack={browser.canGoBack}
@@ -542,7 +545,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             >
               {t('rightSidebar.browser.resourceAlert.terminate')}
             </Button>
-            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom">
+            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom" disabled={!tabVisible}>
               <button
                 type="button"
                 aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
@@ -630,12 +633,8 @@ function BrowserCrashBanner({
           : 'rightSidebar.browser.crash.crashedDesc';
   return (
     <div className="modal-scrim absolute inset-0 flex items-center justify-center">
-      <div className="modal-panel flex max-w-xs flex-col items-center gap-3 px-6 py-5 text-center">
-        <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
-        <div className="text-13 font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
-        <div className="text-12 text-[var(--text-secondary)]">{t(descKey)}</div>
-        <div className="mt-1 flex items-center gap-2">
-          <Button variant="cta" size="sm" compact type="button" onClick={onRecover}>
+      <ErrorNotice className="modal-panel max-w-xs" message={t(titleKey)} description={t(descKey)} actions={<>
+          <Button size="sm" compact type="button" onClick={onRecover}>
             <RotateCw size={12} strokeWidth={2.5} />
             {t('rightSidebar.browser.crash.reload')}
           </Button>
@@ -644,8 +643,7 @@ function BrowserCrashBanner({
               {t('rightSidebar.browser.crash.forceKill')}
             </Button>
           )}
-        </div>
-      </div>
+        </>} />
     </div>
   );
 }

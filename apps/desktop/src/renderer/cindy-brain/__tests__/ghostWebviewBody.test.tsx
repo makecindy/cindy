@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../ghostPanelTheme', () => ({
@@ -29,6 +29,28 @@ const manifest: GhostManifest = {
 
 describe('GhostWebviewBody', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('drops the panel during its library swap and reloads it afterwards', () => {
+    let notify: ((payload: { id: string; phase: 'start' | 'done' }) => void) | undefined;
+    vi.stubGlobal('electronAPI', { ghosts: { onLibraryReplaced: (callback: typeof notify) => {
+      notify = callback;
+      return () => { notify = undefined; };
+    } } });
+    const ghost = { manifest, dir: '/plugins/workspace', approval: { state: 'approved' as const, revision: 'receipt-a' } };
+    const { container, unmount } = render(<GhostWebviewBody ghost={ghost} html="panel.html" />);
+    const original = container.querySelector('webview');
+    act(() => notify?.({ id: 'another', phase: 'start' }));
+    expect(container.querySelector('webview')).toBe(original);
+    act(() => notify?.({ id: 'workspace', phase: 'start' }));
+    expect(container.querySelector('webview')).toBeNull();
+    expect(original?.isConnected).toBe(false);
+    act(() => notify?.({ id: 'workspace', phase: 'done' }));
+    const reloaded = container.querySelector('webview');
+    expect(reloaded).not.toBeNull();
+    expect(reloaded).not.toBe(original);
+    unmount();
+    expect(notify).toBeUndefined();
+  });
 
   it.each(['panel.html', 'main-view.html'])('recreates %s on a same-version receipt replacement', (html) => {
     const ghost = { manifest, dir: '/plugins/workspace', approval: { state: 'approved' as const, revision: 'receipt-a' } };

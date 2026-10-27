@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { CreateScheduleInput, Schedule } from '@cindy/maker-scheduler';
 
 import {
   __testing,
@@ -83,6 +83,51 @@ describe('project automation WeCom group notification reconciliation', () => {
 });
 
 describe('project automation provider reconciliation', () => {
+  // PR #6832, unit: real file upsert/reconcile plus DB mappers. Existing provider
+  // coverage did not distinguish a device-only edit or removal from no change.
+  it('persists, changes and clears the runtime location through project reconciliation', async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-device-'));
+    try {
+      let saved: Schedule | undefined;
+      const create = vi.fn(async (input: CreateScheduleInput) => {
+        saved = scheduleToCamel(scheduleCreateToRow({
+          ...projectSchedule({ desktop: true, feishu: false }), ...input,
+        } as Schedule) as Parameters<typeof scheduleToCamel>[0]);
+        return saved;
+      });
+      const update = vi.fn(async (_id: string, patch: Partial<Schedule>) => {
+        saved = scheduleToCamel({
+          ...scheduleCreateToRow(saved!), ...schedulePatchToRow(patch),
+        } as Parameters<typeof scheduleToCamel>[0]);
+        return saved;
+      });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create, update } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => saved ? [saved] : [] } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({
+          select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+          insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+        }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const config = { ...projectConfig({ model: 'remote-model', providerId: 'remote-provider' }), agentDeviceId: 'studio' };
+      expect(await loader.upsertSchedule(dir, config)).toMatchObject({ inserted: 1, updated: 0 });
+      expect(saved).toMatchObject({ agentDeviceId: 'studio', model: 'remote-model', providerId: 'remote-provider' });
+      expect(await loader.reconcile(dir)).toMatchObject({ inserted: 0, updated: 0 });
+      expect(await loader.upsertSchedule(dir, { ...config, agentDeviceId: 'shared-device' }))
+        .toMatchObject({ updated: 1 });
+      expect(saved?.agentDeviceId).toBe('shared-device');
+      expect(await loader.upsertSchedule(dir, { ...config, agentDeviceId: undefined }))
+        .toMatchObject({ updated: 1 });
+      expect(saved?.agentDeviceId).toBeUndefined();
+      expect(saved?.providerId).toBe('remote-provider');
+      expect(await loader.reconcile(dir)).toMatchObject({ updated: 0 });
+      expect(update).toHaveBeenCalledTimes(2);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('passes an explicit provider through the loader input and detects changes', () => {
     const config = projectConfig({ providerId: 'openai' });
     const input = __testing.scheduleConfigToUpdateInput(config, workingDir);
@@ -124,6 +169,10 @@ describe('project automation explicit Harness reconciliation', () => {
     { override: { modelAgentKind: 'pi', model: 'test-model' }, valid: true },
     { override: { modelAgentKind: 'invalid', model: 'test-model' }, valid: false },
     { override: { modelAgentKind: 'pi' }, valid: false },
+    { override: { agentDeviceId: 'studio', model: 'remote-model' }, valid: true },
+    { override: { agentDeviceId: '../invalid', model: 'remote-model' }, valid: false },
+    { override: { agentDeviceId: 42, model: 'remote-model' }, valid: false },
+    { override: { agentDeviceId: 'studio' }, valid: false },
   ])('loads version 1 project files with compatible Harness validation: %j', async ({ override, valid }) => {
     const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-harness-'));
     try {

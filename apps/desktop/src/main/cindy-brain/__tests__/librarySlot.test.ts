@@ -22,8 +22,8 @@ import {
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { LibraryBindingStore, relocateLibraryMetaOwner } from '../libraryBinding.js';
-import { LibraryVault } from '../libraryVault.js';
-import { initCustomLibraryTree, openExistingCustomLibrary } from '../libraryDirFd.js';
+import { LibraryVault, type LibraryVaultDeps } from '../libraryVault.js';
+import { initCustomLibraryTree, openExistingCustomLibrary, parseExistingStdout } from '../libraryDirFd.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
 import { LibrarySqlService } from '../librarySqlService.js';
 import { GhostManager } from '../GhostManager.js';
@@ -77,6 +77,7 @@ describe('GhostLibrarySlot', () => {
   let createVault: ReturnType<typeof vi.fn>;
   let createSqlService: ReturnType<typeof vi.fn>;
   let getGhost: GhostLibrarySlotDeps['getGhost'];
+  let slotDeps: GhostLibrarySlotDeps;
   let clock: number;
 
   beforeEach(async () => {
@@ -128,6 +129,7 @@ describe('GhostLibrarySlot', () => {
     showSaveDialog = vi.fn(async () => ({ canceled: true }));
     writeClipboardPng = vi.fn(async () => {});
     syncAgentReadonlyExtraDir = vi.fn(async () => {});
+    slotDeps = deps;
     slot = new GhostLibrarySlot(deps);
   });
 
@@ -150,6 +152,33 @@ describe('GhostLibrarySlot', () => {
     });
     return { resume, started };
   }
+
+  it('settles host preparation before a request resolves the library root', async () => {
+    let release!: () => void;
+    const prepared = new Promise<void>((resolve) => { release = resolve; });
+    await slot.disposeAll();
+    const prepareRequest = vi.fn(() => prepared);
+    slot = new GhostLibrarySlot({ ...slotDeps, prepareRequest });
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    expect(prepareRequest).toHaveBeenCalledWith(GHOST_ID);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(resolveLibraryRoot).not.toHaveBeenCalled();
+    release();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(resolveLibraryRoot).toHaveBeenCalled();
+  });
+
+  it('does not run host preparation for capability queries, invalid ops or undeclared plugins', async () => {
+    const prepareRequest = vi.fn(() => Promise.resolve());
+    await slot.disposeAll();
+    slot = new GhostLibrarySlot({ ...slotDeps, prepareRequest });
+    await expect(slot.handleLibraryRequest(GHOST_ID, { op: 'capabilities' })).resolves.toMatchObject({ ok: true });
+    await expect(slot.handleLibraryRequest(GHOST_ID, { op: 'nope' })).resolves.toMatchObject({ ok: false });
+    ghosts.set(GHOST_ID, makeGhost(false));
+    await expect(slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).resolves.toMatchObject({ errorCode: 'NOT_DECLARED' });
+    await expect(slot.resolvePanelFilePath(GHOST_ID, 'a.txt')).resolves.toBeNull();
+    expect(prepareRequest).not.toHaveBeenCalled();
+  });
 
   it('资格审:未声明 library 能力/停用 → NOT_DECLARED', async () => {
     ghosts.set(GHOST_ID, makeGhost(false));
@@ -361,7 +390,8 @@ describe('GhostLibrarySlot', () => {
   }
 
   async function seedSourceDatabase(value: string, instanceId = GHOST_ID): Promise<void> {
-    expect(await slot.handleLibraryRequest(instanceId, { op: 'db.open', dbPath: 'library.sqlite' }))
+    const opened = await slot.handleLibraryRequest(instanceId, { op: 'db.open', dbPath: 'library.sqlite' });
+    expect(opened, JSON.stringify(opened))
       .toMatchObject({ ok: true, op: 'db.open' });
     expect(await slot.handleLibraryRequest(instanceId, {
       op: 'db.exec', dbPath: 'library.sqlite', sql: 'CREATE TABLE source_state (value TEXT)',
@@ -374,7 +404,48 @@ describe('GhostLibrarySlot', () => {
     })).toMatchObject({ ok: true, op: 'db.exec', rows: [{ value }] });
   }
 
+  function useInProcessCustomTreeForArchiveTests(): void {
+    // These cases exercise real SQLite data, binding relocation and rollback.
+    // Repeated PowerShell startup/Add-Type under parallel Windows CI can exceed
+    // the native helper's 15s deadline before any archive assertion runs. Keep
+    // fixture metadata on disk, but inject helper IO here only; the custom-root
+    // swap/held-fd cases below and libraryVault.test.ts retain the real helpers.
+    const readIfPresent = async (file: string): Promise<string | null> => {
+      try {
+        return await fs.promises.readFile(file, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    };
+    createVault.mockImplementation((deps: LibraryVaultDeps) => {
+      const metaDir = path.join(deps.rootDir(), '.cindy-library');
+      const metaFile = path.join(metaDir, 'meta.json');
+      return new LibraryVault({
+        ...deps,
+        openExistingCustom: async () => {
+          const meta = await readIfPresent(metaFile);
+          if (meta === null) return { ok: false, code: 'MISSING' };
+          const usage = await readIfPresent(path.join(metaDir, 'usage.json'));
+          return parseExistingStdout(`OK\n${meta}\n${usage ?? ''}`);
+        },
+        initCustomTree: async ({ metaJson }) => {
+          await fs.promises.mkdir(path.join(metaDir, 'tmp'), { recursive: true });
+          await fs.promises.mkdir(path.join(metaDir, 'backups'), { recursive: true });
+          try {
+            await fs.promises.writeFile(metaFile, metaJson, { flag: 'wx' });
+            return { ok: true, createdMeta: true };
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { ok: true, createdMeta: false };
+            throw error;
+          }
+        },
+      });
+    });
+  }
+
   it.each(['default', 'custom'] as const)('source archive wrapper isolates the real SQLite %s Library from a replacement source', async (location) => {
+    useInProcessCustomTreeForArchiveTests();
     if (location === 'custom') {
       expect((await bindingStore.setBinding(GHOST_ID, candidate)).ok).toBe(true);
     }
@@ -406,6 +477,7 @@ describe('GhostLibrarySlot', () => {
   });
 
   it.each(['default', 'custom'] as const)('source archive wrapper restores the real SQLite %s Library on inverse after failure', async (location) => {
+    useInProcessCustomTreeForArchiveTests();
     if (location === 'custom') {
       expect((await bindingStore.setBinding(GHOST_ID, candidate)).ok).toBe(true);
     }
@@ -441,6 +513,7 @@ describe('GhostLibrarySlot', () => {
   });
 
   it.each(['default', 'custom'] as const)('delayed session creation does not block real Manager %s source archive rollback', async (location) => {
+    useInProcessCustomTreeForArchiveTests();
     const manager = new GhostManager({
       getRootDir: () => path.join(tmp, 'ghosts'),
       onArchiveSourceState: relocateLibraryState,

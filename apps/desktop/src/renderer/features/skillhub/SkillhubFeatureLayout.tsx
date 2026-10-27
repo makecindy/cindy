@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useMatch } from 'react-router-dom';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
 
@@ -39,6 +39,12 @@ import {
 import { useSkillSync } from './hooks/useSkillSync';
 import { projectHash } from './lib/projectHash';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCatalogDevice } from '@/features/plugin/useCatalogDevice';
+
+export function LocalSkillhubStoreSync() {
+  useSkillhubStoreSync();
+  return null;
+}
 
 /** Shared SkillHub store sync. Settings embeds the home view without the route layout. */
 export function useSkillhubStoreSync(): void {
@@ -167,10 +173,12 @@ export function SkillhubFeatureLayout() {
   // 类型,只 reconcile、不 remount(实例状态保留);冷启动直接进 /skillhub 时则首次
   // 播种,避免左栏空白(详见 useRegisterCCAgentSidebar)。
   useRegisterCCAgentSidebar();
-  useSkillhubStoreSync();
+  const { device } = useCatalogDevice();
+  const showingCatalog = useMatch({ path: '/skillhub/local', end: true }) !== null;
 
   return (
     <div className="flex h-full w-full flex-col">
+      {!device || !showingCatalog ? <LocalSkillhubStoreSync /> : null}
       <Outlet />
     </div>
   );

@@ -21,14 +21,13 @@ import { loadGhostFirstPartyFactsLoader } from '../ghostFirstPartyFacts.js';
 import { authorizeGhostTokenBroker } from '../ghostFirstPartyPrivilege.js';
 import { createGhostInstallReceipt, type GhostInstallReceipt } from '../ghostInstallReceipt.js';
 import { classifyGhostLocalUpdateSource } from '../ghostLocalUpdateSource.js';
-import { confirmedTaskCapability } from '../ghostInstallConsent.js';
-import { isCindyOverrideModelAllowed } from '../cindyOverrideWhitelist.js';
+import { confirmedHarnessCapabilities, confirmedTaskCapability } from '../ghostInstallConsent.js';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
 const callbackChannels = {
   inspect: 'ghosts:inspect', update: 'ghosts:update', exportGhost: 'ghosts:export',
-  cindyPrefs: 'ghosts:cindy-prefs:set', errandPrefs: 'ghosts:errand-prefs:set',
+  errandPrefs: 'ghosts:errand-prefs:set',
 };
 const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callbackChannels, Handler>>({
   functions: [
@@ -218,6 +217,7 @@ function harness(
     assertTrustedAppRendererEvent: vi.fn(),
     captureGhostMutationOwner: () => ({ ...session }),
     beginGhostMutation: () => release,
+    pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
     getActiveAppSession: () => session,
     isAppSessionBoundaryPending: () => false,
     isSameAppSession: (left: typeof session, right: typeof session) =>
@@ -255,14 +255,6 @@ function harness(
     installedGhostStoragePart,
     resolveInstalledGhost,
     availableGhosts: () => Array.from(installed.values()),
-    CINDY_CAPABILITY_KEYS: ['image.generate'],
-    isCindyOverrideModelAllowed,
-    getGhostMediaPreferenceConfig: () => ({ models: [] }),
-    getCatalogEmbedConfig: () => ({ models: [] }),
-    buildTextOneshotPinOptions: () => [],
-    getActiveCatalog: () => ({}),
-    readModelDisableOverrides: () => ({}),
-    writeGhostCindyOverride: vi.fn((id: string) => ({ id })),
     writePluginTaskConfig: vi.fn((id: string) => ({ id })),
     validatePluginTaskConfig: vi.fn(async () => {}),
     getGhostSetupChangeBus: () => ({ emit: vi.fn() }),
@@ -278,6 +270,7 @@ function harness(
     createWindowGhostInstallConsentPrompt: vi.fn(),
     assertGhostInstallConsent: vi.fn(),
     confirmedTaskCapability,
+    confirmedHarnessCapabilities,
     withGhostInstallLock: async (_id: string, task: () => unknown) => task(),
     withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
     getGhostRuntime: () => runtime,
@@ -288,12 +281,14 @@ function harness(
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),
+    harnessSlotSingleton: null,
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
     getGhostOauthAccountManager: () => ({ prepareAccountsForChangedClients: vi.fn() }),
     ghostSourceStateArchiveId: () => '_ns__cindy-archive-test__filo-local',
     getLayoutStore: () => ({ getLayout: () => ({}), setLayout: vi.fn() }),
     layoutWithGhostPanel: () => null,
     spawnIfResident: vi.fn(),
+    bindPluginUsage: vi.fn(async () => {}),
     exportGhostPackage: exportPackage,
     BrowserWindow: { fromWebContents: () => null },
     dialog: { showSaveDialog: vi.fn() },
@@ -455,15 +450,12 @@ describe('local file recovery and source gates through production IPC callbacks'
     expect(target.release).toHaveBeenCalledOnce();
   });
 
-  it.each(['cindy', 'errand'])('binds %s preferences to the current physical instance and rejects missing targets', async (kind) => {
+  it('binds plugin model and task preferences to the current physical instance and rejects missing targets', async () => {
     const target = harness({ namespace: 'xd', approval: 'invalid' });
-    const handler = target.callbacks['ghosts:' + kind + '-prefs:set'];
-    const args = kind === 'cindy' ? ['image.generate', null] : [null];
-    expect(await handler({}, 'filo-local', ...args)).toMatchObject(
-      kind === 'cindy' ? { overrides: { id: '_ns__xd__filo-local' } } : { config: { id: '_ns__xd__filo-local' } },
-    );
+    const handler = target.callbacks['ghosts:errand-prefs:set'];
+    expect(await handler({}, 'filo-local', null)).toMatchObject({ config: { id: '_ns__xd__filo-local' } });
     target.installed.clear();
-    await expect(Promise.resolve().then(() => handler({}, 'filo-local', ...args))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(Promise.resolve().then(() => handler({}, 'filo-local', null))).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('does not update an enterprise instance from a local file', async () => {

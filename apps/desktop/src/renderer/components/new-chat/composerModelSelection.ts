@@ -7,8 +7,8 @@ export function resolveComposerModelSelection(input: {
   current: Profile;
   effective?: Profile;
   pending?: SessionRuntimePendingProjection | null;
-  intent?: { target: Profile['agentKind']; model: string; providerId: string | null; effort?: Profile['effort']; fastMode?: boolean } | null;
-  optimistic?: { model: string; providerId: string | null; effort: Profile['effort']; fastMode: boolean } | null;
+  intent?: { target: Profile['agentKind']; model: string; providerId: string | null; effort?: Profile['effort']; fastMode?: boolean | 'ultrafast' } | null;
+  optimistic?: { model: string; providerId: string | null; effort: Profile['effort']; fastMode: boolean | 'ultrafast' } | null;
 }) {
   const current = input.effective ?? input.current;
   const next = input.intent

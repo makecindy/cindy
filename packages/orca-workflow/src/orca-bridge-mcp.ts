@@ -36,7 +36,7 @@ export interface OrcaPersistedSession {
   providerId?: string | null;
   effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   permissionMode?: 'ask' | 'auto' | 'bypassPermissions' | 'acceptEdits' | 'plan' | 'default';
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   sdkSessionId?: string;
   title?: string;
   /**
@@ -120,6 +120,12 @@ export interface OrcaWorkerVendorOptions extends Record<string, unknown> {
 }
 
 export interface OrcaBridgeMcpDeps {
+  /** Host-owned routing for execution-device Workers; null means a local caller. */
+  forwardRemoteWorkerTool?: (
+    ctx: McpProviderContext,
+    tool: string,
+    args: Record<string, unknown>,
+  ) => Promise<OrcaToolResult | null>;
   getMaker: () => Maker;
   logger: Logger;
   persistUserMessage: (
@@ -152,6 +158,8 @@ export interface OrcaBridgeMcpDeps {
     makerMemoryEnabled?: boolean;
   }>;
   orcaTeamStore?: OrcaTeamStore;
+  /** Capture before dispatch; finish once on acceptance or failure, never at queued drain. */
+  captureLocalWorkerReport?: (sessionId: string) => (accepted: boolean) => Promise<void>;
   /**
    * Worker-scoped read-only transcript access. The bridge resolves the owning Lead from the
    * attested Worker link; callers never choose an arbitrary session id.
@@ -202,7 +210,14 @@ function text(data: unknown, isError = false) {
   };
 }
 
-type OrcaToolResult = ReturnType<typeof text>;
+export type OrcaToolResult = ReturnType<typeof text>;
+
+type RegisterWorkerTool = <S extends z.ZodRawShape>(
+  name: string,
+  description: string,
+  shape: S,
+  handler: (args: z.output<z.ZodObject<S>>) => Promise<OrcaToolResult>,
+) => void;
 
 type OrcaSendSource = 'mcp-tool' | 'auto-bridge';
 type HostOrcaDispatch = {
@@ -580,17 +595,6 @@ async function ensureSessionFromMeta(
   return session;
 }
 
-function updatePersistedWorkerStatus(
-  deps: OrcaBridgeMcpDeps,
-  workerId: string,
-  status: OrcaWorkerStatus,
-  log: Logger,
-): void {
-  deps.orcaTeamStore?.updateWorkerStatus(workerId, status).catch((err) => {
-    log.warn('update worker status failed', { err: String(err), workerId, status });
-  });
-}
-
 function readWorkerIdentity(
   vendorOptions: Record<string, unknown> | undefined,
   workerIdParam?: string,
@@ -715,29 +719,16 @@ async function ensureCapturedSession(
 
 
 // 契约锚点：归属校验与 auto-bridge settle 见 docs/dev-rules/orca-team-architecture.md「协同运行时行为契约」「坑点与不变量 #3」。
-// Codex MCP HTTP bridge 仍然从全局 ctx 注册 server 名称，所以 worker bridge 必须
-// 对 Codex 可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
+// Codex/Pi MCP HTTP bridge 从全局 ctx 注册 server 名称，所以 worker bridge 必须
+// 对共享桥接可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
 // 本次调用绑定的 session ctx，并校验它确实拥有解析出的 worker link。
-export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpProvider {
+export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
   const log = deps.logger.child('mcp/orca_worker_bridge');
   const leadCaptures = new CapturedSessionRegistry();
-  return {
-    name: 'orca_worker_bridge',
-    // Global HTTP bridges (Codex and Pi) bind the real session only at request time.
-    // Keep the server registered when a dynamic context resolver exists; every tool
-    // call still fails closed in resolveWorkerLink against that runtime identity.
-    isEnabled: (ctx) =>
-      ctx.vendorOptions?.orcaRole === 'worker'
-      || ctx.agentKind === 'codex'
-      || typeof ctx.getSessionContext === 'function',
-    toClaudeSdkConfig: (ctx) => {
-      if (
-        ctx.vendorOptions?.orcaRole !== 'worker'
-        && ctx.agentKind !== 'codex'
-        && typeof ctx.getSessionContext !== 'function'
-      ) return null;
-      const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
-
+  function defineTools(
+    ctx: McpProviderContext, register: RegisterWorkerTool,
+    options: { manageWorkerStatus?: boolean } = {},
+  ): void {
       async function resolveLead(workerId?: string) {
         const resolved = await resolveWorkerLink(deps, ctx, workerId);
         if (!resolved.ok) return resolved;
@@ -755,7 +746,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         return { ok: true as const, link, entry };
       }
 
-      server.tool(
+      register(
         'send_to_lead',
         SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
@@ -799,94 +790,92 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             liveEntry.status = 'running';
             liveEntry.lastEventAt = Date.now();
           };
-          // worker 回报被 host 接收(直发 accept 或入队成功)即视为"已回报": 立刻标 done +
-          // Host 负责结清 auto-bridge pending。不能等排队消息 drain 到 lead 才清 —— lead 忙时 worker
-          // 自己的 turn 会先结束, turn-end 兜底看到 pending 还在会把它当"忘了回报"再补
-          // 一条桥接, lead 收到两条重复报告。幂等守卫同时防住 drain 时 hostOnAccepted
-          // 二次触发: 那时 worker 可能已被重新派活(running), 不能再改回 done。
-          let workerReportSettled = false;
-          const settleWorkerReport = () => {
-            if (workerReportSettled) return;
-            workerReportSettled = true;
-            updatePersistedWorkerStatus(deps, link.workerId, 'done', log);
-          };
-          const dispatchError = await dispatchOrcaToolMessage({
-            session: liveEntry.session,
-            // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
-            // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
-            message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
-            deps,
-            rawContent: message,
-            source: 'worker',
-            senderLabel: link.workerId,
-            ...(delivery ? { delivery } : {}),
-            log,
-            meta: {
-              source: 'mcp-tool',
-              entrypoint: 'orca_worker_bridge.send_to_lead',
-              sessionId: link.leadSessionId,
-              agentKind: link.leadSession.agentKind,
-              action: 'dispatch-to-lead',
-              context: makeOrcaSendContext(
-                'orca_worker_bridge.send_to_lead',
-                link.leadSessionId,
-                'dispatch-to-lead',
-              ),
-              workerId: link.workerId,
-              leadSessionId: link.leadSessionId,
-            },
-            getLogState: () => ({
-              workerStatus: liveEntry.status,
-              // 自动回报 pending 由 Host 管理；保留既有诊断字段。
-              autoBridgePending: false,
-            }),
-            onAccepted: markLeadDispatchAccepted,
-            hostOnAccepted: () => {
-              markLeadDispatchAccepted();
-              settleWorkerReport();
-            },
-          });
-          if (isHostOrcaDispatch(dispatchError)) {
-            // 排队与插话都视为已回报;直发仍由 hostOnAccepted 结清(settle 幂等)。
-            if (dispatchError.queued || dispatchError.steered) settleWorkerReport();
+          // Reporting settles the obligation, not the turn. The Host retains its captured
+          // identity until the product terminal; execution-device settlement stays separate.
+          const finishReport = options.manageWorkerStatus !== false
+            ? deps.captureLocalWorkerReport?.(link.workerSessionId)
+            : undefined;
+          let reportAccepted = false;
+          try {
+            const dispatchError = await dispatchOrcaToolMessage({
+              session: liveEntry.session,
+              // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
+              // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
+              message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
+              deps,
+              rawContent: message,
+              source: 'worker',
+              senderLabel: link.workerId,
+              ...(delivery ? { delivery } : {}),
+              log,
+              meta: {
+                source: 'mcp-tool',
+                entrypoint: 'orca_worker_bridge.send_to_lead',
+                sessionId: link.leadSessionId,
+                agentKind: link.leadSession.agentKind,
+                action: 'dispatch-to-lead',
+                context: makeOrcaSendContext(
+                  'orca_worker_bridge.send_to_lead',
+                  link.leadSessionId,
+                  'dispatch-to-lead',
+                ),
+                workerId: link.workerId,
+                leadSessionId: link.leadSessionId,
+              },
+              getLogState: () => ({
+                workerStatus: liveEntry.status,
+                // 自动回报 pending 由 Host 管理；保留既有诊断字段。
+                autoBridgePending: false,
+              }),
+              onAccepted: markLeadDispatchAccepted,
+              hostOnAccepted: () => {
+                markLeadDispatchAccepted();
+              },
+            });
+            if (isHostOrcaDispatch(dispatchError)) {
+              // Host acceptance includes direct, queued and same-turn steered delivery.
+              reportAccepted = true;
+              return text({
+                ok: true,
+                ...(dispatchError.steered ? { steered: true } : {}),
+                ...(dispatchError.queued ? { queued: true } : {}),
+                ...(dispatchError.queued && dispatchError.steerFallbackReason
+                  ? { steer_fallback_reason: dispatchError.steerFallbackReason }
+                  : {}),
+                worker_id: link.workerId,
+                lead_session_id: link.leadSessionId,
+              });
+            }
+            if (dispatchError) {
+              liveEntry.status = previousStatus;
+              liveEntry.finalText = previousFinalText;
+              liveEntry.lastEventAt = previousLastEventAt;
+              return dispatchError;
+            }
+            markLeadDispatchAccepted();
+            await deps.persistUserMessage(link.leadSessionId, {
+              clientId: randomUUID(),
+              content: formatOrcaCommunicationMessage('worker', message),
+            }).catch((err) => {
+              log.warn('persist lead message failed', {
+                err: String(err),
+                workerId: link.workerId,
+                leadSessionId: link.leadSessionId,
+              });
+            });
+            reportAccepted = true;
             return text({
               ok: true,
-              ...(dispatchError.steered ? { steered: true } : {}),
-              ...(dispatchError.queued ? { queued: true } : {}),
-              ...(dispatchError.queued && dispatchError.steerFallbackReason
-                ? { steer_fallback_reason: dispatchError.steerFallbackReason }
-                : {}),
               worker_id: link.workerId,
               lead_session_id: link.leadSessionId,
             });
+          } finally {
+            await finishReport?.(reportAccepted);
           }
-          if (dispatchError) {
-            liveEntry.status = previousStatus;
-            liveEntry.finalText = previousFinalText;
-            liveEntry.lastEventAt = previousLastEventAt;
-            return dispatchError;
-          }
-          markLeadDispatchAccepted();
-          await deps.persistUserMessage(link.leadSessionId, {
-            clientId: randomUUID(),
-            content: formatOrcaCommunicationMessage('worker', message),
-          }).catch((err) => {
-            log.warn('persist lead message failed', {
-              err: String(err),
-              workerId: link.workerId,
-              leadSessionId: link.leadSessionId,
-            });
-          });
-          settleWorkerReport();
-          return text({
-            ok: true,
-            worker_id: link.workerId,
-            lead_session_id: link.leadSessionId,
-          });
         },
       );
 
-      server.tool(
+      register(
         'read_lead_history',
         'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use only when an [Orca UI Assignment] depends on Lead context. You MUST pass your worker_id.',
         {
@@ -959,7 +948,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      server.tool(
+      register(
         'read_lead',
         'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Read captured output from the lead session.',
         {
@@ -980,7 +969,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      server.tool(
+      register(
         'lead_status',
         'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Check the lead session state.',
         {
@@ -1000,11 +989,60 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      return {
-        type: 'sdk',
-        name: 'orca_worker_bridge',
-        instance: server,
-      };
+  }
+
+  const registerRoutedTools = (
+    ctx: McpProviderContext, register: RegisterWorkerTool,
+    options: { manageWorkerStatus?: boolean } = {},
+  ) => {
+    defineTools(ctx, (name, description, shape, handler) => {
+      register(name, description, shape, async (args) => {
+        const runtime = resolveRuntimeMcpContext(ctx);
+        if (name === 'send_to_lead') {
+          const authorization = authorizeSendToLeadCaller(runtime);
+          if (!authorization.ok) return text(authorization.error, true);
+        }
+        const forwarded = await deps.forwardRemoteWorkerTool?.(runtime, name, args);
+        return forwarded ?? handler(args);
+      });
+    }, options);
+  };
+  const enabled = (ctx: McpProviderContext) =>
+    ctx.vendorOptions?.orcaRole === 'worker'
+    || ctx.vendorOptions?.orcaRemoteWorker === true
+    || ctx.agentKind === 'codex'
+    // Claude also has this accessor on ordinary per-session contexts; it is not a role.
+    || (ctx.agentKind === 'pi' && typeof ctx.getSessionContext === 'function');
+
+  return {
+    name: 'orca_worker_bridge',
+    isEnabled: enabled,
+    toClaudeSdkConfig: (ctx: McpProviderContext) => {
+      if (!enabled(ctx)) return null;
+      const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
+      registerRoutedTools(ctx, (name, description, shape, handler) => {
+        // MCP validates the shape before calling this handler; direct Host invocation below
+        // validates explicitly. Erase only the SDK's generic zod-v3/v4 compatibility wrapper.
+        server.tool<z.ZodRawShape>(name, description, shape, async args => handler(args as z.output<z.ZodObject<typeof shape>>));
+      });
+      return { type: 'sdk' as const, name: 'orca_worker_bridge', instance: server };
     },
+    /** Same handlers and schemas as MCP, after the Host attests a remote Worker link. */
+    async invokeTool(
+      ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
+      options: { manageWorkerStatus?: boolean } = {},
+    ): Promise<OrcaToolResult> {
+      let invoke: (() => Promise<OrcaToolResult>) | undefined;
+      registerRoutedTools(ctx, (name, _description, shape, handler) => {
+        if (name === tool) invoke = () => handler(z.object(shape).parse(args));
+      }, options);
+      if (!invoke) return text({ error: 'unknown worker bridge tool' }, true);
+      return invoke();
+    },
+  } satisfies McpProvider & {
+    invokeTool(
+      ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
+      options?: { manageWorkerStatus?: boolean },
+    ): Promise<OrcaToolResult>;
   };
 }

@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 /**
  * DetailView — a single Subagent run, read as a conversation.
@@ -718,9 +719,7 @@ function PiDurableDetailView({
               </Tip>
             </div>
             {controlError ? (
-              <p role="alert" className="px-2 text-11 text-[var(--error-fg)]">
-                {t('rightSidebar.subagents.controlFailed')}
-              </p>
+              <ErrorNotice role="alert" message={t('rightSidebar.subagents.controlFailed')} />
             ) : null}
           </div>
         </div>

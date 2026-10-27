@@ -8,7 +8,15 @@ import {
   parsePluginConnectionOffer,
   parsePluginConnectionInput,
   parsePluginAuthorizationOffer,
+  parsePluginAuthorizationRequest,
+  type PluginOauthCallback,
   parsePluginDeviceOffer,
+  parseInputHandoffOffer,
+  parseInputHandoffPresentation,
+  parseInputHandoffValueReply,
+  type InputHandoffPicture,
+  type InputHandoffPresentation,
+  type InputHandoffSubmission,
   type PluginOauthRequest,
   type PluginOauthAction,
   type PluginSecretPresentation,
@@ -25,8 +33,13 @@ export async function runMobilePluginAuthorization(deps: {
   crypto: PluginOauthCrypto;
   invoke(request: PluginOauthRequest): Promise<unknown>;
   action: PluginOauthAction;
-  kind: "oauth" | "secret" | "connection";
+  kind: "oauth" | "secret" | "connection" | "input";
   secretPresentation?: PluginSecretPresentation;
+  /** 代输入: the exact step the owner answered, and the answer. */
+  inputPresentation?: InputHandoffPresentation;
+  inputSubmission?: InputHandoffSubmission;
+  /** 代输入 screenshot step: show the sealed picture, then return the owner's tap or typing. */
+  inputPicture?(picture: InputHandoffPicture): Promise<InputHandoffSubmission>;
   connectionPresentation?: PluginConnectionPresentation;
   inputSecret?: string;
   inputConnection?: { host: string; token: string };
@@ -35,9 +48,11 @@ export async function runMobilePluginAuthorization(deps: {
     code: string | undefined,
     expiresAt: number,
   ): Promise<void>;
+  receiveLoopback?(request: { url: string; callbackUrl: string; state: string }, expiresAt: number, signal: AbortSignal): Promise<PluginOauthCallback>;
   clearInput(): void;
   assertCurrent(): void;
   pause(): Promise<void>;
+  isForeground?(): boolean;
   now?(): number;
 }): Promise<void> {
   const now = deps.now ?? Date.now,
@@ -53,7 +68,8 @@ export async function runMobilePluginAuthorization(deps: {
       caps.encrypted !== true ||
       caps.callback !== "desktop-loopback" ||
       (deps.kind === "secret" && caps.secretSubmission !== true) ||
-      (deps.kind === "connection" && caps.connectionSubmission !== true)
+      (deps.kind === "connection" && caps.connectionSubmission !== true) ||
+      (deps.kind === "input" && caps.inputHandoff !== true)
     )
       throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
     deps.assertCurrent();
@@ -72,6 +88,7 @@ export async function runMobilePluginAuthorization(deps: {
         ...(deps.kind === "connection"
           ? { connectionSubmission: true as const }
           : {}),
+        ...(deps.kind === "input" ? { inputHandoff: true as const } : {}),
       }),
     );
     if (!oauthId(start.id) || !oauthPublicKey(start.publicKey))
@@ -85,11 +102,41 @@ export async function runMobilePluginAuthorization(deps: {
       deps.clearInput();
       deps.inputSecret = undefined;
       deps.inputConnection = undefined;
+      deps.inputSubmission = undefined;
       deps.assertCurrent();
       const result = object(
         await deps.invoke({ op: "callback", id: id!, box }),
       );
       if (result.accepted !== true) throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+    };
+    const receiveLoopback = async (request: { url: string; callbackUrl: string; state: string }) => {
+      if (!deps.receiveLoopback) throw new Error("PLUGIN_OAUTH_UPDATE_REQUIRED");
+      const abort = new AbortController();
+      let checking = false;
+      const monitor = setInterval(() => {
+        if (checking || deps.isForeground?.() === false) return;
+        checking = true;
+        void (async () => {
+          try {
+            deps.assertCurrent();
+            const status = object(await deps.invoke({ op: "status", id: id! }));
+            deps.assertCurrent();
+            if (!["authorizing", "starting"].includes(String(status.phase))) abort.abort();
+          } catch { if (deps.isForeground?.() !== false) abort.abort(); }
+          finally { checking = false; }
+        })();
+      }, 600);
+      try {
+        const value = await deps.receiveLoopback(request, deadline, abort.signal);
+        while (deps.isForeground?.() === false) {
+          deps.assertCurrent();
+          if (now() >= deadline) throw new Error("PLUGIN_OAUTH_CLOSED");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        deps.assertCurrent();
+        if (now() >= deadline) throw new Error("PLUGIN_OAUTH_CLOSED");
+        return value;
+      } finally { clearInterval(monitor); abort.abort(); }
     };
     while (now() < deadline) {
       await deps.pause();
@@ -110,7 +157,35 @@ export async function runMobilePluginAuthorization(deps: {
       if (typeof status.offer !== "string")
         throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
       const raw = object(await key.open(peerKey, id, "offer", status.offer));
-      if (deps.kind === "secret") {
+      if (deps.kind === "input") {
+        if (
+          raw.kind !== "input-entry" ||
+          !deps.inputPresentation ||
+          (!deps.inputSubmission && !deps.inputPicture)
+        )
+          throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+        const offer = parseInputHandoffOffer(raw);
+        // The owner answered exactly this step; anything else is a newer screen.
+        if (
+          JSON.stringify(offer.presentation) !==
+          JSON.stringify(parseInputHandoffPresentation(deps.inputPresentation))
+        )
+          throw new Error("INPUT_HANDOFF_STALE");
+        if (offer.picture) {
+          // Only a caller that asked for this step's picture receives it; a prepared form answer never does.
+          if (!deps.inputPicture || deps.inputSubmission)
+            throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+          deps.inputSubmission = await deps.inputPicture(offer.picture);
+          deps.assertCurrent();
+        }
+        await deliver(
+          parseInputHandoffValueReply({
+            kind: "input-value",
+            state: offer.state,
+            submission: deps.inputSubmission,
+          }),
+        );
+      } else if (deps.kind === "secret") {
         const offer = parsePluginSecretOffer(raw);
         if (
           JSON.stringify(offer.presentation) !==
@@ -137,9 +212,12 @@ export async function runMobilePluginAuthorization(deps: {
         if (caps.authorizationV1 !== true)
           throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
         const offer = parsePluginAuthorizationOffer(raw);
-        // A computer loopback callback cannot be reinterpreted as the phone's localhost.
-        if (offer.request.kind === "loopback")
-          throw new Error("PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK");
+        if (offer.request.kind === "loopback") {
+          const value = await receiveLoopback(offer.request);
+          await deliver({ ...value, state: offer.state });
+          opened = true;
+          continue;
+        }
         await deps.showAuthorization(
           offer.request.url,
           offer.request.kind === "device" ? offer.request.userCode : undefined,
@@ -157,7 +235,6 @@ export async function runMobilePluginAuthorization(deps: {
         );
         await deliver({ kind: "device-opened", state: offer.state });
       } else {
-        // Legacy PKCE loopback offers need the computer's callback listener.
         oauthExact(raw, [
           "authorizeUrl",
           "callbackUrl",
@@ -165,7 +242,9 @@ export async function runMobilePluginAuthorization(deps: {
           "corsOrigins",
           "state",
         ]);
-        throw new Error("PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK");
+        const request = parsePluginAuthorizationRequest({ kind: "loopback", url: raw.authorizeUrl, callbackUrl: raw.callbackUrl, state: raw.state });
+        if (request.kind !== "loopback") throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+        await deliver(await receiveLoopback(request));
       }
       opened = true;
     }
@@ -174,6 +253,7 @@ export async function runMobilePluginAuthorization(deps: {
     deps.clearInput();
     deps.inputSecret = undefined;
     deps.inputConnection = undefined;
+    deps.inputSubmission = undefined;
     if (!finished && id)
       await deps.invoke({ op: "cancel", id }).catch(() => {});
     key.dispose();

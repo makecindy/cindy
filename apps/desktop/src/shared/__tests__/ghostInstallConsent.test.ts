@@ -51,6 +51,40 @@ describe('plugin install consent', () => {
     expect(ghostUpdateNeedsConsent(current, manifest({ version: '1.1.0' }))).toBe(false);
   });
 
+  // Unit regression for #6404: an existing tool must not hide new mailbox
+  // capabilities from the production install/update consent boundary.
+  it('projects mail, reader hosts and read-state writes into install and update consent', () => {
+    const base = manifest();
+    const compose = manifest({ mail: true });
+    const reader = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['mail.example.test'] } });
+    const full = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['mail.example.test'], markRead: true } });
+    const additions = (previous: GhostManifest, next: GhostManifest) => {
+      const facts = evaluateGhostInstallConsent(installed(previous), next);
+      expect(facts?.kind).toBe('update');
+      if (facts?.kind !== 'update') throw new Error('expected update facts');
+      return facts.added.map(item => item.key);
+    };
+    expect(additions(base, compose)).toEqual(['mail']);
+    expect(additions(compose, reader)).toEqual(['mail-reader:forecast', 'mail-reader:host:mail.example.test']);
+    expect(additions(reader, full)).toEqual(['mail-reader:mark-read']);
+    expect(additions(reader, manifest({ mail: true,
+      tools: [{ name: 'forecast', description: 'Read the forecast' }, { name: 'reader', description: 'Read mail' }],
+      mailReader: { tool: 'reader', hosts: ['mail.example.test'] },
+    }))).toEqual(['mail-reader:reader']);
+    const facts = evaluateGhostInstallConsent(null, full);
+    if (facts?.kind !== 'install') throw new Error('expected install facts');
+    expect(facts.permissions.map(item => item.key)).toEqual(expect.arrayContaining([
+      'mail', 'mail-reader:forecast', 'mail-reader:host:mail.example.test', 'mail-reader:mark-read',
+    ]));
+    const reordered = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['other.example.test', 'mail.example.test'] } });
+    expect(additions(reader, reordered)).toEqual(['mail-reader:host:other.example.test']);
+    expect(evaluateGhostInstallConsent(installed(reordered), manifest({ mail: true,
+      mailReader: { tool: 'forecast', hosts: ['mail.example.test', 'other.example.test', 'mail.example.test'] },
+    }))).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(full), reader)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(full), base)).toBeNull();
+  });
+
   it('keeps an update silent when it only removes permissions or changes tools', () => {
     const current = installed(manifest({ network: { hosts: ['api.weather.test', 'maps.weather.test'] } }));
     expect(evaluateGhostInstallConsent(current, manifest({ version: '1.1.0' }))).toBeNull();

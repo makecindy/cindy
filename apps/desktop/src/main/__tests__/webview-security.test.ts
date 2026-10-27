@@ -38,6 +38,7 @@ import {
   LOGIN_CAPTCHA_PARTITION,
 } from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
+import { CURRENT_APP_ID } from '../../shared/brandRegion';
 import * as appSessionState from '../appSessionState';
 import { resolveGhostMediaHandoverTarget } from '../cindy-brain/ghostMediaHandoverTargetTracker';
 import {
@@ -56,6 +57,7 @@ import {
   installGhostGuestNavigationHandlers,
   installGhostMediaHandoverSource,
   installBrowserGuestHandlers,
+  installBrowserVideoReferrer,
   installDeferredPopupRouter,
   installLoginCaptchaGuestHandlers,
   isAllowedLoginCaptchaUrl,
@@ -64,6 +66,26 @@ import {
   setLoginCaptchaOriginResolver,
   setRsbPopupOpenerResolver,
 } from '../webview-security';
+
+// Unit: login return/reload sent YouTube's own URL as Referer and the real
+// embedded player returned 152-4. Exercise the request callback, not source text.
+it('retains app identity on player return without replacing website embed origins', () => {
+  const onBeforeSendHeaders = vi.fn();
+  const browserSession = { webRequest: { onBeforeSendHeaders } } as unknown as Session;
+  installBrowserVideoReferrer(browserSession);
+  installBrowserVideoReferrer(browserSession);
+  expect(onBeforeSendHeaders).toHaveBeenCalledTimes(1);
+  const [filter, request] = onBeforeSendHeaders.mock.calls[0];
+  expect(filter.urls).toEqual(['https://www.youtube.com/embed/*']);
+  for (const referrer of [undefined, 'https://www.youtube.com/embed/E5wWVwe7-6E', 'https://www.youtube.com/']) {
+    const callback = vi.fn();
+    request({ requestHeaders: { ...(referrer ? { referer: referrer } : {}), Accept: 'text/html' } }, callback);
+    expect(callback).toHaveBeenCalledWith({ requestHeaders: { Referer: `https://${CURRENT_APP_ID}/`, Accept: 'text/html' } });
+  }
+  const callback = vi.fn();
+  request({ requestHeaders: { Referer: 'https://example.org/article' } }, callback);
+  expect(callback).toHaveBeenCalledWith({ requestHeaders: { Referer: 'https://example.org/article' } });
+});
 
 describe('applyWebviewHardening', () => {
   it('locks down all webPreferences fields per Codex tY', () => {
@@ -126,8 +148,10 @@ describe('applyWebviewHardening', () => {
     expect(webPreferences.preload).toBe('/app/.vite/build/browserCommentPreload.js');
   });
 
-  it('forces partition to BROWSER_PARTITION (overrides any renderer-set value)', () => {
-    const webPreferences: Record<string, unknown> = {};
+  // Unit: Chromium selects the actual cookie store from WebPreferences, not
+  // only tag params. The old video partition must not survive browser routing.
+  it('forces the actual guest cookie store to the browser partition', () => {
+    const webPreferences: Record<string, unknown> = { partition: 'cindy-video-embed' };
     const params: Record<string, string> = {
       partition: 'persist:evil-other-session',
     };
@@ -135,6 +159,7 @@ describe('applyWebviewHardening', () => {
     applyWebviewHardening(webPreferences, params);
 
     expect(params.partition).toBe(BROWSER_PARTITION);
+    expect(webPreferences.partition).toBe(BROWSER_PARTITION);
   });
 
   it('fills BROWSER_PARTITION when renderer did not set partition at all', () => {
@@ -1061,6 +1086,40 @@ describe('installDeferredPopupRouter', () => {
     });
     // 旧 host 不再收到 —— 它的 Shell 已退订,发它就是丢消息。
     expect(hostContents.send).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:installDeferredPopupRouter 经 host resolver 发送 popup;可观察的是 resolver
+  //   收到捕获时的 hostContents,并可据此让「弹出到独立窗口的页签」的 popup 留在那扇窗口 renderer。
+  // - Bug / 规则依据:review「弹出的浏览器页签的 window.open 被改投整栏侧栏,popup 页签无法显示、
+  //   原生 popup surface owner 校验失败」。
+  // - 现有覆盖缺口:现有用例的 resolver 不看捕获的 host。
+  // - 最小失败输入:resolver 对捕获的页签窗口 host 返回其自身,对其它 host 返回侧栏宿主。
+  it('把捕获的 hostContents 交给 host resolver,页签窗口的 popup 留在原 renderer', () => {
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    const sidebarHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    const seen: unknown[] = [];
+    setRsbPopupHostResolver((captured) => {
+      seen.push(captured);
+      return captured === hostContents ? captured : sidebarHost;
+    });
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    expect(seen).toEqual([hostContents]);
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    });
+    expect(sidebarHost.send).not.toHaveBeenCalled();
   });
 
   it('host resolver 解析失败或返回已销毁 host 时回落捕获的 hostContents', () => {

@@ -1,4 +1,11 @@
 {
+  "imageDelivery": {
+    "stored": "图片已交付",
+    "failed": "图片交付失败，可重试传输已有图片。",
+    "retry": "重试交付",
+    "retrying": "正在交付…",
+    "retryFailed": "暂时无法交付，请确认生成图片的电脑在线。"
+  },
   "agentActionRow": {
     "noContent": "无可展示内容",
     "fileChange": {

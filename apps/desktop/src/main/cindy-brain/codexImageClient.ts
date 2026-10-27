@@ -1,11 +1,10 @@
 /**
  * ChatGPT/Codex OAuth image channel.
  *
- * The subscription token cannot call the public Platform Images API. It can,
- * however, call the Codex Responses surface's hosted `image_generation` tool.
- * The catalog ID is a compatibility handle, not an upstream image model selector.
- * Keep the token in Main and parse the raw
- * SSE stream because image-generation events may be newer than SDK typings.
+ * Use the Codex standalone Images API with the selected ChatGPT account.
+ * No Responses host model is needed. Catalog IDs remain compatibility handles;
+ * the wire image model follows the upstream Codex image-generation extension.
+ * Core validates and persists the returned image bytes through the existing path.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -17,11 +16,9 @@ import { mediaRequestParamsForLog, mediaRequestUrlForLog } from '../cindy-media/
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { createLogger } from '../logger.js';
 
-const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
-const HOST_MODEL = 'gpt-5.5';
+const CODEX_IMAGES_URL = 'https://chatgpt.com/backend-api/codex/images';
+const IMAGE_MODEL = 'gpt-image-2';
 const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
-const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
-const SSE_LINE_ENDING = /\r\n|\r|\n/;
 const log = createLogger('codex-image');
 export interface CreateCodexImageChannelOptions {
   providerId?: string;
@@ -37,84 +34,13 @@ export interface CreateCodexImageChannelOptions {
   beforeDispatch?(model: string): void;
 }
 
-function extractImageB64(value: unknown): string | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = extractImageB64(item);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (!value || typeof value !== 'object') return null;
-  const item = value as Record<string, unknown>;
-  if (item.type === 'image_generation_call' && typeof item.result === 'string') return item.result;
-  // Preview frames are not final assets: never return one after a failed/truncated stream.
-  if (typeof item.partial_image_b64 === 'string') return null;
-  for (const child of Object.values(item)) {
-    const found = extractImageB64(child);
-    if (found) return found;
-  }
-  return null;
-}
-
-async function collectImageB64(response: Response): Promise<string | null> {
-  if (!response.body) return null;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let latest: string | null = null;
-
-  const consume = (block: string): void => {
-    const data = block
-      .split(SSE_LINE_ENDING)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-    if (!data || data === '[DONE]') return;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(data) as Record<string, unknown>;
-    } catch {
-      // Unknown/malformed SSE frames may precede a valid completed result.
-      return;
-    }
-    if (event?.type === 'error' || event?.type === 'response.failed' || event?.type === 'response.incomplete') {
-      throw new Error('Codex image generation did not complete; preview images are not final results');
-    }
-    const found = extractImageB64(event);
-    if (found) latest = found;
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: !done });
-      if (done) buffer += decoder.decode();
-      let match = SSE_EVENT_BOUNDARY.exec(buffer);
-      while (match?.index !== undefined) {
-        consume(buffer.slice(0, match.index));
-        buffer = buffer.slice(match.index + match[0].length);
-        match = SSE_EVENT_BOUNDARY.exec(buffer);
-      }
-      if (done) {
-        if (buffer.trim()) consume(buffer);
-        break;
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-  return latest;
-}
-
-async function inputImage(path: string): Promise<{ type: 'input_image'; image_url: string }> {
+async function inputImage(path: string): Promise<{ image_url: string }> {
   const bytes = await fs.readFile(path);
   const mime = sniffMediaMime(bytes);
   if (!mime || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) {
     throw new Error(`OpenAI 参考图格式不支持:${mime ?? '未知格式'}`);
   }
-  return { type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` };
+  return { image_url: `data:${mime};base64,${bytes.toString('base64')}` };
 }
 
 async function httpError(
@@ -144,12 +70,19 @@ async function httpError(
 export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): ImageChannel {
   const doFetch = opts.fetchImplementation ?? fetch;
 
-  async function generate(params: ImageParameters & {
-    model: string;
-    prompt: string;
-    imagePaths?: string[];
-    signal?: AbortSignal;
-  }): Promise<ImageChannelResult> {
+  async function generate(
+    params: ImageParameters & {
+      model: string;
+      prompt: string;
+      imagePaths?: string[];
+      signal?: AbortSignal;
+    },
+    operation: 'generations' | 'edits',
+  ): Promise<ImageChannelResult> {
+    params.signal?.throwIfAborted();
+    if (operation === 'edits' && !params.imagePaths?.length) {
+      throw new Error('Codex image edit requires at least one reference image');
+    }
     const options = normalizeImageParameters('openai', params.model, params);
     const modelPrefix = `${opts.providerId ?? 'openai'}/`;
     if (!params.model.startsWith(modelPrefix) || !params.model.slice(modelPrefix.length).trim()) {
@@ -167,25 +100,14 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       throw new Error('Codex image account changed before dispatch');
     }
     opts.beforeDispatch?.(params.model);
-    const content: Array<Record<string, unknown>> = [
-      { type: 'input_text', text: params.prompt },
-      ...images,
-    ];
+    params.signal?.throwIfAborted();
+    const url = CODEX_IMAGES_URL + '/' + operation;
     const body = {
-      model: HOST_MODEL,
-      store: false,
-      stream: true,
-      instructions: 'Use the image_generation tool to fulfill this image request.',
-      input: [{ type: 'message', role: 'user', content }],
-      tools: [
-        {
-          type: 'image_generation',
-          ...options,
-          output_format: 'png',
-          background: 'opaque',
-          partial_images: 1,
-        },
-      ],
+      model: IMAGE_MODEL,
+      prompt: params.prompt,
+      ...options,
+      background: 'opaque',
+      ...(operation === 'edits' ? { images } : {}),
     };
     const requestId = randomUUID();
     const startedAt = Date.now();
@@ -194,7 +116,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       providerId: opts.providerId ?? 'openai',
       modelId: params.model,
       method: 'POST',
-      url: mediaRequestUrlForLog(CODEX_RESPONSES_URL),
+      url: mediaRequestUrlForLog(url),
     };
     log.info('media request dispatch', {
       ...requestLog,
@@ -202,13 +124,13 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     });
     let response: Response;
     try {
-      response = await doFetch(CODEX_RESPONSES_URL, {
+      response = await doFetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${auth.accessToken}`,
           'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          'OpenAI-Beta': 'responses=experimental',
+          Accept: 'application/json',
+          'x-codex-image-turn-id': requestId,
           originator: 'codex_cli_rs',
           'User-Agent': USER_AGENT,
           ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
@@ -230,15 +152,25 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       throw error;
     }
     if (!response.ok) await httpError(response, auth.accessToken, opts.onAuthFailure);
-    const b64 = await collectImageB64(response);
-    if (!b64) throw new Error('Codex 返回中没有图片,请重试或改用 OpenAI Platform API key');
-    return { data: [{ b64_json: b64 }], output_format: 'png' };
+    const result = (await response.json()) as { data?: Array<{ b64_json?: unknown }> } | null;
+    params.signal?.throwIfAborted();
+    if (
+      !Array.isArray(result?.data) ||
+      !result.data.length ||
+      result.data.some(
+        (item) => !item || typeof item.b64_json !== 'string' || !item.b64_json.trim(),
+      )
+    ) {
+      throw new Error('Codex 返回中没有图片,请重试或改用 OpenAI Platform API key');
+    }
+    // Do not infer output dimensions or format from the request. Core sniffs the bytes.
+    return { data: result.data.map((item) => ({ b64_json: item.b64_json as string })) };
   }
 
   return {
     imageProtocol: 'openai',
     ready: opts.hasOAuthLogin,
-    generateImage: generate,
-    editImage: generate,
+    generateImage: (params) => generate(params, 'generations'),
+    editImage: (params) => generate(params, 'edits'),
   };
 }

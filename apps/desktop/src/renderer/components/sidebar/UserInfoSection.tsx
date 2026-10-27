@@ -18,7 +18,6 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
-import { useCindyVersions } from '@/lib/useCindyVersions';
 import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import {
@@ -94,7 +93,6 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const { status } = useUpdateStatus();
   const { dismissed, restore } = useUpdateBannerDismiss();
   const { state: betaChannelState } = useBetaChannelSettings();
-  const versions = useCindyVersions();
   const hasPendingUpdate = status === 'ready' || status === 'superseding';
   const isFlameReopen = hasPendingUpdate && dismissed;
   const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;
@@ -147,14 +145,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const appVersionLabelDetail = appRegionLabel
     ? `${appRegionLabel} · ${appDisplayVersionDetail}`
     : appDisplayVersionDetail;
-  const isPersonalVersion =
-    versions.state?.currentId !== undefined && versions.state.currentId !== 'original';
-  const visibleVersionLabel = isPersonalVersion
-    ? t('cindyMake.versions.personal')
-    : appVersionLabel;
-  const visibleVersionLabelDetail = isPersonalVersion
-    ? t('cindyMake.versions.personal') + ' · ' + appDisplayVersionDetail
-    : appVersionLabelDetail;
+  const visibleVersionLabel = appVersionLabel;
+  const visibleVersionLabelDetail = appVersionLabelDetail;
   const remoteAvailable = mode === 'cloud';
 
   const openSettings = () => {

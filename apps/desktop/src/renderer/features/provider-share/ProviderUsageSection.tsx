@@ -1,17 +1,34 @@
+import type { ProviderShareUsageDetails } from '../../../shared/providerShareInsights';
+import { ErrorNotice } from '@/components/ui/error-notice';
 /**
- * 「远程与分享」页的「用量」块(供应商组 §7、§10)：按人列出这个供应商的用量——你自己(当前登录的账号，
- * 本机与你其他电脑的合计)、分享的人(按人分开)，共用一个时间段切换。收起时是这个人的总量；展开后按电脑分开
- * (每台下面列模型)。没有组的供应商当成只有本机一台的组，与建了组的走同一套显示(2026-10-12 用户要求)：
- * 账本里不经组、就在本机运行的用量本来就记在本机(`local`)上。
+ * 「远程与分享」页的「用量」块(供应商组 §7、§10)：与设置 → 用量同一套版式(2026-10-17 用户确认原型)——
+ * 右上筛选(使用方、组内电脑、时间范围与日期)，下面依次是概览、活跃热力图、明细(按人 / 按电脑 / 按模型切换)、
+ * 近 30 天每日 token。默认是所有人、所有组内电脑的合计；选某个人或某台电脑后整块跟着变。
  *
- * 自己的用量来自这台电脑的账本(main 的 own-usage，含你其他电脑经组在别的组内电脑上运行、报告过来的部分)，
- * 分享的人来自分享服务的成员用量。
+ * 数据是管理对象所在电脑的按天明细(usage-history)：你自己 = 本机与你其他电脑的合计，分享的人按人，经另一台
+ * 电脑转来的看不到具体的人、按那台电脑一行。没有组的供应商当成只有本机一台的组(2026-10-12)，只是不出现组内
+ * 电脑的筛选与「按电脑」(只有一台)。那台电脑是旧版本、不认识按天明细时只有所有时间的合计：时间固定为所有时间，
+ * 不显示两张图。
+ *
+ * 分享的人那一行同时管分享本身(2026-10-16 用户要求：原来下方单列的「已分享的人」并进来，同一个人只占一行)：
+ * 名字旁是分享状态，第二行带上加入时间与最近使用，行尾 `···` 关闭／恢复或删除，下方列出经他的组转给别人用的人。
  */
-import { ChevronRight, History, Monitor } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import '@/components/settings/usage/usageCharts.css';
+
+import { History, Monitor, RefreshCw } from 'lucide-react';
+import { Fragment, useCallback, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
+import { FIRST_COL_CLASS, ShareCell, Swatch, TD_CLASS, TH_CLASS } from '@/components/settings/usage/UsageBreakdownTables';
+import { UsageFilterSelect, type UsageFilterOption } from '@/components/settings/usage/UsageFilterSelect';
+import { UsageSeriesBars } from '@/components/settings/usage/UsageTokenBars';
+import { formatUsagePercent } from '@/components/settings/usage/formatUsagePercent';
+import { usageHistoryModelColor } from '@/components/settings/usage/usageHistoryColors';
+import { isUsageHistorySingleDay, usageRangeDay, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
+import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { useOptionalAuthUser } from '@/contexts/AuthContext';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -19,457 +36,926 @@ import { useLocalProviderGroups } from '@/features/provider-group/useLocalProvid
 import { formatModelShort } from '@/lib/usageFormat';
 import { cn } from '@/lib/utils';
 
-import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
+import { providerGroupPhysicalDeviceKey, PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import type {
   ProviderOwnUsageView,
   ProviderShareMemberView,
-  ProviderShareModelUsageView,
-  ProviderShareUsageRange,
+  ProviderUsageHistoryView,
 } from '../../../shared/providerShare';
-import { formatShareMoney, formatShareTokens, summarizeShareUsage } from './providerShareFormat';
+import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
+import { providerShareMemberName } from '../../../shared/providerShareMemberNote';
+import { formatShareMoney, formatShareTokens } from './providerShareFormat';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from './providerShareNames';
+import { deviceIdOfMemberKey, shareAgentDeviceIdOfMemberKey } from './providerUsageBreakdown';
 import {
-  deviceIdOfMemberKey,
-  groupUsageByMember,
-  mergeModelUsage,
-  shareAgentDeviceIdOfMemberKey,
-  type MemberUsageGroup,
-} from './providerUsageBreakdown';
+  computerOrder,
+  filterUsageRows,
+  groupUsageRows,
+  keysByTokens,
+  memberParty,
+  modelKeyOf,
+  relayParty,
+  rowsFromHistory,
+  rowsFromLegacy,
+  SELF_PARTY,
+  summarizeUsageRows,
+  usageRowsByDay,
+  type ProviderUsageFilter,
+  type ProviderUsageRow,
+} from './providerUsageStats';
 import { ShareAvatar } from './ShareAvatar';
+import {
+  ShareMemberMenu,
+  ShareMemberReshares,
+  ShareMemberStatus,
+  type ProviderShareMemberActions,
+} from './ShareMemberControls';
 import type { ShareTimeFormat } from './useShareTimeFormat';
 
-const RANGES: readonly ProviderShareUsageRange[] = ['7d', 'month', 'all'];
+/** 读取状态：legacy = 那台电脑是旧版本，只有所有时间的合计。 */
+export type ProviderUsageStatus = 'loading' | 'ready' | 'failed' | 'legacy';
+
+type StackBy = 'party' | 'computer' | 'model';
+
+/** 热力图与「设置 → 用量」共用；这里只按 token 着色，金额占位不显示。 */
+const HEATMAP_WINDOW_DAYS = 140;
+const ZERO_MONEY: RegionalMoney = { amount: 0, currency: DEFAULT_USAGE_CURRENCY, approximate: false, kind: 'actual-cost' };
+/** 「更早的记录」(当时没有区分电脑)在柱图里的分段键。 */
+const UNATTRIBUTED = '\u0000unattributed';
+const NONE = '—';
 
 interface UsageParty {
   key: string;
   name: string;
-  /** 名字旁的说明：你 / 分享的人。 */
-  tag: string | null;
+  tag: string;
   /** 人用头像；经另一台电脑转来的(看不到具体的人)用设备图标。 */
   person?: { displayName: string; avatarUrl?: string | null };
+  /** 分享的人：这一行同时显示分享状态与操作。 */
+  member?: ProviderShareMemberView;
   lastUsedAt: number | null;
-  models: ProviderShareModelUsageView[];
 }
 
-interface MemberLabel {
+interface ComputerLabel {
   name: string;
   source: string | null;
 }
 
 export function ProviderUsageSection({
   providerId,
-  providerName,
-  own,
-  ownFailed,
+  sharedUsage,
+  history,
+  status,
+  legacyOwn,
   members,
-  membersLoading,
+  memberActions,
   selfDeviceName,
-  range,
-  onRangeChange,
+  ownerDeviceId,
+  groupConfig,
   time,
 }: {
   providerId: string;
-  providerName: string;
-  /** null = 还没读到。 */
-  own: ProviderOwnUsageView | null;
-  ownFailed: boolean;
+  sharedUsage?: ProviderShareUsageDetails;
+  /** 按天明细；还没读到、读失败或旧版本时为 null。 */
+  history: ProviderUsageHistoryView | null;
+  status: ProviderUsageStatus;
+  /** 旧版本电脑：你自己所有时间的合计(own-usage)。 */
+  legacyOwn: ProviderOwnUsageView | null;
   members: readonly ProviderShareMemberView[];
-  /** 分享服务的成员还没读到。 */
-  membersLoading: boolean;
+  memberActions?: ProviderShareMemberActions;
   selfDeviceName: string | null;
-  range: ProviderShareUsageRange;
-  onRangeChange: (range: ProviderShareUsageRange) => void;
+  ownerDeviceId?: string;
+  /** 远程管理时由页面传入建组电脑上的组；不传时读本机组设置。 */
+  groupConfig?: ProviderGroupConfig | null;
   time: ShareTimeFormat;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const user = useOptionalAuthUser();
   const devices = useDeviceLinkDeviceList();
   const ownerNameOf = useProviderShareOwnerNameOf();
-  const group = useLocalProviderGroups()[providerId] ?? null;
+  const localGroups = useLocalProviderGroups();
+  const group = groupConfig === undefined ? localGroups[providerId] ?? null : groupConfig;
   const memberKeys = useMemo(
-    () => group?.members.map((member) => member.key) ?? [PROVIDER_GROUP_LOCAL_MEMBER_KEY],
+    () => group ? [...new Set(group.members.map(providerGroupPhysicalDeviceKey))] : [PROVIDER_GROUP_LOCAL_MEMBER_KEY],
     [group],
   );
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const aliases = useMemo(
+    () => group ? new Map(group.members.map((member) => [member.key, providerGroupPhysicalDeviceKey(member)])) : undefined,
+    [group],
+  );
+
+  // 旧版本电脑读到合计后，后续刷新失败仍保留这份合计，并继续锁定为「所有时间」。
+  const legacy = status === 'legacy' || (status === 'failed' && history === null && legacyOwn !== null);
+  const [rangeChoice, setRange] = useState<UsageHistoryRange>('30d');
+  // 旧版本电脑没有按天的数据：只能看所有时间。
+  const range: UsageHistoryRange = legacy ? 'all' : rangeChoice;
+  const [partyChoice, setParty] = useState('all');
+  const [computerChoice, setComputer] = useState('all');
+  const [breakdownChoice, setBreakdown] = useState<StackBy>('party');
+  const breakdown: StackBy = !group && breakdownChoice === 'computer' ? 'party' : breakdownChoice;
+  const breakdownId = useId();
+  const [stackChoice, setStack] = useState<StackBy>('party');
+  const stack: StackBy = !group && stackChoice === 'computer' ? 'party' : stackChoice;
+  const [heatmapWeeks, setHeatmapWeeks] = useState(20);
+  const todayKey = sharedUsage?.todayKey ?? history?.todayKey ?? '';
+
+  const rows = useMemo<ProviderUsageRow[]>(() => {
+    if (sharedUsage) return sharedUsage.parties.flatMap((party) => party.days.map((day) => ({ ...day, providerId: null, memberKey: null, computer: null, party: party.key })));
+    if (history) {
+      // owned 刷新比按日历史快；成员删除后先从旧快照排除，避免总量和页面上的成员行短暂不一致。
+      const activeMemberIds = new Set(members.map((member) => member.memberId));
+      return rowsFromHistory({
+        ...history,
+        members: history.members.filter((member) => activeMemberIds.has(member.memberId)),
+      }, aliases);
+    }
+    if (legacy) return rowsFromLegacy(legacyOwn, members, aliases);
+    return [];
+  }, [aliases, history, legacy, legacyOwn, members, sharedUsage]);
 
   const parties = useMemo<UsageParty[]>(() => {
-    const rows: UsageParty[] = [];
+    if (sharedUsage) return sharedUsage.parties.map((party) => ({
+      key: party.key,
+      name: party.isRelay ? t('providerShare.insights.relay') : party.displayName,
+      tag: party.isYou ? t('providerShare.insights.you') : party.isOwner ? t('providerShare.insights.owner') : '',
+      person: party.isRelay ? undefined : { displayName: party.displayName, avatarUrl: party.avatarUrl },
+      lastUsedAt: party.lastUsedAt,
+    }));
+    const selfName = user?.name?.trim() || t('settings.userProfile.local.name');
+    const legacySelfLast = [legacyOwn?.local, ...(legacyOwn?.devices ?? [])]
+      .reduce<number | null>((latest, part) => (part ? Math.max(latest ?? 0, part.lastUsedAt) : latest), null);
     // 你自己一行总在，没用过也写出来：本机与你其他电脑的合计，和分享的人同样按人显示。
-    if (own || ownFailed) {
-      const selfName = user?.name?.trim() || t('settings.userProfile.local.name');
-      const parts = [own?.local, ...(own?.devices ?? [])].filter(
-        (part): part is NonNullable<typeof part> => part != null,
-      );
-      const lastUsedAt = parts.reduce<number | null>((latest, part) => Math.max(latest ?? 0, part.lastUsedAt), null);
-      rows.push({
-        key: 'self',
-        name: selfName,
-        tag: t('providerGroup.usage.selfTag'),
-        person: { displayName: selfName, avatarUrl: user?.avatar ?? null },
-        lastUsedAt,
-        models: mergeModelUsage(parts.map((part) => part.models)),
-      });
-    }
+    const list: UsageParty[] = [{
+      key: SELF_PARTY,
+      name: selfName,
+      tag: t('providerGroup.usage.selfTag'),
+      person: { displayName: selfName, avatarUrl: user?.avatar ?? null },
+      lastUsedAt: history ? history.self.lastUsedAt : legacySelfLast,
+    }];
     for (const member of members) {
-      rows.push({
-        key: `member:${member.memberId}`,
-        name: member.displayName,
+      const usage = history?.members.find((item) => item.memberId === member.memberId);
+      list.push({
+        key: memberParty(member.memberId),
+        name: providerShareMemberName(member),
         tag: t('providerGroup.usage.shareSource'),
         person: { displayName: member.displayName, avatarUrl: member.avatarUrl },
-        lastUsedAt: member.lastUsedAt,
-        models: member.models,
+        member,
+        lastUsedAt: usage?.lastUsedAt ?? member.lastUsedAt,
       });
     }
     // 同账号的组所在电脑替它的受邀者转来的：这台电脑看不到具体的人，按那台电脑一行。
-    for (const relay of own?.relays ?? []) {
-      if (!relay.deviceId) continue;
-      const device =
-        devices?.find((item) => item.deviceId === relay.deviceId)?.name ||
-        relay.deviceName ||
-        t('providerGroup.usage.unknownDevice');
-      rows.push({
-        key: `relay:${relay.deviceId}`,
+    const relays = history?.relays ?? (legacyOwn?.relays ?? []).flatMap((relay) => relay.deviceId
+      ? [{ deviceId: relay.deviceId, deviceName: relay.deviceName, lastUsedAt: relay.lastUsedAt }]
+      : []);
+    for (const relay of relays) {
+      const device = devices?.find((item) => item.deviceId === relay.deviceId)?.name
+        || relay.deviceName
+        || t('providerGroup.usage.unknownDevice');
+      list.push({
+        key: relayParty(relay.deviceId),
         name: t('providerGroup.usage.relayName', { device }),
         tag: t('providerGroup.usage.shareSource'),
         lastUsedAt: relay.lastUsedAt,
-        models: relay.models,
       });
     }
-    return rows;
-  }, [devices, members, own, ownFailed, t, user?.avatar, user?.name]);
+    return list;
+  }, [devices, history, legacyOwn, members, sharedUsage, t, user?.avatar, user?.name]);
 
-  const memberLabel = useCallback(
-    (memberKey: string | null, inGroup: boolean): MemberLabel => {
-      if (memberKey === null) return { name: t('providerGroup.usage.unattributed'), source: t('providerGroup.usage.unattributedSource') };
-      const removed = inGroup ? null : t('providerGroup.usage.removedMember');
-      if (memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY) {
-        return { name: t('providerGroup.member.local'), source: removed ?? selfDeviceName };
+  const computerLabel = useCallback(
+    (key: string | null): ComputerLabel => {
+      if (key === null) return { name: t('providerGroup.usage.unattributed'), source: null };
+      if (key === PROVIDER_GROUP_LOCAL_MEMBER_KEY) {
+        return {
+          name: ownerDeviceId ? selfDeviceName ?? t('providerGroup.usage.unknownDevice') : t('providerGroup.member.local'),
+          source: ownerDeviceId ? null : selfDeviceName,
+        };
       }
-      const member = group?.members.find((item) => item.key === memberKey);
-      const deviceId = member?.kind === 'device' ? member.agentDeviceId : deviceIdOfMemberKey(memberKey);
+      const member = group?.members.find((item) => item.key === key)
+        ?? group?.members.find((item) => providerGroupPhysicalDeviceKey(item) === key);
+      const deviceId = member?.kind === 'device' ? member.agentDeviceId : deviceIdOfMemberKey(key);
       if (deviceId) {
         return {
           name: devices?.find((device) => device.deviceId === deviceId)?.name || member?.label || t('providerGroup.usage.unknownDevice'),
-          source: removed ?? t('providerGroup.member.sourceDevice'),
+          source: t('providerGroup.member.sourceDevice'),
         };
       }
       // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)。
-      const shareDevice = member?.kind === 'share' ? member.agentDeviceId : shareAgentDeviceIdOfMemberKey(memberKey);
+      const shareDevice = member?.kind === 'share' ? member.agentDeviceId : shareAgentDeviceIdOfMemberKey(key);
       const owner = shareDevice ? ownerNameOf(shareDevice) : null;
       return {
         name: shareDevice ? providerShareComputerName(t, owner) : t('providerGroup.usage.unknownDevice'),
-        source: removed ?? (owner ? t('providerGroup.member.sourceShare', { name: owner }) : null),
+        source: owner ? t('providerGroup.member.sourceShare', { name: owner }) : null,
       };
     },
-    [devices, group, ownerNameOf, selfDeviceName, t],
+    [devices, group, ownerDeviceId, ownerNameOf, selfDeviceName, t],
   );
 
-  const toggle = (key: string) =>
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const computers = useMemo(() => computerOrder(memberKeys, rows), [memberKeys, rows]);
+  const modelOrder = useMemo(() => keysByTokens(rows, modelKeyOf), [rows]);
+  const modelNames = useMemo(() => new Map(rows.map((row) => [modelKeyOf(row), row.model])), [rows]);
 
-  // 和设置 → 用量历史的摘要卡保持同一阅读顺序：先看总量，再看分布。
-  // 这里只汇总已经读到的使用方；读失败的自己的账本不会被当成 0。
-  const summary = useMemo(() => {
-    const totals = summarizeShareUsage(parties.flatMap((party) => party.models));
-    const usedParties = parties.filter((party) => {
-      const partyTotals = summarizeShareUsage(party.models);
-      return partyTotals.tokens > 0 || party.models.some((model) => model.turns > 0);
-    }).length;
-    const models = new Set(
-      parties
-        .flatMap((party) => party.models)
-        .filter((model) => model.turns > 0 || model.inputTokens > 0 || model.outputTokens > 0)
-        .map((model) => `${model.kind}:${model.providerId ?? ''}:${model.model}`),
-    );
-    return { ...totals, usedParties, modelCount: models.size };
-  }, [parties]);
+  // 选中的人被删除、选中的电脑移出组后回到全部，不停在一个不存在的选项上。
+  const party = parties.some((item) => item.key === partyChoice) ? partyChoice : 'all';
+  const computer = group && memberKeys.includes(computerChoice) ? computerChoice : 'all';
+  const filter: ProviderUsageFilter = { range, todayKey, party, computer };
+  const selectedDay = usageRangeDay(range, todayKey || undefined);
+  const singleDay = isUsageHistorySingleDay(range);
+  const showToday = !legacy && !singleDay;
+
+  const rangeLabel = useMemo(() => {
+    if (selectedDay) {
+      return new Intl.DateTimeFormat(i18n.language, { year: 'numeric', month: 'short', day: 'numeric' })
+        .format(new Date(`${selectedDay}T12:00:00`));
+    }
+    return t(`usageHistory.range.${range}`);
+  }, [i18n.language, range, selectedDay, t]);
+
+  const partyColor = (key: string) => usageHistoryModelColor(parties.findIndex((item) => item.key === key), parties.length);
+  const computerColor = (key: string | null) => usageHistoryModelColor(computers.indexOf(key), computers.length);
+  const modelColor = (key: string) => usageHistoryModelColor(modelOrder.indexOf(key), modelOrder.length);
+
+  const inRange = filterUsageRows(rows, filter);
+  const summary = summarizeUsageRows(inRange);
+  const todayFilter: ProviderUsageFilter = { ...filter, range: 'today' };
+  const todayTokens = showToday ? summarizeUsageRows(filterUsageRows(rows, todayFilter)).tokens : 0;
+  const tokensOf = (list: readonly ProviderUsageRow[]) => summarizeUsageRows(list).tokens;
+  const usedParties = [...groupUsageRows(inRange, (row) => row.party).values()].filter((list) => tokensOf(list) > 0).length;
+  const usedComputers = [...groupUsageRows(inRange, (row) => row.computer).entries()]
+    .filter(([key, list]) => key !== null && tokensOf(list) > 0).length;
+  const usedModels = new Set(inRange.map(modelKeyOf)).size;
+
+  const toggleParty = (key: string) => setParty((current) => (current === key ? 'all' : key));
+  const toggleComputer = (key: string) => setComputer((current) => (current === key ? 'all' : key));
+  const handleDayClick = (day: string) => setRange(`day:${day}` as UsageHistoryRange);
+
+  const partyOptions: UsageFilterOption[] = [
+    { value: 'all', label: t('providerGroup.usage.filter.allParties') },
+    ...parties.map((item) => ({
+      value: item.key,
+      label: item.name,
+      detail: sharedUsage ? item.tag : item.key === SELF_PARTY
+        ? t('providerGroup.usage.filter.selfDetail')
+        : item.member
+          ? item.member.status === 'paused'
+            ? `${item.tag} · ${t('providerShare.manage.members.statusPaused')}`
+            : item.tag
+          : t('providerGroup.usage.filter.relayDetail'),
+    })),
+  ];
+  const computerOptions: UsageFilterOption[] = [
+    { value: 'all', label: t('providerGroup.usage.filter.allComputers') },
+    ...memberKeys.map((key) => {
+      const label = computerLabel(key);
+      return { value: key, label: label.name, detail: label.source };
+    }),
+  ];
+  const rangeOptions: UsageFilterOption[] = [
+    ...(['all', '30d', '7d', 'today'] as const).map((value) => ({ value, label: t(`usageHistory.range.${value}`) })),
+    ...(range.startsWith('day:') ? [{ value: range, label: rangeLabel }] : []),
+  ];
+
+  // 两张图：按使用方与组内电脑筛，不按时间段(固定窗口，与设置 → 用量相同)。
+  const chartRows = useMemo(
+    () => filterUsageRows(rows, { range: 'all', todayKey: '', party, computer }, { range: true }),
+    [computer, party, rows],
+  );
+  const series = useMemo(() => chartRows.flatMap((row) => row.day === null ? [] : [{
+    day: row.day,
+    key: stack === 'party' ? row.party : stack === 'computer' ? row.computer ?? UNATTRIBUTED : modelKeyOf(row),
+    tokens: row.inputTokens + row.outputTokens,
+  }]), [chartRows, stack]);
+  const seriesOrder = useMemo(() => stack === 'party'
+    ? parties.map((item) => item.key)
+    : stack === 'computer'
+      ? computers.map((key) => key ?? UNATTRIBUTED)
+      : modelOrder, [computers, modelOrder, parties, stack]);
+  const seriesLabel = useCallback(
+    (key: string) => stack === 'party'
+      ? parties.find((item) => item.key === key)?.name ?? key
+      : stack === 'computer'
+        ? computerLabel(key === UNATTRIBUTED ? null : key).name
+        : formatModelShort(modelNames.get(key) ?? key),
+    [computerLabel, modelNames, parties, stack],
+  );
+  const heatDays = useMemo(() => usageRowsByDay(chartRows).map((day) => ({ ...day, money: ZERO_MONEY })), [chartRows]);
+
+  const charts = Boolean(history || sharedUsage) && rows.length > 0;
+  const stackOptions = [
+    { value: 'party' as const, label: t('providerGroup.usage.stack.party') },
+    ...(group ? [{ value: 'computer' as const, label: t('providerGroup.usage.stack.computer') }] : []),
+    { value: 'model' as const, label: t('providerGroup.usage.stack.model') },
+  ];
+  const breakdownSubtitle = [
+    rangeLabel,
+    ...(breakdown !== 'party' && party !== 'all' ? [parties.find((item) => item.key === party)?.name] : []),
+    ...(breakdown !== 'computer' && computer !== 'all' ? [computerLabel(computer).name] : []),
+  ].filter(Boolean).join(' · ');
 
   return (
-    <section className="mt-8 shrink-0" aria-labelledby="provider-usage-title">
-      <div className="mb-3 flex flex-wrap items-start gap-3">
-        <div className="flex min-w-[240px] flex-1 flex-col gap-1">
-          <h3 id="provider-usage-title" className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('providerGroup.usage.title')}
-          </h3>
-          <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t(group ? 'providerGroup.usage.descriptionGroup' : 'providerGroup.usage.description', { provider: providerName })}
-          </p>
-        </div>
-        <SegmentedControl
-          value={range}
-          onValueChange={onRangeChange}
-          aria-label={t('providerShare.manage.members.rangeAria')}
-          options={RANGES.map((value) => ({ value, label: t(`providerShare.manage.members.range.${value}`) }))}
-        />
-      </div>
-      {parties.length > 0 && (
-        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="provider-usage-summary">
-          <UsageSummaryCell
-            value={summary.tokens > 0 ? formatShareTokens(summary.tokens) : '—'}
-            label={t('providerGroup.usage.summary.total')}
+    <section className="usage-history-charts mt-8 shrink-0" aria-labelledby="provider-usage-title">
+      {/* 标题在左、筛选在右；放不下时筛选整组换到下一行、靠左。下拉本身写着「所有人」「所有组内电脑」，不另加说明文字。 */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <h3 id="provider-usage-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t('providerGroup.usage.title')}
+        </h3>
+        <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="provider-usage-filters">
+          <UsageFilterSelect
+            value={party}
+            options={partyOptions}
+            onValueChange={setParty}
+            ariaLabel={t('providerGroup.usage.filter.partyAria')}
+            className="w-[168px]"
           />
-          <UsageSummaryCell
-            value={summary.amount ? formatShareMoney(summary.amount) : '—'}
-            label={t('providerGroup.usage.summary.amount')}
-          />
-          <UsageSummaryCell
-            value={summary.usedParties > 0 ? String(summary.usedParties) : '—'}
-            label={t('providerGroup.usage.summary.people')}
-          />
-          <UsageSummaryCell
-            value={summary.modelCount > 0 ? String(summary.modelCount) : '—'}
-            label={t('providerGroup.usage.summary.models')}
-          />
-        </div>
-      )}
-      <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
-        {parties.length === 0 ? (
-          <p className="px-4 py-7 text-center text-13 leading-[1.5] text-[var(--text-secondary)]">
-            {membersLoading || !own ? t('providerShare.manage.loading') : '—'}
-          </p>
-        ) : (
-          parties.map((party, index) => (
-            <UsagePartyRow
-              key={party.key}
-              party={party}
-              first={index === 0}
-              open={expanded.has(party.key)}
-              unavailable={party.key === 'self' && ownFailed && !own}
-              totalTokens={summary.tokens}
-              memberKeys={memberKeys}
-              showComputerCount={Boolean(group)}
-              memberLabel={memberLabel}
-              time={time}
-              onToggle={() => toggle(party.key)}
+          {group && (
+            <UsageFilterSelect
+              value={computer}
+              options={computerOptions}
+              onValueChange={setComputer}
+              ariaLabel={t('providerGroup.usage.filter.computerAria')}
+              className="w-[168px]"
             />
-          ))
-        )}
+          )}
+          {/* 旧版本电脑只有所有时间的合计：选不了时间，就不摆出时间与日期。 */}
+          {!legacy && (
+            <>
+              <UsageFilterSelect
+                value={range}
+                options={rangeOptions}
+                onValueChange={(value) => setRange(value as UsageHistoryRange)}
+                ariaLabel={t('usageHistory.range.ariaLabel')}
+                className="w-[148px]"
+              />
+              <Input
+                type="date"
+                size="md"
+                aria-label={t('usageHistory.range.date')}
+                className="w-[148px] max-w-full"
+                value={selectedDay ?? ''}
+                max={todayKey || undefined}
+                disabled={!todayKey}
+                onChange={(day) => {
+                  if (!todayKey) return;
+                  if (/^\d{4}-\d{2}-\d{2}$/.test(day) && day <= todayKey) handleDayClick(day);
+                  else if (!day) setRange('30d');
+                }}
+              />
+            </>
+          )}
+        </div>
       </div>
+
+      {status === 'loading' && !history && !sharedUsage ? (
+        <p role="status" className="-mt-1 mb-3 inline-flex items-center gap-1.5 text-12 text-[var(--text-tertiary)]">
+          <Spinner icon={RefreshCw} size={11} className="opacity-70" />
+          {t('providerShare.manage.loading')}
+        </p>
+      ) : status === 'failed' && !history ? (
+        <ErrorNotice role="alert" className="-mt-1 mb-3" message={t('providerGroup.usage.loadFailed')} />
+      ) : legacy ? (
+        <p role="status" className="-mt-1 mb-3 text-12 text-[var(--text-tertiary)]">
+          {t('providerGroup.usage.legacyNote', { device: selfDeviceName ?? t('providerGroup.usage.unknownDevice') })}
+        </p>
+      ) : (sharedUsage ?? history)?.coverageStart ? (
+        <p className="-mt-1 mb-3 text-12 text-[var(--text-tertiary)]">
+          {t('providerGroup.usage.coverage', { date: time.date(Date.parse(`${(sharedUsage ?? history)!.coverageStart}T12:00:00`)) })}
+        </p>
+      ) : null}
+
+      <UsageCard title={t('usageHistory.summary.title')}>
+        <div className="flex flex-wrap gap-2" data-testid="provider-usage-summary">
+          {showToday && (
+            <StatCell value={todayTokens > 0 ? formatShareTokens(todayTokens) : NONE} label={t('usageHistory.stats.todayTokens')} />
+          )}
+          <StatCell
+            value={summary.tokens > 0 ? formatShareTokens(summary.tokens) : NONE}
+            label={t('usageHistory.stats.totalTokensInRange', { range: rangeLabel })}
+          />
+          <StatCell value={summary.amount ? formatShareMoney(summary.amount) : NONE} label={t('providerGroup.usage.summary.amount')} />
+          <StatCell value={usedParties > 0 ? String(usedParties) : NONE} label={t('providerGroup.usage.summary.people')} />
+          {group && (
+            <StatCell value={usedComputers > 0 ? String(usedComputers) : NONE} label={t('providerGroup.usage.summary.computers')} />
+          )}
+          <StatCell value={usedModels > 0 ? String(usedModels) : NONE} label={t('usageHistory.stats.models')} />
+        </div>
+      </UsageCard>
+
+      {charts && (
+        <UsageCard title={t('usageHistory.heatmap.title')} subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}>
+          <UsageHeatmap
+            days={heatDays}
+            todayKey={todayKey}
+            windowDays={HEATMAP_WINDOW_DAYS}
+            metric="tokens"
+            selectedDay={selectedDay}
+            onDayClick={handleDayClick}
+            onVisibleWeeksChange={setHeatmapWeeks}
+          />
+        </UsageCard>
+      )}
+
+      <UsageCard
+        title={(
+          <SegmentedControl
+            role="tablist"
+            value={breakdown}
+            onValueChange={setBreakdown}
+            aria-label={t('providerGroup.usage.title')}
+            options={stackOptions.map((option) => ({
+              ...option,
+              id: `${breakdownId}-${option.value}`,
+              'aria-controls': `${breakdownId}-panel`,
+            }))}
+            height={28}
+            optionHeight={24}
+          />
+        )}
+        subtitle={breakdownSubtitle}
+      >
+        <div
+          id={`${breakdownId}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${breakdownId}-${breakdown}`}
+          tabIndex={0}
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {breakdown === 'party' ? (
+            <PartyTable
+              parties={parties}
+              rows={rows}
+              filter={filter}
+              rangeLabel={rangeLabel}
+              showToday={showToday}
+              showComputers={Boolean(group)}
+              colorOf={partyColor}
+              selected={party}
+              onToggle={toggleParty}
+              memberActions={memberActions}
+              time={time}
+            />
+          ) : breakdown === 'computer' ? (
+            <ComputerTable
+              groupKeys={memberKeys}
+              rows={rows}
+              filter={filter}
+              rangeLabel={rangeLabel}
+              showToday={showToday}
+              labelOf={computerLabel}
+              colorOf={computerColor}
+              selected={computer}
+              onToggle={toggleComputer}
+            />
+          ) : (
+            <>
+              <ModelTable rows={inRange} order={modelOrder} colorOf={modelColor} rangeLabel={rangeLabel} />
+              <p className="mt-2 text-12 text-[var(--text-tertiary)]">{t('providerShare.manage.members.estimateNote')}</p>
+            </>
+          )}
+        </div>
+      </UsageCard>
+
+      {(history || sharedUsage) && rows.length === 0 && (
+        <p className="mb-3.5 text-center text-13 text-[var(--text-tertiary)]">{t('usageHistory.empty')}</p>
+      )}
+
+      {charts && (
+        <>
+          {/* 分色由右侧的切换说明，不再写「按人堆叠」之类的副标题。 */}
+          <UsageCard
+            title={t('usageHistory.daily.title')}
+            right={(
+              <SegmentedControl
+                value={stack}
+                onValueChange={setStack}
+                aria-label={t('providerGroup.usage.stack.aria')}
+                options={stackOptions}
+                height={28}
+                optionHeight={24}
+              />
+            )}
+          >
+            <UsageSeriesBars
+              daily={series}
+              order={seriesOrder}
+              labelOf={seriesLabel}
+              todayKey={todayKey}
+              selectedDay={selectedDay}
+              highlightRecentWeek={range === '7d'}
+              onDayClick={handleDayClick}
+            />
+          </UsageCard>
+        </>
+      )}
     </section>
   );
 }
 
-function UsageSummaryCell({ value, label }: { value: string; label: string }) {
+function UsageCard({
+  title,
+  subtitle,
+  right,
+  children,
+}: {
+  title: ReactNode;
+  subtitle?: string;
+  right?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
+    <div className="mb-3.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+      <div className="mb-3 flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="min-w-0 text-14 font-medium text-[var(--text-primary)]">{title}</div>
+        {subtitle ? <span className="text-12 text-[var(--text-tertiary)]">{subtitle}</span> : null}
+        {right ? <div className="ml-auto">{right}</div> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function StatCell({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="flex min-w-[96px] flex-1 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
       <span className="break-words text-16 font-medium leading-[1.4] tabular-nums text-[var(--text-primary)]">{value}</span>
       <span className="mt-auto break-words text-12 leading-[1.5] text-[var(--text-secondary)]">{label}</span>
     </div>
   );
 }
 
-function UsagePartyRow({
-  party,
-  first,
-  open,
-  unavailable,
-  totalTokens,
-  memberKeys,
-  showComputerCount,
-  memberLabel,
-  time,
-  onToggle,
-}: {
-  party: UsageParty;
-  first: boolean;
-  open: boolean;
-  /** 自己的账本没读出来：不写 0，免得被当成没用过。 */
-  unavailable: boolean;
-  /** 所选时间段所有已读使用方的 token 总量，用来画轻量占比条。 */
-  totalTokens: number;
-  /** 组内电脑(按组里的顺序)；没有组时只有本机。 */
-  memberKeys: readonly string[];
-  /** 收起时写「用了几台电脑」：没有组时只有本机一台，这句没有信息量。 */
-  showComputerCount: boolean;
-  memberLabel: (memberKey: string | null, inGroup: boolean) => MemberLabel;
-  time: ShareTimeFormat;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation();
-  const totals = summarizeShareUsage(party.models);
-  const share = totals.tokens > 0 && totalTokens > 0 ? Math.max(3, Math.round((totals.tokens / totalTokens) * 100)) : 0;
-  const breakdown = useMemo(() => groupUsageByMember(party.models, memberKeys), [memberKeys, party.models]);
-  const usedOn = showComputerCount
-    ? breakdown.filter((item) => item.memberKey !== null && summarizeShareUsage(item.models).tokens > 0).length
-    : 0;
-  const breakdownId = `provider-usage-${party.key}`;
-  const toggleLabel = t(open ? 'providerGroup.usage.collapseAria' : 'providerGroup.usage.expandAria', { name: party.name });
-  const lastUsed = unavailable
-    ? t('providerShare.manage.loadFailed')
-    : party.lastUsedAt
-      ? t('providerShare.manage.members.lastUsed', { time: time.relative(party.lastUsedAt) })
-      : t('providerShare.manage.members.neverUsed');
+/** 表格顶部的占比条：与各行色块同色、同顺序。 */
+function ShareStrip({ items }: { items: Array<{ key: string; tokens: number; color: string }> }) {
+  const total = items.reduce((sum, item) => sum + item.tokens, 0);
+  if (!(total > 0)) return null;
   return (
-    <div
-      data-testid="provider-usage-row"
-      data-usage-party={party.key}
-      className={cn(!first && 'border-t border-[var(--settings-theme-card-border)]')}
-    >
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3.5 transition-colors motion-reduce:transition-none hover:bg-[var(--surface-hover)]">
-        <Tip text={toggleLabel}>
-          <button
-            type="button"
-            onClick={onToggle}
-            disabled={unavailable}
-            aria-expanded={open}
-            aria-controls={breakdownId}
-            aria-label={toggleLabel}
-            className="-ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-          >
-            <ChevronRight
-              size={14}
-              aria-hidden
-              className={cn('transition-transform duration-150 motion-reduce:transition-none', open && 'rotate-90')}
-            />
-          </button>
-        </Tip>
-        {party.person ? (
-          <ShareAvatar displayName={party.person.displayName} avatarUrl={party.person.avatarUrl} />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]"
-          >
-            <Monitor size={16} />
-          </span>
-        )}
-        <div className="flex min-w-[180px] flex-1 flex-col gap-0.5">
-          <div className="flex flex-wrap items-baseline gap-2 text-13">
-            <span className="font-medium text-[var(--text-primary)]">{party.name}</span>
-            {party.tag && <span className="text-12 text-[var(--text-secondary)]">{party.tag}</span>}
-          </div>
-          <span className="text-12 text-[var(--text-secondary)]">
-            {usedOn > 0 && !unavailable
-              ? t('providerGroup.usage.lastUsedOn', { lastUsed, computers: t('providerGroup.usage.computerCount', { count: usedOn }) })
-              : lastUsed}
-          </span>
-        </div>
-        {!unavailable && (
-          <div className="flex min-w-[108px] shrink-0 flex-col items-end text-12 text-[var(--text-secondary)]">
-            <span className="text-13 font-medium text-[var(--text-primary)] [font-variant-numeric:tabular-nums]">
-              {t('providerShare.manage.members.tokens', { tokens: formatShareTokens(totals.tokens) })}
-            </span>
-            {totals.amount && (
-              <span className="[font-variant-numeric:tabular-nums]">
-                {t('providerShare.manage.members.amount', { amount: formatShareMoney(totals.amount) })}
-              </span>
-            )}
-            {share > 0 && (
-              <span aria-hidden="true" className="mt-1.5 h-1 w-16 overflow-hidden rounded-full bg-[var(--surface-chip)]">
-                <span
-                  className="block h-full rounded-full bg-[var(--text-secondary)]"
-                  style={{ width: `${share}%` }}
-                />
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-      {/* 明细表与头像左缘对齐：px-4 + 展开按钮(24 - 4) + gap-3 = 48px。 */}
-      {open && !unavailable && (
-        <div
-          id={breakdownId}
-          className="border-t border-[var(--border-default)] bg-[var(--surface)] px-3 py-3.5 sm:ml-12 sm:mr-3 sm:rounded-lg sm:border"
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] border-collapse text-12">
-              <thead>
-                <tr className="border-b border-[var(--border-default)] text-left text-[var(--text-secondary)]">
-                  <th scope="col" className="py-1.5 pr-3 font-medium">{t('providerGroup.usage.table.member')}</th>
-                  <th scope="col" className="w-[72px] py-1.5 pr-3 text-right font-medium">{t('providerShare.manage.members.table.turns')}</th>
-                  <th scope="col" className="w-[88px] py-1.5 pr-3 text-right font-medium">{t('providerShare.manage.members.table.input')}</th>
-                  <th scope="col" className="w-[88px] py-1.5 pr-3 text-right font-medium">{t('providerShare.manage.members.table.output')}</th>
-                  <th scope="col" className="w-[96px] py-1.5 text-right font-medium">{t('providerShare.manage.members.table.amount')}</th>
-                </tr>
-              </thead>
-              {breakdown.map((item, index) => (
-                <MemberUsageRows
-                  key={item.memberKey ?? '\u0000unattributed'}
-                  item={item}
-                  first={index === 0}
-                  label={memberLabel(item.memberKey, item.inGroup)}
-                  partyTokens={totals.tokens}
-                />
-              ))}
-            </table>
-          </div>
-          <p className="mt-2 text-12 text-[var(--text-tertiary)]">{t('providerShare.manage.members.estimateNote')}</p>
-        </div>
-      )}
+    <div aria-hidden="true" className="mb-3 flex h-2 overflow-hidden rounded-[2px]">
+      {items.filter((item) => item.tokens > 0).map((item) => (
+        <div key={item.key} style={{ width: `${(item.tokens / total) * 100}%`, backgroundColor: item.color }} />
+      ))}
     </div>
   );
 }
 
-/** 组内一台电脑：一行这台的合计(带占这个人总量的比例)，下面每个模型一行。这段时间没用过的整行变淡。 */
-function MemberUsageRows({
-  item,
-  first,
-  label,
-  partyTokens,
+const ROW_CLASS = 'cursor-pointer transition-colors motion-reduce:transition-none hover:bg-[var(--surface-hover)]';
+const NAME_BUTTON_CLASS =
+  'min-w-0 truncate rounded-sm text-left font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
+
+/** 按人：你自己、分享的人(带分享状态与操作)、经另一台电脑转来的。点一行只看这个人，再点回到所有人。 */
+function PartyTable({
+  parties,
+  rows,
+  filter,
+  rangeLabel,
+  showToday,
+  showComputers,
+  colorOf,
+  selected,
+  onToggle,
+  memberActions,
+  time,
 }: {
-  item: MemberUsageGroup;
-  first: boolean;
-  label: MemberLabel;
-  partyTokens: number;
+  parties: readonly UsageParty[];
+  rows: readonly ProviderUsageRow[];
+  filter: ProviderUsageFilter;
+  rangeLabel: string;
+  showToday: boolean;
+  showComputers: boolean;
+  colorOf: (key: string) => string;
+  selected: string;
+  onToggle: (key: string) => void;
+  memberActions?: ProviderShareMemberActions;
+  time: ShareTimeFormat;
 }) {
-  const totals = summarizeShareUsage(item.models);
-  const turns = item.models.reduce((sum, model) => sum + model.turns, 0);
-  const input = item.models.reduce((sum, model) => sum + model.inputTokens, 0);
-  const output = item.models.reduce((sum, model) => sum + model.outputTokens, 0);
-  const used = totals.tokens > 0 || turns > 0;
-  const share = used && partyTokens > 0 ? Math.round((totals.tokens / partyTokens) * 100) : null;
-  const Icon = item.memberKey === null ? History : Monitor;
+  const { t } = useTranslation();
+  const byParty = groupUsageRows(filterUsageRows(rows, filter, { party: true }), (row) => row.party);
+  const todayByParty = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { party: true }), (row) => row.party);
+  const items = parties.map((party) => {
+    const list = byParty.get(party.key) ?? [];
+    return {
+      party,
+      list,
+      totals: summarizeUsageRows(list),
+      today: summarizeUsageRows(todayByParty.get(party.key) ?? []).tokens,
+      computers: new Set(list.filter((row) => row.computer !== null && row.inputTokens + row.outputTokens > 0).map((row) => row.computer)).size,
+      color: colorOf(party.key),
+    };
+  });
+  const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
+  const actionColumn = parties.some((party) => party.member);
+  const columns = 4 + (showToday ? 1 : 0) + (showComputers ? 1 : 0) + (actionColumn ? 1 : 0);
   return (
-    <tbody
-      data-testid="provider-usage-member"
-      data-member-key={item.memberKey ?? ''}
-      // 模型行收紧、整组底部留一点空：一眼看出这几行属于上面那台电脑。
-      className={cn(
-        '[font-variant-numeric:tabular-nums] [&>tr:last-child>td]:pb-2.5',
-        !first && 'border-t border-[var(--border-default)]',
-      )}
-    >
-      <tr className={used ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'}>
-        <td className="pb-1 pr-3 pt-2.5">
-          <span className="flex min-w-0 items-center gap-2">
-            <Icon size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
-            <span className={cn('truncate', used && 'font-medium')}>{label.name}</span>
-            {label.source && <span className="shrink-0 text-[var(--text-secondary)]">{label.source}</span>}
-            {share !== null && (
-              <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-[var(--text-secondary)]">
-                <span aria-hidden="true" className="h-1 w-12 overflow-hidden rounded-full bg-[var(--surface-chip)]">
-                  <span
-                    className="block h-full rounded-full bg-[var(--text-secondary)]"
-                    style={{ width: `${Math.max(share, 2)}%` }}
-                  />
-                </span>
-                <span className="w-8 text-right">{`${share}%`}</span>
-              </span>
-            )}
-          </span>
-        </td>
-        <td className={cn('pb-1 pr-3 pt-2.5 text-right', used && 'font-medium')}>{used ? turns : '—'}</td>
-        <td className={cn('pb-1 pr-3 pt-2.5 text-right', used && 'font-medium')}>{used ? formatShareTokens(input) : '—'}</td>
-        <td className={cn('pb-1 pr-3 pt-2.5 text-right', used && 'font-medium')}>{used ? formatShareTokens(output) : '—'}</td>
-        <td className={cn('pb-1 pt-2.5 text-right', used && 'font-medium')}>
-          {used && totals.amount ? formatShareMoney(totals.amount) : '—'}
-        </td>
-      </tr>
-      {item.models.map((model) => (
-        <tr key={`${model.kind}:${model.providerId ?? ''}:${model.model}`} className="text-[var(--text-secondary)]">
-          {/* 模型行收紧(py-1)，缩进与上一行的电脑名对齐：图标 14 + gap-2。 */}
-          <td className="py-1 pl-[22px] pr-3">{formatModelShort(model.model)}</td>
-          <td className="py-1 pr-3 text-right">{model.turns}</td>
-          <td className="py-1 pr-3 text-right">{formatShareTokens(model.inputTokens)}</td>
-          <td className="py-1 pr-3 text-right">{formatShareTokens(model.outputTokens)}</td>
-          <td className="py-1 text-right">{model.amount ? formatShareMoney(model.amount) : '—'}</td>
-        </tr>
-      ))}
-    </tbody>
+    <>
+      <ShareStrip items={items.map((item) => ({ key: item.party.key, tokens: item.totals.tokens, color: item.color }))} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px] border-collapse">
+          <thead>
+            <tr>
+              <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>{t('providerGroup.usage.byParty.col.party')}</th>
+              <th className={TH_CLASS}>{t('usageHistory.byAgent.col.totalInRange', { range: rangeLabel })}</th>
+              <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
+              {showToday && <th className={TH_CLASS}>{t('usageHistory.byAgent.col.today')}</th>}
+              <th className={TH_CLASS}>{t('providerShare.manage.members.table.amount')}</th>
+              {showComputers && <th className={TH_CLASS}>{t('providerGroup.usage.byParty.col.computers')}</th>}
+              {actionColumn && <th className={cn(TH_CLASS, 'w-10')} aria-label={t('providerGroup.usage.byParty.col.actions')} />}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(({ party, totals, today, computers, color }) => {
+              const { member } = party;
+              const paused = member?.status === 'paused';
+              const used = totals.tokens > 0;
+              const isSelected = selected === party.key;
+              const hasReshares = (member?.reshares ?? []).some((reshare) => reshare.state !== 'pending');
+              const lastUsed = party.lastUsedAt
+                ? t('providerShare.manage.members.lastUsed', { time: time.relative(party.lastUsedAt) })
+                : t('providerShare.manage.members.neverUsed');
+              const toggleLabel = isSelected
+                ? t('providerGroup.usage.focus.clear')
+                : t('providerGroup.usage.focus.only', { name: party.name });
+              const tdClass = cn(TD_CLASS, hasReshares && 'border-b-0');
+              return (
+                <Fragment key={party.key}>
+                  <tr
+                    data-testid="provider-usage-row"
+                    data-usage-party={party.key}
+                    data-selected={isSelected || undefined}
+                    className={cn(ROW_CLASS, isSelected && 'bg-[var(--surface-chip)]')}
+                    onClick={() => onToggle(party.key)}
+                  >
+                    <td className={cn(tdClass, FIRST_COL_CLASS, 'text-left')}>
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Swatch color={color} />
+                        {party.person ? (
+                          <ShareAvatar
+                            displayName={party.person.displayName}
+                            avatarUrl={party.person.avatarUrl}
+                            size="sm"
+                            className={cn(paused && 'opacity-70')}
+                          />
+                        ) : (
+                          <span
+                            aria-hidden="true"
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]"
+                          >
+                            <Monitor size={14} />
+                          </span>
+                        )}
+                        <div className={cn('flex min-w-0 flex-col gap-0.5', paused && 'opacity-70')}>
+                          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                            <Tip text={toggleLabel}>
+                              <button
+                                type="button"
+                                aria-pressed={isSelected}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onToggle(party.key);
+                                }}
+                                className={NAME_BUTTON_CLASS}
+                              >
+                                {party.name}
+                              </button>
+                            </Tip>
+                            <span className="text-12 text-[var(--text-secondary)]">{party.tag}</span>
+                            {member && <ShareMemberStatus member={member} />}
+                          </div>
+                          {member?.note && (
+                            <span className="truncate text-12 leading-[1.5] text-[var(--text-secondary)]" title={member.displayName}>
+                              {t('providerShare.manage.memberNote.username', { name: member.displayName })}
+                            </span>
+                          )}
+                          <span className="truncate text-12 text-[var(--text-secondary)]">
+                            {member
+                              ? `${t('providerShare.manage.members.joined', { date: time.date(Date.parse(member.joinedAt)) })} · ${lastUsed}`
+                              : lastUsed}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className={cn(tdClass, used && 'text-[var(--text-primary)]')}>{used ? formatShareTokens(totals.tokens) : NONE}</td>
+                    {used && total > 0 ? <ShareCell share={totals.tokens / total} color={color} /> : <td className={tdClass}>{NONE}</td>}
+                    {showToday && (
+                      <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
+                    )}
+                    <td className={cn(tdClass, used && 'text-[var(--text-primary)]')}>
+                      {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                    </td>
+                    {showComputers && (
+                      <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{computers > 0 ? computers : NONE}</td>
+                    )}
+                    {actionColumn && (
+                      // 行尾菜单的点击(含 portal 里的菜单项)不当成「只看这个人」。
+                      <td className={cn(tdClass, 'w-10 pl-1')} onClick={(event) => event.stopPropagation()}>
+                        {member && memberActions && (
+                          <ShareMemberMenu
+                            member={member}
+                            disabled={memberActions.busy(member.memberId)}
+                            onTogglePause={() => memberActions.onTogglePause(member)}
+                            onRemove={() => memberActions.onRemove(member)}
+                            onEditNote={(trigger) => memberActions.onEditNote(member, trigger)}
+                            onModelAccess={memberActions.onModelAccess ? (trigger) => memberActions.onModelAccess!(member, trigger) : undefined}
+                          />
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                  {member && memberActions && hasReshares && (
+                    <tr data-usage-party-extra={party.key}>
+                      {/* 与昵称一列左对齐：色块 8 + gap 10 + 头像 28 + gap 10 = 56px。 */}
+                      <td colSpan={columns} className="border-b border-[var(--border-default)] pb-3 pl-14 pr-3">
+                        <ShareMemberReshares member={member} actions={memberActions} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/** 按电脑：只列当前组内电脑；移出组的历史用量合进「更早的记录」，不丢合计。 */
+function ComputerTable({
+  groupKeys,
+  rows,
+  filter,
+  rangeLabel,
+  showToday,
+  labelOf,
+  colorOf,
+  selected,
+  onToggle,
+}: {
+  /** 现在还在组里的电脑：这段时间没用过也列出。 */
+  groupKeys: readonly string[];
+  rows: readonly ProviderUsageRow[];
+  filter: ProviderUsageFilter;
+  rangeLabel: string;
+  showToday: boolean;
+  labelOf: (key: string | null) => ComputerLabel;
+  colorOf: (key: string | null) => string;
+  selected: string;
+  onToggle: (key: string) => void;
+}) {
+  const { t } = useTranslation();
+  const keyOf = (row: ProviderUsageRow) => row.computer !== null && groupKeys.includes(row.computer) ? row.computer : null;
+  const byComputer = groupUsageRows(filterUsageRows(rows, filter, { computer: true }), keyOf);
+  const todayByComputer = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { computer: true }), keyOf);
+  const computers = [...groupKeys, ...(byComputer.has(null) ? [null] : [])];
+  const items = computers
+    .map((key) => {
+      const list = byComputer.get(key) ?? [];
+      return {
+        key,
+        totals: summarizeUsageRows(list),
+        today: summarizeUsageRows(todayByComputer.get(key) ?? []).tokens,
+        parties: new Set(list.filter((row) => row.inputTokens + row.outputTokens > 0).map((row) => row.party)).size,
+        color: colorOf(key),
+      };
+    })
+    // 组里的电脑都列；更早的记录只在这段时间用过时列。
+    .filter((item) => item.totals.tokens > 0 || (item.key !== null && groupKeys.includes(item.key)));
+  const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
+  return (
+    <>
+      <ShareStrip items={items.map((item) => ({ key: item.key ?? UNATTRIBUTED, tokens: item.totals.tokens, color: item.color }))} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] border-collapse">
+          <thead>
+            <tr>
+              <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>{t('providerGroup.usage.byComputer.col.computer')}</th>
+              <th className={TH_CLASS}>{t('usageHistory.byAgent.col.totalInRange', { range: rangeLabel })}</th>
+              <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
+              {showToday && <th className={TH_CLASS}>{t('usageHistory.byAgent.col.today')}</th>}
+              <th className={TH_CLASS}>{t('providerShare.manage.members.table.amount')}</th>
+              <th className={TH_CLASS}>{t('providerGroup.usage.byComputer.col.parties')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(({ key, totals, today, parties, color }) => {
+              const label = labelOf(key);
+              const used = totals.tokens > 0;
+              const isSelected = key !== null && selected === key;
+              const Icon = key === null ? History : Monitor;
+              return (
+                <tr
+                  key={key ?? UNATTRIBUTED}
+                  data-testid="provider-usage-computer"
+                  data-computer-key={key ?? ''}
+                  data-selected={isSelected || undefined}
+                  className={cn(
+                    key !== null && ROW_CLASS,
+                    isSelected && 'bg-[var(--surface-chip)]',
+                    !used && 'text-[var(--text-tertiary)]',
+                  )}
+                  onClick={key === null ? undefined : () => onToggle(key)}
+                >
+                  <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Swatch color={color} />
+                      <Icon size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+                      {key === null ? (
+                        <span className="truncate">{label.name}</span>
+                      ) : (
+                        <Tip text={isSelected ? t('providerGroup.usage.focus.clear') : t('providerGroup.usage.focus.only', { name: label.name })}>
+                          <button
+                            type="button"
+                            aria-pressed={isSelected}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onToggle(key);
+                            }}
+                            className={cn(NAME_BUTTON_CLASS, !used && 'font-normal text-[var(--text-tertiary)]')}
+                          >
+                            {label.name}
+                          </button>
+                        </Tip>
+                      )}
+                      {label.source && <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label.source}</span>}
+                    </span>
+                  </td>
+                  <td className={cn(TD_CLASS, used && 'text-[var(--text-primary)]')}>{used ? formatShareTokens(totals.tokens) : NONE}</td>
+                  {used && total > 0 ? <ShareCell share={totals.tokens / total} color={color} /> : <td className={TD_CLASS}>{NONE}</td>}
+                  {showToday && (
+                    <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
+                  )}
+                  <td className={cn(TD_CLASS, used && 'text-[var(--text-primary)]')}>
+                    {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{used ? parties : NONE}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/** 按模型：与设置 → 用量的按模型表同一套列，另加估算金额。 */
+function ModelTable({
+  rows,
+  order,
+  colorOf,
+  rangeLabel,
+}: {
+  rows: readonly ProviderUsageRow[];
+  order: readonly string[];
+  colorOf: (key: string) => string;
+  rangeLabel: string;
+}) {
+  const { t } = useTranslation();
+  const items = [...groupUsageRows(rows, modelKeyOf).entries()]
+    .map(([key, list]) => ({ key, kind: list[0]!.kind, model: list[0]!.model, totals: summarizeUsageRows(list) }))
+    .filter((item) => item.totals.tokens > 0 || item.totals.turns > 0)
+    .sort((a, b) => b.totals.tokens - a.totals.tokens || order.indexOf(a.key) - order.indexOf(b.key));
+  const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
+  if (items.length === 0) {
+    return <p className="py-5 text-center text-13 text-[var(--text-tertiary)]">{t('providerGroup.usage.emptyRange')}</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[720px] border-collapse">
+        <thead>
+          <tr>
+            <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>{t('usageHistory.byModel.col.model')}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.totalInRange', { range: rangeLabel })}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.share')}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.input')}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.output')}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.cacheRead')}</th>
+            <th className={TH_CLASS}>{t('usageHistory.byModel.col.cacheCreate')}</th>
+            <th className={TH_CLASS} title={t('usageHistory.cacheHitTooltip')}>{t('usageHistory.byModel.col.hitRate')}</th>
+            <th className={TH_CLASS}>{t('providerShare.manage.members.table.amount')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(({ key, kind, model, totals }) => {
+            const color = colorOf(key);
+            return (
+              <tr key={key} data-testid="provider-usage-model">
+                <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Swatch color={color} />
+                    <span className="truncate font-medium" title={model}>{formatModelShort(model)}</span>
+                    <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                      {kind}
+                    </span>
+                  </span>
+                </td>
+                <td className={TD_CLASS}>{formatShareTokens(totals.tokens)}</td>
+                <ShareCell share={total > 0 ? totals.tokens / total : 0} color={color} />
+                <td className={TD_CLASS}>{formatShareTokens(totals.inputTokens)}</td>
+                <td className={TD_CLASS}>{formatShareTokens(totals.outputTokens)}</td>
+                <td className={TD_CLASS}>{formatShareTokens(totals.cacheReadTokens)}</td>
+                <td className={TD_CLASS}>{formatShareTokens(totals.cacheCreateTokens)}</td>
+                <td className={TD_CLASS}>{totals.cacheHitRate === null ? NONE : formatUsagePercent(totals.cacheHitRate)}</td>
+                <td className={TD_CLASS}>{totals.amount ? formatShareMoney(totals.amount) : NONE}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -132,13 +132,17 @@ export function attachMenuHighlight(
     };
   };
 
+  // Client rects include the open animation's scale (on the panel or an ancestor), and the
+  // layer inside the panel is scaled again, so measurements are converted back to layout px.
   const place = (el: HTMLElement) => {
     const p = panel.getBoundingClientRect();
     const r = visibleBox(el);
-    layer.style.width = `${r.width}px`;
-    layer.style.height = `${r.height}px`;
-    layer.style.transform = `translate(${r.left - p.left - panel.clientLeft + panel.scrollLeft}px, ${
-      r.top - p.top - panel.clientTop + panel.scrollTop
+    const sx = panel.offsetWidth > 0 && p.width > 0 ? p.width / panel.offsetWidth : 1;
+    const sy = panel.offsetHeight > 0 && p.height > 0 ? p.height / panel.offsetHeight : 1;
+    layer.style.width = `${r.width / sx}px`;
+    layer.style.height = `${r.height / sy}px`;
+    layer.style.transform = `translate(${(r.left - p.left) / sx - panel.clientLeft + panel.scrollLeft}px, ${
+      (r.top - p.top) / sy - panel.clientTop + panel.scrollTop
     }px)`;
   };
 

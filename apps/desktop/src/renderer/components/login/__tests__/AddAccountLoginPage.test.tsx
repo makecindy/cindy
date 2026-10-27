@@ -35,9 +35,6 @@ vi.mock('@/lib/secondaryWindow', () => ({
 vi.mock('@/lib/sidebarWindow', () => ({
   isSidebarWindow: () => false,
 }));
-vi.mock('@/lib/ghostPanelWindow', () => ({
-  isGhostPanelWindow: () => false,
-}));
 
 vi.mock('../LoginPage', () => ({
   LoginPage: ({ onClose }: { onClose?: () => void }) => (

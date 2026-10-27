@@ -1,8 +1,8 @@
 /**
  * xtermPool —— per-tab xterm.js Terminal 实例池。
  *
- * 设计动机：RSB 切换顶层 tab 时,非 active 的 TabBody 被 React 卸载(unmount),
- * 但 PTY 在 main 进程仍然存活。如果每次切回来都重建 xterm Terminal,scrollback
+ * 普通 tab 切换保留挂载并隐藏,任务切换等路径仍可能卸载 TabBody,
+ * 但 PTY 在 main 进程仍然存活。如果每次重新挂载都重建 xterm Terminal,scrollback
  * (用户看过的输出历史)就丢了。pool 把 Terminal 实例跟 tabId 绑定,跨 mount/unmount
  * 复用,只在 plugin.onBeforeClose 真正关 tab 时才 dispose。
  *
@@ -25,6 +25,10 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
 import { createLogger } from '@/lib/logger';
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_TERMINAL_FONT_FAMILY,
+} from '@/../shared/appearanceSettings';
 
 const log = createLogger('terminal');
 
@@ -47,8 +51,8 @@ const pool = new Map<string, XtermEntry>();
 
 const DEFAULT_OPTIONS: ITerminalOptions = {
   // Codex 同款字号 / 字体;cursorBlink 跟 iTerm 默认行为对齐。
-  fontFamily: '"SF Mono", Menlo, Monaco, "Cascadia Code", "Courier New", monospace',
-  fontSize: 13,
+  fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+  fontSize: DEFAULT_APPEARANCE_SETTINGS.terminalSize,
   lineHeight: 1.2,
   cursorBlink: true,
   cursorStyle: 'block',
@@ -121,6 +125,15 @@ export function openTerminalExternalLink(_event: MouseEvent, uri: string): void 
  */
 export function markAllPtyDetached(): void {
   for (const entry of pool.values()) entry.ptyAttached = false;
+}
+
+/**
+ * 单个页签在「侧边栏 ↔ 单页签独立窗口」间迁移时调用(弹出前 / 交回后各一次):
+ * 只复位这一个 entry 的 ptyAttached,其余终端页签不受影响。语义同 markAllPtyDetached。
+ */
+export function markPtyDetached(tabId: string): void {
+  const entry = pool.get(tabId);
+  if (entry) entry.ptyAttached = false;
 }
 
 /** 仅供 plugin.onBeforeClose 调用：真正销毁实例 + 释放 GPU/DOM 资源。 */

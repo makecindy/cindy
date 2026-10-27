@@ -61,6 +61,22 @@ function deferredWrite() {
 }
 
 describe('GhostCardService relocation', () => {
+  it('lets an active tool refresh its earlier task card, rejecting other owners/tasks and settled sources', () => {
+    const { svc, advance, broadcast } = makeService();
+    const target = { ghostId: 'mail', sessionId: 's' };
+    svc.registerCall('old', { ...target, toolUseId: null });
+    svc.handleCardUpdate('mail', update('old'));
+    svc.finalizeCall('old');
+    advance(300_000);
+    svc.registerCall('tool', { ...target, toolUseId: null });
+    expect(svc.reopenForTool('other', 'old', 'tool', target)).toBe(false);
+    expect(svc.reopenForTool('mail', 'old', 'tool', { ...target, sessionId: 'other' })).toBe(false);
+    expect(svc.reopenForTool('mail', 'old', 'tool', target)).toBe(true);
+    expect(svc.handleCardUpdate('mail', update('old', 'Sent')).accepted).toBe(true);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    svc.finalizeCall('tool');
+    expect(svc.reopenForTool('mail', 'old', 'tool', target)).toBe(false);
+  });
   it('drains every accepted source write even after its call was swept, without waiting for other plugins', async () => {
     const pending = [deferredWrite(), deferredWrite(), deferredWrite()];
     const persist = vi.fn()
@@ -151,6 +167,7 @@ describe('GhostCardService', () => {
     expect(svc.hasCard('c1')).toBe(true);
     expect(broadcast).toHaveBeenCalledWith({
       callId: 'c1',
+      sessionId: 's1',
       ghostId: 'g1',
       toolUseId: 'tu1',
       html: 'S:<p>a</p>',
@@ -248,6 +265,16 @@ describe('GhostCardService', () => {
     expect(svc.handleCardUpdate('g1', update('c1')).reason).toBe('too-late');
     svc.reopenForAction('c1', { ghostId: 'g1', sessionId: 's1' }); // dispatcher 在 card-action 时调
     expect(svc.handleCardUpdate('g1', update('c1')).accepted).toBe(true);
+  });
+
+  it('accepts an immediate result after a new user action while retaining per-action rate limits', () => {
+    const { svc, advance } = makeService();
+    svc.registerCall('c1', { ghostId: 'g1', toolUseId: null, sessionId: 's1' });
+    expect(svc.handleCardUpdate('g1', update('c1')).accepted).toBe(true);
+    advance(50);
+    svc.reopenForAction('c1', { ghostId: 'g1', sessionId: 's1' });
+    expect(svc.handleCardUpdate('g1', update('c1', '<p>Saved</p>')).accepted).toBe(true);
+    expect(svc.handleCardUpdate('g1', update('c1')).reason).toBe('rate-limited');
   });
 
   it('reopenForAction 重建被清扫条目:用持久归属续会话,落该 sessionId', async () => {

@@ -9,10 +9,10 @@
  *      已知边界:网页(webview)/独立进程区域宿主收不到按压事件,长按在那里
  *      天然无效(平台机制)——标准头手势是这类面板的主入口。
  *
- * 交互语义(drop-zone 式):**拖动过程不改树**。插件拖到另一个插件的上/下边缘
- * 形成纵向 grid，拖到任一根级区域的左/右边缘回到横排，中心保持交换；内置
- * chat/right-tabs 只参加根级交换，不进入插件 column。高亮罩严格显示最终占位的
- * 半区或整块区域，松手才一次性 layout.set 持久化；Esc / 无高亮松手 = 取消。
+ * 交互语义(drop-zone 式):**拖动过程不改树**。拖到另一块根级区域身上 = 两块
+ * 根级区域换位(聊天区所在的列整体跟着走,上下页签组随聊天区移动);高亮罩显示
+ * 最终占位的整块区域,松手才一次性 layout.set 持久化;Esc / 无高亮松手 = 取消。
+ * 边组(`tab-group:*`)不作为拖拽源:它们的位置由组名决定,搬的是页签不是面板。
  *
  * 性能口径(按 Lizi "卡手"反馈定型):pointermove 热路径**零 React 渲染、零
  * 布局读取**——边界几何在起拖时量一次缓存(拖动期间不换位,界面静止,没有
@@ -31,13 +31,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-import {
-  moveGhostPaneToRootByKind,
-  stackGhostPaneByKind,
-  swapPanesByKind,
-  swapRootSplitChildrenByKind,
-  type LayoutNode,
-} from '../../shared/layoutTree';
+import { swapRootSplitChildrenByKind, type LayoutNode } from '../../shared/layoutTree';
 import { toast } from '@/lib/toast';
 
 /** 长按窗体:按住该时长(ms)且位移小于容差才"浮起"。 */
@@ -127,72 +121,30 @@ interface ZoneRect {
   height: number;
 }
 
-export type PanelDropIntent =
-  'swap' | 'stack-before' | 'stack-after' | 'root-before' | 'root-after';
+export type PanelDropIntent = 'swap';
 
 interface RectLike extends ZoneRect {
   right: number;
   bottom: number;
 }
 
-const GRID_EDGE_RATIO = 0.28;
-
 function pointInRect(x: number, y: number, rect: RectLike): boolean {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
 /**
- * 二维停靠意图：插件之间上/下形成 grid，左/右回到根横排，中心交换槽位。
- * 内置面板保持根级交换；落在插件纵向列时交换整列，不把内置面板塞进列内。
+ * 落点意图:指针落在另一块根级区域里 → 两块根级区域换位。同一根级区域(例如
+ * 聊天列里的上下页签组)之间没有新的布局含义,返回 null。
  */
 export function computePanelDropIntent(input: {
   pointerX: number;
   pointerY: number;
   paneRect: RectLike;
-  rootRect: RectLike;
-  sourceKind: string;
-  targetKind: string;
   sourceRootIndex: number;
   targetRootIndex: number;
-  sourceIsRootPane: boolean;
-  targetIsRootPane: boolean;
 }): PanelDropIntent | null {
-  const { pointerX, pointerY, paneRect, sourceKind, targetKind } = input;
-  if (!pointInRect(pointerX, pointerY, paneRect)) return null;
-  const sourceGhost = sourceKind.startsWith('ghost:');
-  const targetGhost = targetKind.startsWith('ghost:');
-  if (!sourceGhost) {
-    return input.sourceIsRootPane && input.sourceRootIndex !== input.targetRootIndex
-      ? 'swap'
-      : null;
-  }
-
-  const nx = paneRect.width > 0 ? (pointerX - paneRect.left) / paneRect.width : 0.5;
-  const ny = paneRect.height > 0 ? (pointerY - paneRect.top) / paneRect.height : 0.5;
-  const edgeCandidates: Array<{ distance: number; intent: PanelDropIntent }> = [
-    { distance: nx, intent: 'root-before' },
-    { distance: 1 - nx, intent: 'root-after' },
-  ];
-  if (targetGhost) {
-    edgeCandidates.push(
-      { distance: ny, intent: 'stack-before' },
-      { distance: 1 - ny, intent: 'stack-after' },
-    );
-  }
-  const nearest = edgeCandidates.sort((a, b) => a.distance - b.distance)[0];
-  if (nearest && nearest.distance <= GRID_EDGE_RATIO) return nearest.intent;
-
-  // 嵌套插件只能和插件交换，避免把 chat/right-tabs 换进 ghost-only 的 column。
-  if (
-    targetGhost ||
-    (input.sourceIsRootPane &&
-      input.targetIsRootPane &&
-      input.sourceRootIndex !== input.targetRootIndex)
-  ) {
-    return 'swap';
-  }
-  // 同一 root 区域的中心没有新的布局含义。
-  return null;
+  if (!pointInRect(input.pointerX, input.pointerY, input.paneRect)) return null;
+  return input.sourceRootIndex !== input.targetRootIndex ? 'swap' : null;
 }
 
 function insetRect(rect: RectLike): RectLike {
@@ -203,29 +155,10 @@ function insetRect(rect: RectLike): RectLike {
   return { left, top, width, height, right: left + width, bottom: top + height };
 }
 
-export function computePanelDropZone(
-  intent: PanelDropIntent,
-  paneRect: RectLike,
-  rootRect: RectLike,
-  swapAtRoot = false,
-): ZoneRect {
-  const base = insetRect(
-    intent === 'root-before' || intent === 'root-after' || (intent === 'swap' && swapAtRoot)
-      ? rootRect
-      : paneRect,
-  );
-  switch (intent) {
-    case 'stack-before':
-      return { ...base, height: base.height / 2 };
-    case 'stack-after':
-      return { ...base, top: base.top + base.height / 2, height: base.height / 2 };
-    case 'root-before':
-      return { ...base, width: base.width / 2 };
-    case 'root-after':
-      return { ...base, left: base.left + base.width / 2, width: base.width / 2 };
-    case 'swap':
-      return base;
-  }
+/** 高亮整块根级区域(聊天列时是整列,而不是列里的单个 pane)。 */
+export function computePanelDropZone(rootRect: RectLike): ZoneRect {
+  const base = insetRect(rootRect);
+  return { left: base.left, top: base.top, width: base.width, height: base.height };
 }
 
 /** 单个可落靶面板：pane 与其根级区域几何均在起拖时缓存。 */
@@ -234,7 +167,6 @@ interface DropTarget {
   paneRect: RectLike;
   rootRect: RectLike;
   rootIndex: number;
-  isRootPane: boolean;
 }
 
 /** 起拖时一次性缓存的几何:全部可落靶面板(N 面板,拖到谁身上就和谁换位)。 */
@@ -278,7 +210,6 @@ export function PanelDragController({
       // 拖动期间树不变，热路径无需再次读取布局。
       const targets: DropTarget[] = [];
       let sourceRootIndex = -1;
-      let sourceIsRootPane = false;
       try {
         const layout = window.electronAPI.layout.getStateSync().layout;
         if (layout.content.type !== 'split' || layout.content.direction !== 'row') return;
@@ -290,7 +221,6 @@ export function PanelDragController({
           paneKinds(child.node).includes(sourceKind),
         );
         if (sourceRootIndex < 0) return;
-        sourceIsRootPane = layout.content.children[sourceRootIndex].node.type === 'pane';
 
         layout.content.children.forEach((rootChild, rootIndex) => {
           const kinds = paneKinds(rootChild.node);
@@ -310,6 +240,8 @@ export function PanelDragController({
           };
           kinds.forEach((kind) => {
             if (kind === sourceKind) return;
+            // 边组不参与换位(位置由组名决定),既不做源也不做落点。
+            if (kind.startsWith('tab-group:')) return;
             const el = document.querySelector(`[data-panel-drag-root="${kind}"]`);
             if (!el) return; // 未注册(隐藏)的 kind 没有 DOM,自然不可落靶
             const rect = el.getBoundingClientRect();
@@ -328,7 +260,6 @@ export function PanelDragController({
               },
               rootRect,
               rootIndex,
-              isRootPane: rootChild.node.type === 'pane',
             });
           });
         });
@@ -369,13 +300,8 @@ export function PanelDragController({
             pointerX: e.clientX,
             pointerY: e.clientY,
             paneRect: target.paneRect,
-            rootRect: target.rootRect,
-            sourceKind,
-            targetKind: target.kind,
             sourceRootIndex,
             targetRootIndex: target.rootIndex,
-            sourceIsRootPane,
-            targetIsRootPane: target.isRootPane,
           });
           if (!intent) continue;
           nextTarget = target;
@@ -388,15 +314,7 @@ export function PanelDragController({
           targetIntentNow = nextIntent;
           setDrag({
             targetKind: nextKind,
-            zone:
-              nextTarget && nextIntent
-                ? computePanelDropZone(
-                    nextIntent,
-                    nextTarget.paneRect,
-                    nextTarget.rootRect,
-                    nextIntent === 'swap' && !sourceKind.startsWith('ghost:'),
-                  )
-                : null,
+            zone: nextTarget && nextIntent ? computePanelDropZone(nextTarget.rootRect) : null,
           });
         }
       };
@@ -417,24 +335,7 @@ export function PanelDragController({
         if (opts.commit && targetKindNow && targetIntentNow) {
           try {
             const layout = window.electronAPI.layout.getStateSync().layout;
-            const op =
-              targetIntentNow === 'stack-before' || targetIntentNow === 'stack-after'
-                ? stackGhostPaneByKind(
-                    layout,
-                    sourceKind,
-                    targetKindNow,
-                    targetIntentNow === 'stack-before' ? 'before' : 'after',
-                  )
-                : targetIntentNow === 'root-before' || targetIntentNow === 'root-after'
-                  ? moveGhostPaneToRootByKind(
-                      layout,
-                      sourceKind,
-                      targetKindNow,
-                      targetIntentNow === 'root-before' ? 'before' : 'after',
-                    )
-                  : sourceKind.startsWith('ghost:')
-                    ? swapPanesByKind(layout, sourceKind, targetKindNow)
-                    : swapRootSplitChildrenByKind(layout, sourceKind, targetKindNow);
+            const op = swapRootSplitChildrenByKind(layout, sourceKind, targetKindNow);
             if (op.applied) {
               void window.electronAPI.layout
                 .set(op.layout)
@@ -490,6 +391,8 @@ export function PanelDragController({
       // 标记值即面板身份(chat-main / right-tabs),两块都可拖、都往对面半区落。
       const sourceKind = root.getAttribute('data-panel-drag-root');
       if (!sourceKind) return;
+      // 边组的位置由组名决定(左 / 上 / 下),不作为换位拖拽源;搬页签走页签拖拽。
+      if (sourceKind.startsWith('tab-group:')) return;
       if (target.closest('[data-rsb-resize-handle]')) return; // 拖宽把手让路
 
       const startX = e.clientX;

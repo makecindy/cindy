@@ -11,7 +11,7 @@ import type { DbClient } from '../localDb/client/DbClient.js';
 import { sessions } from '../localDb/schema.js';
 
 export type CodexThreadTransferSnapshot = Pick<typeof sessions.$inferSelect,
-  'id' | 'sdkSessionId' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'updatedAt'>;
+  'id' | 'sdkSessionId' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'workingDir'>;
 
 export function codexThreadTransferSourcePredicate(source: CodexThreadTransferSnapshot) {
   return and(
@@ -21,7 +21,10 @@ export function codexThreadTransferSourcePredicate(source: CodexThreadTransferSn
     source.model === null ? isNull(sessions.model) : eq(sessions.model, source.model),
     source.providerId === null ? isNull(sessions.providerId) : eq(sessions.providerId, source.providerId),
     eq(sessions.effort, source.effort), eq(sessions.fastMode, source.fastMode),
-    eq(sessions.updatedAt, source.updatedAt),
+    // List activity, message persistence and title edits also advance updatedAt.
+    // They do not replace the writer. Fence the native source and its route/cwd;
+    // the caller retains the session selection lock and owner/revision guards.
+    source.workingDir === null ? isNull(sessions.workingDir) : eq(sessions.workingDir, source.workingDir),
   );
 }
 
@@ -40,7 +43,7 @@ export interface CodexProviderThreadRoute {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface CodexProviderThreadRelinkSource extends CodexProviderThreadRoute {

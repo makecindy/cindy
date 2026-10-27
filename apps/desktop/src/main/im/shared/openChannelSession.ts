@@ -22,13 +22,14 @@ import { openSession, type SessionOpenBody } from '../../localDb/sessionOpening'
 
 /** 渠道为新任务选定的路由(准入前)。 */
 export interface ChannelSessionRoute {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   providerId: string | null;
   /** 缺席 = 渠道没有显式指定(准入后的默认值不回写给调用方, 保持渠道原有省略语义)。 */
   effort?: Effort;
   /** 缺席同上。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode: PermissionMode;
   workingDir: string;
   workspaceKind?: 'project' | 'dialogue';
@@ -40,7 +41,7 @@ export interface AdmittedChannelRoute {
   model: string;
   providerId: string | null;
   effort?: Effort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /**
@@ -68,6 +69,7 @@ export async function openChannelSession<T>(
     agentKind: normalizeDbAgentKind(route.agentKind) as SessionOpenBody['agentKind'],
     model: route.model,
     providerId: route.providerId,
+    ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
     ...(route.effort !== undefined ? { effort: route.effort } : {}),
     ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
     permissionMode: route.permissionMode,

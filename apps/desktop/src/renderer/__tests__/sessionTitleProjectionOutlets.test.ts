@@ -122,6 +122,9 @@ describe('desktop 会话标题投影出口', () => {
     // /review Reviewer tasks are checked first: they never notify on their own.
     expect(sidebarUpper).toContain('if (await isReviewSessionNotificationTarget(sessionId)) return;');
     expect(sidebarUpper).toContain('const botTitle = await botOwnedSessionNotificationTitle(sessionId);');
+    // The task sidebar is the only notification owner, also on /bots routes: group
+    // lanes never notify (docs/product-rules/bot-group-chat.md §3).
+    expect(sidebarUpper).toContain('if (botTitle === BOT_GROUP_LANE_SESSION) return;');
     expect(sidebarUpper).toContain(
       'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);',
     );

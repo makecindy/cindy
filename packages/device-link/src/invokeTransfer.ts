@@ -1,4 +1,5 @@
 import type { InvokePayload, InvokeResultPayload } from './protocol.js';
+import { byteLength } from './transport.js';
 
 /**
  * invoke 结果的传输编码（弱网减流量），与业务 channel 无关：
@@ -91,7 +92,9 @@ export function encodeInvokeResultTransfer(
   }
   if (options.gzip && codec.gzipBase64) {
     const gzipBase64 = codec.gzipBase64(text);
-    if (gzipBase64.length < text.length * 0.9) {
+    // Base64 is ASCII, whereas Chinese/emoji JSON takes multiple UTF-8 bytes
+    // per character. Compare transmitted bytes, not JS string lengths.
+    if (gzipBase64.length < byteLength(text) * 0.9) {
       return { ok: true, result: null, transfer: { ...(tag ? { tag } : {}), gzipBase64 } };
     }
   }

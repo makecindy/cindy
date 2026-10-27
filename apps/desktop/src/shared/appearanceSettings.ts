@@ -12,6 +12,8 @@ export interface AppearanceOverrides {
   codeFamily?: string;
   uiSize?: number;
   codeSize?: number;
+  terminalFamily?: string;
+  terminalSize?: number;
   windowZoom?: number;
   wallpaperId?: WallpaperId;
   wallpaperOverlay?: number;
@@ -24,11 +26,24 @@ export interface AppearanceOverrides {
 
 export type WallpaperMotion = 'static' | 'dynamic';
 
+export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
+  'appearance-settings:wallpaper-download-progress';
+
+/** Local Desktop transfer telemetry; never persisted or sent through device-link. */
+export interface WallpaperDownloadProgress {
+  wallpaperId: WallpaperId;
+  kind: 'image' | 'video';
+  loaded: number;
+  total: number;
+}
+
 export interface AppearanceSettings {
   uiFamily: string;
   codeFamily: string;
   uiSize: number;
   codeSize: number;
+  terminalFamily: string;
+  terminalSize: number;
   windowZoom: number;
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
@@ -40,11 +55,17 @@ export interface AppearanceSettings {
   customWallpaperUrl?: string;
 }
 
+/** Keep the terminal's existing platform fallbacks independent of code fonts. */
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  '"SF Mono", Menlo, Monaco, "Cascadia Code", "Courier New", monospace';
+
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   uiFamily: '',
   codeFamily: '',
   uiSize: DEFAULT_FONT_SIZES.uiSize,
   codeSize: DEFAULT_FONT_SIZES.codeSize,
+  terminalFamily: '',
+  terminalSize: 13,
   windowZoom: 1,
   wallpaperId: 'none',
   wallpaperOverlay: 0.2,
@@ -55,19 +76,35 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
 export const APPEARANCE_LIMITS = {
   uiSize: { min: 12, max: 24 },
   codeSize: { min: 10, max: 24 },
+  terminalSize: { min: 10, max: 24 },
   windowZoom: { min: 0.5, max: 3, step: 0.1 },
   wallpaperOverlay: { min: 0, max: 1, step: 0.05 },
   wallpaperVisibility: { min: 0, max: 1, step: 0.01 },
   wallpaperBlur: { min: 0, max: 20, step: 1 },
 } as const;
 
-export const WALLPAPER_IDS = [
+/** Current picker order; saved selections also accept the hidden compatibility IDs below. */
+export const SELECTABLE_WALLPAPER_IDS = [
   'none',
-  'cindy-window',
-  'cindy-studio',
-  'cindy-dream',
+  'cindy-whisper',
+  'cindy-night-glance',
+  'cindy-scarlet-stroll',
+  'cindy-neon',
+  'cindy-prism',
+  'night-launch',
+  'silent-orbits',
+  'dune-dawn',
+  'planet-dawn',
+  'indigo-folds',
+  'dune-sphere',
+  'ocean-clouds',
+  'rose-quartz',
   'custom',
 ] as const;
+
+/** Removed from the picker; saved selections keep working until the user switches away. */
+export const RETIRED_WALLPAPER_IDS = ['cindy-window', 'cindy-studio', 'cindy-dream'] as const;
+export const WALLPAPER_IDS = [...SELECTABLE_WALLPAPER_IDS, ...RETIRED_WALLPAPER_IDS] as const;
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
 
 export function normalizeCustomWallpaperUrl(value: unknown): string {
@@ -150,6 +187,18 @@ export function clampAppearanceCodeSize(
   );
 }
 
+export function clampAppearanceTerminalSize(
+  value: number,
+  fallback = DEFAULT_APPEARANCE_SETTINGS.terminalSize,
+): number {
+  return clampInteger(
+    value,
+    APPEARANCE_LIMITS.terminalSize.min,
+    APPEARANCE_LIMITS.terminalSize.max,
+    fallback,
+  );
+}
+
 export function clampAppearanceWindowZoom(
   value: number,
   fallback = DEFAULT_APPEARANCE_SETTINGS.windowZoom,
@@ -171,6 +220,7 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
   return {
     uiFamily: normalizeFamily(value.uiFamily),
     codeFamily: normalizeFamily(value.codeFamily),
+    terminalFamily: normalizeFamily(value.terminalFamily),
     uiSize:
       typeof value.uiSize === 'number'
         ? clampAppearanceUiSize(value.uiSize)
@@ -179,6 +229,10 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
       typeof value.codeSize === 'number'
         ? clampAppearanceCodeSize(value.codeSize)
         : DEFAULT_APPEARANCE_SETTINGS.codeSize,
+    terminalSize:
+      typeof value.terminalSize === 'number'
+        ? clampAppearanceTerminalSize(value.terminalSize)
+        : DEFAULT_APPEARANCE_SETTINGS.terminalSize,
     windowZoom:
       typeof value.windowZoom === 'number'
         ? clampAppearanceWindowZoom(value.windowZoom)

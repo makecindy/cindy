@@ -83,6 +83,13 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => ['claude-code', 'codex', 'pi'] }));
 
+// PR #6832: these local popover interaction tests now also import remote location
+// discovery. Keep the unit fixture local; loading real account/chat state made
+// collection fail before the existing selection/refresh assertions could run.
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
+}));
+
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   getCachedCapabilities: () => null,
   useAgentCapabilities: () => ({

@@ -62,6 +62,8 @@ export interface PluginMarketInstallationRecord {
    * clients that still interpret it as a normalized digest.
    */
   rawManifestSha256?: string;
+  /** Verified delivery endpoint; absent legacy records require catalog verification before reporting. */
+  serverRoot?: string;
 }
 
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
@@ -437,18 +439,40 @@ export class PluginMarketLedger {
   }
 
   lookupInstallationsForNamespaceMigration(ghostId: string): PluginMarketNamespaceMigrationLookup {
+    return this.createNamespaceMigrationLookup()(ghostId);
+  }
+
+  /** Facts for one synchronous scan; never retain this across an await or use it for authorization. */
+  createNamespaceMigrationLookup(): (ghostId: string) => PluginMarketNamespaceMigrationLookup {
     const { main, custom, namespaced } = this.readFiles();
-    for (const file of [main, custom, namespaced]) {
-      if (file.kind === 'invalid') return { kind: 'invalid' };
-      if (!rawMentionsGhost(file, ghostId)) continue;
-      const raw = file.raw!.installations as Record<string, unknown>;
-      if (Object.entries(raw).some(([key, record]) =>
-        rawEntryMentionsGhost(key, record, ghostId) &&
-        (!validRecord(record) || (key !== record.ghostId && key !== pluginLedgerRecordKey(record))),
-      )) return { kind: 'invalid' };
+    const files = [main, custom, namespaced];
+    const invalidFile = files.some((file) => file.kind === 'invalid');
+    const invalidGhostIds = new Set<string>();
+    for (const file of files) {
+      const raw = file.raw?.installations;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      for (const [key, record] of Object.entries(raw)) {
+        if (validRecord(record) && (key === record.ghostId || key === pluginLedgerRecordKey(record))) continue;
+        invalidGhostIds.add(key);
+        const keyedGhost = parsePluginStoragePart(key)?.ghostId;
+        if (keyedGhost) invalidGhostIds.add(keyedGhost);
+        if (record && typeof record === 'object' && !Array.isArray(record) &&
+            typeof (record as { ghostId?: unknown }).ghostId === 'string') {
+          invalidGhostIds.add((record as { ghostId: string }).ghostId);
+        }
+      }
     }
-    const records = recordsForGhostId(this.mergeInstallations(main, custom, namespaced).installations, ghostId);
-    return records.length > 0 ? { kind: 'found', records } : { kind: 'absent' };
+    const byGhost = new Map<string, PluginMarketInstallationRecord[]>();
+    for (const record of Object.values(this.mergeInstallations(main, custom, namespaced).installations)) {
+      const records = byGhost.get(record.ghostId) ?? [];
+      records.push(record);
+      byGhost.set(record.ghostId, records);
+    }
+    return (ghostId) => {
+      if (invalidFile || invalidGhostIds.has(ghostId)) return { kind: 'invalid' };
+      const records = byGhost.get(ghostId) ?? [];
+      return records.length > 0 ? { kind: 'found', records } : { kind: 'absent' };
+    };
   }
 
   installationForPlugin(plugin: {
@@ -474,7 +498,12 @@ export class PluginMarketLedger {
 
   markRemovedRecordIfUnchanged(record: PluginMarketInstallationRecord, userId: string | null): boolean {
     const current = this.installationForPlugin(record);
-    if (!current || canonicalJson(current) !== canonicalJson(record)) return false;
+    if (!current) return false;
+    // A verified reporting-root backfill does not replace the captured installation.
+    // Every other provenance field (and an already pinned root) still participates in CAS.
+    const expected = record.serverRoot === undefined && current.serverRoot
+      ? { ...record, serverRoot: current.serverRoot } : record;
+    if (canonicalJson(current) !== canonicalJson(expected)) return false;
     this.markRemovedRecord(current, userId);
     return true;
   }
@@ -540,6 +569,30 @@ export class PluginMarketLedger {
     const data = this.read();
     this.putRecord(data, record);
     this.write(data);
+  }
+
+  /** The simulator keeps its server resource; replace both local route keys in one ledger write. */
+  migrateSimulatorInstallation(expected: PluginMarketInstallationRecord, next: PluginMarketInstallationRecord): boolean {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    const target = data.installations[pluginLedgerRecordKey(next)];
+    if (!current || canonicalJson(current) !== canonicalJson(expected) || !current.installed ||
+        current.ghostId !== 'baguette-simulator' || next.ghostId !== 'cindy-simulator' ||
+        current.scope !== 'public' || next.scope !== 'public' || current.namespace != null || next.namespace !== null ||
+        current.pluginId !== next.pluginId || (current.source !== 'market' && current.source !== 'legacy-adopted') ||
+        (target && target.installed)) return false;
+    this.replaceRecord(data, current, next);
+    this.write(data);
+    return true;
+  }
+
+  backfillServerRoot(expected: PluginMarketInstallationRecord, serverRoot: string): boolean {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (!current || current.serverRoot || canonicalJson(current) !== canonicalJson(expected)) return false;
+    data.installations[pluginLedgerRecordKey(current)] = { ...current, serverRoot };
+    this.write(data);
+    return true;
   }
 
   /**

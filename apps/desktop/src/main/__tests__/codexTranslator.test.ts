@@ -58,6 +58,30 @@ function feedItem(phase: 'started' | 'updated' | 'completed', item: Record<strin
   translateItemNotification(phase, itemParams(item), coll.queue, { rt, log });
 }
 
+// #6412: native image data must survive translation when savedPath belongs to another
+// computer. The prior suite did not exercise imageGeneration. unit; no IO or timers.
+describe('imageGeneration delivery', () => {
+  it.each([
+    { result: 'iVBORw0KGgo=', expected: { data: 'iVBORw0KGgo=' } },
+    { result: '/9j/4AAQSkZJRg==', expected: { data: '/9j/4AAQSkZJRg==' } },
+    { result: 'data:image/png;base64,iVBORw0KGgo=', expected: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+  ])('preserves $result independently of savedPath', ({ result, expected }) => {
+    feedItem('completed', { type: 'imageGeneration', id: 'img-1', status: 'completed', savedPath: '/other-computer/image.png', result });
+    expect(coll.events).toEqual([{ type: 'image', source: 'codex', data: {
+      kind: 'generation', blockId: 'img-1', threadId: 't1', turnId: 'turn-1',
+      path: '/other-computer/image.png', status: 'completed', ...expected,
+    } }]);
+  });
+
+  it('keeps bare Base64 without a path, and preserves legacy path-only events', () => {
+    feedItem('completed', { type: 'imageGeneration', id: 'bytes', result: '/9j/4AAQSkZJRg==' });
+    feedItem('completed', { type: 'imageGeneration', id: 'file', result: '/tmp/generated.png' });
+    expect(coll.events[0].data).toMatchObject({ data: '/9j/4AAQSkZJRg==' });
+    expect(coll.events[0].data).not.toHaveProperty('path');
+    expect(coll.events[1].data).toMatchObject({ path: '/tmp/generated.png' });
+  });
+});
+
 // ── agentMessage ────────────────────────────────────────────────────────────
 
 describe('agentMessage', () => {

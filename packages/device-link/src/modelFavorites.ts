@@ -8,7 +8,7 @@ export interface RemoteModelFavorite {
   modelId: string;
   agent: "cc" | "codex" | "pi";
   effort?: string;
-  fast?: true;
+  fast?: true | "ultrafast";
 }
 export type ModelFavoriteMutation =
   | { kind: "add"; item: Omit<RemoteModelFavorite, "uid"> }
@@ -68,7 +68,7 @@ export function parseRemoteModelFavorite(
       !["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(
         p.effort,
       )) ||
-    (p.fast !== undefined && p.fast !== true)
+    (p.fast !== undefined && p.fast !== true && p.fast !== "ultrafast")
   )
     throw new Error("Invalid model favorite");
   return {
@@ -77,7 +77,7 @@ export function parseRemoteModelFavorite(
     modelId: p.modelId,
     agent: p.agent,
     ...(p.effort !== undefined ? { effort: p.effort } : {}),
-    ...(p.fast ? { fast: true } : {}),
+    ...(p.fast ? { fast: p.fast } : {}),
   };
 }
 export function parseModelFavoriteMutation(
@@ -122,6 +122,6 @@ export function sameModelFavorite(
     a.modelId === b.modelId &&
     a.agent === b.agent &&
     a.effort === b.effort &&
-    !!a.fast === !!b.fast
+    (a.fast ?? false) === (b.fast ?? false)
   );
 }

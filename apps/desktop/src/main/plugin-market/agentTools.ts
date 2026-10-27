@@ -3,7 +3,12 @@ import type { PluginMarketService } from './service.js';
 import type { PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import { ServerApiError } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import {
+  isPluginMarketPassthroughErrorCode,
+  type PluginMarketPassthroughErrorCode,
+} from './api.js';
 
 interface InstalledState {
   exists: boolean;
@@ -55,10 +60,14 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
         ok: true,
         items: matches.slice(0, 20).map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
         has_more: matches.length > 20,
-        complete: !snapshot.unavailableReason && snapshot.unavailableCustomSourceNames.length === 0,
+        complete:
+          !snapshot.unavailableReason &&
+          !snapshot.organizationAccessError &&
+          snapshot.unavailableCustomSourceNames.length === 0,
         // Source errors can contain local paths or server responses; expose status only.
         unavailable_sources: [
           ...(snapshot.unavailableReason ? ['server'] : []),
+          ...(snapshot.organizationAccessError ? ['organization'] : []),
           ...snapshot.unavailableCustomSourceNames.map(() => 'custom'),
         ],
       };
@@ -113,6 +122,17 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             message: 'The user declined this plugin installation. Do not retry unless the user asks for it again.',
           };
         }
+        // The service raises catalog-level outages as IPC errors; detail/download
+        // failures arrive as server errors. Both carry the same fixed codes.
+        const accessCode =
+          isIpcError(error) || error instanceof ServerApiError ? error.code : null;
+        if (accessCode && isPluginMarketPassthroughErrorCode(accessCode)) {
+          return {
+            ok: false,
+            errorCode: accessCode,
+            message: agentMarketAccessMessage(accessCode),
+          };
+        }
         return {
           ok: false, errorCode: isIpcError(error) ? error.code : 'INSTALL_UNAVAILABLE',
           message: 'Installation was not confirmed. Inspect the selected plugin before retrying; do not claim an account connection or completed work.',
@@ -120,4 +140,16 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
       } finally { release?.(); }
     },
   };
+}
+
+function agentMarketAccessMessage(code: PluginMarketPassthroughErrorCode): string {
+  switch (code) {
+    case 'PLUGIN_NAMESPACE_CLIENT_REQUIRED':
+      return 'The user must update Cindy before this organization plugin can be installed. Do not retry.';
+    case 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE':
+    case 'PLUGIN_LIST_CHANGED':
+      return 'Organization plugin access is temporarily unavailable. Retry later. Do not claim the plugin is absent.';
+    case 'PLUGIN_NAMESPACE_CONFIG_REQUIRED':
+      return 'The organization plugin service is unavailable. Do not retry repeatedly.';
+  }
 }

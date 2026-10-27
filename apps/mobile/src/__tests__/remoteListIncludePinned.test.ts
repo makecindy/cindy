@@ -1,3 +1,4 @@
+// guard: protocol-compatibility.md: list bootstrap flags and schedule-index invalidation must agree across Home, device detail and event adapters; static wire/call-site contract.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';

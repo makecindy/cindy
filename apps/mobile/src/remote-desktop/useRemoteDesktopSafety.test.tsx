@@ -219,6 +219,54 @@ it("foreground replacement never sends a stale cleanup disable", async () => {
   expect(h.tick).toHaveBeenCalledTimes(2);
   expect(h.update).not.toHaveBeenCalled();
 });
+it.each([
+  "phone-to-computer-complete",
+  "computer-to-phone-complete",
+  "unchanged-content",
+  "content-empty",
+])(
+  "clears stale content notices only on accepted recovery: %s",
+  async (stage) => {
+    await act(async () => root.render(createElement(Probe)));
+    for (const notice of ["clipboardSyncSkipped", "clipboardSyncConflict"]) {
+      if (notice === "clipboardSyncSkipped")
+        h.tick.mockImplementationOnce(async () => h.trace("content-skipped"));
+      else h.tick.mockRejectedValueOnce(new Error("CLIPBOARD_CONFLICT"));
+      await act(async () => vi.advanceTimersByTimeAsync(1500));
+      expect(latest.safetyNotice).toBe(notice);
+      // An idle tick accepts no new snapshot and must preserve its diagnosis.
+      await act(async () => vi.advanceTimersByTimeAsync(1500));
+      expect(latest.safetyNotice).toBe(notice);
+      h.tick.mockImplementationOnce(async () => h.trace(stage));
+      await act(async () => vi.advanceTimersByTimeAsync(1500));
+      expect(latest.safetyNotice).toBeNull();
+    }
+    expect(h.update).not.toHaveBeenCalled();
+  },
+);
+it("ignores recovery from a paused loop and keeps protection failures visible", async () => {
+  caps.privacyScreen = true;
+  h.request.mockImplementation(async (message) => {
+    if (message.op === "privacyScreen" && message.enabled)
+      throw new Error("PRIVACY_FAILED");
+    return { enabled: message.enabled };
+  });
+  h.tick.mockImplementationOnce(async () => h.trace("content-skipped"));
+  await act(async () => root.render(createElement(Probe)));
+  const staleTrace = h.trace;
+  await act(async () => root.render(createElement(Probe, { focused: false })));
+  await act(async () => root.render(createElement(Probe)));
+  await act(async () => staleTrace("unchanged-content"));
+  expect(latest.safetyNotice).toBe("clipboardSyncSkipped");
+  h.privacy = true;
+  await act(async () => root.render(createElement(Probe)));
+  h.tick.mockImplementationOnce(async () => h.trace("unchanged-content"));
+  await act(async () => vi.advanceTimersByTimeAsync(1500));
+  expect(latest.safetyNotice).toBe("privacyFailed");
+  h.privacy = false;
+  await act(async () => root.render(createElement(Probe)));
+  expect(latest.safetyNotice).toBeNull();
+});
 it("renews host opt-in after a delayed disable from an earlier client state", async () => {
   h.tick.mockRejectedValueOnce(new Error("DESKTOP_CLIPBOARD_UNAVAILABLE"));
   await act(async () => root.render(createElement(Probe)));

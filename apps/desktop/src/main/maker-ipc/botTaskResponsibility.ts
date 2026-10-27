@@ -3,8 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { botProfileDir } from './botProfileFolder.js';
+import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
 
-/** Per-task responsibility, independent of project discovery, judgments and Todo.
+/** Per-task responsibility, independent of directories and Todo.
  * Releases override creation evidence; nothing is inferred from conversation text.
  */
 export type TaskResponsibilities = Record<string, { responsible: boolean; updatedAt: string }>;
@@ -69,19 +70,34 @@ export async function setTaskResponsibility(
     }
     assertCurrent();
   });
+  // 接手 / 解除立即让自主跟进重读归属：工作台与跟进者不必等 60 秒的定时重读。
+  signalBotAutonomyBotsChanged();
+}
+
+export interface TaskResponsibilityScope {
+  botId: string;
+  directories: string[];
+  /** Every task this Bot is responsible for: its own background tasks plus the ones it took over. */
+  sessionIds: string[];
+  /** Only the background tasks this Bot started itself (delegation children). */
+  delegatedSessionIds: string[];
 }
 
 /** Fail closed for a damaged companion, without removing other companions' marks. */
 export async function collectTaskResponsibilityScopes(
-  botIds: readonly string[], readIds: (botId: string) => Promise<string[]>,
-): Promise<Array<{ botId: string; directories: string[]; sessionIds: string[] }>> {
-  const scopes = await Promise.all(botIds.map(async (botId) => {
+  botIds: readonly string[],
+  readScope: (botId: string) => Promise<{ sessionIds: string[]; delegatedSessionIds?: string[] }>,
+): Promise<TaskResponsibilityScope[]> {
+  const scopes = await Promise.all(botIds.map(async (botId): Promise<TaskResponsibilityScope> => {
     try {
-      return { botId, directories: [], sessionIds: await readIds(botId) };
+      const scope = await readScope(botId);
+      return { botId, directories: [], sessionIds: scope.sessionIds, delegatedSessionIds: scope.delegatedSessionIds ?? [] };
     } catch {
       // Do not fall back to creation evidence: a damaged file may contain releases.
-      return { botId, directories: [], sessionIds: [] };
+      return { botId, directories: [], sessionIds: [], delegatedSessionIds: [] };
     }
   }));
-  return scopes.filter((scope) => scope.sessionIds.length > 0);
+  // A Bot that released its only background task is still that task's origin: keep the scope
+  // for the owner chip even when nothing is followed any more.
+  return scopes.filter((scope) => scope.sessionIds.length > 0 || scope.delegatedSessionIds.length > 0);
 }

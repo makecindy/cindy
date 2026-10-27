@@ -8,8 +8,8 @@
  * 关闭后回到预览触发器。图片路径同时保留 gallery 定位标记的既有断言。
  */
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
@@ -18,10 +18,36 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/useRemoteMediaUrl', () => ({
   useRemoteMediaUrl: (url: string) => url,
 }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
 import { ChatImageView } from '../components/chat/ChatImageView';
+import { ModelLightbox } from '../components/chat/ModelLightbox';
+import { toast } from '@/lib/toast';
+
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () => {
+  // ModelLightbox's 2026-06 scheme regression: the custom element reports a
+  // parse/load error, but its poster must stay usable and the user gets a
+  // toast. Existing focus tests never dispatch that event. Reuse the real
+  // lightbox unit harness, with fake time to detect delayed unwanted closure.
+  it('reports a model load error and keeps the preview open', async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
+    render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose }));
+    const viewer = document.body.querySelector('model-viewer')!;
+    expect(viewer).not.toBeNull();
+    await act(async () => {
+      fireEvent.error(viewer);
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(viewer.isConnected).toBe(true);
+    expect(viewer.getAttribute('src')).toBe(url);
+  });
+
   it('Enter 打开图片预览:焦点进入 lightbox,Esc 延迟关闭后回到触发器', async () => {
     render(
       React.createElement(ChatImageView, {

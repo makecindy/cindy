@@ -741,4 +741,7 @@ revision 去旧和四语言文案。
 - 每次 update 抢焦点，或 ChatInput 恢复时后台窗口抢焦点；
 - terminal 状态立即 dismissed，用户看不到完成或取消反馈；
 - 插件卸载、停用、manifest/tool 漂移时没有 `unavailable` 收口；
-- 隐藏会话的 Agent Island 仍显示 running，无法提示等待插件配置。
+- （已处理）隐藏会话的 Agent Island 仍显示 running，无法提示等待插件配置：插件后台任务
+  （`sessions.hidden_at` 非空，需声明 `agent.hiddenTasks`）不进入 Agent Island / 菜单栏运行态，
+  转入后台时收起已有条目，也不发系统通知；等待插件配置的设置卡留在该任务内，用户从插件详情页
+  「后台任务」打开任务即可看到并处理，或「显示到任务列表」后按普通任务提醒。

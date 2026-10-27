@@ -40,12 +40,18 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import {
+  archiveScheduleWarning,
+  loadActiveBoundScheduleNames,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail } from '@/lib/agentIslandVisibleSessionRoute';
 import type { AgentKind } from '@/lib/ccAgent.types';
 import { CCAgentSessionView } from '../CCAgentSessionView';
+import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import {
   comparePinnedByStatusThenPinnedDesc,
   compareSessionsByStatusThenSortTimeDesc,
@@ -75,6 +81,15 @@ import {
 const log = createLogger('cc-agent.workdir-browse.route');
 
 export function WorkdirBrowseRoute() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  return (
+    <CindyMakeSessionGate sessionId={sessionId}>
+      <WorkdirBrowseContent />
+    </CindyMakeSessionGate>
+  );
+}
+
+function WorkdirBrowseContent() {
   const { t } = useTranslation();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -93,7 +108,7 @@ export function WorkdirBrowseRoute() {
   // 断链/重连后列表变化会重渲染)。
   const remoteMirrorSessions = useSyncExternalStore(
     remoteProjectsStore.subscribe,
-    remoteProjectsStore.getMergedRemoteSessions,
+    remoteProjectsStore.getVisibleMergedRemoteSessions,
   );
   const currentSession = useMemo(
     () =>
@@ -159,6 +174,7 @@ export function WorkdirBrowseRoute() {
       (s) =>
         projectIdentityKeyForSession(s) === currentProjectKey &&
         s.status === 'active' &&
+        (CINDY_MAKE_ENABLED || !isCindyMakeSource(s.source)) &&
         !isOrcaWorkerSession(s),
     );
     return list.slice().sort((a, b) => {
@@ -344,17 +360,23 @@ export function WorkdirBrowseRoute() {
         // resolveSession 失败不阻断后续 confirm —— 与 sidebar 单条 archive 行为一致。
       }
 
+      const scheduleNames =
+        (await loadActiveBoundScheduleNames([
+          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
+        ])).get(closingId) ?? [];
       const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
         closingId,
         closing?.deviceLinkDeviceId,
       );
       const ok = await confirmDialog({
         title: t('ccAgent.workdirBrowse.archiveSession.title'),
-        description:
-          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }) +
-          (dirtyWorktree
-            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
-            : ''),
+        description: [
+          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+          dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
+          archiveScheduleWarning(t, scheduleNames),
+        ]
+          .filter(Boolean)
+          .join(' '),
         confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
         cancelText: t('ccAgent.workdirBrowse.archiveSession.cancel'),
       });

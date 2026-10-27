@@ -77,11 +77,15 @@ describe('parseGhostCommandWord', () => {
 });
 
 describe('formatGhostCommandToken', () => {
-  it('qualifies organization instances and leaves root unqualified', () => {
+  it('leaves a unique command bare and qualifies only a shared one', () => {
+    const org = ghost('draw', true, { namespace: 'acme' });
     expect(formatGhostCommandToken(ghost('draw'))).toBe('draw');
     expect(formatGhostCommandToken(ghost('draw', true, { namespace: null }))).toBe('draw');
-    expect(formatGhostCommandToken(ghost('draw', true, { namespace: 'acme' }))).toBe('draw/acme');
-    expect(formatGhostCommandInsertion(ghost('draw', true, { namespace: 'acme' }))).toBe('$draw/acme');
+    expect(formatGhostCommandInsertion(org, [org, ghost('write', true, { namespace: null })])).toBe('$draw');
+    // A disabled duplicate still counts, so re-enabling it cannot make the token ambiguous.
+    const sleepingRoot = ghost('DRAW', false, { namespace: null });
+    expect(formatGhostCommandInsertion(org, [org, sleepingRoot])).toBe('$draw/acme');
+    expect(expandGhostCommand('$draw a cat', [org])).toContain('namespace: acme');
   });
 });
 

@@ -46,6 +46,35 @@ const oidcManifest = {
 } as const;
 
 describe('plugin delivery contract', () => {
+  it('preserves optional cumulative download statistics in list and detail without conflating installs', () => {
+    const plugin = {
+      id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+      description: null, author: null, scope: 'public', organizationId: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64),
+        sizeBytes: 1024, publishedAt: '2026-07-19T00:00:00.000Z', icon: null,
+        manifest: validManifest,
+      },
+    };
+    for (const downloadStatistics of [
+      { requestCount: '0', last7DaysRequestCount: '0' },
+      { requestCount: '18446744073709551615', last7DaysRequestCount: '12' },
+      { requestCount: '123' },
+    ]) {
+      const withStatistics = { ...plugin, downloadStatistics };
+      const list = parseListPluginsResponse({ schemaVersion: 2, plugins: [withStatistics], nextCursor: null });
+      const detail = parseGetPluginResponse({ schemaVersion: 2, plugin: withStatistics });
+      expect(list.plugins[0]?.downloadStatistics).toEqual(downloadStatistics);
+      expect(detail.plugin.downloadStatistics).toEqual(downloadStatistics);
+      expect(detail.plugin).not.toHaveProperty('usageStatistics');
+    }
+    for (const downloadStatistics of [undefined, null, {}, { requestCount: 0 }, { requestCount: '-1' }, { requestCount: '01' }]) {
+      const detail = parseGetPluginResponse({ schemaVersion: 2, plugin: { ...plugin, downloadStatistics } });
+      expect(detail.plugin).not.toHaveProperty('downloadStatistics');
+    }
+  });
+
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,

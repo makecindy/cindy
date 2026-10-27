@@ -3,6 +3,7 @@ import type { MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
 import type { RemoteResourceProvider } from '../../device-link/remoteResourceRegistry';
 
 const h = vi.hoisted(() => ({
+  enabled: true,
   owner: 1,
   running: false,
   session: {} as Record<string, unknown>,
@@ -17,7 +18,12 @@ const h = vi.hoisted(() => ({
   changed: vi.fn(),
   readBuild: vi.fn(),
   cancel: vi.fn(),
+  personal: vi.fn(),
   beforeRead: vi.fn(),
+}));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return h.enabled; },
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => clientDb }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -44,6 +50,9 @@ vi.mock('../historyRuntime.js', () => ({
   readCindyMakeBuildState: h.readBuild,
 }));
 vi.mock('../remoteBroadcast.js', () => ({ broadcastMakeRemoteChanged: h.changed }));
+vi.mock('../personalRemoteRuntime.js', () => ({
+  readPersonalRemoteProjection: h.personal,
+}));
 import { sessions } from '../../localDb/schema';
 import { remoteResourceRegistry } from '../../device-link/remoteResourceRegistry';
 import { registerMakeRemoteResources } from '../remoteRuntime';
@@ -85,6 +94,7 @@ const completion = (continuedAt?: number) => ({
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
+  h.enabled = true;
   h.owner = 1;
   h.running = false;
   h.prep = undefined;
@@ -104,6 +114,7 @@ beforeEach(() => {
       JSON.parse(h.rows.find((row) => row.clientId === completionId)!.agentMeta!)
         .cindyMakeCompletion,
   );
+  h.personal.mockResolvedValue(undefined);
   vi.spyOn(remoteResourceRegistry, 'register').mockImplementation((next) => {
     provider = next;
     return () => {};
@@ -112,6 +123,31 @@ beforeEach(() => {
 });
 
 describe('Cindy Make mobile host adapter', () => {
+  it('includes personal sync and PR state as read-only resource content', async () => {
+    h.personal.mockResolvedValueOnce({
+      remote: { sync: 'synced' },
+      contributions: [{ number: 7, state: 'open' }],
+    });
+    const card = await get();
+    expect(card.display.subtitle).toContain('ja:cindyMake.storage.status.synced');
+    expect(card.display.subtitle).toContain('ja:cindyMake.contribution.state.open');
+    expect(
+      card.actions?.some(
+        (action) => action.id.includes('sync') || action.id.includes('contribution'),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not register a remote resource or restore tasks while Make is disabled', () => {
+    h.enabled = false;
+    vi.mocked(remoteResourceRegistry.register).mockClear();
+    registerMakeRemoteResources(() => h.running);
+    expect(remoteResourceRegistry.register).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
   it('restores preparation once per owner and normalizes a persisted interrupted test through the shared controller', async () => {
     h.test.mockResolvedValue({
       reportedAt: 1,

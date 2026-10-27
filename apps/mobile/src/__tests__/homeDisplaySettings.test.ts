@@ -1,3 +1,5 @@
+import ts from 'typescript';
+import { buildMobileHomePresentation } from '@/session/mobileHome';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -182,60 +184,107 @@ describe('task info pieces (desktop 任务信息 parity)', () => {
   });
 });
 
-describe('task info usage wiring', () => {
-  const meta = readFileSync(resolve(process.cwd(), 'src/session/HomeSessionInfoMeta.tsx'), 'utf8');
-  const store = readFileSync(resolve(process.cwd(), 'src/session/remoteSessionStore.ts'), 'utf8');
+const surface = ts.createSourceFile('home.tsx', readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function evaluate(node: ts.Node, file: ts.SourceFile, scope: Record<string, unknown>): any {
+  const compiled = ts.transpileModule('function evaluate() { return (' + node.getText(file) + '); }', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
+  }).outputText;
+  return new Function(...Object.keys(scope), compiled + '; return evaluate();')(...Object.values(scope));
+}
+function surfaceValue(name: string, scope: Record<string, unknown>): any {
+  let initializer: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (!initializer && ts.isVariableDeclaration(node) && node.name.getText(surface) === name) initializer = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(surface);
+  if (!initializer) throw new Error('Missing production Home initializer: ' + name);
+  return evaluate(initializer, surface, scope);
+}
+const useMemo = (build: () => unknown) => build();
 
-  it('reads token / cost per row because the Home projection strips usage fields', () => {
-    // Home 列表投影刻意去掉用量(避免用量推送重排分组),行上的 Token / 费用必须单独订阅。
-    expect(store).toContain('delete projected.totalTokenUsage;');
-    expect(meta).toContain("taskInfoFields.includes('tokens') || taskInfoFields.includes('cost')");
-    expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
-  });
-
-  it('keeps worktree off the mobile task info (desktop-only per sidebar plan §3.4)', async () => {
-    const { HOME_TASK_INFO_FIELDS, normalizeTaskInfoFields } = await import('@/session/homeDisplaySettings');
-    expect(HOME_TASK_INFO_FIELDS).toEqual(['time', 'pr', 'tokens', 'cost']);
-    // 旧版本存下的 worktree 勾选被丢弃。
+describe('task info and retained Home behavior', () => {
+  it('keeps worktree off the mobile task info (desktop-only per sidebar plan 3.4)', async () => {
+    const { normalizeTaskInfoFields } = await import('@/session/homeDisplaySettings');
     expect(normalizeTaskInfoFields(['worktree', 'pr'])).toEqual(['pr']);
   });
 
-  it('counts dialogue automation runs like project candidates', () => {
-    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-    expect(surface).toContain('dialogueCount: projectFilterUniverse.chats.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),');
+  it('counts each dialogue automation run in the actual display-menu input', () => {
+    const projectFilterUniverse = { chats: [item('normal'), { ...item('automation'), automationGroup: { sessionCount: 4 } }], projects: [] };
+    const options = surfaceValue('homeDisplayPullDownActions', { useMemo, projectFilterUniverse,
+      selectedDeviceId: null, displayMenuState: {}, t: (key: string) => key,
+      buildHomeDisplayPullDownActions: (value: unknown) => value });
+    expect(options.dialogueCount).toBe(5);
   });
 
-  it('reorders only the filtered visible projects and keeps hidden project slots', () => {
-    // 完整顺序 A、B、C,筛选后只显示 A / C,把 C 拖到 A 前:B 保持原槽位。
-    expect(reorderVisibleProjectByDropIndex(['A', 'B', 'C'], ['A', 'C'], 'C', 0)).toEqual(['C', 'B', 'A']);
-    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-    // 主机账本分支的可见集同样取实际渲染(已筛选)的项目。
-    expect(surface).toContain('const visibleKeys = visibleProjectKeys.filter((key) => hostWritable.has(key));');
+  it('keeps hidden project slots when applying the actual host-visible subset', () => {
+    const visible = surfaceValue('visibleKeys', { visibleProjectKeys: ['A', 'C', 'read-only'], hostWritable: new Set(['A', 'B', 'C']) });
+    expect(reorderVisibleProjectByDropIndex(['A', 'B', 'C'], visible, 'C', 0)).toEqual(['C', 'B', 'A']);
   });
 
-  it('lists project filter candidates regardless of search and status', () => {
-    // 已选中的项目不能因为搜索没命中或当前状态下没有任务而从菜单消失。
-    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-    const universe = surface.slice(surface.indexOf('const projectFilterUniverse = useMemo('), surface.indexOf('const projectMachineIdentities'));
-    expect(universe).toContain("statusFilter: 'all',");
-    expect(universe).not.toContain('searchQuery');
-    expect(surface).toContain('projects: projectFilterUniverse.projects.map((project) => ({');
+  it('keeps real project candidates available despite nonmatching search and status', () => {
+    const sessions = ['A', 'B'].map((name) => ({ ...item(name).session, title: name, workingDir: '/' + name,
+      workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer' }));
+    // Keep the existing production-expression fixture complete when aliases become an optional Home input.
+    const result = surfaceValue('projectFilterUniverse', { useMemo, buildMobileHomePresentation,
+      deviceModels: [], scheduleIndex: new Map(), selectedDeviceId: null, homeSessions: sessions,
+      projectAliases: new Map([['device:d:/A', 'Customer Portal']]),
+      t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running' });
+    expect(result.projects.map((project: { workingDir: string }) => project.workingDir).sort()).toEqual(['/A', '/B']);
+    // #7026: the production initializer consumes host aliases; keep that input
+    // in this unit fixture and verify its visible title without filtering candidates.
+    expect(result.projects.find((project: { workingDir: string }) => project.workingDir === '/A')?.title)
+      .toBe('Customer Portal');
   });
 
-  it('re-evaluates the last-activity filter on a clock while the list stays open', () => {
-    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-    expect(surface).toContain("const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);");
-    expect(surface).toContain('applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now())');
+  it('expires active-time rows using the actual clock input while Home stays open', () => {
+    for (const [filter, focused, enabled] of [['all', true, false], ['1d', false, false], ['1d', true, true]] as const) {
+      expect(surfaceValue('filterTick', { lastActivityFilter: filter, screenFocused: focused,
+        useHomeFilterClock: (active: boolean) => active })).toBe(enabled);
+    }
+    const input = home({ chats: [item('recent', { daysAgo: 0.5 })] });
+    const scope = { useMemo, sharedGroup: { home: input }, applyHomeContentFilters,
+      contentFilters: { ...NO_FILTERS, lastActivity: '1d' } };
+    expect(surfaceValue('filteredHome', { ...scope, filterTick: NOW }).chats).toHaveLength(1);
+    expect(surfaceValue('filteredHome', { ...scope, filterTick: NOW + DAY }).chats).toHaveLength(0);
   });
 
-  it('polls PR status only while the retained home list is visible', () => {
-    // 首页被盖住时任务行仍挂载:轮询前检查可见性,回到首页时补查一次。
-    expect(meta).toContain("if (AppState.currentState !== 'active' || !isActive()) return;");
-    expect(meta).toContain('const stopResume = onResume(() => refresh(true));');
-    // 节流补查与回到前台补查。
-    expect(meta).toContain('if (retryIn > 0 && retry === undefined) {');
-    expect(meta).toContain("if (state === 'active') refresh(true);");
-    expect(store).toContain('export function useRemoteSessionStoreVisibility()');
+  it('pauses PR polling under another page and refreshes on resume, with cleanup', () => {
+    const file = ts.createSourceFile('meta.tsx', readFileSync(resolve(process.cwd(), 'src/session/HomeSessionInfoMeta.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const hook = file.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'useHomeSessionPr');
+    let callback: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isCallExpression(node) && node.expression.getText(file) === 'useEffect') callback = node.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    if (!hook) throw new Error('Missing PR hook');
+    visit(hook);
+    if (!callback) throw new Error('Missing PR lifecycle effect');
+    let visible = true;
+    let poll!: () => void;
+    let resume!: () => void;
+    let foreground!: (state: string) => void;
+    const remove = vi.fn(), stopResume = vi.fn(), clearInterval = vi.fn();
+    const refreshHomeSessionPr = vi.fn((_key: string, _load: () => unknown, _options: unknown) => 0);
+    const AppState = { currentState: 'active', addEventListener: (_event: string, callback: typeof foreground) => { foreground = callback; return { remove }; } };
+    const effect = evaluate(callback, file, { key: 'cache', deviceId: 'd', sessionId: 's', online: true,
+      isActive: () => visible, AppState, refreshHomeSessionPr, loadHomeSessionPr: vi.fn(), link: {}, refreshKey: 'updated',
+      PR_STATUS_REFRESH_INTERVAL_MS: 90_000, Date, clearInterval, clearTimeout: vi.fn(),
+      setInterval: (fn: () => void) => { poll = fn; return 1; }, setTimeout: vi.fn(),
+      onResume: (fn: () => void) => { resume = fn; return stopResume; } });
+    const cleanup = effect();
+    expect(refreshHomeSessionPr).toHaveBeenCalledTimes(1);
+    visible = false; poll(); resume();
+    expect(refreshHomeSessionPr).toHaveBeenCalledTimes(1);
+    visible = true; resume();
+    expect(refreshHomeSessionPr).toHaveBeenCalledTimes(2);
+    expect(refreshHomeSessionPr.mock.calls[1]?.[2]).toMatchObject({ eventful: true });
+    AppState.currentState = 'background'; poll();
+    expect(refreshHomeSessionPr).toHaveBeenCalledTimes(2);
+    AppState.currentState = 'active'; foreground('active');
+    expect(refreshHomeSessionPr).toHaveBeenCalledTimes(3);
+    cleanup(); expect(clearInterval).toHaveBeenCalledWith(1);
+    expect(remove).toHaveBeenCalledOnce(); expect(stopResume).toHaveBeenCalledOnce();
   });
 });
 

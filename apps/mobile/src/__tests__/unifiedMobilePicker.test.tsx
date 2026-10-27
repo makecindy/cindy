@@ -767,3 +767,25 @@ it('lists the member again when the group owner is not in the list',async()=>{
   expect(test.view.filter).toBe(vmMemberId);
   expect(test.view.groups[0].rows[0].selected).toBe(true);
 });
+
+it('selects remote Pi using its catalog when the controlled host has no Pi binary', async () => {
+  test.entries = [{ providerId: 'account', modelId: 'pi-model', displayName: 'Pi Model',
+    candidates: ['pi'], recommended: 'pi', nativeAgent: 'pi',
+    capabilities: { pi: { wireModelId: 'pi-model', efforts: ['high'], defaultEffort: 'high', supportsFastMode: true } } }];
+  const onSelect = vi.fn(async () => true);
+  await mount(onSelect, { agentKind: 'pi', capabilities: null, activeModelId: 'pi-model',
+    selectedFastMode: true, unified: { scope: 'no-local-pi', agents: ['pi'],
+      loadCapabilities: async () => { throw new Error('Pi not installed'); }, onSelect,
+      remote: { catalogs: [studioCatalog], selectedDeviceId: studioCatalog.deviceId } } });
+  await act(async () => test.view.onFilter('all'));
+  const local = test.view.groups.find((g:any) => g.key === 'recommended').rows[0];
+  expect(local.disabled).toBe(true);
+  const remote = test.view.groups.find((g:any) => g.key === remoteId).rows[0];
+  expect(remote.disabled).toBe(false);
+  expect(remote.config).toMatchObject({ agent: 'pi', fast: true });
+  await act(async () => test.view.onOptions(remote));
+  expect(test.view.options.fastCapable).toBe(true);
+  await act(async () => test.view.onSelect(remote));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ agent: 'pi', modelId: 'pi-model', fast: true }),
+    { deviceId: studioCatalog.deviceId });
+});

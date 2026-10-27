@@ -1,0 +1,12 @@
+{
+  "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
+  "retry": "再読み込み",
+  "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",
+  "updateRequired": "このコンピューターはまだ MCP Apps に対応していません。このコンピューターの Cindy を更新してから、もう一度お試しください。",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
+  "serverId": "MCP サーバー ID：{{id}}",
+  "exitFullscreen": "全画面表示を終了",
+  "mobileUpdateRequired": "このカードを開くには、スマートフォンの Cindy を更新してください。"
+}

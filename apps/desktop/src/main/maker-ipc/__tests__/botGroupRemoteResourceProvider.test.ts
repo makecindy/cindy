@@ -25,8 +25,10 @@ import {
   BOT_GROUP_CHAT_PRIMITIVE,
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
+  type BotGroupAttachment,
   type BotGroupDetail,
   type BotGroupSummary,
+  type BotGroupThreadShareView,
 } from '../../../shared/botGroupChat.js';
 
 const context = { controllerDeviceId: 'phone-1' };
@@ -119,6 +121,18 @@ describe('bot group remote resources', () => {
   });
 
   afterEach(() => h.sqlite?.close());
+
+  it('omits archived groups from phone lists while keeping authorized history readable', async () => {
+    const archived = detail({ serverBacked: true, archived: true });
+    service.listGroups.mockResolvedValue({ ok: true, groups: [archived, summary({ id: 'active' })] });
+    const result = await remoteResourceRegistry.list(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID });
+    expect(result.items.map(item => item.ref.id)).toEqual(['active']);
+    service.getGroup.mockResolvedValue({ ok: true, group: archived });
+    const history = await remoteResourceRegistry.get(context, { client: client([BOT_GROUP_CHAT_PRIMITIVE]), ref: ref('g1') });
+    expect(history.blocks?.[0]).toMatchObject({ data: { archived: true, messages: archived.messages } });
+    expect(service.deleteGroup).not.toHaveBeenCalled();
+    expect(service.chatServer.manage).not.toHaveBeenCalled();
+  });
 
   it('advertises revision-checked settings only for server groups', () => {
     expect(botGroupRemoteChatData(detail()).supportsSettingsManagement).toBe(false);
@@ -231,6 +245,14 @@ describe('bot group remote resources', () => {
     } });
   });
 
+  it('names who shared a thread reply, never the card text, the way the desktop sidebar does', () => {
+    const share = (extra: Record<string, unknown>) => botGroupRemotePreview(summary({ openPlan: null,
+      lastMessage: { authorName: '小满', preview: '', createdAt: 50, threadShare: true, ...extra } as never }));
+    expect(share({ authorKind: 'bot' })).toMatchObject({ fallback: '小满 shared a thread reply', translations: { 'zh-CN': '小满 贴回了一条话题回复' } });
+    expect(share({ authorKind: 'user', isSelf: false })).toMatchObject({ translations: { 'zh-CN': '小满 贴回了一条话题回复' } });
+    expect(share({ authorKind: 'user', isSelf: true })).toMatchObject({ fallback: 'You shared a thread reply', translations: { 'zh-CN': '你贴回了一条话题回复' } });
+  });
+
   it('sends the chat only to controllers that understand it, without host paths', async () => {
     const rich = await remoteResourceRegistry.get(context, { client: client([BOT_GROUP_CHAT_PRIMITIVE]), ref: ref('g1') });
     expect(rich.blocks?.[0]).toMatchObject({ primitive: BOT_GROUP_CHAT_PRIMITIVE });
@@ -269,12 +291,18 @@ describe('bot group remote resources', () => {
   it('forwards actions to the group service and reports its error code when refused', async () => {
     const send = await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'send', resourceRef: ref('g1'),
-      input: { text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true },
+      input: { text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true, quote: { messageId: 'm2' } },
     });
     expect(service.sendMessage).toHaveBeenCalledWith({
-      groupId: 'g1', text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true,
+      groupId: 'g1', text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true, quote: { messageId: 'm2' },
     }, { controllerDeviceId: 'phone-1' });
     expect(send.effects).toEqual([{ kind: 'refresh-resource', ref: ref('g1') }]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true }) });
+    const read = await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
+    expect(read.effects).toEqual([]);
 
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-continue', resourceRef: ref('g1'),
@@ -382,6 +410,23 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('📎 photo.png 📎 需求.pdf');
   });
 
+  it('keeps host paths off the attachments of shared thread replies', async () => {
+    const file: BotGroupAttachment = { id: 'a2', name: '需求.pdf', category: 'pdf', mimeType: 'application/pdf', size: 4, url: null, path: '/Users/me/cache/需求.pdf' };
+    const share: BotGroupThreadShareView = {
+      messageId: 'r1', threadRootId: 'm1', status: 'available', authorKind: 'bot', authorBotId: 'abu', authorName: '阿布',
+      sharedByAuthor: false, content: '附件在这', attachments: [file], createdAt: 20, edited: false,
+    };
+    service.getGroup.mockResolvedValue({ ok: true, group: detail({
+      messages: [{ ...detail().messages[0]!, id: 's1', threadShare: share }],
+      threadShareUpdates: { s0: { ...share, messageId: 'r0' } },
+    }) });
+    const rich = await remoteResourceRegistry.get(context, { client: client([BOT_GROUP_CHAT_PRIMITIVE]), ref: ref('g1') });
+    const data = rich.blocks![0]!.data as ReturnType<typeof botGroupRemoteChatData>;
+    expect(data.messages[0]!.threadShare!.attachments).toEqual([{ ...file, path: null }]);
+    expect(data.threadShareUpdates!.s0!.attachments).toEqual([{ ...file, path: null }]);
+    expect(JSON.stringify(rich)).not.toContain('/Users/me/cache');
+  });
+
   it('writes nothing once the computer has switched accounts during the checks', async () => {
     // The first owner check runs after the visibility reads; by then the account has changed.
     h.ownerCurrent = () => false;
@@ -415,4 +460,28 @@ describe('bot group remote resources', () => {
       { kind: 'navigate', target: { kind: 'resource', ref: ref('g9') } },
     ]);
   });
+  it('forwards explicit dissolution and leave separately from compatibility archive/delete', async () => {
+    const group = detail({ serverBacked: true, revision: 5, supportsDissolve: true });
+    group.members[0] = { ...group.members[0], actorId: 'self', isSelf: true, isOwned: true, role: 'owner' };
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'dissolve', resourceRef: ref('g1'), input: { expectedRevision: 5 } });
+    expect(service.chatServer.manage).toHaveBeenLastCalledWith({ groupId: 'g1', action: { type: 'dissolve', expectedRevision: 5 } });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'leave', resourceRef: ref('g1') });
+    expect(service.chatServer.manage).toHaveBeenLastCalledWith({ groupId: 'g1', action: { type: 'member', actorId: 'self', action: 'leave' } });
+    expect(service.deleteGroup).not.toHaveBeenCalled();
+  });
+  it('allows personal removal after leave through the account-authorized server service', async () => {
+    service.getGroup.mockResolvedValue({ ok: false, errorCode: 'NOT_FOUND' });
+    const listState = { conversationId: 'g1', hidden: true, revision: 4 };
+    service.chatServer.manage.mockResolvedValue({ ok: true, listState });
+    const result = await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'hide', resourceRef: ref('g1') });
+    expect(result.result).toEqual({ listState });
+    expect(service.getGroup).not.toHaveBeenCalled();
+    expect(service.chatServer.manage).toHaveBeenLastCalledWith({ groupId: 'g1', action: { type: 'hide' } });
+    expect(service.deleteGroup).not.toHaveBeenCalled();
+  });
+
 });

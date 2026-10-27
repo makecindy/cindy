@@ -61,6 +61,37 @@ if (capabilities.operations.includes('models')) {
 连接存在不等于远端凭证、配额和请求一定成功。保存、创建、发送／改模仍分别验证，错误应显示给用户，
 允许恢复连接或明确改选同一任务的模型；不得自动改成另一型号、另一个账号或清掉历史后重建。
 
+持续复用任务的插件若要在新输入前同步插件当前保存的模型设置，必须同时确认
+`capabilities.operations.includes('setModel')` 和 `capabilities.pluginDefaultModel === true`，
+再调用 `setModel({taskId, expectedRevision, route: 'plugin-default'})`。仅存在 `setModel`
+operation 不代表支持这个特殊 route；它只适用于 `setModel`，不能传给 `create`。
+
+```js
+let currentTask = await cindy.tasks.get({ taskId });
+if (capabilities.operations.includes('setModel') && capabilities.pluginDefaultModel === true) {
+  const result = await cindy.tasks.setModel({
+    taskId, expectedRevision: currentTask.revision, route: 'plugin-default',
+  });
+  currentTask = result.task;
+}
+// 仅用于尚未发送的新输入；之前已接受或结果不确定的输入须先恢复其原回执。
+const nextRun = await cindy.tasks.send({
+  taskId, expectedRevision: currentTask.revision, requestKey: nextRequestKey, text: nextText,
+});
+```
+
+Host 每次调用都重新读取本插件的模型设置，复用创建任务的模型解析规则；没有完整插件覆盖时
+可继承当前新任务选择。只同步模型、Agent、供应商、推理强度和 Fast，不修改权限、工作目录
+或任务历史。返回 `{status, task}`；组合相同返回 `unchanged`，不重复切换运行时。
+后续 `send.expectedRevision` 使用返回的 `task.revision`，不能继续使用切换前的 revision。
+
+解析或运行时写入前若任务 revision、插件模型偏好或所继承的新任务默认组合变化，会返回
+`STALE_REVISION`。调用方应重新 `get` 获取最新任务 revision，再重试同一次模型同步，成功后
+才发送新输入；不得沿用过期 route。该重试不授权重发已经接受或结果不确定的旧输入，旧输入
+仍按原 requestKey／run 回执恢复。不可用模型等其他错误应按原因处理，不静默换模型。
+旧 Host 未声明 `pluginDefaultModel: true` 时不发送该特殊 route，保留任务已有模型和原有发送
+流程；显式 `selected.route` 的调用契约不变。
+
 `setModel` 返回 `deferred` 时，当前执行仍按原模型完成，下一条输入才应用新组合。
 任务 `resolvedConfig` 与 revision 表示宿主已接受的下一条输入配置；在切换实际生效前后保持
 一致，避免先用旧模型登记发送回执、再因新模型生效而拒绝首条续发。读取历史不受切模影响。
@@ -83,6 +114,11 @@ if (capabilities.operations.includes('models')) {
 新任务选择；用户可为插件单独覆盖。模型、Agent、供应商、推理强度和 Fast 作为完整组合
 解析，绝不从另一 Agent 的历史草稿拼出一组值。权限独立设置，不随模型来源继承。
 
+插件可在 `ghost.json` 顶层声明 `showTaskPreferences: false`，隐藏 Desktop 和手机上的
+宿主「模型与任务」默认配置卡，并在自己的设置界面提供配置。省略或设为 `true` 保持原有显示条件。
+此字段仅控制卡片显示；以下任务 API、模型优先级、已有默认配置和权限检查全部保持原样。
+旧客户端不识别该字段时仍显示原卡片。
+
 | 入口 | 模型来源与复用 | 权限与结果 |
 | --- | --- | --- |
 | `tasks.create` | 显式 route → 插件任务设置 → 经验证的 callId 发起任务 → 当前新任务选择；保存准入后的完整 route | 用户插件权限，默认普通任务的 ask；返回普通任务及持久创建回执 |
@@ -90,7 +126,8 @@ if (capabilities.operations.includes('models')) {
 | `agent.errand` | 共用模型解析；无显式覆盖时优先保留已有专属任务的当前模型。配置冲突时只在新任务创建成功后替换映射，旧历史保留 | 旧权限边界、sessionKey、jobId 与结果取回协议保持兼容 |
 | `workspace.ensureSession` | 已有工作区入口照常复用；新建才使用插件设置／发起任务／当前新任务完整组合 | 目录仍经亲选或原有确认流程；只建入口、不运行 Agent |
 | `agent.run` | 操作已有用户任务；本机任务校验其当前组合，远程任务交由执行宿主校验，继续／新建／分叉仍按原接口继承用户任务 | 保留原有点击票、任务关联和源权限限制；不套用插件自有任务权限或取件协议 |
-| 快问快答／媒体生成 | 各自已有通道，不受任务默认配置支配 | 不变成普通任务或代办 |
+| 快问快答 | 与新建任务共用插件详情的唯一「模型」字段：用户显式选模即钉死该组合；未选时依次取身份卡 `oneshotModel` 声明、系统辅助模型链（每单现读） | 不创建任务、没有工具，走轻量文本通道 |
+| 媒体生成／向量 | 没有逐插件选模，走调用方档位／点名与系统默认 | 不变成普通任务或代办 |
 
 `tasks.capabilities().sourceCallContext` 声明支持 create 的可选 `callId`。Agent 在处理
 在途插件工具时可转传该调用 ID；宿主只接受同插件、本机、仍在途的归属，不接受插件
@@ -135,9 +172,10 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 已接入
 
-- `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel`。
+- `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel/setHidden`。
+- create 可传 `hidden:true`、`setHidden({taskId, hidden})` 切换，`get`/`list` 快照恒返回 `hidden` 布尔值；仅身份卡声明 `agent.hiddenTasks: true`（必须同时 `agent.tasks: true`）时可用，见下文「后台任务」。
 - create 可传 isolatedWorkspace:true，由宿主分配独立空作答目录；返回本任务 workingDir 与 permissionMode，插件不能覆盖权限。
-- 创建用户可见的普通本地 Session；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。普通任务创建前复用 Worker 的目录身份判据：配置路径必须仍为原规范路径，改链、缺失或非目录拒绝；异步解析后复核账号、tasks 批准及配置。缺省/isolatedWorkspace 仍由宿主分配目录，旧 errand 路径不变。旧别名配置没有原目标证据，不自动授权当前目标；这不解决校验后的目录置换窗口。
+- 默认创建用户可见的普通本地 Session（声明 hiddenTasks 后可在同一次 INSERT 中创建后台任务）；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。普通任务创建前复用 Worker 的目录身份判据：配置路径必须仍为原规范路径，改链、缺失或非目录拒绝；异步解析后复核账号、tasks 批准及配置。缺省/isolatedWorkspace 仍由宿主分配目录，旧 errand 路径不变。旧别名配置没有原目标证据，不自动授权当前目标；这不解决校验后的目录置换窗口。
 - 发送走普通输入协调器，使用持久 requestKey 去重和稳定输入 ID；重复请求不会再次启动模型。
 - 指定 provider、model、effort、Fast 必须通过当前目录核验；派发前再次核验，不静默 fallback。
 - 创建回执写入后、创建 Session 前，按原始请求重新解析路由并与已受理路由比较；默认模型配置变化则拒绝，不静默使用旧值。目录解析及创建器的最终 continuation 同时复核 agentKind/model/provider/effort/Fast、目录和权限。
@@ -152,6 +190,42 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - 请求跨账号切换后不能继续操作新账号数据库。禁用插件后不能继续发送或停止。
 - 用户通过插件页或市场卸载时，在删除插件包前持久撤销其旧任务归属；保留任务、消息、作答文件、成绩和回执。正常更新保留归属；卸载重装后旧任务和旧 requestKey 不再可用，新请求键可创建新任务。撤销写入失败则不删除包；删除包失败时已撤销的归属不回滚。此处不改变内置插件 orphan/audience 自动回收路径。
 
+## 后台任务（agent.hiddenTasks）
+
+任务默认可见。声明 `agent.hiddenTasks: true` 的插件可以把**自己经 create 回执拥有的**本地普通任务
+放到后台：`sessions.hidden_at`（可空毫秒时间戳，migration 0126）非空即隐藏，存量行全部为 NULL。
+
+- **声明与权限**：v3 直接能力字段，`GhostAgentNeeds.hiddenTasks`；新包校验要求布尔且依赖 `tasks: true`，
+  已安装快照里不成对的历史值只作为未知数据保留、不授予（`ghostDeclaresHiddenTasks` 统一判定）。权限项
+  `agent:hidden-tasks` 单列在 `agent:tasks` 之后，进入详情页权限区与安装/更新确认；更新新增该声明按
+  「权限变多」触发确认，旧 receipt 缺字段视为未声明，不报错、不迁移。管子（taskSlot）先按身份卡拒绝，
+  服务在回执队列内再经 `assertHiddenTasksAllowed` 复核插件批准与声明；未声明返回 `PERMISSION_DENIED`，
+  `hidden:false` 是默认值，所有 tasks 插件可用。
+- **幂等**：只有 `hidden:true` 进入 create 的请求摘要，存量可见回执的重放摘要不变。
+- **写入口**：创建时由 `openSession({hiddenAt})` 在同一次 INSERT 落库，不发「新建」推送；切换与用户
+  显示统一走 `localDb/ipc/sessionHidden.setSessionHidden`：隐藏广播 `sessions:patched {hiddenAt}`
+  （renderer 从各桶移除并重拉、灵动岛收起），显示清列并刷新 updatedAt、广播 patched 后再发
+  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核），远程任务
+  与 Worker 没有创建回执，`readSession` 不认，不支持 setHidden。
+- **可见性口径**：`local-db:sessions:list`、会话搜索（conversationSearch）、未结束提示两条腿
+  （sessionActiveTurn）、hook-control 最近任务排除隐藏任务；用量统计等全量口径不排除。灵动岛/菜单栏
+  运行态与系统通知经 `hiddenSessionRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；
+  renderer 通知兜底按单任务读取的 `hiddenAt` 判定。`subscriptionGateway.isGhostEligibleSessionRow`
+  不因隐藏改变，插件仍可订阅自己的任务。
+- **透明性兜底**：插件详情页「后台任务」区块（设置之后、Tools 之前）列出本插件回执拥有、仍在后台且未删除
+  的任务（标题、最后活动、运行状态），可「打开任务」（`/cc-agent/:id`，与审查卡片同一路由）或「显示到
+  任务列表」。停用插件同样可查；更新移除 hiddenTasks（甚至 tasks）声明后仍有遗留后台任务时区块照常出现，
+  未声明且没有后台任务的插件不显示该区块。卸载时 `withUninstall`
+  先把该插件的后台任务全部恢复显示，再撤销归属；恢复失败则不卸载。内置插件 orphan/audience 自动回收路径
+  未改，不经此恢复。
+- **多端**：SSH 远程工作区——插件任务只建在本机，不涉及。设备互联/手机——列表走同一个
+  `local-db:sessions:list`；远端边界（`remoteBotSessionBoundary`）把隐藏任务标为 `background`，只从
+  `sessions:list` / `maker:list-active` 结果中排除，`sessions:get` 等单任务读取与操作照常（插件页深链
+  可打开）。详情页的两个新 IPC `ghosts:background-tasks:list` / `ghosts:background-tasks:reveal` **只登记
+  Desktop**：它们服务本机插件详情页（打开任务、显示到任务列表都是本机 UI 动作），手机端没有插件详情页
+  入口，按 allowlist 默认拒绝不进白名单；handler 同时拒绝 device-link 调用并校验可信窗口。手机列表在
+  任务转入后台的瞬间不会主动移除已加载的行，下一次列表重拉后消失（手机端未改，未单独验证）。
+
 ## 与伙伴的共用和隔离
 
 `sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。伙伴委派与插件任务均使用这套函数。
@@ -160,7 +234,7 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 当前限制与后续工作
 
-- 仅本插件创建的本地普通任务；不支持选择既有任务、远端任务或 Bot；自有普通任务可通过 startTeam 成为 Orca Lead。
+- 仅本插件创建的本地普通任务；不支持选择既有任务、远端任务或 Bot（setHidden 同样只作用于自有本地任务）；自有普通任务可通过 startTeam 成为 Orca Lead。
 - 已支持通过 `setModel` 修改任务模型；尚未开放其它配置修改/归档任务、队列暂停、事件订阅、逐输入费用与用量。usage 明确返回 unavailable。
 - 回执已经持久化，但完整的重启后终态补账、无输入别名的自动续跑归属尚未闭环。缺少原生证据时返回 reconciling，不重放请求、不报告成功；目前不应作为无人值守正式评测的完成依据。
 - 一旦 Session INSERT 已开始、创建进程中断或回执撤回失败，结果仍可能不明：保留回执，重放只读取已存在任务，不补建，可能返回 TASK_NOT_FOUND。旧孤立回执没有本次失败证据，不自动修复；已删除任务不复活、已撤销任务及旧 key 不接管。此限制与创建前明确失败后的显式重试不同。
@@ -220,6 +294,11 @@ getTeam 的 completedAt 可由宿主落盘的 turnCompleted 终态恢复：仅�
 
 Plan Mode 的本地及 device-link 切换与插件确认复用同一内存权限提交队列，由 Host 完成 runtime、落库与失败恢复；renderer 不再另写 DB 或发第二次回滚。原生 Plan 事件只异步登记镜像，不阻塞事件消费和 turn 收尾；落库前核对原账号、绑定 Session 及当前 armed 值，忽略迟到的旧事件。插件授权另同步核对现有稳定 Plan 状态（含未知/切换中），不等同于仅看数据库镜像。普通新输入 IPC 在 send/restart fence 外等已有权限提交完成后才进入发送；内部续跑、steering 与独立停止不等待该队列。上述复用不新增 Plan 代次、持久字段或后台重试，也不承诺跨工具事务。
 
+插件 `tasks.send` 与排队输入最终 `accept` 同样核对 live Session 的 `stablePlanModeState`；
+DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan。执行态开启、未知或切换中时拒绝；
+路由查询、回执保存后复核同一 Session 对象及已有 Plan generation，变更后不沿用旧授权。
+冷任务仍可入队，但最终接受必须匹配已启动的执行实例。读取、取消和同 requestKey 的回执查询保持原行为。
+
 ### 委派范围与 Host Auto 审阅
 
 首版保留 Codex 原生 `on-request`、`workspace-write` / `auto_review`。以下范围核验适用于进入 Host 审批的动作；原生常规工作区动作可能直接执行，不承诺每个读取或写入都经过 Host，也不把任务说明当作原生执行隔离。插件 API 的归属、撤权及权限检查保持；同一任务直接 Auto→Ask 仍沿原机制中断当前轮次。卸载仅撤销插件控制并移除包，不保证停止已派发的原生工作；Lead 降权也不承诺立即停止全部 Worker。用户可使用原有任务停止入口。此边界不新增原生沙箱、后台停机重试或另一套权限状态。
@@ -254,3 +333,50 @@ Pi 子代理未成功投递的自动 allow 再次投递前重走现有核验，�
 `auto-review-context.test.ts`、Pi/Claude Code 审批接线回归以及 `eval-auto-approval.mts` 的
 `delegated-*` 正反对照（后者需要真实审阅模型，当前拆分 PR 未运行付费验证）。主机身份校验是确定性边界，动作与任务是否相符仍由 Auto 审阅，
 不宣称题目目录是系统沙箱。
+
+## 通用投递目标（增量接口，尚未发布）
+
+`cindy.targets` 的作者契约见 `FORGE_GUIDE`，实现位于 `pluginTargetSlot.ts` 和
+`pluginTargetCandidates.ts`。查询、解析和投递相互独立，没有宿主目标选择弹窗、Renderer 目标选择接线。权限说明复用既有安装/更新确认界面。
+选择方式、固定目标及其配置由使用这些接口的插件维护；Host 不保存插件的固定目标绑定。
+入口要求 `agent.tasks: true` 与独立的 `agent.targets: true`，后者单列为 `agent:targets` 权限，需 Host receipt 的 `targetCapabilityApproved` 明确批准事实。
+安装/更新确认只授予实际展示的新能力；旧 tasks 批准与历史未知字段不授予 targets。存量插件的原有能力不变，缺独立批准只阻止新接口；首次新接口调用复用既有宿主确认。
+保留 `cindy.tasks` 自有任务边界，不放宽它的 get/list/send，也不改变默认设置卡。
+
+- `list({targetKind})` 返回 `{targets:[{kind,id,label,detail}]}`，仅返回本机可用目标元数据，不返回消息历史。
+  项目使用 Cindy 已有目录分组（id 为目录路径），普通任务和伙伴使用其 ID。最近活动只排序，插件自行展示和选择。
+- `resolve({target:{kind,id}})` 返回最新目标元数据，供插件校验保存的固定目标；无写入、弹窗或隐式选中。
+  `send` 同样重新校验目标，不要求先 list/resolve，也不接受任意不可用路径或目标；失效返回 TARGET_UNAVAILABLE，不降级改投。
+- `send({target,requestKey,text,title?,route?,delivery?,attachments?})` 在指定项目中新建普通任务，或向指定普通任务/伙伴投递。
+  新任务经现有 `PluginTaskService.create` 登记归属后使用 `createPluginTaskSession`，沿用插件模型选择、受限动手权限及卸载撤销流程，可传统一模型目录的 route。
+  存量任务和伙伴保留其模型、权限、目录，不接受 route；伙伴通过唯一 canonical 注册解析，不使用兼容镜像或伪造伙伴身份。
+- 同键并发发送共享同一 Promise。回执复用当前账号 SQLite 的 `plugin_task_requests`，以 `operation=target` 按插件和请求键读写单行；只保存请求摘要、Host 生成的 taskId/clientId、批准修订和状态，
+  不保存正文、图片或插件固定配置。执行前原子预留回执；已接受请求可在重启后返回原结果，尚未确定的回执返回 DELIVERY_UNCERTAIN，
+  不自动重派。幂等键按插件和 requestKey 隔离，不因插件升级或 Host 重启更换身份；同键修改目标、正文、附件或 delivery 返回 REQUEST_KEY_CONFLICT。
+- `delivery` 为 `queue | steer`，缺省 queue（与显式 queue 幂等签名一致）；project 仅接受 queue。
+  queue 走 `sendToSessionInternal` 与既有输入队列；steer 复用 `steerControlInput` 同轮注入，不停止或重启当前轮。
+  空闲、框架不支持或当前输入边界不允许插话时走普通队列，保留 Stop/pause 边界。
+  返回 `{taskId,accepted:true,delivery:'queue'|'steer'}` 表示实际接受路径，不表示 AI 已执行完成。
+- main 盖 sourcePlugin 和 delegated-continuation 来源；入队前及实际受理时复核插件批准与目标。受理通过持久 clientId 查回执，重启恢复后仍检查当前批准修订、取消状态和伙伴 canonical 归属；失效以队列取消信号拦下派发。插话还在异步筛查后及 provider 派发前复核。
+  筛查拒绝返回 DELIVERY_REJECTED，不改走队列；ACK 未知保留宿主保护性暂停队列并返回 DELIVERY_UNCERTAIN，不再次排队。
+  `cancel({requestKey})` 持久使迟到请求失效，只按本插件该请求的 clientId 撤回排队输入，不停止整个会话或撤回已经接受的插话。
+- 仅本机 Desktop，不新增 Mobile/device-link 透传，也不承诺跨平台原生触发。异步请求持续复核原逻辑页、批准 revision 和 owner generation。
+
+此能力供同时声明并获批 `agent.tasks` 与 `agent.targets` 的插件使用；投递沿用目标任务权限，不授予读取历史、修改配置或停止其他任务的权限。
+静态检查与单元测试不等于真实 AI 执行的联调验收，不得把 accepted 当成完成。
+
+### 消息图片附件
+
+`tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`。
+插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送截图，不能静默丢图或回退文件路径。
+只接受插件自己提供的字节；不接受 Host 路径、URL、其他会话的媒体 URI 或自报 MIME。
+Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB；附件字节指纹和名称参与幂等签名，回执不保存 base64。
+两种发送入口在解码前共用 40 MiB 在途字节额度，持有至请求完成；超额返回可重试的 `TASK_BUSY`，成功、失败及取消均在 `finally` 释放额度，不在 Host 内排队保留超额附件。
+
+`pluginMessageAttachments.ts` 复用 `ingestMedia` 和草稿/排队消息提交链路。入库前同步登记内容地址到现有回收器的活引用集合，
+覆盖去重旧 blob 的入库、取消和派发在途窗口。调用方等待既有持久队列写入或插话落库后释放在途保护；
+之后由内存队列、恢复快照和 `createMessage → commitMessageMediaRefs` 的会话附件引用保护。
+失败或取消且未采用的图片不保留永久引用，由既有零引用缓冲与手动回收处理。无新目录、数据表、媒体协议或 media.deposit 授权。
+
+queue 与 steer 都把托管 URL 写入 files、chatMessage.images 和持久消息信封；模型输入由既有附件装配器生成。
+正文/附件来源仍是插件续行，不把截图变为新用户授权；目标、批准、owner 和取消闸保持不变。

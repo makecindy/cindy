@@ -20,6 +20,8 @@
  *      the active session (FP-3).
  *    - It has pending local plugin setup (`hasPendingPluginSetup`) while NOT
  *      being the active session.
+ *    - It has a pending input handoff (`hasPendingInputHandoff`, 代输入) while
+ *      NOT being the active session.
  *
  * Notifications are cleared when:
  *    - The user navigates to that session (clicks it) — done / awaiting only。
@@ -304,7 +306,8 @@ export function useSessionRunningStatus(
             (cur.hasPendingAskUser ||
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
-              cur.hasPendingPluginSetup);
+              cur.hasPendingPluginSetup ||
+              cur.hasPendingInputHandoff === true);
           // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
           if (!hasTerminalError && (isSessionDoneSilenced(sessionId)
             || makerChatStore.wasLastStopQuietCompletion(sessionId))) return;
@@ -335,7 +338,8 @@ export function useSessionRunningStatus(
         info.hasPendingAskUser ||
         info.hasPendingPermission ||
         info.hasPendingPlanReview ||
-        info.hasPendingPluginSetup
+        info.hasPendingPluginSetup ||
+        info.hasPendingInputHandoff === true
       ) {
         currentPendingSet.add(id);
         const isActive = id === activeSessionId;

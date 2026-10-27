@@ -158,12 +158,40 @@ export function classifyNamespaceMigration(
 
 function matchingOrganizationNamespace(
   organizationId: string | null,
-  currentOrganization: ClassifyNamespaceMigrationInput['currentOrganization'],
+  currentOrganization: { organizationId: string; orgSlug: string | null } | null,
 ): string | null {
   if (!organizationId || !currentOrganization) return null;
   if (currentOrganization.organizationId !== organizationId) return null;
   const namespace = currentOrganization.orgSlug;
   return namespace && isValidPluginNamespace(namespace) ? namespace : null;
+}
+
+/**
+ * An organization install removed before this client first ran leaves its
+ * library under the bare id and no registry record. The market ledger still
+ * holds the pre-namespace record, so only that same organization plugin may
+ * take the bare key back.
+ */
+export function canReclaimLegacyBareInstance(input: {
+  pluginId: string;
+  namespace: string;
+  records: readonly {
+    pluginId: string;
+    scope: 'public' | 'personal' | 'organization';
+    source: 'market' | 'legacy-adopted' | 'git-market' | 'local-market';
+    organizationId: string | null;
+    namespace?: string | null;
+    installed: boolean;
+  }[];
+  currentOrganization: { organizationId: string; orgSlug: string | null } | null;
+}): boolean {
+  const matches = input.records.filter((record) => record.pluginId === input.pluginId);
+  if (matches.length !== 1) return false;
+  const record = matches[0]!;
+  return !record.installed && !hasDeliveryNamespace(record) &&
+    record.scope === 'organization' &&
+    (record.source === 'market' || record.source === 'legacy-adopted') &&
+    matchingOrganizationNamespace(record.organizationId, input.currentOrganization) === input.namespace;
 }
 
 export type NamespaceCommitPlan =

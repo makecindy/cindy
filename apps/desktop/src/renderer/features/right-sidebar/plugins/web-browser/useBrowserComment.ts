@@ -133,6 +133,8 @@ export function useBrowserComment(
   /** 提交时刻的页面 URL 取值器(immediate 路径由 hook 自己触发提交,拿不到
    *  调用方参数,统一走 getter;需引用稳定或由调用方 useCallback 包裹)。 */
   getPageUrl: () => string,
+  /** Retained background hosts keep their guest, but must release selection overlays. */
+  visible = true,
 ): UseBrowserCommentResult {
   const { t } = useTranslation();
   // 草稿写入目标键:项目草稿页的 RSB bucket 是合成 sessionId,可见 composer
@@ -671,7 +673,19 @@ export function useBrowserComment(
     webview,
   ]);
 
-  // tab 卸载 / 切走时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
+  // A retained host no longer unmounts on task switches or sidebar collapse.
+  // Use the existing abort path to invalidate pending work and remove the guest
+  // blocker, while keeping unfinished host text/design edits recoverable.
+  useLayoutEffect(() => {
+    if (!visible && modeRef.current !== 'off') {
+      // Abort increments the epoch before rejecting pending IPC promises, so
+      // their continuations cannot restore selection or report a stale error.
+      abortModePreservingDraft();
+      if (webview) rejectCommandsForWebview(webview);
+    }
+  }, [visible, abortModePreservingDraft, rejectCommandsForWebview, webview]);
+
+  // tab 卸载时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
   // 不通知的话 overlay 会一直趴在页面上)。
   useEffect(() => {
     return () => {

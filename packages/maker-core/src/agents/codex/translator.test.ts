@@ -24,7 +24,9 @@ import {
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
+  finishCodexSamplingTurn,
   pauseCodexGeneration,
+  resetCodexGenerationTiming,
   resumeCodexGeneration,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -81,6 +83,65 @@ async function collect(queue: AsyncQueue<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 describe('Codex assistant text streaming contract', () => {
+  it.each(['completed', 'failed', 'interrupted'])('isolates failed sampling items when the retry turn is %s', async (status) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const delta = (turnId: string, itemId: string) => translateAgentMessageDelta({
+      threadId: 't1', turnId, itemId, delta: 'Opening',
+    }, q, ctx);
+    delta('turn-a', 'first');
+    delta('turn-b', 'other-turn');
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    delta('turn-a', 'retry');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toEqual(status === 'completed'
+      ? undefined : { threadId: 't1', turnId: 'turn-a', attempt: 2, agentMessageIds: ['retry'] });
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toBeUndefined();
+    translateErrorNotification(makeParams({ turnId: 'turn-b', willRetry: false, message: 'stream disconnected' }), q, ctx);
+    const failures = (await collect(q)).filter(event => event.type === 'error').map(event =>
+      (event.data as { assistantAttemptFailure?: { agentMessageIds: string[] } }).assistantAttemptFailure?.agentMessageIds);
+    expect(failures).toEqual([['first'], ['other-turn']]);
+    resetCodexGenerationTiming(rt);
+  });
+  // #6351: item/completed is not response completion. Existing text-delta tests
+  // never inject a stream failure after an assistant item has already completed.
+  it('attributes a failed sampling segment without discarding earlier tool progress or final retry output', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const complete = (id: string, text: string, phase: 'commentary' | 'final_answer') =>
+      translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+        item: { type: 'agentMessage', id, text, phase } }, q, ctx);
+    complete('progress', 'Checking the workspace', 'commentary');
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'pwd', cwd: '/repo',
+        status: 'completed', aggregatedOutput: '/repo', exitCode: 0 } }, q, ctx);
+    complete('failed-commentary', 'Preparing the answer', 'commentary');
+    complete('failed-answer', 'Hello from attempt one', 'final_answer');
+    translateErrorNotification(makeParams({ willRetry: true,
+      message: 'stream disconnected - retrying sampling request (1/5 in 212ms)...',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    complete('successful-commentary', 'Preparing the accepted answer', 'commentary');
+    complete('successful-intro', 'Hello from attempt two', 'final_answer');
+    complete('successful-answer', 'The accepted answer continues', 'final_answer');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', 'completed')).toBeUndefined();
+    const events = await collect(q);
+    expect(events.filter(event => event.type === 'text').map(event =>
+      (event.data as { agentMessageId?: string }).agentMessageId)).toEqual([
+      'progress', 'failed-commentary', 'failed-answer',
+      'successful-commentary', 'successful-intro', 'successful-answer',
+    ]);
+    expect(events.find(event => event.type === 'error')).toMatchObject({
+      data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
+        threadId: 't1', turnId: 'turn-a', attempt: 1,
+        agentMessageIds: ['failed-commentary', 'failed-answer'],
+      } },
+    });
+    expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
   it('uses dedicated deltas for live text, dedupes item snapshots, and keeps completed as final calibration', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
@@ -516,12 +577,12 @@ describe('Codex generation timing', () => {
     try {
       const rt = newCodexRuntimeState();
       beginCodexGenerationTurn(rt, 'turn-1', 1_000);
-      rt.tokenSpeed.recordDelta('a b c d e f g h i j', 1_000);
+      rt.tokenSpeed.recordUsage(10, 1_000);
       wallClockSpy.mockReturnValue(40_000);
       finalizeCodexGenerationTurn(rt, 'turn-1', 2_000);
       expect(codexGenerationDurationMs(rt)).toBeUndefined();
       // The suspended wall clock would dilute the live speed too.
-      expect(rt.tokenSpeed.snapshot(40_000)).toBeUndefined();
+      expect(rt.tokenSpeed.snapshot()).toBeUndefined();
     } finally {
       wallClockSpy.mockRestore();
     }
@@ -2484,7 +2545,7 @@ it('carries the provider final phase from item start onto the first delta', asyn
   expect(await collect(q)).toContainEqual({ type: 'text', source: 'codex', data: { text: 'Visible now', isFinal: false, agentMessageId: 'final', phase: 'final_answer' } });
 });
 
-it('measures live tok/s from visible deltas and pauses while a command runs', () => {
+it('does not count visible summaries as output and pauses the usage clock while a command runs', () => {
   vi.useFakeTimers();
   try {
     const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
@@ -2493,14 +2554,35 @@ it('measures live tok/s from visible deltas and pauses while a command runs', ()
     translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'm1', text: '' } }, q, ctx);
     vi.setSystemTime(1_500);
     translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'm1', delta: 'one two three four' }, q, ctx);
-    expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: true, tokens: 4, elapsedMs: 500 });
+    expect(rt.tokenSpeed.snapshot()).toBeUndefined();
     translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'commandExecution', id: 'c1', command: 'ls' } }, q, ctx);
     vi.setSystemTime(9_500);
     // The command is still running: its time is not generation time.
-    expect(rt.tokenSpeed.snapshot()?.elapsedMs).toBe(500);
-    rt.tokenSpeed.stop(20);
+    expect(rt.generationDurationMs).toBe(500);
+    rt.tokenSpeed.recordUsage(20, rt.generationDurationMs);
+    rt.tokenSpeed.stop();
     expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 500, average: 40 });
   } finally {
     vi.useRealTimers();
   }
+});
+
+// Regression: imageView was discarded by the host; now a paired process step. Unit.
+it('projects imageView once and retains mixed MCP media', async () => {
+  const q = createAsyncQueue<AgentEvent>();
+  const ctx = makeCtx(newCodexRuntimeState());
+  const viewed = { threadId: 't', turnId: 'turn', item: { type: 'imageView', id: 'view', path: '/tmp/preview.png' } };
+  translateItemNotification('started', viewed, q, ctx);
+  translateItemNotification('completed', viewed, q, ctx);
+  translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: {
+    type: 'mcpToolCall', id: 'mcp', server: 'preview', tool: 'capture', status: 'completed',
+    result: { content: [{ type: 'text', text: 'captured' }, { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
+  } }, q, ctx);
+  q.end(); const events: AgentEvent[] = []; for await (const e of q) events.push(e);
+  expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
+  expect(events.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual([
+    { toolUseId: 'view', fullText: '/tmp/preview.png', processMedia: [{ kind: 'image', path: '/tmp/preview.png' }] },
+    { toolUseId: 'mcp', fullText: 'captured', isError: false,
+      processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }] },
+  ]);
 });

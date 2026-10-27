@@ -289,6 +289,7 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       turnCostUsd?: unknown;
       turnCostIsEstimate?: unknown;
       turnUsageDetails?: unknown;
+      mediaCosts?: unknown;
     };
     const totalTokens = normalizeTurnUsageDetails(parsed.turnUsageDetails)?.totalTokens ?? 0;
     const structured = normalizeRegionalMoney(parsed.turnCost);
@@ -299,19 +300,16 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
         ? legacyUsdMoney(parsed.turnCostUsd)
         : undefined;
     const money = structured ?? legacy;
-    if (!money || money.amount <= 0) {
-      return {
-        costMoney: null,
-        estimatedValueMoney: null,
-        legacyProjectedActualAmount: 0,
-        totalTokens,
-      };
-    }
-    const isEstimate = parsed.turnCostIsEstimate === true || money.kind === 'value-estimate';
+    const mediaCosts = (Array.isArray(parsed.mediaCosts) ? parsed.mediaCosts : [])
+      .map(normalizeRegionalMoney)
+      .filter((value): value is RegionalMoney => Boolean(value && value.kind === 'actual-cost' && value.amount > 0));
+    const isEstimate = parsed.turnCostIsEstimate === true || money?.kind === 'value-estimate';
     return {
-      costMoney: isEstimate ? null : money,
-      estimatedValueMoney: isEstimate ? asValueEstimateMoney(money) : null,
-      legacyProjectedActualAmount: !structured && !isEstimate ? money.amount : 0,
+      costMoney: addCompatibleRegionalMoney([
+        ...mediaCosts, ...(money && money.amount > 0 && !isEstimate ? [money] : []),
+      ]),
+      estimatedValueMoney: money && money.amount > 0 && isEstimate ? asValueEstimateMoney(money) : null,
+      legacyProjectedActualAmount: !structured && !isEstimate ? (money?.amount ?? 0) : 0,
       totalTokens,
     };
   } catch {
@@ -632,7 +630,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     // Chunking bind parameters must also bound RPC fan-out for large histories.
     for (const sessionIdChunk of chunkArray([...sessionIds], SQLITE_IN_CHUNK_SIZE)) {
       rows.push(...await db.select({ agentMeta: messages.agentMeta }).from(messages)
-        .where(and(inArray(messages.sessionId, sessionIdChunk), eq(messages.role, 'assistant'))));
+        .where(and(inArray(messages.sessionId, sessionIdChunk), inArray(messages.role, ['user', 'assistant']))));
     }
     const ledger = new Map<
       string,
@@ -939,9 +937,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       if (row.role === 'user') {
         activeScheduleId = scheduleOriginFromAgentMeta(row.agentMeta)?.scheduleId ?? null;
-        continue;
       }
-      if (row.role !== 'assistant') continue;
+      if (row.role !== 'assistant' && row.role !== 'user') continue;
       const turnCost = turnCostFromAgentMeta(row.agentMeta);
       const cost = turnCost.costMoney?.amount ?? 0;
       const estimatedValue = turnCost.estimatedValueMoney?.amount ?? 0;

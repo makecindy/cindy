@@ -23,6 +23,15 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  // plugin-security-and-authoring §1.1: preserve Host capability declarations so mobile never guesses support.
+  // Existing discovery tests omitted collection actions. Minimal regression: one plugins management action (unit).
+  it('retains bounded collection capability actions from the Host manifest', async () => {
+    const invoke = vi.fn(async () => ({ protocolVersion: 1, collections: [{
+      id: 'plugins', resourceKind: 'plugin', title: 'Plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }],
+    }] })) as RemoteInvoke;
+    const manifest = await loadRemoteResourceManifest(invoke, targets[0]);
+    expect(manifest?.collections[0].actions).toEqual([{ id: 'management:snapshot', label: 'Manage' }]);
+  });
   it('omits desktop routines from live discovery and offline fallback while keeping other collections', async () => {
     const collections = [
       { id: 'routines', title: '例行任务', resourceKind: 'routine', placement: 'home-scope', targets },
@@ -113,6 +122,17 @@ describe('remote resource discovery', () => {
 
     await expect(discoverRemoteHomeCollections(invoke, targets, 'en'))
       .rejects.toThrow('temporarily offline');
+  });
+
+  it('commits an authoritative empty manifest even when an uncached sibling fails', async () => {
+    const invoke = vi.fn(async (deviceId: string) => {
+      if (deviceId === 'mac-2') throw new Error('temporarily offline');
+      return { protocolVersion: 1, collections: [] };
+    }) as RemoteInvoke;
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
+    const progress = vi.fn();
+    await expect(discoverRemoteHomeCollections(invoke, targets, 'en', previous, progress)).resolves.toEqual([]);
+    expect(progress).toHaveBeenLastCalledWith([]);
   });
 
   it('treats an old host as unsupported while retaining collections from newer hosts', async () => {

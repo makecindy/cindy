@@ -23,7 +23,7 @@ describe('inactive session list subscriptions', () => {
       'gate ? gate.subscribe(subscribe, notify) : subscribe(notify)',
     );
     expect(store).toContain(
-      "usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions)",
+      "usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions)",
     );
     const previewHook = store.slice(
       store.indexOf('export function useRemoteSessionMessagePreview'),

@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { useTranslation } from 'react-i18next';
 import { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, type RemoteResourceRef } from '@cindy/device-link';
-import { COMPANION_IMPORT_CHUNK_PRIMITIVE, companionImportSubmissions, companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_BOTS_PRIMITIVE, COMPANION_IMPORT_CHUNK_PRIMITIVE, companionImportSubmissions, companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportEntry, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -17,10 +17,12 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
 }) {
   const { t, i18n } = useTranslation();
   const tr = (key: string) => t(`devices.companionImport.${key}`);
+  // Bots read as "platform · name"; their owner alternatives differ only by owner ID.
+  const entryLabel = (entry: CompanionImportEntry) => entry.platform ? `${t(`message.renderer.imPlatform.${entry.platform}`)} · ${entry.name}` : entry.name;
   const styles = useThemedStyles(makeStyles);
   const { invoke, openLink } = useDeviceLink();
   const api = useMemo(() => remoteCompanionImportApi(
-    async id => { await openLink(deviceId); return invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ ref: { collectionId: 'companion-import', kind: 'import', id }, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['companion-import', COMPANION_IMPORT_CHUNK_PRIMITIVE], locale: i18n.language } }]); },
+    async id => { await openLink(deviceId); return invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ ref: { collectionId: 'companion-import', kind: 'import', id }, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['companion-import', COMPANION_IMPORT_CHUNK_PRIMITIVE, COMPANION_IMPORT_BOTS_PRIMITIVE], locale: i18n.language } }]); },
     (sourceId, selection) => invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId: 'companion-import', resourceRef: { collectionId: 'companion-import', kind: 'import', id: `preview:${sourceId}` }, actionId: 'import', input: { ...selection } }, i18n.language),
   ), [deviceId, deviceName, invoke, openLink, i18n.language]);
   const [sources, setSources] = useState<CompanionImportSource[]>();
@@ -106,7 +108,8 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
     onCreated({ collectionId: 'teammates', kind: 'bot', id: result.botId }); onClose();
   }, [enterChat, result, onCreated, onClose]);
   const entries = preview?.entries.filter(entry => entry.category === expanded) ?? [];
-  const filtered = entries.filter(entry => `${entry.name} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const entriesById = new Map(preview?.entries.map(entry => [entry.id, entry]));
+  const filtered = entries.filter(entry => `${entryLabel(entry)} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <CompanionSheet visible={visible && !enterChat} title={tr('title')} contentScrolls onClose={() => { if (!busy || result) onClose(); }} onClosed={onClosed} preventDismiss={busy && !result}>
     {!enterChat ? <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {!online || error ? <Text accessibilityRole="alert" style={styles.note}>{!online ? t('devices.companionProfile.offline', { deviceName }) : tr(companionImportReasonKey(error))}</Text> : null}
@@ -121,7 +124,7 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
           <MainWindowActionButton action={{ label: `${tr('details')} · ${outstanding.length}`, onPress: () => { setDetails(!details); setDetailPage(0); } }} />
           {details ? <>
             {outstanding.slice(detailPage * 20, (detailPage + 1) * 20).map(check => <View key={check.entryId}>
-              <Text style={styles.label}>{preview?.entries.find(entry => entry.id === check.entryId)?.name ?? tr('itemAttention')}</Text>
+              <Text style={styles.label}>{entriesById.has(check.entryId) ? entryLabel(entriesById.get(check.entryId)!) : tr('itemAttention')}</Text>
               <Text style={styles.note}>{tr(check.progress?.saved ? 'partlySaved' : savedIds.has(check.entryId) ? 'savedNeedsSetup' : 'notSaved')} · {tr(companionImportReasonKey(check.message))}</Text>
               {check.progress ? <Text style={styles.count}>{check.progress.saved} / {check.progress.total}</Text> : null}
             </View>)}
@@ -135,8 +138,11 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
       </> : expanded ? <>
         <MainWindowActionButton action={{ label: tr('back'), onPress: () => setExpanded('') }} />
         <View style={styles.row}><Text style={[styles.label, styles.expand]}>{tr(expanded)}</Text><Switch accessibilityLabel={tr('selectAll')} disabled={locked} value={areCompanionImportEntriesSelected(entries, selected)} onValueChange={checked => toggle(entries.map(entry => entry.id), checked)} /></View>
-        <TextInput accessibilityLabel={tr('search')} placeholder={tr('search')} value={query} onChangeText={value => { setQuery(value); setPage(0); }} style={styles.input} />
-        {filtered.slice(page * 20, (page + 1) * 20).map(entry => <View key={entry.id} style={styles.row}><View style={styles.expand}><Text style={styles.label}>{entry.name}</Text>{entry.description ? <Text numberOfLines={2} style={styles.note}>{entry.description}</Text> : null}{entry.enabled === false ? <Text style={styles.note}>{tr('paused')}</Text> : null}</View><Switch accessibilityLabel={entry.name} value={selectedSet.has(entry.id)} disabled={locked} onValueChange={value => toggle([entry.id], value)} /></View>)}
+        {expanded !== 'bots' || entries.length > 20 ? <TextInput accessibilityLabel={tr('search')} placeholder={tr('search')} value={query} onChangeText={value => { setQuery(value); setPage(0); }} style={styles.input} /> : null}
+        {filtered.slice(page * 20, (page + 1) * 20).map(entry => <View key={entry.id} style={styles.row}><View style={styles.expand}><Text style={styles.label}>{entryLabel(entry)}</Text>
+          {entry.owner && entry.exclusiveWith?.length ? <Text style={styles.note}>{t('devices.companionImport.botOwner', { id: entry.owner })}</Text> : null}
+          {entry.description ? <Text numberOfLines={2} style={styles.note}>{entry.description}</Text> : null}{entry.enabled === false ? <Text style={styles.note}>{tr(entry.category === 'bots' ? 'sourceDisabled' : 'paused')}</Text> : null}</View>
+          <Switch accessibilityLabel={entryLabel(entry)} value={selectedSet.has(entry.id)} disabled={locked} onValueChange={value => toggle([entry.id], value)} /></View>)}
         {filtered.length > 20 ? <View style={styles.row}><MainWindowActionButton action={{ label: tr('previous'), disabled: page === 0, onPress: () => setPage(page - 1) }} /><Text style={styles.count}>{page + 1} / {Math.ceil(filtered.length / 20)}</Text><MainWindowActionButton action={{ label: tr('next'), disabled: (page + 1) * 20 >= filtered.length, onPress: () => setPage(page + 1) }} /></View> : null}
       </> : <>
         <Text style={styles.label}>{t('devices.companionProfile.name')}</Text>
@@ -146,7 +152,7 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
           const group = preview.entries.filter(entry => entry.category === category);
           if (!group.length) return null;
           const count = group.filter(entry => selectedSet.has(entry.id)).length;
-          return <View key={category} style={styles.row}><Pressable accessibilityRole="button" style={styles.expand} disabled={locked} onPress={() => { setExpanded(category); setQuery(''); setPage(0); }}><Text style={styles.label}>{tr(category)}</Text><Text style={styles.count}>{count} / {group.length}</Text></Pressable><Switch accessibilityLabel={tr(category)} value={areCompanionImportEntriesSelected(group, selected)} disabled={locked} onValueChange={value => toggle(group.map(entry => entry.id), value)} /></View>;
+          return <View key={category} style={styles.row}><Pressable accessibilityRole="button" style={styles.expand} disabled={locked} onPress={() => { setExpanded(category); setQuery(''); setPage(0); }}><Text style={styles.label}>{tr(category)}</Text>{category === 'bots' ? <Text style={styles.note}>{t('devices.companionImport.botsNote', { source: preview.source.kind === 'hermes' ? 'Hermes' : 'OpenClaw' })}</Text> : null}<Text style={styles.count}>{count} / {group.length}</Text></Pressable><Switch accessibilityLabel={tr(category)} value={areCompanionImportEntriesSelected(group, selected)} disabled={locked} onValueChange={value => toggle(group.map(entry => entry.id), value)} /></View>;
         })}
         {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <View style={styles.row}><Text style={[styles.note, styles.expand]}>{tr('takeover')}</Text><Switch accessibilityLabel={tr('takeover')} value={takeover} disabled={locked} onValueChange={setTakeover} /></View> : null}
       </>}

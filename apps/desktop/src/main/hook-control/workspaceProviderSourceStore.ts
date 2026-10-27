@@ -7,8 +7,9 @@
  * 连接态、目录、派发全在客户端,server 对它零感知,Slack /model 卡也不需要
  * 编辑它)。model/effort/agentKind/permissionMode 的正本同样在本机
  * (workspacePrefsStore);本表按 (channel, teamId, workspace) 记来源,派发合成
- * 时与本机目录 model 组合,再经 effectiveSourceIdForModel 收窄到真实已连接来源
- * (来源断开/不提供该模型时自动回落,不会拼出不可能路由)。
+ * 时与本机目录 model 组合,再经 effectiveSourceIdForModel 校验:显式来源失效时
+ * 拒绝新任务而不换账号;目录模型为空(继承 IM 默认)时,账号可用但不提供继承模型
+ * 的残留来源被忽略(issue #5912)。远端快照改模型时同键来源一并清除。
  *
  * 持久化 <userData>/hook-workspace-provider-source.json —— 属配置而非业务数据,
  * 与 slack-hook.json 同级同模式(原子写防半截文件);不含任何凭证。
@@ -52,7 +53,8 @@ function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
     HOOK_WORKSPACE_ALIAS_RE.test(r.workspace) &&
     typeof r.providerId === 'string' &&
     r.providerId.length > 0 &&
-    r.providerId.length <= 128
+    r.providerId.length <= 128 &&
+    (r.agentDeviceId == null || (typeof r.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId)))
   );
 }
 
@@ -96,10 +98,18 @@ export function getWorkspaceProviderSource(
   teamId: string | null,
   workspace: string,
 ): string | null {
+  return getWorkspaceProviderRoute(channel, teamId, workspace)?.providerId ?? null;
+}
+
+export function getWorkspaceProviderRoute(
+  channel: HookProviderChannel,
+  teamId: string | null,
+  workspace: string,
+): WorkspaceProviderSourceEntry | null {
   const entries = readFileEntries(filePath());
   return (
-    entries.find((e) => sameKey(e, channel, teamId, workspace))?.providerId ??
-    entries.find((e) => sameKey(e, channel, null, workspace))?.providerId ??
+    entries.find((e) => sameKey(e, channel, teamId, workspace)) ??
+    entries.find((e) => sameKey(e, channel, null, workspace)) ??
     null
   );
 }
@@ -110,11 +120,55 @@ export function setWorkspaceProviderSource(
   teamId: string | null,
   workspace: string,
   providerId: string | null,
+  agentDeviceId?: string | null,
 ): WorkspaceProviderSourceEntry[] {
   const fp = filePath();
   const rest = readFileEntries(fp).filter((e) => !sameKey(e, channel, teamId, workspace));
   const next =
-    providerId === null ? rest : [...rest, { channel, teamId, workspace, providerId }];
+    providerId === null ? rest : [...rest, { channel, teamId, workspace, providerId,
+      ...(agentDeviceId ? { agentDeviceId } : {}) }];
+  writeFileEntries(fp, next);
+  return next;
+}
+
+/** 只需要偏好行的定位键与路由字段(HookWorkspacePrefs 的子集)。 */
+interface WorkspaceRouteRow {
+  workspace: string;
+  teamId?: string | null;
+  agentKind: string | null;
+  model: string | null;
+}
+
+/**
+ * server 快照改动了某目录的路由(agentKind 或 model 改成别的 / 清空 / 整行消失)后,
+ * 清掉同键的来源偏好;有清除时返回更新后的全量条目, 否则返回 null。
+ *
+ * 来源只在本机模型面板里和 (Agent, 模型) 一起选, 远端(/model 卡、服务端快照)改路由时
+ * 没有来源通道 —— 留着旧来源就会拼出「新路由 + 旧来源」的不可执行组合(issue #5912)。
+ * 本机尚未镜像的写入在快照合并时优先, 路由不会被改动, 也就不会误清刚选的来源。
+ *
+ * 只按来源条目自身的键比较。null-team 来源被多个 team 当兜底共用, 某个 team 远端改了
+ * 自己的路由时不清它: 清掉会让仍在用它的其它 team 静默改走默认来源(换账号)。这种
+ * 组合派发时按「显式来源失效」拒绝并提示重新选择。
+ */
+export function clearWorkspaceProviderSourcesForRemoteModelChanges(
+  channel: HookProviderChannel,
+  before: readonly WorkspaceRouteRow[],
+  after: readonly WorkspaceRouteRow[],
+): WorkspaceProviderSourceEntry[] | null {
+  const keyOf = (row: { teamId?: string | null; workspace: string }): string =>
+    `${row.teamId ?? ''}::${row.workspace}`;
+  const routeOf = (row: WorkspaceRouteRow): string =>
+    JSON.stringify([row.agentKind ?? null, row.model ?? null]);
+  const routeBefore = new Map(before.map((row) => [keyOf(row), routeOf(row)] as const));
+  const routeAfter = new Map(after.map((row) => [keyOf(row), routeOf(row)] as const));
+  const empty = JSON.stringify([null, null]);
+  const changed = (e: WorkspaceProviderSourceEntry): boolean =>
+    (routeBefore.get(keyOf(e)) ?? empty) !== (routeAfter.get(keyOf(e)) ?? empty);
+  const fp = filePath();
+  const entries = readFileEntries(fp);
+  const next = entries.filter((e) => e.channel !== channel || !changed(e));
+  if (next.length === entries.length) return null;
   writeFileEntries(fp, next);
   return next;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostCardActionDispatcher } from '../cardActionDispatch.js';
 import { GhostPreviewGate } from '../previewGate.js';
+import { prepareMailAttachmentUpload } from '../mailAttachmentUpload.js';
 import { ghostInstallApprovalToken, ghostWebviewEntryPaths, type InstalledGhost } from '../../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, installedGhostLogicalIdentity, installedGhostPhysicalKeys, installedGhostStoragePart,
   parsePluginStoragePart, pluginStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
@@ -15,6 +16,10 @@ const load = createGhostProductionCallbacks<{
 }>({ functions: ['findGhostForInstanceId', 'findGhostForPhysicalStoragePart', 'resolveGhostWebviewAttach',
   'getGhostCardActionDispatcher', 'resolveMobilePluginMedia', 'setGhostEnabledForUser'],
   initialize: 'let cardActionDispatcherSingleton = null;' });
+
+const loadUsageBinding = createGhostProductionCallbacks<{
+  bindPluginUsage: (ghost: InstalledGhost) => Promise<void>;
+}>({ functions: ['bindPluginUsage'] });
 
 function harness() {
   const root: InstalledGhost = { manifest: { schemaVersion: 3, id: 'helper', name: 'Root', version: '1.0.0',
@@ -34,10 +39,13 @@ function harness() {
     blobUrl: (hash, ext) => 'cindy-media://blobs/' + hash + ext });
   const api = load({ availableGhosts: () => ghosts, findInstalledGhostByInstanceId, resolveInstalledGhost,
     installedGhostPhysicalKeys,
-    requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled }),
+    requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled,
+      findInstalledInstance: (key: string) => ghosts.find((ghost) => installedGhostStoragePart(ghost) === key) }),
     beginGhostMutation: () => vi.fn(), captureGhostMutationOwner: vi.fn(),
+    pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
     getGhostNodeRuntimeBroker: () => ({ stop }), getGhostSubscriptionGateway: () => ({ dropGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
+    harnessSlotSingleton: null,
     getGhostLibrarySlot: () => ({ disposeGhost: vi.fn() }),
     suspendGhostUnreadProjection: vi.fn(), refreshMivoLibraryExtraDirGrant: async () => {},
     broadcastGhostsChanged: vi.fn(),
@@ -52,7 +60,7 @@ function harness() {
     sendToGhostLogic: send, getGhostAgentSlot: () => ({ issueUserActionToken: () => null, clearGhost: vi.fn() }),
     getGhostSessionActivityTracker: () => ({ begin: vi.fn() }), ghostOwnerScope: undefined,
     ghostInstallApprovalToken, log: { info: vi.fn(), warn: vi.fn() },
-    getGhostPreviewGate: () => preview,
+    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload,
   });
   return { ...api, root, organization, ghosts, send, setEnabled, stop, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
 }
@@ -67,12 +75,12 @@ describe('production plugin instance boundaries', () => {
     expect(fixture.stop).not.toHaveBeenCalled();
     const currentApproval = ghostInstallApprovalToken(fixture.organization.approval);
     await fixture.setGhostEnabledForUser('helper', false, currentApproval);
-    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval);
+    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval, undefined);
   });
   it('does not disable a logical twin after the original physical target disappears', async () => {
     const fixture = harness();
     await fixture.setGhostEnabledForUser('helper', false);
-    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval));
+    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval), undefined);
     fixture.setEnabled.mockClear();
     fixture.stop.mockClear();
     fixture.ghosts.splice(0, 1);
@@ -114,4 +122,48 @@ describe('production plugin instance boundaries', () => {
     await expect(dispatcher.dispatch('root-card', 'continue')).resolves.toEqual({ ok: true });
     expect(fixture.send).toHaveBeenLastCalledWith('_root__helper', expect.any(Object));
   });
+});
+
+describe('usage binding instance revalidation', () => {
+  // Unit regression: a market refresh used to rescan every plugin once per
+  // binding. Read the committed target inside the lock and retain fallback for
+  // missing registry entries, without binding a same-name replacement instance.
+  it.each(['indexed', 'fallback', 'removed', 'owner-changed'] as const)(
+    'revalidates the committed installation with %s state', async (state) => {
+      const { organization, root } = harness();
+      const committed: InstalledGhost = {
+        ...organization, approval: { state: 'approved', revision: 'committed' },
+      };
+      let locked = false;
+      let scope = 'owner-a';
+      const list = vi.fn(() => state === 'removed' ? [root] : [committed, root]);
+      const findInstalledInstance = vi.fn((key: string) => {
+        expect(locked).toBe(true);
+        expect(key).toBe(installedGhostStoragePart(organization));
+        return state === 'indexed' ? committed : undefined;
+      });
+      const bind = vi.fn(async () => {});
+      const api = loadUsageBinding({
+        activeOwnerScopeKey: () => scope,
+        currentPluginUsageService: () => ({ bind }),
+        isAppSessionBoundaryPending: () => false,
+        getGhostManager: () => ({ list, findInstalledInstance }),
+        findInstalledGhostByInstanceId,
+        readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+        withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => {
+          locked = true;
+          if (state === 'owner-changed') scope = 'owner-b';
+          await callback();
+        },
+        log: { warn: vi.fn() },
+      });
+      await api.bindPluginUsage(organization);
+      if (state === 'removed' || state === 'owner-changed') {
+        expect(bind).not.toHaveBeenCalled();
+      } else {
+        expect(bind).toHaveBeenCalledExactlyOnceWith(committed.approval, undefined);
+      }
+      expect(list).toHaveBeenCalledTimes(state === 'indexed' || state === 'owner-changed' ? 0 : 1);
+    },
+  );
 });

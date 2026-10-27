@@ -19,7 +19,7 @@ type Source = { shareId: string; memberId: string; providerId: string; region: P
 
 /**
  * 复用受邀者账号的收藏存储；远程同步保留既有长度约束。providerId 是带分享/成员身份的存储键，
- * 只在对应分享的选择器里投影为真实 providerId，绝不用于模型请求。
+ * 按对应分享的目录投影为真实 providerId（包括聚合收藏视图），绝不把存储键用于模型请求。
  * 老客户端不认识这个来源时不会把它误认成本机同名供应商。
  */
 export function providerShareFavoriteSource(source: Pick<ProviderShareReceived, 'shareId' | 'memberId' | 'providerId' | 'owner'>): string {
@@ -52,12 +52,16 @@ const subscribe = (listener: () => void) => {
 };
 const getSnapshot = () => snapshot;
 
-/** 原收藏就是未完成清理的持久线索，不依赖另写一份可能同样失败的清理队列。 */
-export function getProviderShareFavoriteRegions(ownerId: string | null): Source['region'][] {
-  return [...new Set(accessHostModelFavorites(ownerId).flatMap((item) => {
+export function providerShareFavoriteRegionsOf(items: readonly Pick<ModelFavoriteItem, 'providerId'>[]): Source['region'][] {
+  return [...new Set(items.flatMap((item) => {
     const source = parseProviderShareFavoriteSource(item.providerId);
     return source ? [source.region] : [];
   }))];
+}
+
+/** 原收藏就是未完成清理的持久线索，不依赖另写一份可能同样失败的清理队列。 */
+export function getProviderShareFavoriteRegions(ownerId: string | null): Source['region'][] {
+  return providerShareFavoriteRegionsOf(accessHostModelFavorites(ownerId));
 }
 
 /** 可用来源立即发布；仅清理 Main 已确认完整名单的区域，未知区域的收藏保留。 */
@@ -85,10 +89,24 @@ export function useProviderShareFavoriteCleanupFailed(): boolean {
   return !!state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp) && state.cleanupFailed;
 }
 
+/** 聚合收藏只解析当前账号仍可用的原授权；同名供应商或重新申请的分享不能接管旧副本。 */
+export function useProviderShareFavoriteSources(): ReadonlyMap<string, string> {
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const current = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
+    ? state.membership : null;
+  return useMemo(() => new Map(
+    (current?.received ?? [])
+      .filter((share) => share.status === 'active' && share.hostOnline && share.hostCapable)
+      .map((share) => [providerShareFavoriteSource(share), `share:${share.shareId}`]),
+  ), [current]);
+}
+
 export function useProviderShareFavorites(
   deviceId: string | undefined,
-  stored: readonly ModelFavoriteItem[],
+  localItems: readonly ModelFavoriteItem[],
+  home?: { items: readonly ModelFavoriteItem[]; store: FavoriteStore },
 ): { items: readonly ModelFavoriteItem[]; store: FavoriteStore } {
+  const stored = home?.items ?? localItems;
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const owner = getDataOwnerGeneration();
   const membership = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
@@ -105,8 +123,10 @@ export function useProviderShareFavorites(
   };
   const expected = (uid: string) => {
     assertCurrent();
-    const item = accessHostModelFavorites(owner.dataOwnerId).find((item) => item.uid === uid && item.providerId === source);
-    if (!item) throw new Error('Shared favorite unavailable');
+    const item = home
+      ? home.store.get(uid)
+      : accessHostModelFavorites(owner.dataOwnerId).find((item) => item.uid === uid);
+    if (!item || item.providerId !== source) throw new Error('Shared favorite unavailable');
     return item;
   };
   const store: FavoriteStore = {
@@ -117,10 +137,12 @@ export function useProviderShareFavorites(
     add: (config: ModelFavoriteConfig) => {
       assertCurrent();
       if (config.providerId !== share!.providerId) throw new Error('Shared provider changed');
+      if (home) return home.store.add({ ...config, providerId: source! });
       accessHostModelFavorites(owner.dataOwnerId, { kind: 'add', item: { ...config, providerId: source! } });
     },
     update: (uid, patch) => {
       const before = expected(uid);
+      if (home) return home.store.update(uid, patch);
       const item = { ...before, ...patch };
       accessHostModelFavorites(owner.dataOwnerId, {
         kind: 'update', expected: before,
@@ -128,7 +150,9 @@ export function useProviderShareFavorites(
       });
     },
     remove: (uid) => {
-      accessHostModelFavorites(owner.dataOwnerId, { kind: 'remove', expected: expected(uid) });
+      const before = expected(uid);
+      if (home) return home.store.remove(uid);
+      accessHostModelFavorites(owner.dataOwnerId, { kind: 'remove', expected: before });
     },
   };
   const items = useMemo(() => source && share

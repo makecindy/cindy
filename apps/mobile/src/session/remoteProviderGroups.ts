@@ -41,6 +41,12 @@ interface SummaryMember {
   /** 组员所在电脑(组所在电脑视角)；null = 组所在电脑自己，就是组那一项本身。 */
   agentDeviceId: string | null;
   providerId: string;
+  /** 台数按哪台电脑算：分享来的按分享者那台电脑(组摘要带了时)，其余就是 agentDeviceId(与桌面端一致)。 */
+  computer: string;
+}
+
+function isHostDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128;
 }
 
 /** 目录里某个供应商带的组摘要里的组员；没有组或格式不对返回 null(当作没有组)。 */
@@ -53,15 +59,20 @@ function readSummaryMembers(provider: ProviderView): SummaryMember[] | null {
   const seen = new Set<string>();
   for (const entry of raw.slice(0, MAX_SUMMARY_MEMBERS)) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    const { kind, agentDeviceId, providerId } = entry as Record<string, unknown>;
+    const { kind, agentDeviceId, providerId, hostDeviceId } = entry as Record<string, unknown>;
     let member: SummaryMember | null = null;
-    if (kind === 'local') member = { agentDeviceId: null, providerId: provider.id };
+    if (kind === 'local') member = { agentDeviceId: null, providerId: provider.id, computer: 'local' };
     else if (
       (kind === 'device' || kind === 'share')
       && typeof agentDeviceId === 'string' && agentDeviceId.length > 0 && agentDeviceId.length <= 160
       && (kind === 'share') === isProviderShareAgentDeviceId(agentDeviceId)
       && typeof providerId === 'string' && providerId.length > 0 && providerId.length <= 128
-    ) member = { agentDeviceId, providerId };
+    ) {
+      const host = kind === 'share' && isHostDeviceId(hostDeviceId)
+        ? `share-host:${hostDeviceId}`
+        : null;
+      member = { agentDeviceId, providerId, computer: host ?? `${kind}:${agentDeviceId}` };
+    }
     if (!member) continue;
     const key = providerGroupEntryKey(member.agentDeviceId, member.providerId);
     if (seen.has(key)) continue;
@@ -92,7 +103,8 @@ export function collectMobileProviderGroups(input: {
       if (shared !== null) sizes.set(key, shared);
       return;
     }
-    sizes.set(key, members.length);
+    // 台数按电脑算：同一台电脑上的几个账号(含同一台分享来的几个)只算一台(与桌面端一致)。
+    sizes.set(key, new Set(members.map((member) => member.computer)).size);
     groupKeys.add(key);
     for (const member of members) {
       // 组员就是组那一项本身，或是被控电脑自己的供应商(被控电脑那一栏照常显示)。

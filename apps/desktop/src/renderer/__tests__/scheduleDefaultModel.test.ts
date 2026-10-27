@@ -125,6 +125,21 @@ function seedChatDraft(ccModel?: string, opts: { chosen?: boolean } = {}): void 
 }
 
 describe('getScheduleDefaultModel 三级回退', () => {
+  // Unit characterization for the reported Grok default: existing tests cover
+  // schedule reads, but not whether saving a schedule changes ordinary defaults.
+  it('自动任务记住 Grok 时，不改普通新建任务的模型与来源', async () => {
+    const draft = await import('@/state/newMakerDraft');
+    draft.patchVendorPrefs('pi', { model: 'gpt-6-sol', providerId: 'openai' });
+    const before = draft.getDraft().lastByVendor.pi;
+    const { makeFormFromSchedule, rememberScheduleFormPrefs, getScheduleDefaultRoute } = await loadModule();
+    rememberScheduleFormPrefs({
+      ...makeFormFromSchedule(null), agentKind: 'pi', model: 'grok-4.7', providerId: 'xai',
+    });
+    expect(getScheduleDefaultRoute('pi')).toEqual({ model: 'grok-4.7', providerId: 'xai' });
+    expect(draft.getDraft().lastByVendor.pi).toEqual(before);
+    expect(draft.getPersistedVendorModel('pi')).toBe('gpt-6-sol');
+  });
+
   it('一级:上次建任务的选择优先(即使对话侧有不同选择)', async () => {
     seedSchedulePrefs('claude-haiku-4-5');
     seedChatDraft('claude-opus-4-8');

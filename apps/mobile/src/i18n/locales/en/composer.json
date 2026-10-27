@@ -72,6 +72,7 @@
     "noFileRead": "No uploadable file was read."
   },
   "voice": {
+    "cancelled": "Voice input cancelled.",
     "recordingEmpty": "The recording is empty and can't be transcribed.",
     "recordingTooLarge": "The recording exceeds the {{size}}MB limit.",
     "invalidUploadUrl": "The server did not return a valid voice upload URL.",
@@ -97,11 +98,26 @@
     "sessionExpiredOrForbidden": "Your {{appName}} voice sign-in has expired or lacks permission. Check your sign-in status and try again (status {{status}}).",
     "incomplete": "Voice input didn't finish. Try again.",
     "missingRefinerTargetProvider": "Voice refinement is unavailable. Sign in to {{appName}} again and retry.",
-    "emptyTranscript": "Speech was detected but no text was recognized. Try again.",
+    "emptyTranscript": "Speech recognition returned no text. Please record again.",
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
     "micPermission": "Microphone access is turned off. Allow {{appName}} to use the microphone in system settings.",
     "realtimeAudioUnavailable": "This build does not support realtime voice input. Install a test build that includes the native recording module."
+  },
+  "incomingShare": {
+    "title": "Send to Cindy",
+    "empty": "No pending shared content",
+    "file": "File",
+    "fileCount": "{{count}} files",
+    "hint": "Choose a destination, then add instructions and send.",
+    "search": "Search tasks and companions",
+    "newTask": "New task",
+    "companions": "Companions",
+    "tasks": "Tasks",
+    "unavailable": "Cannot receive shares yet",
+    "noCompanions": "No companions yet",
+    "noTasks": "No tasks yet",
+    "retry": "Could not load everything. Tap to retry."
   }
 }

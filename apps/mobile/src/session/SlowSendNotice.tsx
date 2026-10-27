@@ -20,16 +20,16 @@ export function useSlowSendVisible(startedAt: number | null): boolean {
 }
 
 /**
- * New-task page only: before handoff there is no activity row yet, so a slow send shows the same
- * pill the task page uses for "思考中", and the task page continues it in place. Fast sends add nothing.
+ * Keep the status row in place before handoff too. A slow send only changes its contents,
+ * so the form stays still; fast sends show no status text.
  */
 export function SlowSendNotice({ startedAt, phase }: { startedAt: number | null; phase: SlowSendPhase }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeComposerActivityPillStyles);
-  if (!useSlowSendVisible(startedAt)) return null;
+  const visible = useSlowSendVisible(startedAt);
   return (
     <View pointerEvents="none" style={styles.composerActivityStatus} testID="session.slowSendNotice">
-      <ComposerActivityPill label={t(`session.new.slowSend.${phase}`)} live />
+      {visible ? <ComposerActivityPill label={t(`session.new.slowSend.${phase}`)} live /> : null}
     </View>
   );
 }

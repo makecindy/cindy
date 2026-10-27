@@ -442,7 +442,7 @@ export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps
         permissionMode: 'auto',
         model: selection.model,
         providerId: selection.providerId,
-        effort: selection.effort,
+        effort: selection.effort ?? '',
         fastMode: selection.fastMode,
         remoteHostId: hostId,
       });

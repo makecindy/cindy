@@ -5,6 +5,36 @@ import {
   shouldReseedDeviceLinkDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+
+function providerModel(
+  id: string,
+  efforts: CatalogModel['efforts'],
+  defaultEffort: CatalogModel['defaultEffort'],
+): CatalogModel {
+  return {
+    id,
+    name: id,
+    contextWindow: 200_000,
+    efforts,
+    defaultEffort,
+    effortsUnknown: false,
+    supportsFastMode: false,
+  } as CatalogModel;
+}
+
+function provider(id: string, model: CatalogModel): ProviderView {
+  return {
+    id,
+    name: id,
+    source: 'user',
+    agents: ['pi'],
+    models: { pi: [model] },
+    routing: { pi: { upstream: 'https://provider.test', authStrategy: 'none' } },
+    auth: { method: 'api-key' },
+    connected: true,
+  } as unknown as ProviderView;
+}
 
 // 最小被控端 capabilities:两模型(Opus 支持 fast + 多 effort 档;Haiku 无 effort/fast)。
 function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
@@ -24,6 +54,7 @@ function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
         contextWindow: 200_000,
         efforts: [],
         defaultEffort: null,
+        effortsUnknown: false,
         supportsFastMode: false,
         sortOrder: 10,
         newSessionDefault: ['claude-code'],
@@ -163,6 +194,95 @@ describe('resolveDeviceLinkDraftDefaults', () => {
       effort: 'low', // Opus 只支持 high/xhigh
     });
     expect(sel.effort).toBe('high');
+  });
+
+  it('已知无 effort 模型清掉远端草稿里的旧档位', () => {
+    const sel = resolveDeviceLinkDraftDefaults(caps(), {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+      fastMode: true,
+    });
+    expect(sel.effort).toBeNull();
+  });
+
+  it('按选中的供应商校准 effort,不被同名其他来源的空档位清掉', () => {
+    const model = 'qwen3:14b';
+    const capabilities = caps({
+      availableModels: [
+        {
+          id: model,
+          displayName: model,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    });
+    const sel = resolveDeviceLinkDraftDefaults(
+      capabilities,
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, ['medium', 'high'], 'high')),
+        provider('other', providerModel(model, [], null)),
+      ],
+    );
+    expect(sel.effort).toBe('medium');
+  });
+
+  it('选中的供应商明确无 effort 时才清掉旧档位', () => {
+    const model = 'qwen3:14b';
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps({
+        availableModels: [
+          {
+            id: model,
+            displayName: model,
+            contextWindow: 200_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      }),
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, [], null)),
+        provider('other', providerModel(model, ['medium', 'high'], 'high')),
+      ],
+    );
+    expect(sel.effort).toBeNull();
+  });
+
+  it('档位能力尚未声明时保留远端草稿档位', () => {
+    const capabilities = caps();
+    capabilities.availableModels[1]!.effortsUnknown = true;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+    });
+    expect(sel.effort).toBe('high');
+  });
+
+  it.each(['medium', 'high'])('旧主机缺少能力标记时保留远端草稿档位 (%s)', (effort) => {
+    const capabilities = caps();
+    delete capabilities.availableModels[1]!.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5', effort,
+    });
+    expect(sel.effort).toBe(effort);
+  });
+
+  it.each(['medium', 'high'])('旧主机来源条目缺少能力标记时不借用扁平目录清空档位 (%s)', (effort) => {
+    const model = providerModel('claude-haiku-4-5', [], null);
+    delete model.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(), { model: model.id, providerId: 'legacy', effort }, undefined, 'pi',
+      [provider('legacy', model)],
+    );
+    expect(sel.effort).toBe(effort);
   });
 
   it('模型不支持 fast(或被控端 agent 无 fast 能力)→ fastMode 强制 false', () => {

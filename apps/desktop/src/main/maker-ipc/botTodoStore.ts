@@ -14,8 +14,7 @@ import {
   type TeammateTodo,
 } from '@cindy/maker-shared/teammate-todo';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
-import type { WorkbenchTaskJudgment } from '../../shared/botWorkbench.js';
-import { parseWorkbenchTaskId } from '../../shared/botWorkbench.js';
+import { parseLegacyWorkbenchTaskId, type LegacyWorkbenchJudgment } from './botWorkbenchLegacy.js';
 
 function validText(value: unknown, max: number, required = false): boolean {
   return typeof value === 'string' && value.length <= max && (!required || !!value.trim());
@@ -55,17 +54,24 @@ export interface BotTodoStore {
     requestId: string,
     result: { ok: boolean; uncertain?: boolean; error?: string },
   ): Promise<TeammateTodo | null>;
+  /**
+   * The companion moved to this computer (cloud-companions.md §2): its todos from the cloud
+   * replace the items with the same id, `remove` ids are deleted. Per-computer plugin cursors
+   * and receipts stay as they are.
+   */
+  importItems(items: TeammateTodo[], remove: string[]): Promise<void>;
 }
 /** A separate versioned affair store preserves the old task/project file unchanged. */
 export function createBotTodoStore(
   file: string,
-  legacy: () => Promise<Record<string, WorkbenchTaskJudgment>>,
+  legacy: () => Promise<Record<string, LegacyWorkbenchJudgment>>,
   assertCurrent = () => {},
+  ownerAuthored = () => true,
 ): BotTodoStore {
-  const fingerprint = (j: WorkbenchTaskJudgment) =>
+  const fingerprint = (j: LegacyWorkbenchJudgment) =>
     createHash('sha256').update(JSON.stringify(j)).digest('hex');
-  const legacyItem = (legacyId: string, j: WorkbenchTaskJudgment): TeammateTodo | null => {
-    const ref = parseWorkbenchTaskId(legacyId);
+  const legacyItem = (legacyId: string, j: LegacyWorkbenchJudgment): TeammateTodo | null => {
+    const ref = parseLegacyWorkbenchTaskId(legacyId);
     if (!ref || !['github', 'idea'].includes(ref.kind)) return null;
     const at = j.updatedAt;
     return {
@@ -273,6 +279,15 @@ export function createBotTodoStore(
     for (const [legacyId, j] of Object.entries(await legacy())) {
       const imported = legacyItem(legacyId, j);
       if (!imported) continue;
+      // A todo that travelled from another computer lost its link to the workbench entry: same
+      // stable id, so link it again (it already reflects that entry) instead of adding a twin.
+      const travelled = state.items.find((t) => t.legacyId === undefined && t.id === imported.id);
+      if (travelled) {
+        travelled.legacyId = legacyId;
+        travelled.legacyFingerprint = imported.legacyFingerprint;
+        travelled.legacyVerdict = j.verdict;
+        continue;
+      }
       const old = state.items.find((t) => t.legacyId === legacyId);
       if (!old) {
         state.items.push(imported);
@@ -331,9 +346,35 @@ export function createBotTodoStore(
       },
     );
   }
+  // Classify inside the locked mutation. Automatic discovery cannot manufacture an
+  // owner assignment or reclassify existing records, including legacy records.
+  const attributedPatch = (state: TodoState, patch: TodoPatch): TodoPatch => {
+    if (ownerAuthored()) return patch;
+    const key = patch.key === undefined ? undefined : normalizeTodoKey(patch.key);
+    const existing = state.items.find(item => patch.id ? item.id === patch.id : item.key === key);
+    return { ...patch, origin: existing?.origin ?? 'discovered' };
+  };
   return {
     read,
-    patch: (patch: TodoPatch) => mutate((s) => applyTodoPatch(s, patch, 'todo:' + randomUUID())),
+    patch: (patch: TodoPatch) => mutate((s) => applyTodoPatch(s, attributedPatch(s, patch), 'todo:' + randomUUID())),
+    importItems: (items: TeammateTodo[], remove: string[]) =>
+      mutate((s) => {
+        const replaced = new Set([...items.map((item) => item.id), ...remove]);
+        const kept = s.items.filter((item) => !replaced.has(item.id));
+        // Keys are unique in the store: a different todo (another companion merged in) with a key
+        // already taken gets a stable key of its own, the same on every rerun.
+        const keys = new Set(kept.map((item) => item.key));
+        const added = structuredClone(items).map((item) => {
+          let key = item.key;
+          for (let attempt = 0; keys.has(key); attempt += 1) {
+            const tag = createHash('sha256').update(item.id + (attempt ? '#' + attempt : '')).digest('hex').slice(0, 10);
+            key = item.key.slice(0, 500) + '~' + tag;
+          }
+          keys.add(key);
+          return key === item.key ? item : { ...item, key };
+        });
+        s.items = [...kept, ...added];
+      }),
     ingest: (params: {
       source: string;
       sequence: number;
@@ -362,7 +403,7 @@ export function createBotTodoStore(
         const suppressed = (!!existing && !todoVisible(existing)) || existing?.status === 'done';
         const saved =
           params.patch && !suppressed
-            ? applyTodoPatch(s, params.patch, 'todo:' + randomUUID())
+            ? applyTodoPatch(s, attributedPatch(s, params.patch), 'todo:' + randomUUID())
             : null;
         s.cursors[params.source] = params.sequence;
         // The monotonic cursor already proves older receipts; retain only the latest per stream.

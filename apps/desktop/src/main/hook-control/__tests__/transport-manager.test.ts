@@ -121,6 +121,10 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
           : { ...state, telegramBindingCache: entry ? { ...entry } : null };
       return state;
     },
+    setXCompanionBotId(botId) {
+      state = { ...state, xCompanionBotId: botId };
+      return state;
+    },
     setProviderDefaultWorkspace(provider: 'telegram' | 'x', alias: string | null) {
       state =
         provider === 'x'
@@ -214,6 +218,7 @@ describe('hook-control runtime capability gate', () => {
     const opts = transportOpts[0];
     if (opts === undefined) throw new Error('X transport was not created');
     expect(opts.buildHello().features).toContain(HOOK_FEATURE_TURN_DELIVERY);
+    expect(opts.buildHello().statusReactions).toBeUndefined();
 
     const delivery = makeTurnDelivery({
       requestId: 'x:999:post-1',
@@ -660,6 +665,11 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     if (hello.type !== 'hello') throw new Error('unreachable');
     expect(hello.payload.deviceId).toBe('dev-1');
     expect(hello.payload.lifecycleAnnouncement).toBe(false);
+    expect(hello.payload.statusReactions).toMatchObject({
+      queued: 'eyes',
+      processing: expect.arrayContaining(['female-technologist::skin-tone-2']),
+      error: 'flash03',
+    });
     // 内置「对话」伪目录 chat 恒在清单第一位, 真实别名跟在后面
     expect(hello.payload.workspaces[0]).toBe('chat');
     expect([...hello.payload.workspaces].sort()).toEqual(['blog', 'chat', 'xdmaker']);
@@ -1446,6 +1456,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     );
     await expect.poll(() => manager.snapshot().binding?.state, { timeout: 3000 }).toBe('confirmed');
     // 熬过看门狗时限: 已 confirmed 不该被误判超时
+    // real-wait: this regression must cross the real watchdog deadline.
     await new Promise((r) => setTimeout(r, 200));
     expect(store.get().enabled).toBe(true);
     expect(manager.snapshot().binding?.state).toBe('confirmed');
@@ -1969,6 +1980,12 @@ describe('Telegram provider capability, binding and prefs', () => {
     const telegram = connections[0];
     const telegramHello = await telegram.server.waitFor('hello');
     if (telegramHello.type !== 'hello') throw new Error('unreachable');
+    expect(telegramHello.payload.statusReactions).toMatchObject({
+      queued: '👀',
+      processing: ['🤔', '🤓', '✍'],
+      error: '👎',
+      expressiveError: expect.arrayContaining(['😢']),
+    });
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_PROVIDER_BIND);
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_SESSION_RESULT);
     expect(telegramHello.payload.features).not.toContain(HOOK_FEATURE_MULTI_TEAM);

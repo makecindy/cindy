@@ -107,6 +107,40 @@ describe('plugin recommendation recovery', () => {
       toast: { error: vi.fn() },
     });
     await run({ suggestion, ownerId: 'owner', targetKey: 'local', workingDir: '/project' });
+    expect(fillComposerWithSuggestion).toHaveBeenCalledWith('$org Org task');
+    expect(markUsed).toHaveBeenCalledWith('_ns__acme__helper');
+  });
+
+  it('keeps the qualifier when a disabled root plugin shares the selected command', async () => {
+    const source = readFileSync(resolve(__dirname, '../features/cc-agent/NewMakerDraftRoute.tsx'), 'utf8');
+    const block = source.slice(source.indexOf('  const runPluginSuggestion ='), source.indexOf('  const handlePluginSuggestion ='));
+    const suggestion = { id: 'plugin:_ns__acme__helper:task', pluginId: '_ns__acme__helper', prompt: 'Org task' };
+    // A disabled sibling cannot be chosen, but re-enabling it before send must not make the fill ambiguous.
+    const root = { manifest: { id: 'helper', name: 'Root', command: 'org' }, dir: '/ghosts/helper', namespace: null, enabled: false };
+    const org = { manifest: { id: 'helper', name: 'Org', command: 'org' }, dir: '/ghosts/_ns/acme/helper', namespace: 'acme', enabled: true };
+    const fillComposerWithSuggestion = vi.fn(() => true);
+    const markUsed = vi.fn(async () => ({ ids: ['_ns__acme__helper'] }));
+    Object.assign(window, { electronAPI: { ghosts: { listSync: () => ({ ghosts: [root, org] }), markUsed } } });
+    const run = compile(block + String.fromCharCode(10) + 'return runPluginSuggestion;', {
+      useCallback: (callback: unknown) => callback,
+      sendInFlightRef: { current: false },
+      pluginSuggestionFlight: { current: false },
+      pluginSuggestionMounted: { current: true },
+      currentPluginSuggestionContext: { current: { generation: 1, dataOwnerId: 'owner', targetKey: 'local' } },
+      readPluginRecommendationSnapshot: () => ({ ownerId: 'owner' }),
+      buildHomeTaskCatalog: () => [suggestion],
+      filterGhostsForWorkdir: (ghosts: unknown[]) => ghosts,
+      fillComposerWithSuggestion,
+      pluginSuggestionComposerText,
+      installedGhostStoragePart,
+      i18n: { language: 'en' },
+      t: () => 'Use Org',
+      isRemoteProjectDraft: false,
+      isDeviceLinkDraft: false,
+      navigate: vi.fn(),
+      toast: { error: vi.fn() },
+    });
+    await run({ suggestion, ownerId: 'owner', targetKey: 'local', workingDir: '/project' });
     expect(fillComposerWithSuggestion).toHaveBeenCalledWith('$org/acme Org task');
     expect(markUsed).toHaveBeenCalledWith('_ns__acme__helper');
   });

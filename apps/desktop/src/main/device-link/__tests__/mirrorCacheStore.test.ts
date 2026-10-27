@@ -334,6 +334,27 @@ describe('normalizeDeviceSessions', () => {
 });
 
 describe('readMessages / writeMessages', () => {
+  // Regression: a delayed history write used to discard a newer list body.
+  // Existing cache fixture exercises the production guarded write/read path.
+  it('retains a list update through an older page write, then retires it after a newer read', async () => {
+    const c = rawCache();
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    const old = row('same', '2026-01-01T00:00:00Z', { content: 'old' });
+    const updated = { ...old, content: 'updated', cacheReceipt: { run: 'renderer', order: 2 } };
+    const snapshot: HistoryViewSnapshot<typeof old> = {
+      items: projectHistoryView([old], false), details: new Map(), expanded: new Set(),
+      nextCursor: null, hasMore: false, ready: true, loading: false, error: null, readReceipt: { run: 'renderer', order: 1 },
+    };
+    await c.writeMessages('dev', 'session', [updated], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    const cached = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(cached.messages).toEqual([updated]);
+    expect(decodeRemoteHistory(cached.historyView)?.readReceipt).toEqual({ run: 'renderer', order: 1 });
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter,
+      encodeRemoteHistory({ ...snapshot, readReceipt: { run: 'restarted-renderer', order: 1 } }));
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).messages).toEqual([]);
+  });
+
   it('merges list arrivals under the page-write lock, preserving history and clear barriers', async () => {
     const c = rawCache();
     const token = await c.readMessagesWithInvalidation('dev', 'session');
@@ -732,6 +753,7 @@ describe('session list', () => {
             status: 'active',
             title: 'T',
             createdAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
           },
         ],
@@ -739,6 +761,7 @@ describe('session list', () => {
     ]);
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
+    expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 

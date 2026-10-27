@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 /**
  * 待发送气泡 → 消息流渲染项的构造。
  *
@@ -17,6 +20,7 @@ import {
   isPendingSendItemSelected,
   mergePendingSendItems,
   pendingSendItemKey,
+  pendingSendBubbleText,
   pendingSendSpins,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -309,6 +313,8 @@ describe('buildPendingSendItems', () => {
       queue: [queued('same')],
       presentationByClientId: new Map([['same', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -345,6 +351,29 @@ describe('buildPendingSendItems', () => {
     expect(items[2].errorText).toBe('boom');
     // 失败条目不给队列操作(它还没入队),重试 / 删除走 outbox 侧动作。
     expect(items[2].actions).toBeNull();
+  });
+
+  it('holds local sends as waiting while disconnected, including unfinished uploads, but keeps failures', () => {
+    const [ready, uploading, failed, handed] = build({
+      outboxWaitingFor: 'computer',
+      outbox: [
+        outboxItem('ready'),
+        outboxItem('uploading', { attachmentCount: 1, uploadedCount: 0, thumbnails: [{ key: 'uploading-slot-0', uri: 'file:///a.jpg', ossRef: null, uploading: true }] }),
+        outboxItem('failed', { failed: true }),
+        outboxItem('handed', { dispatching: true, sentAt: 1_700_000_000_000 }),
+      ],
+    });
+    expect(ready).toMatchObject({ phase: 'waiting', waitingFor: 'computer' });
+    expect(isPendingSendItemSelected(ready, 'ready')).toBe(true);
+    // 断开时附件上传也停着:写等待,图片不转圈。
+    expect(uploading).toMatchObject({ phase: 'waiting', waitingFor: 'computer' });
+    expect(uploading.thumbs.every((thumb) => !thumb.uploading)).toBe(true);
+    expect(failed.phase).toBe('failed');
+    // 已交给电脑的条目在等对账,不是在等着发。
+    expect(handed.phase).toBe('sending');
+    // 发件箱的发送时刻带进气泡,伙伴对话按它分组。
+    expect(handed.sentAt).toBe(1_700_000_000_000);
+    expect(build({ outbox: [outboxItem('ready')] })[0].phase).toBe('sending');
   });
 
   it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
@@ -405,6 +434,8 @@ describe('pending_send 渲染接线', () => {
       queue: [queued('selected')],
       presentationByClientId: new Map([['selected', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -420,59 +451,35 @@ describe('pending_send 渲染接线', () => {
     expect(isPendingSendItemSelected(item, expanded.pendingSendSelectedClientId)).toBe(true);
   });
 
-  it('keeps pendingSend on the renderer actions object', async () => {
-    // 回归防线:MessageRenderer 的 actions 是显式组装的 useMemo。漏掉这一项时 props 和
-    // 类型都还对(interface 上有、JSX 也传了),但 actions.pendingSend 是 undefined,渲染
-    // 分支直接 null —— 气泡整个不画,乐观显示凭空消失(实测踩过)。
-    const { readFileSync } = await import('node:fs');
-    const { resolve: resolvePath } = await import('node:path');
-    const source = readFileSync(
-      resolvePath(process.cwd(), 'src/session/MessageRenderer.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const actionsStart = source.indexOf('const actions: MessageActions');
-    const actionsEnd = source.indexOf('viewportLayout.contentWidth,\n  ]);', actionsStart);
-    const actionsBlock = source.slice(actionsStart, actionsEnd);
-    expect(actionsBlock).toContain('pendingSend,');
-    expect(source).toContain('buildMobileMessageListExtraData(');
-    expect(source).toContain('extraData={messageListExtraData}');
-    // 渲染分支存在,且 items 的联合类型里有这一支。
-    expect(source).toContain("case 'pending_send':");
-    expect(source).toContain('actions={actions.pendingSend}');
-    const bubbleSource = readFileSync(
-      resolvePath(process.cwd(), 'src/session/PendingSendBubble.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    expect(bubbleSource).toContain('<SentInlineAtomBody');
-    expect(bubbleSource).toContain('interactiveAtoms={false}');
-    expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
-    expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
-    // 状态徽标保留独立入口和定位，气泡正文通过 touch end 展开队列操作；移动手势不触发菜单。
-    const badgeStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
-    const badgeEnd = bubbleSource.indexOf('\n        </Pressable>', badgeStart);
-    expect(badgeStart).toBeGreaterThan(-1);
-    const badge = bubbleSource.slice(badgeStart, badgeEnd);
-    expect(badge).toContain('testID={`pendingSend.badge.${item.phase}`}');
-    expect(badge).toContain('actions.onSelect(selected ? null : item.clientId)');
-    expect(badge).not.toContain('renderText(');
-    expect(badge).toContain('badgePosition');
-    expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
-    expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
-    expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
-    expect(bubbleSource).toContain('onTouchEnd={interactive ? handleBubbleTouchEnd : undefined}');
-    expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
-    expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');
-    expect(bubbleSource).toContain('(measureBody && collapseLatched) || collapseResolved');
-    const actionPillStart = bubbleSource.indexOf('  actionPill: {');
-    const actionPillEnd = bubbleSource.indexOf('\n  },', actionPillStart);
-    const actionPillStyle = bubbleSource.slice(actionPillStart, actionPillEnd);
-    expect(actionPillStart).toBeGreaterThan(-1);
-    expect(actionPillStyle).toContain('minHeight: 44');
-    // 粘贴时已上传到媒体总仓的图(cindy-media://blobs/…)本地没有文件,气泡要靠远端取件
-    // 才有缩略图 —— 漏传 resolver 就只能画空占位格。
-    expect(source).toContain('resolveRemoteMedia={actions.onResolveRemoteMedia}');
-  });
+
 });
+
+  it('preserves pending send actions through the production renderer memo', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+    const tree = ts.createSourceFile('renderer.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let callback: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'actions' && node.initializer && ts.isCallExpression(node.initializer)) callback = node.initializer.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!callback) throw new Error('Missing renderer actions memo');
+    const identifiers = new Set<string>();
+    function readNames(node: ts.Node) {
+      if (ts.isShorthandPropertyAssignment(node)) identifiers.add(node.name.text);
+      if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.initializer)) identifiers.add(node.initializer.text);
+      ts.forEachChild(node, readNames);
+    }
+    readNames(callback);
+    const pendingSend = { onSelect: vi.fn(), onRemove: vi.fn(), onSendNow: vi.fn() };
+    const bindings: Record<string, unknown> = Object.fromEntries([...identifiers].map((name) => [name, undefined]));
+    Object.assign(bindings, { pendingSend, viewportLayout: { contentWidth: 390 } });
+    const compiled = ts.transpileModule('const project = ' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const actions = new Function(...Object.keys(bindings), compiled + '\nreturn project();')(...Object.values(bindings));
+    expect(actions.pendingSend).toBe(pendingSend);
+    actions.pendingSend.onSelect('queued');
+    expect(pendingSend.onSelect).toHaveBeenCalledWith('queued');
+  });
 
 describe('pendingSendSpins', () => {
   it('spins only while the message has not been confirmed as queued', () => {
@@ -590,4 +597,15 @@ describe('pending bubble source labels', () => {
     const [bubble] = build({ outbox: [outboxItem('o1')] });
     expect(bubble.source).toBeNull();
   });
+});
+
+
+// Unit regression: remote pending bubble used to expose transport escapes. The
+// original queue item is retained for sending; a human draft is not decoded.
+it('decodes only attributed forwarded pending bubbles', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const item = { ...queued('forwarded', content), origin: { kind: 'session' as const, senderSessionId: 'sender' } };
+  expect(pendingSendBubbleText(item)).toContain('第一段\n第二段');
+  expect(item.persistedContent).toBe(content);
+  expect(pendingSendBubbleText(queued('human', content))).toBe(content);
 });

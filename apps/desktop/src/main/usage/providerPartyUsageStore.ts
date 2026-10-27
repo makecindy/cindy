@@ -30,6 +30,7 @@ const FILE_VERSION = 1;
 const RETAIN_DAYS = 400;
 const MAX_ROWS = 20_000;
 const FLUSH_DELAY_MS = 1_000;
+const REPORT_DAY_CUSHION = 2;
 
 /**
  * 谁用的：本机自己的任务，同账号另一台电脑自己的任务，同账号的组所在电脑替受邀者转来的任务，
@@ -93,10 +94,27 @@ export interface ProviderPartyUsageQuery {
   relays: ProviderPartyUsage[];
 }
 
+/** 按天的明细：每天按(Agent、模型、组内电脑)分行，新的日子在前。 */
+export interface ProviderPartyDailyUsage {
+  lastUsedAt: number | null;
+  days: Array<ProviderPartyUsage['models'][number] & { day: string }>;
+}
+
+export interface ProviderPartyUsageHistory {
+  /** 你自己：本机、我的其他电脑与它们报告来的合成一份。 */
+  self: ProviderPartyDailyUsage;
+  /** 经其他电脑转来的，每台组所在电脑一项。 */
+  relays: Array<ProviderPartyDailyUsage & { deviceId: string }>;
+}
+
 function localDay(at: number): string {
   const date = new Date(at);
   const pad = (value: number) => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function shiftDay(day: string, delta: number): string {
+  return localDay(new Date(`${day}T12:00:00`).getTime() + delta * 86_400_000);
 }
 
 /**
@@ -229,10 +247,15 @@ export function createProviderPartyUsageStore(filePath: string, options: { now?:
     /** 要报告给某台组所在电脑的行(sinceDay 起，含当天；null = 全部)。 */
     groupReport(ownerDeviceId: string, sinceDay: string | null): ProviderGroupUsageReportRow[] {
       const out: ProviderGroupUsageReportRow[] = [];
+      // 报告端与组所在电脑可能跨时区；多带两天，由接收端按 lastAt 的本地日期归一。
+      const reportSinceDay = sinceDay ? shiftDay(sinceDay, -REPORT_DAY_CUSHION) : null;
       for (const row of load().values()) {
         if (row.party !== 'group' || row.deviceId !== ownerDeviceId || !row.memberKey) continue;
-        if (sinceDay && row.day < sinceDay) continue;
-        const { party: _party, deviceId: _deviceId, memberKey, ...rest } = row;
+        if (reportSinceDay && row.day < reportSinceDay) continue;
+        const { party, deviceId, memberKey, ...rest } = row;
+        // 报告格式不携带来源方和设备字段；这里只保留按组内电脑的成员键。
+        void party;
+        void deviceId;
         out.push({ ...rest, memberKey });
       }
       return out.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
@@ -242,12 +265,15 @@ export function createProviderPartyUsageStore(filePath: string, options: { now?:
     replaceReported(deviceId: string, sinceDay: string | null, incoming: readonly ProviderGroupUsageReportRow[]): void {
       if (!deviceId) return;
       const map = load();
+      const replaceSinceDay = sinceDay ? shiftDay(sinceDay, -REPORT_DAY_CUSHION) : null;
       for (const [key, row] of map) {
-        if (row.party === 'reported' && row.deviceId === deviceId && (!sinceDay || row.day >= sinceDay)) map.delete(key);
+        if (row.party === 'reported' && row.deviceId === deviceId && (!replaceSinceDay || row.day >= replaceSinceDay)) map.delete(key);
       }
       for (const item of incoming) {
-        if (sinceDay && item.day < sinceDay) continue;
-        const row: PartyUsageRow = { ...item, party: 'reported', deviceId };
+        // day 是报告端的本地日期；lastAt 是共享协议里的 unix ms，以接收端时区为准重算。
+        const day = item.lastAt > 0 ? localDay(item.lastAt) : item.day;
+        if (replaceSinceDay && day < replaceSinceDay) continue;
+        const row: PartyUsageRow = { ...item, day, party: 'reported', deviceId };
         const key = keyOf(row);
         const existing = map.get(key);
         if (existing) {
@@ -313,6 +339,60 @@ export function createProviderPartyUsageStore(filePath: string, options: { now?:
       }
       const recent = (a: ProviderPartyUsage, b: ProviderPartyUsage) => b.lastUsedAt - a.lastUsedAt;
       return { local: local[0] ?? null, devices: devices.sort(recent), relays: relays.sort(recent) };
+    },
+
+    /**
+     * 某个供应商按天的明细(「用量」块在界面上按时间段、组内电脑筛选)：你自己(本机与我的其他电脑，
+     * 含报告来的)合成一份，经其他电脑转来的按那台分开。本机要报告出去的不算，与 query 同口径。
+     */
+    history(providerId: string): ProviderPartyUsageHistory {
+      const self: ProviderPartyDailyUsage = { lastUsedAt: null, days: [] };
+      const relays = new Map<string, ProviderPartyDailyUsage & { deviceId: string }>();
+      const selfDays = new Map<string, ProviderPartyDailyUsage['days'][number]>();
+      for (const row of load().values()) {
+        if (row.providerId !== providerId || row.party === 'group') continue;
+        const day = {
+          day: row.day,
+          kind: row.kind,
+          model: row.model,
+          memberKey: row.memberKey,
+          turns: row.turns,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          cacheReadTokens: row.cacheReadTokens,
+          cacheCreateTokens: row.cacheCreateTokens,
+          sdkCostUsd: row.sdkCostUsd,
+        };
+        if (row.party === 'relay' && row.deviceId) {
+          const relay = relays.get(row.deviceId) ?? { deviceId: row.deviceId, lastUsedAt: null, days: [] };
+          relays.set(row.deviceId, relay);
+          relay.lastUsedAt = Math.max(relay.lastUsedAt ?? 0, row.lastAt);
+          relay.days.push(day);
+          continue;
+        }
+        self.lastUsedAt = Math.max(self.lastUsedAt ?? 0, row.lastAt);
+        // 本机与我的其他电脑同一天、同一模型、同一台组内电脑的合成一行。
+        const key = JSON.stringify([row.day, row.kind, row.model, row.memberKey]);
+        const existing = selfDays.get(key);
+        if (!existing) {
+          selfDays.set(key, day);
+          continue;
+        }
+        existing.turns += day.turns;
+        existing.inputTokens += day.inputTokens;
+        existing.outputTokens += day.outputTokens;
+        existing.cacheReadTokens += day.cacheReadTokens;
+        existing.cacheCreateTokens += day.cacheCreateTokens;
+        existing.sdkCostUsd += day.sdkCostUsd;
+      }
+      const newestFirst = (a: { day: string; turns: number }, b: { day: string; turns: number }) =>
+        a.day < b.day ? 1 : a.day > b.day ? -1 : b.turns - a.turns;
+      self.days = [...selfDays.values()].sort(newestFirst);
+      for (const relay of relays.values()) relay.days.sort(newestFirst);
+      return {
+        self,
+        relays: [...relays.values()].sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0)),
+      };
     },
 
     async flush(): Promise<void> {

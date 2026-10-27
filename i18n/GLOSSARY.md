@@ -171,6 +171,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。
 
+### Archive
+
+任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。
+
 ### Global region
 
 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
@@ -183,13 +187,17 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### At a glance
+
+伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
+
+### Discover Teammates
+
+预制伙伴目录与邀请入口，仅 Desktop。入口菜单项与弹窗标题同用 bots.market.heading，不再另设英文品牌名 Bot Market；英文句中小写 teammates（Discover teammates 作动作时），作功能名保持 Discover Teammates。
+
 ### reply (the bot's public post on X)
 
 Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
-
-### Workbench
-
-伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
 
 ### Security check
 
@@ -215,6 +223,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。
 
+### Submit to Cindy
+
+把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。
+
 ### Make history
 
 Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。
@@ -222,6 +234,10 @@ Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；
 ### Add back to personal version
 
 重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。
+
+### Saved in
+
+Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。
 
 ### Remove from personal version
 
@@ -239,6 +255,14 @@ Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正�
 
 Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。
 
+### Main computer
+
+云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。
+
+### Connection code
+
+本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。
+
 ### Content Update
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
@@ -255,6 +279,10 @@ Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一
 
 设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。
 
+### Detached HEAD
+
+沿用会话顶栏分支徽标现有译法
+
 ### Release
 
 CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。
@@ -267,9 +295,17 @@ device-link 里「可以选择在哪台机器上运行」这一维度，两端�
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
 
+### Device Simulator
+
+官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。
+
 ### DingTalk
 
 钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### Dissolve group
+
+Irreversible group termination, distinct from archive, leave and personal list removal.
 
 ### Doubao
 
@@ -291,6 +327,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Follow Up on All Sessions
+
+伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
+
 ### Group Admin
 
 可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。
@@ -298,6 +338,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### Group chat
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Main Chat
+
+伙伴群聊的主时间线（产品规则里也称「主群」），与话题相对。中文 UI 写「群聊」（如「同时发到群聊」「贴回群聊」），不写「主聊天」——「聊天」是 Chat 条目的禁用译法。贴回指把话题回复以引用形式发到这里，原回复不移动。
 
 ### Group Nickname
 
@@ -309,7 +353,11 @@ Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或�
 
 ### Group Strategy
 
-供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重、用量均衡。只决定新任务分到哪台，正常运行的任务不因均衡迁移。
+供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重。读得到 Claude Code 或 OpenAI 订阅用量时先按配额筛（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），组策略只在差不多急的几台里挑。只决定新任务分到哪台，正常运行的任务不因均衡迁移。
+
+### Thread (in a group chat)
+
+伙伴群聊里挂在某条消息下的子讨论（服务器的 Thread）。zh 取「话题」：入口叫「创建话题」，有回复后叫「查看话题」，面板标题「话题」；话题里的单条发言仍叫「回复」（回复这条消息、发送回复），不要全局替换。它不是任务：已裁决的 Thread→任务 指产品内的 session，这里是群消息的分支讨论，与「引用回复」（quote-reply）不同——引用回复留在当前时间线。2026-10-13 Dash 提出「现在的回复改名叫创建话题」，先登记为 proposed 待走查后定。
 
 ### Harness
 
@@ -319,13 +367,17 @@ Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或�
 
 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
 
+### Input Handoff
+
+Agent 遇到需要主人填写的界面（选择、文本、密码、验证码、授权）时，由宿主读出当前一步，主人在本机或远程设备上填写，值只交给宿主、不进模型与记录。不是远程控制。
+
 ### Invitation Code
 
 共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。
 
 ### iOS Simulator
 
-Apple Simulator 的用户可见名称，也用于原内置模拟器的下线说明。Cindy 已移除内置查看器能力。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
+Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历史与下线说明。Cindy 已移除内置查看器能力；替代插件 cindy-simulator 使用独立术语 Device Simulator。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
 
 ### Lark
 
@@ -334,6 +386,10 @@ Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法�
 ### Lead
 
 Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。
+
+### Left navigation
+
+主窗口左侧放任务与「自动化」「插件」「伙伴」等一级入口的那一栏。插件主视图入口的开关称「导航入口」（Navigation Entry），用来与右侧放插件面板、浏览器、终端的「右侧栏」（right sidebar）区分，所以涉及这个入口的文案写左侧导航，不再写笼统的「侧边栏」。韩语依国立国语院标准外来语表记写 내비게이션，不写 네비게이션。英文句中小写 left navigation，故 checkCase 为 false。先登记为 proposed：其他位置仍有「侧边栏」泛指左栏的存量文案，待统一清理时再裁决。
 
 ### Local model
 
@@ -355,6 +411,14 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
 
+### MCP App
+
+标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。
+
+### Mivo Library
+
+#5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。
+
 ### Audio Generation
 
 V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。
@@ -362,6 +426,10 @@ V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech �
 ### Compression
 
 issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。
+
+### Decision
+
+模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。
 
 ### Realtime Audio
 
@@ -382,6 +450,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 ### Native API
 
 模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。
+
+### Nightly learning
+
+伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
 
 ### Not signed in
 
@@ -443,9 +515,17 @@ OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意�
 
 把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
 
+### Quote reply
+
+伙伴群聊消息操作：在当前时间线发一条带被引用者与原消息摘要的新消息，不创建话题（group-thread）；被引用的原消息作者是仍在群中的伙伴时，宿主自动将该伙伴加入接收人，与显式点名去重。引用正文中的名字不产生额外接收人。输入框上方的待发引用用「引用 {name}」，取消叫「取消引用」。与任务里「选中文字引用」（chat quote）是不同功能。
+
 ### Qwen
 
 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
+
+### Read by sentence
+
+伙伴语音设置：默认在最终答复生成过程中按完整句子提前朗读；关闭后等待完整回复。需要回复后处理或无法识别最终答复阶段时延后。
 
 ### Region badge
 
@@ -553,6 +633,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 
 已确定禁用：`输入监控（仅当英文含 shortcut listener permission）`（zh-CN）、`入力監視（仅当英文含 shortcut listener permission）`（ja）、`입력 모니터링（仅当英文含 shortcut listener permission）`（ko）
 
+### Side chat
+
+在右侧独立提问，继承主任务已完成的上下文；追问不自动写回主任务。
+
 ### Skip Sign-In
 
 登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
@@ -560,6 +644,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### Smart routing
 
 Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。
+
+### Speech speed
+
+伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。
 
 ### Tag
 
@@ -577,6 +665,10 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
 
+### Ultrafast
+
+Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。
+
 ### Ungrouped
 
 模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。
@@ -587,7 +679,7 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 ### Usage Balancing
 
-Claude 订阅供应商组的分配策略：先排除5小时或周配额耗尽的账号，再优先分给用量较低的可用账号；不迁移正常运行的任务。
+原 Claude 订阅供应商组的分配策略。2026-10-15 起配额排序对所有组策略生效（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），设置里不再单列此选项，旧组存的此值按最少占用挑；不迁移正常运行的任务。
 
 ### Use my browser logins
 
@@ -600,6 +692,14 @@ Claude 订阅供应商组的分配策略：先排除5小时或周配额耗尽的
 ### Voice dictionary
 
 语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。
+
+### Voice Mode
+
+桌面伙伴一对一的连续语音交互方式；停顿发送、最终回复朗读和插话，沿用伙伴主任务。
+
+### Voiceprint
+
+语音输入「识别我的声音」录入的本人声音特征，只存在本机、不同步。可写「录入声纹」「删除声纹」；不要写成声音指纹、声音模板。
 
 ### Wallpaper
 

@@ -28,6 +28,8 @@ export interface BotSkillSummaryWire {
 export interface BotSkillCallbacks {
   save(params: {
     callerSessionId: string;
+    /** 当前运行实例;IM 专线上 host 据此读逐轮渠道作用域判定「是不是主人触发的轮次」。 */
+    callerSessionInstanceId?: string;
     name: string;
     description: string;
     body: string;
@@ -40,6 +42,7 @@ export interface BotSkillCallbacks {
   >;
   list(params: {
     callerSessionId: string;
+    callerSessionInstanceId?: string;
     query?: string;
     offset?: number;
     limit?: number;
@@ -55,6 +58,11 @@ function callerSessionId(deps: BotSkillToolDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
 }
 
+function callerSessionInstanceId(deps: BotSkillToolDeps): { callerSessionInstanceId: string } | Record<never, never> {
+  const instanceId = deps.getSessionContext().sessionInstanceId;
+  return instanceId ? { callerSessionInstanceId: instanceId } : {};
+}
+
 function missingSession() {
   return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务。');
 }
@@ -67,7 +75,8 @@ export function registerBotSkillTools(
     name: 'save_teammate_skill',
     category: 'bots',
     description:
-      '把刚做完的一类任务的可复用做法,存成当前伙伴自己的一个技能(真技能文件,不是记忆分片)。'
+      '用户明确要求把一套做法记成技能、或纠正已有技能时,存成 / 更新当前伙伴自己的一个技能(真技能文件,不是记忆分片)。'
+      + '其他时候不在对话里新建技能,宿主的夜间学习会把反复出现的做法整理成技能。'
       + '同名技能会被原地更新 —— 发现更好的做法就用同一个 name 再存一次。'
       + 'body 写成可照做的步骤,不要写这一次的具体结论。'
       + '需要当前运行位置支持伙伴自有 Skill 存储；远端未挂载时返回不可用，不会代写本机，也不能声称已保存或生效。'
@@ -96,6 +105,7 @@ export function registerBotSkillTools(
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.save({
         callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
         name,
         description,
         body,
@@ -125,6 +135,7 @@ export function registerBotSkillTools(
       const sessionId = callerSessionId(deps);
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.list({ callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
         ...(query !== undefined ? { query } : {}),
         ...(offset !== undefined ? { offset } : {}),
         ...(limit !== undefined ? { limit } : {}),

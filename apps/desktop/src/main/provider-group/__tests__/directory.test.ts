@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupDirectory, type ProviderGroupDirectoryDeps } from '../directory';
+import { providerGroupCodexUsageSnapshot } from '../usage';
 
 const view = (id: string, name: string, patch: Partial<ProviderView> = {}): ProviderView => ({
   id,
@@ -80,6 +81,9 @@ describe('listCandidates', () => {
     // 分享来的电脑只用分享者的昵称称呼，不用分享者的电脑名(provider-sharing.md §6)。
     expect(candidates[1]).toMatchObject({ label: 'Magi', ownerName: 'Magi' });
     expect(JSON.stringify(candidates)).not.toContain('s1-pc');
+    // 分享者那台电脑只带设备 id，用来把同一台的几个分享收在一起。
+    expect(candidates[1].hostDeviceId).toBe('host-s1');
+    expect(candidates[0].hostDeviceId).toBeUndefined();
   });
 
   it('marks computers already in the group', async () => {
@@ -114,7 +118,9 @@ describe('resolveMembers', () => {
   });
 
   it('reads quota only for available Claude subscriptions on this account’s computers', async () => {
-    const readClaudeUsage = vi.fn(async (_member: ProviderGroupMember) => ({ updatedAt: 1_000, fiveHour: { utilization: 25 } }));
+    const readClaudeUsage = vi.fn<(member: ProviderGroupMember) => Promise<{ updatedAt: number; fiveHour: { utilization: number } }>>(
+      async () => ({ updatedAt: 1_000, fiveHour: { utilization: 25 } }),
+    );
     const directory = createProviderGroupDirectory(deps({ readClaudeUsage }));
     const member = (kind: 'local' | 'device' | 'share', agentDeviceId: string | null, providerId: string) => ({
       key: `${kind}:${agentDeviceId}:${providerId}`, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
@@ -127,6 +133,27 @@ describe('resolveMembers', () => {
     expect(readClaudeUsage).toHaveBeenCalledWith(members[1]);
     expect(result[0].claudeUsage?.fiveHour?.utilization).toBe(25);
     expect(result[4]).not.toHaveProperty('claudeUsage');
+  });
+
+  // Unit/privacy: OpenAI quota reads are confined to usable same-account subscriptions.
+  // The Claude-only fixture cannot detect querying API connections or a borrowed OpenAI share.
+  it('reads OpenAI quota only for usable local/same-account subscriptions, never shares or API connections', async () => {
+    const readCodexUsage = vi.fn(async (_member: ProviderGroupMember) => providerGroupCodexUsageSnapshot({ updatedAt: 1_000, primary: { usedPercent: 25 } }));
+    const providers = [view('openai', 'OpenAI', { auth: { method: 'oauth', native: 'codex' } }),
+      view('openai-api', 'OpenAI API', { auth: { method: 'apiKey' } }),
+      view('openai-disabled', 'OpenAI', { suspended: true, auth: { method: 'oauth', native: 'codex' } })];
+    const directory = createProviderGroupDirectory(deps({ readCodexUsage,
+      listLocalProviders: async () => providers, readDeviceProviders: async () => providers,
+      listReceivedShares: () => [share('s1', { providerId: 'openai' })],
+    }));
+    const member = (kind: 'local' | 'device' | 'share', agentDeviceId: string | null, providerId: string) => ({
+      key: `${kind}:${agentDeviceId}:${providerId}`, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
+    });
+    const members = [member('local', null, 'openai'), member('device', 'mini', 'openai'),
+      member('device', 'mini', 'openai-api'), member('device', 'off', 'openai'),
+      member('share', 'share:s1', 'openai'), member('local', null, 'openai-disabled')];
+    await directory.resolveMembers('openai', { strategy: 'least', autoSwitch: true, members });
+    expect(readCodexUsage.mock.calls.map(([entry]) => entry.key)).toEqual(members.slice(0, 2).map((m) => m.key));
   });
 
   it('reports each member with a state and reason', async () => {
@@ -227,6 +254,36 @@ describe('resolveMembers', () => {
     });
     expect(resolved).toMatchObject({ state: 'ok' });
     expect(resolved.reportedRunning).toBeUndefined();
+  });
+
+  it.each(['resolve', 'reject'] as const)('bounds local load reads and ignores a late %s', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      const directory = createProviderGroupDirectory(deps({
+        localRunning: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 4_000));
+          if (outcome === 'reject') throw new Error('db busy');
+          return 6;
+        },
+      }));
+      const done = vi.fn();
+      void directory.resolveMembers('anthropic', {
+        strategy: 'least',
+        autoSwitch: true,
+        members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
+      }).then(done);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(done).toHaveBeenCalledTimes(1);
+      const [resolved] = done.mock.calls[0][0];
+      expect(resolved).toMatchObject({ state: 'ok', member: { key: 'local' } });
+      expect(resolved.reportedRunning).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(resolved.reportedRunning).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('names members for activity records without the sharer’s computer name', () => {
@@ -370,6 +427,36 @@ describe('resolving members quickly when choosing a computer (2026-10-11)', () =
       ]);
       expect(resolved[0].pending).toBeUndefined();
       expect(resolved[0].claudeUsage).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the local computer when its catalog is slow and its load read stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const local: ProviderGroupMember = {
+        key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false,
+      };
+      const directory = createProviderGroupDirectory({
+        ...slowDeps(),
+        listLocalProviders: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2_500));
+          return [view('anthropic', 'Anthropic')];
+        },
+        localRunning: () => new Promise<number | null>(() => undefined),
+      });
+      const done = vi.fn();
+      void directory.resolveMembers('anthropic', { ...config, members: [local, SLOW] }, {
+        quickMs: 3_000,
+        enough: (resolved) => resolved.state === 'ok',
+      }).then(done);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(done.mock.calls[0][0]).toMatchObject([
+        { member: { key: local.key }, state: 'ok' },
+        { member: { key: SLOW.key }, state: 'offline', pending: true },
+      ]);
     } finally {
       vi.useRealTimers();
     }

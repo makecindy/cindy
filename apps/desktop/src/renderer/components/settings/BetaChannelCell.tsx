@@ -13,7 +13,6 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
@@ -82,13 +81,7 @@ export function BetaChannelCell() {
   );
 
   return (
-    <div
-      className={cn(
-        'flex flex-col gap-3 rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
+    <div className="flex flex-col gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <p
@@ -97,7 +90,7 @@ export function BetaChannelCell() {
           >
             {t('settings.betaChannel.title')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.betaChannel.description')}
           </p>
         </div>

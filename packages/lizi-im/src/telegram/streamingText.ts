@@ -402,19 +402,6 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     // 重试再读它就会把终稿当成待清理的旧消息(见 carrierMessageId 的说明)。
     this.carrierMessageId ??= this.messageIdValue;
     const staleMessageId = this.carrierMessageId;
-    if (isNoReply(finalText)) {
-      // 惰性占位下通常从未发过消息(真零痕迹); 已建过程消息则尽力清掉。
-      this.lifecycle.cancel();
-      if (staleMessageId) {
-        try {
-          await this.deps.deleteMessage?.(staleMessageId);
-        } catch {
-          /* 删除失败(权限等)保留占位, 不抛错 */
-        }
-      }
-      return;
-    }
-
     const imageUrls = this.deps.extractImageUrls(finalText);
     const chunks = this.deps.chunk(finalText);
     const firstChunk = chunks[0] ?? '';
@@ -424,8 +411,16 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         : imageUrls.length > 0 || this.extraImageAbsPaths.length > 0
           ? IMAGE_ONLY_PLACEHOLDER
           : '';
-    if (seed === '') {
+    if (isNoReply(finalText) || seed === '') {
+      // 惰性占位下通常从未发过消息(真零痕迹); 已建过程消息则尽力清掉。
       this.lifecycle.cancel();
+      if (staleMessageId) {
+        try {
+          await this.deps.deleteMessage?.(staleMessageId);
+        } catch {
+          /* 删除失败(权限等)保留占位, 不抛错 */
+        }
+      }
       return;
     }
 

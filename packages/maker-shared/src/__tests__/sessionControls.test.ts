@@ -88,11 +88,11 @@ describe('summarizeCodexRateLimitReset', () => {
     });
   });
 
-  it('does not offer reset before exhaustion and leaves offer expiry to desktop', () => {
+  it('allows manual reset before exhaustion and leaves offer expiry to desktop', () => {
     expect(summarizeCodexRateLimitReset({
       ...base,
       rateLimits: { primary: { usedPercent: 99.9 } },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
     expect(summarizeCodexRateLimitReset({
       ...base,
       resetOffer: { ...base.resetOffer, validUntil: NOW_MS },
@@ -111,7 +111,7 @@ describe('summarizeCodexRateLimitReset', () => {
         primary: { usedPercent: 100 },
         rateLimitReachedType: 'workspace_owner_credits_depleted',
       },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
   });
 
   it('omits the reset count when credit availability was not returned', () => {

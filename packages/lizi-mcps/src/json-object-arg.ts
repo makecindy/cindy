@@ -3,8 +3,14 @@ import { z } from 'zod';
 /**
  * string → JSON.parse 出的 object；非 string、或 parse 失败时原样返回，
  * 交给下游 record 校验报原本的错（不吞坏数据）。
+ *
+ * null → `{}`：宿主侧实测（2026-10-14），模型明明传了空对象 `args: {}`，到达 MCP
+ * 入口时却成了 null（同一构建里省略 args 能过、非空 args 能过，只有空对象形态报
+ * `-32602 expected record`），而 `z.record().optional()` 只容忍缺失、不容忍 null。
+ * null 与缺失对消费方同义（都是 `registry.call(name, args ?? {})`），统一归一成 `{}`。
  */
 function coerceStringifiedJson(value: unknown): unknown {
+  if (value === null) return {};
   if (typeof value !== 'string') return value;
   try {
     return JSON.parse(value);
@@ -38,8 +44,15 @@ function coerceStringifiedJson(value: unknown): unknown {
 const OBJECT_HINT = '（传 JSON 对象本身，不要序列化成字符串）';
 
 export function jsonObjectArg(description: string) {
+  // .optional() 落在【pipe 外层】，不动内层 record 的描述落点。
+  // 为什么必须可选：入口 schema 曾把 args 列为必填，而「自身入参 schema 为空对象」的无参
+  // 工具（如 cindy_memory 的 memory_list / memory_review）会被模型按内层 schema 合理地
+  // 省略 args——入口 zod 校验直接 -32602 invalid_type，报错指向内部信封字段，模型无法
+  // 自纠（2026-10-14 实测：call_tool({name:'memory_list'}) 被拒，带参工具全部正常）。
+  // 省略后 args 为 undefined，所有消费方都是 registry.call(name, args ?? {}) /
+  // handleCallTool(name, args ?? {})，已容忍；stringify 兜底与坏串报错语义不变。
   return z.preprocess(
     coerceStringifiedJson,
     z.record(z.string(), z.unknown()).describe(`${description}${OBJECT_HINT}`),
-  );
+  ).optional();
 }

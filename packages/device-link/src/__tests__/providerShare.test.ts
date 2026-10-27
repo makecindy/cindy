@@ -114,6 +114,30 @@ describe('provider share api', () => {
     await api({ requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString() }, calls).sendRequest(TOKEN, 'card');
     expect(calls[0]).toEqual({ path: '/api/device-link/provider-shares/requests', body: { invitation: TOKEN, identityCard: 'card' } });
   });
+
+  it.each([undefined, 'a'.repeat(64)])('accepts old and new link responses and preserves linkId %s', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    const result = await api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    });
+    expect(result.linkId).toBe(linkId);
+    const request = { requestId: 'r1', linkId, displayName: 'Guest', avatarUrl: null, region: 'global',
+      pairingCode: '0042', createdAt: expiresAt, expiresAt };
+    const shares = await api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [request] }] }).listOwned();
+    expect(shares[0].requests[0].linkId).toBe(linkId);
+  });
+
+  it.each(['invalid', 'A'.repeat(64), 'a'.repeat(63), null])('rejects malformed linkId %s on links and owner requests', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    await expect(api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    })).rejects.toThrow('Invalid provider share link id');
+    await expect(api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [{ requestId: 'r1', linkId,
+        displayName: 'Guest', avatarUrl: null, region: 'global', pairingCode: '0042', createdAt: expiresAt, expiresAt }] }] })
+      .listOwned()).rejects.toThrow('Invalid provider share link id');
+  });
 });
 
 describe('provider share received catalogs', () => {

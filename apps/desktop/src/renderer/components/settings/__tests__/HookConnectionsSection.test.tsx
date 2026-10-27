@@ -21,6 +21,7 @@ const ipc = vi.hoisted(() => ({
   openProviderAction: vi.fn(),
   openExternal: vi.fn(),
   setProviderDefaultWorkspace: vi.fn(),
+  setXCompanion: vi.fn(),
   imDefaultSettingsGet: vi.fn(),
   imDefaultSettingsReset: vi.fn(),
 }));
@@ -194,6 +195,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
         revokeTeam: ipc.revokeTeam,
         openProviderAction: ipc.openProviderAction,
         setProviderDefaultWorkspace: ipc.setProviderDefaultWorkspace,
+        setXCompanion: ipc.setXCompanion,
       },
       maker: {
         imDefaultSettingsGet: ipc.imDefaultSettingsGet,
@@ -204,6 +206,42 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
   });
 
   afterEach(() => cleanup());
+
+  // The real settings component must assign/revoke with the previously observed
+  // owner, and cancellation must not write (new companion entry, unit DOM).
+  it('assigns and removes X without disconnecting the account', async () => {
+    const unbound = { ...BASE_HOOK, x: { ...BASE_HOOK.x, url: 'wss://x.example.test' } };
+    const bound = { ...unbound, x: { ...unbound.x, companionBotId: 'bot-fixture' } };
+    ipc.get.mockResolvedValue({ hook: unbound });
+    ipc.setXCompanion.mockResolvedValueOnce({ hook: bound }).mockResolvedValueOnce({ hook: unbound });
+    render(<HookConnectionsSection companion={{ id: 'bot-fixture', name: 'Fixture' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.bind' }));
+    await waitFor(() => expect(ipc.setXCompanion).toHaveBeenCalledWith('bot-fixture', null));
+    expect(screen.queryByRole('button', { name: SLACK_CARD })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.remove' }));
+    await waitFor(() => expect(ipc.setXCompanion).toHaveBeenLastCalledWith(null, 'bot-fixture'));
+    expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
+  });
+
+  it('can remove an orphaned assignment from the global X settings', async () => {
+    const unbound = { ...BASE_HOOK, x: { ...BASE_HOOK.x, url: 'wss://x.example.test' } };
+    ipc.get.mockResolvedValue({ hook: { ...unbound, x: { ...unbound.x, companionBotId: 'deleted-bot' } } });
+    ipc.setXCompanion.mockResolvedValue({ hook: unbound });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.remove' }));
+    await waitFor(() => expect(ipc.setXCompanion).toHaveBeenCalledWith(null, 'deleted-bot'));
+    expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps the X assignment unchanged when confirmation is cancelled', async () => {
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, x: { ...BASE_HOOK.x, url: 'wss://x.example.test' } } });
+    dialog.confirm.mockResolvedValue(false);
+    render(<HookConnectionsSection companion={{ id: 'bot-fixture', name: 'Fixture' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.bind' }));
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalled());
+    expect(ipc.setXCompanion).not.toHaveBeenCalled();
+  });
 
   it('never derives prototype or built-in chat aliases from a selected folder', () => {
     expect(deriveAlias('/tmp/chat', new Set())).toBe('chat-2');

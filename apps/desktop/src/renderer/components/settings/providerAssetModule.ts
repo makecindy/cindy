@@ -18,6 +18,7 @@ export type ProviderAssetModuleState =
   | { kind: 'hidden' }
   | { kind: 'fault' }
   | { kind: 'balance'; available: string }
+  | { kind: 'unlimited'; scope: 'quota' }
   | { kind: 'quota'; quota: ClaudeAccountUsageSnapshot }
   | { kind: 'loading'; scope: 'balance' | 'quota' }
   | { kind: 'unavailable'; scope: 'balance' | 'quota' };
@@ -30,6 +31,7 @@ export interface XdAssetModuleInput {
   /** 额度池账本里的可用余额（useModelAccessCreditUsage）；拿不到为 null。 */
   available: string | null;
   quotaAccessible?: boolean;
+  quotaUnlimited?: boolean;
   quota?: ClaudeAccountUsageSnapshot | null;
   loading?: boolean;
 }
@@ -128,6 +130,7 @@ export function resolveXdAssetModuleState(input: XdAssetModuleInput): ProviderAs
   // personal credit ledger. Never grant billing/purchase access merely to show this quota.
   if (input.quotaAccessible) {
     if (syncState === 'failed') return { kind: 'fault' };
+    if (input.quotaUnlimited) return { kind: 'unlimited', scope: 'quota' };
     return input.quota
       ? { kind: 'quota', quota: input.quota }
       : { kind: input.loading ? 'loading' : 'unavailable', scope: 'quota' };

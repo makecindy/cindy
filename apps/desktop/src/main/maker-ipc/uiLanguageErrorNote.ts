@@ -49,7 +49,9 @@ export function turnUiLanguageFromSendOpts(
 /**
  * Per-turn note for the model only. It is not part of the cached system prompt:
  * the viewing client can change between turns, and a locale must not enter the
- * stable prefix. The note text is fixed for each supported locale.
+ * stable prefix. The note text is fixed for each supported locale, so the send
+ * paths only repeat it when the locale changes or the native context was rebuilt,
+ * compacted or cleared (see wireNoteMemory.ts).
  */
 export function buildUiLanguageErrorNote(locale: SupportedLocale): string {
   const name = INTERFACE_LANGUAGE_NAME[locale];

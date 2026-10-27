@@ -161,9 +161,11 @@ export function removeSessionExtraDir(
   return normalizeExtraDirs(current ?? undefined).filter((dir) => dir !== path);
 }
 
-/** 会话深链(一级「复制链接」的复制值)。 */
-export function sessionMenuCopyLink(session: Pick<RemoteSession, 'id'>): string {
-  return buildMobileSessionDeepLink(session.id);
+/** 会话深链(一级「复制链接」的复制值),冻结会话所在设备(可达优先,与打开会话同口径)。 */
+export function sessionMenuCopyLink(
+  session: Pick<RemoteSession, 'id' | 'canonicalDeviceId' | 'deviceLinkDeviceId'>,
+): string {
+  return buildMobileSessionDeepLink(session.id, { session });
 }
 
 /** Android 返回键 / 关闭手势的两段式收敛:info 先回 menu,menu 才关 sheet。 */
@@ -257,4 +259,3 @@ function lastPathPart(path: string): string {
 function readPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
-

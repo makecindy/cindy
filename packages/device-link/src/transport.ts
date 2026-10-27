@@ -114,6 +114,17 @@ export const TRANSPORT_ADAPTIVE_RETRY_MAX_MS = 10_000;
 export interface RetransmitEstimate {
   srttMs: number | null;
   rttVarMs: number;
+  /** End-to-end delivery, including relay queues; never inferred from socket drain. */
+  deliveryBytesPerMs?: number;
+}
+
+/** Only first-attempt ACKs give an unambiguous large-message delivery sample. */
+export function updateDeliveryEstimate(estimate: RetransmitEstimate, bytes: number, elapsedMs: number): void {
+  if (bytes < 64 * 1024 || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+  const sample = bytes / elapsedMs;
+  const previous = estimate.deliveryBytesPerMs;
+  // Slow down immediately, recover gradually; bursts must not erase a slow-path observation.
+  estimate.deliveryBytesPerMs = previous === undefined ? sample : Math.min(sample, previous * 0.75 + sample * 0.25);
 }
 
 export function updateRetransmitEstimate(estimate: RetransmitEstimate, sampleMs: number): void {
@@ -138,18 +149,26 @@ export function retransmitBaseMs(estimate: RetransmitEstimate, configuredMs: num
 }
 
 /**
- * 单条可靠消息距上次写出后多久可以重发。字节节奏（sizeIntervals）估的是传输耗时，
- * 按配置间隔计；实测往返只放宽按次数的退避。两者取大而不相乘，否则慢链路上的
- * 大回包要等上百秒才重发。往返未知时与原先 configured × max(size, backoff) 相同。
+ * 单条可靠消息距上次写出后多久可以重发。字节节奏和已确认的交付速度估算传输耗时；
+ * 超过 512KiB 的回包再按次数退避，传输等待封顶 120s。小消息保留 RTT 退避，
+ * 请求自身的响应截止时间不因重传延长。
  */
 export function reliableRetryDelayMs(
   estimate: RetransmitEstimate,
   configuredMs: number,
   sizeIntervals: number,
   attempts: number,
+  bytes = 0,
 ): number {
   const backoff = Math.min(4, 2 ** Math.max(0, attempts - 1));
-  return Math.max(configuredMs * sizeIntervals, retransmitBaseMs(estimate, configuredMs) * backoff);
+  const measuredDelivery = bytes >= 64 * 1024 && estimate.deliveryBytesPerMs
+    ? bytes / estimate.deliveryBytesPerMs * 1.5 : 0;
+  // A 1.85 MB result needs roughly two minutes at 128 Kbit/s. The old 30s
+  // size ceiling repeatedly copied it before its first ACK. Keep a finite
+  // ceiling and retry exhaustion, while leaving small-message timing intact.
+  const delivery = Math.min(120_000,
+    Math.max(configuredMs * sizeIntervals, measuredDelivery) * (bytes > 512 * 1024 ? backoff : 1));
+  return Math.max(delivery, retransmitBaseMs(estimate, configuredMs) * backoff);
 }
 
 const TRANSPORT_MARKER = '__cindyDeviceLinkTransport';

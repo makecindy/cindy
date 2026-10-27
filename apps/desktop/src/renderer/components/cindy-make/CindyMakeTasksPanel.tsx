@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -246,9 +247,7 @@ export function CindyMakeTasksPanel({
             </div>
             <div className="shrink-0 space-y-3 border-t border-[var(--border-default)] p-4">
               {failureCode && (
-                <p role="alert" className="text-12 text-[var(--error-fg)]">
-                  {t('settings.cindyMake.tasks.errors.' + failureCode)}
-                </p>
+                <ErrorNotice role="alert" message={t('settings.cindyMake.tasks.errors.' + failureCode)} />
               )}
               <div className="flex flex-wrap gap-2">
                 {selected.task.sessionStatus !== 'deleted' && (

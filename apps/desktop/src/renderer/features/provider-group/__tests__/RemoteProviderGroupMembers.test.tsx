@@ -196,6 +196,34 @@ describe('RemoteProviderGroupMembers', () => {
     expect(screen.queryByText('providerGroup.member.version.updateRequired')).toBeNull();
   });
 
+  it('lists several accounts of one computer under that computer and keeps a one-account computer as one row', async () => {
+    const config: ProviderGroupConfig = { ...CONFIG, members: [
+      { ...VM, key: 'local:anthropic', kind: 'local', agentDeviceId: null, label: 'Group host' },
+      { ...VM, providerName: 'Claude A' },
+      { ...VM, key: 'device:vm:anthropic-b', providerId: 'anthropic-b' },
+    ] };
+    mountWith({}, { config, devices: [{ deviceId: 'vm', appVersion: '0.1.103' }] });
+    const device = await screen.findByTestId('remote-provider-group-device');
+    expect(screen.getAllByTestId('remote-provider-group-device')).toHaveLength(1);
+    const header = within(device).getByTestId('remote-provider-group-device-header');
+    expect(header.textContent).toContain('grok-bot-vm');
+    expect(header.textContent).toContain('providerGroup.member.accountCount:{"count":2}');
+    // 版本属于电脑：写在电脑那一层，账号行不重复。
+    await waitFor(() => expect(within(header).getByText('v0.1.103')).toBeTruthy());
+    const accounts = within(device).getAllByTestId('remote-provider-group-member');
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0].textContent).toContain('Claude A');
+    expect(accounts[0].textContent).not.toContain('grok-bot-vm');
+    expect(within(accounts[0]).queryByText('v0.1.103')).toBeNull();
+    // 旧组没有账号名快照、那台也没报：按第几个账号称呼，不显示内部 id。
+    expect(accounts[1].textContent).toContain('providerGroup.member.accountFallback:{"index":2}');
+    expect(accounts[1].textContent).not.toContain('anthropic-b');
+    // 只有一个账号的组所在电脑不分两层。
+    const host = screen.getAllByTestId('remote-provider-group-member')[0];
+    expect(host.closest('[data-testid="remote-provider-group-device"]')).toBeNull();
+    expect(host.textContent).toContain('Group host');
+  });
+
   it('says this computer cannot reach a computer the group computer still sees as usable', async () => {
     mountWith({ unreachableHere: true });
     await waitFor(() => expect(screen.getByText('providerGroup.member.status.unreachableHere')).toBeTruthy());

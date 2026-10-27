@@ -56,7 +56,7 @@ it('records no relationship when creation fails', async () => {
 it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('does not record an unverified creator/target after %s', async reason => {
   const captureSource = readFileSync(new URL('../../maker-ipc/botWorkbenchTools.ts', import.meta.url), 'utf8');
   const begin = captureSource.indexOf('export async function captureBotCreatedTaskResponsibility');
-  const chunk = captureSource.slice(begin, captureSource.indexOf('async function listBotRoutines', begin)).replace('export ', '');
+  const chunk = captureSource.slice(begin, captureSource.indexOf('type Failure = {', begin)).replace('export ', '');
   const js = ts.transpileModule(`${chunk}; return captureBotCreatedTaskResponsibility;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   let owner = 'owner-one';
   const save = vi.fn(async () => {});
@@ -64,7 +64,7 @@ it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('
     isAppSessionBoundaryPending: () => false,
     activeOwnerScopeKey: () => owner,
     ownerScopedUserDataPath: () => '/synthetic-owner-home',
-    resolveWorkbenchCaller: async () => reason === 'ordinary-caller' ? { ok: false } : { ok: true, botId: 'creator' },
+    resolveBotTaskCreator: async () => reason === 'ordinary-caller' ? null : 'creator',
     readWorkbenchTarget: async () => ({ status: 'active', botLinked: false, remoteHostId: reason === 'remote-target' ? 'remote' : null, orcaRole: reason === 'worker-target' ? 'worker' : null }),
     setTaskResponsibility: save,
     broadcastBotWorkbenchChanged: vi.fn(),

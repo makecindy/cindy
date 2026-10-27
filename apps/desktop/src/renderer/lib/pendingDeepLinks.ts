@@ -10,5 +10,5 @@ export async function drainPendingDeepLinks<T extends { type: string }>(
   do {
     payload = await take();
     if (payload) receive(payload);
-  } while (payload?.type === 'chat-invite');
+  } while (payload?.type === 'chat-invite' || payload?.type === 'chat-invite-malformed');
 }

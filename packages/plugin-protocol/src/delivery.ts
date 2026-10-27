@@ -93,6 +93,49 @@ export interface PluginReleaseDetail extends PluginReleaseSummary {
   manifest: GhostManifest & { namespace?: string | null };
 }
 
+/** Optional aggregate of successfully issued client download URLs, not completed installs. */
+export interface PluginDownloadStatistics {
+  /** Decimal count of successfully issued download URLs across all releases. */
+  requestCount: string;
+  /** Rolling 168 hours; optional for compatibility with older servers. */
+  last7DaysRequestCount?: string;
+}
+
+/** Preserve exact counters while allowing older servers to omit statistics. */
+export function parsePluginDownloadStatistics(value: unknown): PluginDownloadStatistics | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const isCount = (count: unknown): count is string =>
+    typeof count === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(count);
+  if (!isCount(raw.requestCount)) return undefined;
+  return {
+    requestCount: raw.requestCount,
+    ...(isCount(raw.last7DaysRequestCount) ? { last7DaysRequestCount: raw.last7DaysRequestCount } : {}),
+  };
+}
+
+/** Optional, already-authorized audience aggregate. Downloads are not install receipts. */
+export interface PluginUsageStatistics {
+  installationCount?: string;
+  usageCount?: string;
+  usageCountLast7Days?: string;
+  asOf: string;
+}
+
+/** Invalid optional metrics never make an otherwise compatible marketplace unavailable. */
+export function parsePluginUsageStatistics(value: unknown): PluginUsageStatistics | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const keys = ['installationCount', 'usageCount', 'usageCountLast7Days'] as const;
+  if (typeof raw.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}T.*Z$/.test(raw.asOf) || !Number.isFinite(Date.parse(raw.asOf))) return undefined;
+  const result: PluginUsageStatistics = { asOf: raw.asOf };
+  for (const key of keys) {
+    if (typeof raw[key] === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(raw[key] as string))
+      result[key] = raw[key] as string;
+  }
+  return keys.some(key => result[key] !== undefined) ? result : undefined;
+}
+
 /** Plugin 列表项；只含市场展示和版本对账所需的摘要。 */
 export interface VisiblePluginSummary {
   /** plugin-server 生成的永久资源 ID，也是客户端管理安装实例的主键。 */
@@ -114,6 +157,8 @@ export interface VisiblePluginSummary {
   defaultInstall: boolean;
   /** 服务端为该客户端选择的 Release；优先 current，不兼容时回退到历史兼容版本。 */
   currentRelease: PluginReleaseSummary;
+  usageStatistics?: PluginUsageStatistics;
+  downloadStatistics?: PluginDownloadStatistics;
 }
 
 /** Plugin 详情；展示字段必须与 `currentRelease.manifest` 保持一致。 */
@@ -137,6 +182,8 @@ export interface VisiblePluginDetail {
   defaultInstall: boolean;
   /** 服务端为该客户端选择的 Release，包含完整 manifest。 */
   currentRelease: PluginReleaseDetail;
+  usageStatistics?: PluginUsageStatistics;
+  downloadStatistics?: PluginDownloadStatistics;
 }
 
 /** 清理通告支持的处置动作；解析器会跳过动作未知的通告（未来扩展位）。 */
@@ -162,6 +209,19 @@ export interface PluginRemovalNotice {
   removedAt: string;
 }
 
+/** scope=all 中企业部分被拒绝时的已知错误码。解析器也接受格式合法的未知码。 */
+export const ORGANIZATION_PLUGIN_ACCESS_ERROR_CODES = [
+  'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+  'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+  'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+] as const;
+
+export interface OrganizationPluginAccessError {
+  /** 已知码见 ORGANIZATION_PLUGIN_ACCESS_ERROR_CODES；未知但格式合法的码也保留。 */
+  code: string;
+  message: string;
+}
+
 /** Plugin 分页列表响应。 */
 export interface ListPluginsResponse {
   /** Plugin HTTP envelope 版本。 */
@@ -177,6 +237,11 @@ export interface ListPluginsResponse {
    * 规范化为 `null`。组织已登录但未登记前缀时为 `{ organizationId, pluginPrefix: null }`。
    */
   currentOrganization: PluginCurrentOrganization | null;
+  /**
+   * scope=all 的企业部分被拒绝。每页重复；出现时必须同时有 currentOrganization，
+   * 且本页不能有企业条目或清理通告。缺失表示企业部分按原规则返回。
+   */
+  organizationAccessError?: OrganizationPluginAccessError;
 }
 
 /** 单个 Plugin 详情响应。 */
@@ -343,14 +408,18 @@ function parseVisiblePluginBase(
 function parseVisiblePluginSummary(value: unknown, index: number): VisiblePluginSummary {
   const path = `plugins[${index}]`;
   const { raw, ...base } = parseVisiblePluginBase(value, path);
+  const downloadStatistics = parsePluginDownloadStatistics(raw.downloadStatistics);
   return {
     ...base,
+    ...(parsePluginUsageStatistics(raw.usageStatistics) ? { usageStatistics: parsePluginUsageStatistics(raw.usageStatistics) } : {}),
+    ...(downloadStatistics ? { downloadStatistics } : {}),
     currentRelease: parseReleaseSummary(raw.currentRelease, `${path}.currentRelease`),
   };
 }
 
 function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDetail {
   const { raw, ...parsed } = parseVisiblePluginBase(value, path);
+  const downloadStatistics = parsePluginDownloadStatistics(raw.downloadStatistics);
   const currentRelease = parseReleaseDetail(
     raw.currentRelease,
     parsed.ghostId,
@@ -379,6 +448,8 @@ function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDe
   }
   return {
     ...parsed,
+    ...(parsePluginUsageStatistics(raw.usageStatistics) ? { usageStatistics: parsePluginUsageStatistics(raw.usageStatistics) } : {}),
+    ...(downloadStatistics ? { downloadStatistics } : {}),
     currentRelease,
   };
 }
@@ -456,7 +527,8 @@ function parseCurrentOrganization(value: unknown): PluginCurrentOrganization | n
  * 未知字段会被忽略；已知字段缺失、值不合法或 schema 版本不支持时抛出
  * `PluginProtocolError`。`removals` 缺失时规范化为空数组，动作未知的通告
  * 会被跳过而不影响其余内容。`currentOrganization` 缺失或为 null 时规范化为
- * `null`；对象存在但缺少 `pluginPrefix` 键时抛错。
+ * `null`；对象存在但缺少 `pluginPrefix` 键时抛错。`organizationAccessError`
+ * 缺失时不保留；出现时必须同时有组织身份，且不能夹带企业条目或清理通告。
  */
 export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
   const raw = object(value, 'response');
@@ -467,6 +539,15 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
   const plugins = raw.plugins.map(parseVisiblePluginSummary);
   const removals = parseRemovals(raw.removals);
   const currentOrganization = parseCurrentOrganization(raw.currentOrganization);
+  const organizationAccessError = parseOrganizationAccessError(raw.organizationAccessError);
+  if (
+    organizationAccessError &&
+    (!currentOrganization ||
+      plugins.some((item) => item.scope === 'organization') ||
+      removals.length > 0)
+  ) {
+    throw new PluginProtocolError('企业准入拒绝响应不能包含企业资源或清理通告');
+  }
   assertPluginListOrganizationNamespace(currentOrganization, plugins, removals);
   return {
     schemaVersion: PLUGIN_API_SCHEMA_VERSION,
@@ -474,6 +555,22 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
     nextCursor: nextCursor(raw.nextCursor, 'response.nextCursor'),
     removals,
     currentOrganization,
+    ...(organizationAccessError ? { organizationAccessError } : {}),
+  };
+}
+
+const ORGANIZATION_PLUGIN_ACCESS_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function parseOrganizationAccessError(value: unknown): OrganizationPluginAccessError | undefined {
+  if (value === undefined) return undefined;
+  const error = object(value, 'response.organizationAccessError');
+  const code = string(error.code, 'response.organizationAccessError.code', 64);
+  if (!ORGANIZATION_PLUGIN_ACCESS_ERROR_CODE_PATTERN.test(code)) {
+    throw new PluginProtocolError('organizationAccessError.code 不合法');
+  }
+  return {
+    code,
+    message: string(error.message, 'response.organizationAccessError.message', 512),
   };
 }
 

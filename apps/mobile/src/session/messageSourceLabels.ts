@@ -111,6 +111,11 @@ export function isSourceDeviceRemoved(
 }
 
 export function sourcePluginLabel(plugin: MessageSourcePlugin): string {
+  if (plugin.pluginId.startsWith('mcp-app:')) {
+    return i18n.t('mcpApps.messageSource', {
+      name: plugin.name ?? plugin.pluginId.slice(8),
+    });
+  }
   return plugin.name
     ? i18n.t("message.renderer.sourcePluginNamed", { name: plugin.name })
     : i18n.t("message.renderer.sourcePlugin");
@@ -157,6 +162,7 @@ export function orcaMessageTitle(
 
 const SOURCE_ID_I18N_KEYS: Record<MessageSourceIdKind, string> = {
   plugin: "message.renderer.sourcePluginId",
+  mcpApp: "mcpApps.serverId",
   teammate: "message.renderer.sourceTeammateId",
   session: "message.renderer.sourceSessionId",
   automation: "message.renderer.sourceAutomationId",

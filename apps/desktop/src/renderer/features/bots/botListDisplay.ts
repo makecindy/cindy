@@ -3,6 +3,7 @@
  * line, latest message on the second). Kept out of the component so the
  * fallback chain and the timestamp format are unit-testable without a DOM.
  */
+import { formatSidebarTime } from '../cc-agent/lib/formatSidebarTime';
 
 /**
  * 行上该显示哪一刻。
@@ -28,19 +29,16 @@ export function botListTimestampAt(
     : null;
 }
 
-/** Row timestamp: today → `HH:mm`, any older day → `M/D`. */
-export function formatBotListTimestamp(at: number | null | undefined, now: number): string {
+/** Use the same localized relative time as ordinary sidebar tasks. */
+export function formatBotListTimestamp(
+  at: number | null | undefined,
+  now: number,
+  t?: Parameters<typeof formatSidebarTime>[1],
+): string {
   if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return '';
   const stamp = new Date(at);
-  const today = new Date(now);
-  const sameDay =
-    stamp.getFullYear() === today.getFullYear() &&
-    stamp.getMonth() === today.getMonth() &&
-    stamp.getDate() === today.getDate();
-  if (sameDay) {
-    return `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}`;
-  }
-  return `${stamp.getMonth() + 1}/${stamp.getDate()}`;
+  if (Number.isNaN(stamp.getTime())) return '';
+  return formatSidebarTime(stamp.toISOString(), t, new Date(now));
 }
 
 /**

@@ -10,17 +10,22 @@ import {
 describe('Bots list timestamp', () => {
   const now = new Date(2026, 7, 17, 14, 5, 0).getTime();
 
-  it('shows the clock for today and the date for anything older', () => {
-    expect(formatBotListTimestamp(new Date(2026, 7, 17, 9, 7, 0).getTime(), now)).toBe('09:07');
-    expect(formatBotListTimestamp(new Date(2026, 7, 17, 23, 59, 0).getTime(), now)).toBe('23:59');
-    expect(formatBotListTimestamp(new Date(2026, 7, 16, 23, 59, 0).getTime(), now)).toBe('8/16');
-    expect(formatBotListTimestamp(new Date(2025, 11, 3, 8, 0, 0).getTime(), now)).toBe('12/3');
+  it('shows the same relative units as the task list', () => {
+    expect(formatBotListTimestamp(now, now)).toBe('now');
+    expect(formatBotListTimestamp(now - 5 * 60_000, now)).toBe('5m');
+    expect(formatBotListTimestamp(new Date(2026, 7, 17, 9, 7, 0).getTime(), now)).toBe('4h');
+    expect(formatBotListTimestamp(new Date(2026, 7, 17, 23, 59, 0).getTime(), now)).toBe('now');
+    expect(formatBotListTimestamp(now - 2 * 86_400_000, now)).toBe('2d');
+    expect(formatBotListTimestamp(now - 21 * 86_400_000, now)).toBe('3w');
+    expect(formatBotListTimestamp(new Date(2025, 11, 3, 8, 0, 0).getTime(), now)).toBe('8mo');
   });
 
   it('renders nothing when the Bot has no message yet', () => {
     expect(formatBotListTimestamp(null, now)).toBe('');
     expect(formatBotListTimestamp(undefined, now)).toBe('');
     expect(formatBotListTimestamp(0, now)).toBe('');
+    expect(formatBotListTimestamp(Number.NaN, now)).toBe('');
+    expect(formatBotListTimestamp(Number.MAX_VALUE, now)).toBe('');
   });
 });
 

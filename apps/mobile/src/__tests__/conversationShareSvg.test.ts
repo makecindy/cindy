@@ -457,3 +457,32 @@ describe("ConversationShareSvg", () => {
     expect(renderSize.width).toBeLessThan(conversationShareSvgRenderSize(layout).width);
   });
 });
+
+describe("ConversationShareSvg 与聊天气泡同款渲染", () => {
+  const ownUserBubble = { background: "#e8f0ff", border: "#b5c8ef" };
+  const layout = buildConversationShareSvgLayout({
+    allShareableIds: ["short", "own", "multi"],
+    colors: { ...colors, ownUserBubble },
+    messages: [
+      { body: "短消息", clientId: "short", kind: "user" },
+      { body: "自己发的", clientId: "own", kind: "user", ownUserBubble: true },
+      { body: "第一行\n第二行", clientId: "multi", kind: "user" },
+    ],
+    width: 390,
+  });
+
+  it("用户气泡描边用边框色,自己的消息用气泡颜色", () => {
+    const [short, own, multi] = layout.bubbles;
+    expect(short).toMatchObject({ fill: colors.surfaceElevated, stroke: colors.border });
+    expect(own).toMatchObject({ fill: ownUserBubble.background, stroke: ownUserBubble.border });
+    expect(multi!.stroke).toBe(colors.border);
+  });
+
+  it("左右边距与消息流一致,短消息上下内边距更紧凑", () => {
+    const [short, , multi] = layout.bubbles;
+    expect(short!.x + short!.width).toBe(390 - 16);
+    expect(short!.textBlocks[0]!.y - short!.y).toBeLessThan(
+      multi!.textBlocks[0]!.y - multi!.y,
+    );
+  });
+});

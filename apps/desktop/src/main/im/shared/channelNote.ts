@@ -1,7 +1,7 @@
 import type { IMMessageEvent } from '@cindy/im';
 import { formatSourceRef, sanitizeSourceName } from '@cindy/maker-shared/message-source';
 
-import { imChannelDisplayName } from '../../../shared/imMessageSource';
+import { imChannelDisplayName, type ImMessageOrigin } from '../../../shared/imMessageSource';
 
 /**
  * 本机 IM 渠道的逐条来源说明（只进发给模型的正文）。
@@ -23,6 +23,16 @@ export interface ImChannelNoteSource {
   chatName?: string;
   senderId?: string;
   senderName?: string;
+  /**
+   * 发言人是不是主人。私聊缺省就是主人(不写); 伙伴自有 bot 对外开放后外部用户的
+   * 私聊置 false —— 说明里写明发言人并点出不是主人, 模型才不会把陌生人当成主人。
+   */
+  senderIsOwner?: boolean;
+  /**
+   * 本轮可用的渠道工具提示(一句事实, 由渠道 adapter 给出)。Agent 在 IM 轮次里经常
+   * 不知道自己手上有渠道 API 可用, 每条消息点一句比只靠工具描述更可靠。
+   */
+  toolsHint?: string;
 }
 
 /** 中文语境里拉丁字母渠道名两侧补空格，中文渠道名直接相连。 */
@@ -46,12 +56,67 @@ export function buildImChannelNote(channel: string, source: ImChannelNoteSource)
     source.chatId,
   );
   const where = source.chatKind === 'group' ? `${label}群${chatRef}` : `${label}私聊${chatRef}`;
+  const guestDm = source.chatKind === 'direct' && source.senderIsOwner === false;
   const senderRef =
-    source.chatKind === 'group'
+    source.chatKind === 'group' || guestDm
       ? formatSourceRef(source.senderName, 'user_id', source.senderId)
       : '';
-  const sender = senderRef ? `，发言人${senderRef}` : '';
-  return `[渠道说明] 系统追加，不是用户消息。本条来自${where}${sender}。`.replace(/ {2,}/g, ' ');
+  const sender = senderRef
+    ? `，发言人${senderRef}${guestDm ? '，不是主人' : ''}`
+    : guestDm
+      ? '，发言人不是主人'
+      : '';
+  const tools = source.toolsHint?.trim() ? `${source.toolsHint.trim()}` : '';
+  return `[渠道说明] 系统追加，不是用户消息。本条来自${where}${sender}。${tools}`.replace(/ {2,}/g, ' ');
+}
+
+/**
+ * 存给界面的「谁、在哪说的」: 与渠道说明同源。`source` 还没算出来(提前落库)时只写发言人,
+ * 派发时再补齐群 / 私聊; 群说明省略了发言人(Telegram 的 `[发言人]` 行)就从 speaker 补。
+ * 名字按不可信展示文本消毒, 消毒后为空就只留 id。
+ */
+export function imMessageOriginFor(
+  event: Pick<IMMessageEvent, 'speaker' | 'interactionSource'>,
+  source: ImChannelNoteSource | null | undefined,
+): ImMessageOrigin | undefined {
+  const sender = event.speaker
+    ? (() => {
+        const id = event.speaker.id?.trim() || undefined;
+        const name = distinctName(event.speaker.name || event.interactionSource?.senderName, id);
+        return { isOwner: event.speaker.isOwner === true, ...(id ? { id } : {}), ...(name ? { name } : {}) };
+      })()
+    : undefined;
+  const chat = source
+    ? {
+        kind: source.chatKind,
+        ...(source.chatKind === 'group' && source.chatName ? { name: source.chatName } : {}),
+      }
+    : undefined;
+  if (!sender && !chat) return undefined;
+  return { ...(chat ? { chat } : {}), ...(sender ? { sender } : {}) };
+}
+
+/**
+ * 私聊的来源(渠道已判定这是私聊, 不按 speaker 有无猜群): 主人只写 chat_id; 带
+ * `speaker.isOwner === false` 的外部用户私聊写明发言人并标记不是主人。
+ */
+export function imChannelNoteDirectSourceFromEvent(
+  event: Pick<IMMessageEvent, 'chatId' | 'speaker' | 'interactionSource'>,
+): ImChannelNoteSource {
+  const chatId = event.chatId?.trim() || undefined;
+  const direct: ImChannelNoteSource = { chatKind: 'direct', ...(chatId ? { chatId } : {}) };
+  if (!event.speaker || event.speaker.isOwner) return direct;
+  const senderId = event.speaker.id?.trim() || undefined;
+  const senderName = distinctName(
+    event.speaker.name || event.interactionSource?.senderName,
+    senderId,
+  );
+  return {
+    ...direct,
+    senderIsOwner: false,
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+  };
 }
 
 /** 平台把 id 当显示名回填时（如钉钉缺群名、企业微信发言人）视为没有名字。 */

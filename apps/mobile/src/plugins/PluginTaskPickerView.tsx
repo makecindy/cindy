@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { ErrorNotice } from '@/components/ErrorNotice';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import {
   ActivityIndicator,
   Pressable,
@@ -100,12 +102,7 @@ export function PluginTaskPickerView({
         {loading ? (
           <ActivityIndicator color={colors.textSecondary} />
         ) : error ? (
-          <View style={styles.empty}>
-            <Text style={styles.note}>{t("plugins.loadFailed")}</Text>
-            <Pressable style={styles.row} onPress={() => onRetry()}>
-              <Text style={styles.title}>{t("plugins.retry")}</Text>
-            </Pressable>
-          </View>
+          <ErrorNotice message={t('plugins.loadFailed')} actions={<MainWindowActionButton action={{ label: t('plugins.retry'), onPress: onRetry }} />} />
         ) : (
           matches.map((row) => (
             <Pressable

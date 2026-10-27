@@ -21,6 +21,12 @@ interface ViewerConnectOptions {
   isCurrent: () => boolean;
   /** Ask a host advertising `autoControl` to grant control with the lease. */
   control?: boolean;
+  /**
+   * Open a 代输入 live view of the window this pending request is about. Needs a
+   * host advertising `handoffWindow`; the reported caps keep only what applies
+   * to a single window.
+   */
+  handoff?: string;
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -74,7 +80,7 @@ export class RemoteDesktopViewerSession {
         throw new Error("DESKTOP_VIDEO_STOPPED");
     };
     check();
-    const caps = await this.request<RemoteDesktopCapabilities>(
+    let caps = await this.request<RemoteDesktopCapabilities>(
       { op: "capabilities" },
       check,
     );
@@ -83,6 +89,10 @@ export class RemoteDesktopViewerSession {
     if (!caps.enabled) throw new Error("DESKTOP_DISABLED");
     if (options.resume && !caps.automaticReconnect)
       throw new Error("CHANNEL_NOT_ALLOWED");
+    if (options.handoff !== undefined) {
+      if (!caps.handoffWindow) throw new Error("CHANNEL_NOT_ALLOWED");
+      caps = handoffWindowCapabilities(caps);
+    }
     await options.onCapabilities?.(caps);
     check();
     const display =
@@ -101,12 +111,18 @@ export class RemoteDesktopViewerSession {
         ...(options.control && caps.autoControl && caps.canControl
           ? { control: true }
           : {}),
+        ...(options.handoff !== undefined ? { handoff: options.handoff } : {}),
       },
       check,
     );
     if (generation !== this.generation || !options.isCurrent()) {
       await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
       throw new Error("DESKTOP_VIDEO_STOPPED");
+    }
+    // A window view that came back as a whole display is not what was asked for.
+    if (options.handoff !== undefined && typeof lease.window?.app !== "string") {
+      await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+      throw new Error("INVALID_RESPONSE");
     }
     // Only a confirmed grant counts; older hosts always start view only.
     lease.controlling = lease.controlling === true;
@@ -282,6 +298,34 @@ export class RemoteDesktopViewerSession {
   }
 }
 
+/**
+ * What a 代输入 window view may use. Everything that reaches past the one window —
+ * display modes, whole-system audio, the clipboard, privacy screen, window and
+ * workspace actions, locking — is left out, so the viewer hides those controls;
+ * the host refuses them for a window lease either way.
+ */
+export function handoffWindowCapabilities(
+  caps: RemoteDesktopCapabilities,
+): RemoteDesktopCapabilities {
+  return {
+    version: caps.version,
+    enabled: caps.enabled,
+    canControl: caps.canControl,
+    platform: caps.platform,
+    displays: caps.displays,
+    ...(caps.permissions ? { permissions: caps.permissions } : {}),
+    ...(caps.automaticReconnect ? { automaticReconnect: true } : {}),
+    ...(caps.videoSettings ? { videoSettings: true } : {}),
+    ...(caps.trickleIce ? { trickleIce: true } : {}),
+    ...(caps.channelRequests ? { channelRequests: true } : {}),
+    ...(caps.autoControl ? { autoControl: true } : {}),
+    ...(caps.backgroundViewing ? { backgroundViewing: true } : {}),
+    ...(caps.cursorOverlay ? { cursorOverlay: true } : {}),
+    ...(caps.viewerHidden ? { viewerHidden: true } : {}),
+    handoffWindow: true,
+  };
+}
+
 /** Layout points determine the ratio; cap the long edge instead of sending phone DPR pixels. */
 export function viewerDisplaySize(
   width: number,
@@ -355,6 +399,8 @@ export function remoteDesktopFailureKey(code: string): string | null {
   if (/ACCESS_REVOKED/.test(code)) return "accessRevoked";
   if (/REMOTE_DISABLED/.test(code)) return "remoteDisabled";
   if (/DESKTOP_BUSY/.test(code)) return "connectionBusy";
+  if (/DESKTOP_HANDOFF_ENDED/.test(code)) return "handoffEnded";
+  if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code)) return "handoffUnavailable";
   if (/CHANNEL_NOT_ALLOWED/.test(code)) return "upgrade";
   if (/DESKTOP_DISABLED/.test(code)) return "disabled";
   if (/PERMISSION|ACCESSIBILITY/.test(code)) return "permissionHint";

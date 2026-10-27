@@ -17,13 +17,19 @@ import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import SlackIcon from './SlackIcon';
 import XIcon from './XIcon';
-import { isImMessageCount, type ImMessageSource } from '../../../shared/imMessageSource';
+import {
+  isImMessageCount,
+  type ImMessageOrigin,
+  type ImMessageSource,
+} from '../../../shared/imMessageSource';
 import { mayExceedVisualLineThreshold, useUserMessageAutoCollapse } from './userMessageCollapse';
 
 type ThreadContextEntry = NonNullable<ImMessageSource['threadContext']>[number];
 
 interface HookTaskCardProps {
   im: string;
+  /** 谁、在哪说的(伙伴自有 bot 的专线里主人与别人的消息混在一条任务); 缺省按主人显示。 */
+  origin?: ImMessageOrigin;
   /** 用户 @ bot 的干净原文(卡片正文)。 */
   userText: string;
   collapseUserText?: boolean;
@@ -84,8 +90,32 @@ export function imLabel(im: string, t: TFunction): string {
   }
 }
 
+/** 卡片头: 主人 / 未知来源沿用「Cindy · 来自 X」; 别人说的写出发言人与群, 不冒充主人。 */
+export function hookTaskCardHeading(
+  im: string,
+  origin: ImMessageOrigin | undefined,
+  t: TFunction,
+): { label: string; title?: string } {
+  const platform = imLabel(im, t);
+  const sender = origin?.sender;
+  if (!sender || sender.isOwner) return { label: t('chat.threadContext.cindyFrom', { platform }) };
+  const name = sender.name?.trim() || sender.id || t('chat.threadContext.unknownSender');
+  const title = sender.id ? `user_id: ${sender.id}` : undefined;
+  if (origin?.chat?.kind === 'direct') {
+    return { label: t('chat.threadContext.guestFromDm', { name, platform }), ...(title ? { title } : {}) };
+  }
+  const group = origin?.chat?.name?.trim();
+  return {
+    label: group
+      ? t('chat.threadContext.memberFromGroup', { name, platform, group })
+      : t('chat.threadContext.memberFromPlatform', { name, platform }),
+    ...(title ? { title } : {}),
+  };
+}
+
 export default function HookTaskCard({
   im,
+  origin,
   userText,
   collapseUserText = false,
   threadContext,
@@ -131,9 +161,17 @@ export default function HookTaskCard({
         className="flex items-center gap-2 px-[14px] pb-[6px]"
       >
         <ImIcon im={im} />
-        <span className="text-13 font-semibold text-[var(--text-primary)]">
-          {t('chat.threadContext.cindyFrom', { platform: imLabel(im, t) })}
-        </span>
+        {(() => {
+          const heading = hookTaskCardHeading(im, origin, t);
+          return (
+            <span
+              className="min-w-0 truncate text-13 font-semibold text-[var(--text-primary)]"
+              title={heading.title}
+            >
+              {heading.label}
+            </span>
+          );
+        })()}
       </div>
 
       {/* Body: 用户实际提问 */}

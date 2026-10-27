@@ -14,6 +14,7 @@ import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { providerShareAgentDeviceId } from './providerShareFormat';
 import { providerShareDisplayNames } from './providerShareNames';
 import { useProviderShareReceived } from './providerShareStore';
+import { useControlledShareIds } from './useControlledShareIds';
 
 export interface ProviderShareAgentDevice {
   deviceId: string;
@@ -37,10 +38,12 @@ export interface ProviderShareAgentDevices {
 
 export function useProviderShareAgentDevices(
   keepDeviceIds: readonly (string | null | undefined)[] = [],
+  controlledDeviceId?: string | null,
 ): ProviderShareAgentDevices {
   const { t } = useTranslation();
   const { received, loaded } = useProviderShareReceived();
   const keepKey = keepDeviceIds.filter(isProviderShareAgentDeviceId).join('\n');
+  const controlledShareIds = useControlledShareIds(controlledDeviceId, received);
 
   const names = useMemo(() => {
     const byShare = providerShareDisplayNames(received, t);
@@ -57,6 +60,7 @@ export function useProviderShareAgentDevices(
     for (const share of received) {
       const deviceId = providerShareAgentDeviceId(share.shareId);
       if (share.status !== 'active' && !keep.has(deviceId)) continue;
+      if (controlledDeviceId && !controlledShareIds.has(deviceId) && !keep.has(deviceId)) continue;
       list.push({ deviceId, name: names.get(deviceId) ?? '' });
       keep.delete(deviceId);
     }
@@ -67,7 +71,7 @@ export function useProviderShareAgentDevices(
       }
     }
     return list;
-  }, [keepKey, loaded, names, received, t]);
+  }, [controlledDeviceId, controlledShareIds, keepKey, loaded, names, received, t]);
 
   const nameFor = useCallback(
     (deviceId: string | null | undefined) => {

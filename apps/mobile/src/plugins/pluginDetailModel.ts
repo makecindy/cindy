@@ -18,7 +18,12 @@ export type PluginDetailStatus =
 export interface PluginDetailModel {
   details?: Array<{ key: string; title: string; value: string }>;
   tools?: Array<{ name: string; description: string }>;
-  permissions?: Array<{ title: string; description: string }>;
+  permissions?: Array<{
+    title: string;
+    description: string;
+    kind?: string;
+    labelKey?: string;
+  }>;
   description?: string;
   version?: string;
   status?: PluginDetailStatus;
@@ -126,6 +131,12 @@ export function pluginDetailModel(
       ? capabilities.permissions.map((permission) => ({
           title: permission.title,
           description: permission.description,
+          kind:
+            typeof permission.kind === "string" ? permission.kind : undefined,
+          labelKey:
+            typeof permission.labelKey === "string"
+              ? permission.labelKey
+              : undefined,
         }))
       : undefined;
   const details =
@@ -154,7 +165,8 @@ export function pluginDetailModel(
     status,
     statusAction,
     taskUsable,
-    canUseTasks: taskUsable && !status && usage?.runtimeIssue !== "fused",
+    // Setup facts guide configuration; they do not remove task entry for an enabled plugin.
+    canUseTasks: taskUsable && (!status || status === "setupRequired" || (status === "setupUnknown" && !!usage)) && usage?.runtimeIssue !== "fused",
     canToggle:
       online &&
       !loading &&

@@ -53,6 +53,60 @@ async function fillBothQuestions(view: ReturnType<typeof render>) {
 }
 
 describe('AskUserQuestionPrompt identity', () => {
+  it.each([
+    { label: 'single-select custom answer', options: [{ label: 'A' }], multiSelect: false },
+    { label: 'multi-select custom answer', options: [{ label: 'A' }], multiSelect: true },
+    { label: 'direct answer', options: [], multiSelect: false },
+    { label: 'direct multi-select answer', options: [], multiSelect: true },
+  ])('retains the final $label until acknowledged, including across remounts', ({ options, multiSelect }) => {
+    const props = {
+      ...makeProps(),
+      pending: { requestId: 'request-1', questions: [{ question: 'Final?', options, multiSelect }] },
+      draft: { requestId: 'request-1', currentIndex: 0, answers: {}, started: true,
+        customInput: 'Keep this answer', showCustomInput: true, selectedLabels: [] },
+    };
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    fireEvent.click(view.getAllByRole('button', { name: 'Submit' })[0]);
+    // A failed/unconfirmed submission keeps the card mounted. No acknowledgement
+    // means the visible field and the persisted draft must both remain retryable.
+    expect((view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('Keep this answer');
+    const draft = props.onDraftChange.mock.lastCall?.[0];
+    expect(draft).toMatchObject({ customInput: 'Keep this answer', showCustomInput: true });
+    view.unmount();
+    const restored = render(createElement(AskUserQuestionPrompt, { ...props, draft }));
+    fireEvent.click(restored.getAllByRole('button', { name: 'Submit' })[0]);
+    expect(props.onAnswer).toHaveBeenCalledTimes(2);
+    expect(props.onAnswer).toHaveBeenLastCalledWith('request-1', {
+      'Final?': multiSelect ? JSON.stringify(['Keep this answer']) : 'Keep this answer',
+    });
+  });
+
+  it('starts protection on IME composition, but not focus or opening the text field', () => {
+    const props = makeProps();
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    fireEvent.click(view.getByText('Type something else…'));
+    const input = view.getByPlaceholderText('Type your answer…');
+    fireEvent.focus(input);
+    expect(props.onDraftChange.mock.lastCall?.[0]?.started).not.toBe(true);
+    fireEvent.compositionStart(input);
+    expect(props.onDraftChange.mock.lastCall?.[0]?.started).toBe(true);
+    fireEvent.change(input, { target: { value: '正在输入' } });
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    expect(props.onDraftChange.mock.lastCall?.[0]).toMatchObject({ started: true, customInput: '' });
+  });
+
+  it('restores an unfinished field after leaving and returning to the task', () => {
+    const props = makeProps();
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    fireEvent.click(view.getByText('Type something else…'));
+    fireEvent.change(view.getByPlaceholderText('Type your answer…'), { target: { value: 'Not finished' } });
+    const draft = props.onDraftChange.mock.lastCall?.[0];
+    view.unmount();
+    const restored = render(createElement(AskUserQuestionPrompt, { ...props, draft }));
+    expect((restored.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('Not finished');
+  });
+
   it('keeps text, selections and question progress when the same card is synchronized', async () => {
     const props = makeProps();
     const view = render(createElement(AskUserQuestionPrompt, props));
@@ -103,6 +157,7 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(view.queryByPlaceholderText('Type your answer…')).toBeNull();
     expect(props.onDraftChange).toHaveBeenLastCalledWith({
       requestId: 'request-1', currentIndex: 0, answers: {},
+      started: false, customInput: '', selectedLabels: [], showCustomInput: false,
     });
 
     fireEvent.click(view.getByText('First option'));
@@ -140,7 +195,8 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(view.queryByText('First question')).not.toBeNull();
     expect(view.queryByText('1/2')).not.toBeNull();
     expect(view.queryByPlaceholderText('Type your answer…')).toBeNull();
-    expect(props.onDraftChange).toHaveBeenCalledWith({ requestId, currentIndex: 0, answers: {} });
+    expect(props.onDraftChange).toHaveBeenCalledWith({ requestId, currentIndex: 0, answers: {},
+      started: false, customInput: '', selectedLabels: [], showCustomInput: false });
 
     fireEvent.click(view.getByText('First option'));
     await waitFor(() => expect(view.queryByText('Second question')).not.toBeNull());
