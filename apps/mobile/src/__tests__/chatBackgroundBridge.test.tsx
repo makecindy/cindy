@@ -54,6 +54,8 @@ vi.mock('@/notifications/pushNotifications', () => ({
     h.preferences.add(listener); return () => h.preferences.delete(listener);
   },
 }));
+vi.mock('../../modules/cindy-chat-notifications/src', () => ({ default: null }));
+import { readChatNotificationDiagnostics } from '@/notifications/chatNotificationDiagnostics';
 import { ChatBackgroundBridge } from '@/notifications/ChatBackgroundBridge';
 
 let root: Root;
@@ -82,6 +84,7 @@ it('does not start a saved background opt-in when system notification permission
   expect(h.configure).not.toHaveBeenCalled();
   expect(h.stop).toHaveBeenCalled();
   expect(h.token).not.toHaveBeenCalled();
+  expect(await readChatNotificationDiagnostics()).toEqual({ stage: 'permission-denied' });
 });
 
 it('stops an existing connection after notification permission is revoked on return to the app', async () => {
@@ -119,4 +122,14 @@ it('drops a late token after logout and removes lifecycle listeners', async () =
   expect(h.setIdentity).toHaveBeenLastCalledWith('');
   await act(async () => root.unmount());
   expect(h.foreground.size + h.focus.size + h.preferences.size + h.refresh.size).toBe(0);
+});
+
+// Unit: swallowed auth failures must be distinguishable from a started socket,
+// without exporting error bodies, tokens or account IDs. Existing tests only
+// observed successful native calls. Minimal failure: /me rejects.
+it('reports the failing gate without exporting an authentication exception', async () => {
+  h.me.mockRejectedValueOnce(new Error('Bearer private-secret'));
+  await mount();
+  expect(h.configure).not.toHaveBeenCalled();
+  expect(await readChatNotificationDiagnostics()).toEqual({ stage: 'failed', failedAt: 'identity' });
 });

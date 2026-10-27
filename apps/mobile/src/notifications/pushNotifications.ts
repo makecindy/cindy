@@ -15,6 +15,7 @@ import {
   type DevServerEnvironment,
 } from '@/config/devServerEnvironment';
 import Notifications from './nativeNotifications';
+import { recordChatForegroundDecision } from './chatNotificationDiagnostics';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -287,7 +288,10 @@ export function configureForegroundNotificationBehavior(isReading: (path: string
   Notifications.setNotificationHandler({
     handleNotification: async notification => {
       const route = parseNotificationResponseDeepLink({ notification });
-      const show = !!route?.startsWith('/companions/groups/') && !isReading(route);
+      const chat = !!route?.startsWith('/companions/groups/');
+      const reading = !!route && chat && isReading(route);
+      const show = chat && !reading;
+      recordChatForegroundDecision(!route ? 'invalid-route' : !chat ? 'other-route' : reading ? 'reading' : 'allowed');
       return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
     },
   });

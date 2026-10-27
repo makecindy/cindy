@@ -10,6 +10,8 @@ const files = vi.hoisted(() => ({
   copy: vi.fn(),
   prune: vi.fn(),
 }));
+const notificationNative = vi.hoisted(() => ({ getDiagnostics: vi.fn() }));
+vi.mock('../../modules/cindy-chat-notifications/src', () => ({ default: notificationNative }));
 const lifecycle = vi.hoisted(() => ({ listen: vi.fn() }));
 vi.mock("./mobileDebugFiles", () => ({
   appendMobileDebugFile: files.append,
@@ -46,6 +48,7 @@ beforeEach(() => {
   storage.getItem.mockReset().mockResolvedValue(null);
   storage.setItem.mockReset().mockResolvedValue(undefined);
   files.write.mockReset();
+  notificationNative.getDiagnostics.mockReset().mockResolvedValue(undefined);
   files.append.mockReset();
   files.clear.mockReset();
   files.copy.mockReset();
@@ -285,6 +288,32 @@ describe("local journal persistence", () => {
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1]);
     expect(saved.enabled).toBe(false);
     expect(saved.events).toHaveLength(1);
+  });
+  // Unit, explicit export -> shareable file. Real field failure had an ongoing
+  // service but no banners; existing export tests never included native stages.
+  // Minimal input: inbox HTTP 401 plus forbidden arbitrary native fields.
+  it('exports bounded notification state without native content, identity or credentials', async () => {
+    const log = await import('./localDiagnostics');
+    notificationNative.getDiagnostics.mockResolvedValue({
+      connection: 'ready', inbox: 'http-error', httpStatus: 401, serviceRunning: true,
+      messageChannelImportance: 0, inboxAt: 1234, dispatched: 0,
+      body: 'private reply', token: 'private credential', actorId: 'private identity',
+      endpoint: 'https://private.example', invalid: Infinity, duplicates: 1.5,
+    });
+    await log.exportDiagnostics();
+    const record = JSON.parse(files.write.mock.calls.at(-1)![0]);
+    expect(record.args[1]).toEqual({ stage: 'unavailable', connection: 'ready', inbox: 'http-error',
+      httpStatus: 401, serviceRunning: true, messageChannelImportance: 0, inboxAt: 1234, dispatched: 0 });
+    expect(files.write.mock.calls.at(-1)![1]).toEqual({ append: true });
+    expect(files.share).toHaveBeenCalledOnce();
+    expect(JSON.stringify(files.write.mock.calls)).not.toContain('private');
+  });
+  it('keeps diagnostic export available when the native diagnostic read fails', async () => {
+    const log = await import('./localDiagnostics');
+    notificationNative.getDiagnostics.mockRejectedValue(new Error('token=private'));
+    await log.exportDiagnostics();
+    expect(JSON.parse(files.write.mock.calls.at(-1)![0]).args[1]).toEqual({ stage: 'unavailable', nativeReadFailed: true });
+    expect(files.share).toHaveBeenCalledOnce();
   });
   it.each([false, true])(
     "cleans the export cache after sharing (failure=%s)",

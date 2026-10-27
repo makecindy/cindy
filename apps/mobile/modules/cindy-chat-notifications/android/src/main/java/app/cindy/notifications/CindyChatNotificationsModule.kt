@@ -11,6 +11,9 @@ class CindyChatNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CindyChatNotifications")
     Events("refreshRequested")
+    AsyncFunction("getDiagnostics") {
+      appContext.reactContext?.let { ChatDiagnostics.snapshot(it) } ?: emptyMap<String, Any>()
+    }
     AsyncFunction("isPaused") {
       appContext.reactContext?.getSharedPreferences("cindy-chat-background", android.content.Context.MODE_PRIVATE)?.getBoolean("paused", false) ?: false
     }

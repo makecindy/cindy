@@ -6,6 +6,7 @@ export interface ChatNotificationsNative {
   resume(): Promise<void>;
   setIdentity(actor: string): Promise<void>;
   setPreview(enabled: boolean): Promise<void>;
+  getDiagnostics?(): Promise<Record<string, unknown>>;
   addListener(event: 'refreshRequested', listener: () => void): { remove(): void };
 }
 export default requireOptionalNativeModule<ChatNotificationsNative>('CindyChatNotifications');

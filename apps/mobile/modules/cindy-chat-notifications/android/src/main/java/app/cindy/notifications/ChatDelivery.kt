@@ -25,18 +25,21 @@ object ChatDelivery {
   private const val STORE = "cindy-chat-notification-ids"
   @Synchronized fun identity(context: Context, actor: String) {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    if (prefs.getString("actor", "") != actor) prefs.edit().clear().putString("actor", actor).apply()
+    if (prefs.getString("actor", "") != actor) {
+      ChatDiagnostics.reset()
+      prefs.edit().clear().putString("actor", actor).apply()
+    }
   }
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
-    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { ChatDiagnostics.count("invalid"); return }
     if (body.optString("category") == "chat-message") {
       val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
       val actor = prefs.getString("actor", "") ?: ""
-      if (actor.isEmpty() || body.optString("recipientId") != actor) return
-      val id = data["tag"] ?: return
-      if (!id.matches(Regex("[a-fA-F0-9-]{36}"))) return
+      if (actor.isEmpty() || body.optString("recipientId") != actor) { ChatDiagnostics.count("wrongRecipient"); return }
+      val id = data["tag"] ?: ""
+      if (!id.matches(Regex("[a-fA-F0-9-]{36}"))) { ChatDiagnostics.count("invalid"); return }
       val ids = try { JSONArray(prefs.getString("ids", "[]")) } catch (_: Exception) { JSONArray() }
-      if ((0 until ids.length()).any { ids.optString(it) == id }) return
+      if ((0 until ids.length()).any { ids.optString(it) == id }) { ChatDiagnostics.count("duplicates"); return }
       val next = JSONArray()
       for (i in maxOf(0, ids.length() - 255) until ids.length()) next.put(ids.getString(i))
       next.put(id)
@@ -47,6 +50,7 @@ object ChatDelivery {
       body.remove("sender"); body.remove("senderName"); body.remove("body")
       display["body"] = body.toString(); display["message"] = ""
     }
+    ChatDiagnostics.count("dispatched")
     FirebaseMessagingDelegate(context).onMessageReceived(RemoteMessage.Builder("cindy").setData(display).build())
   }
 }
@@ -60,6 +64,8 @@ class ChatNotificationsService : NotificationsService() {
   override fun getPresentationDelegate(context: Context): PresentationDelegate = object : ExpoPresentationDelegate(context) {
     override suspend fun createNotification(notification: Notification, notificationBehavior: NotificationBehaviorRecord?): android.app.Notification {
       val original = super.createNotification(notification, notificationBehavior)
+      // Constructed by Expo; this is not proof that Android displayed a banner.
+      ChatDiagnostics.count("constructed")
       val content = notification.notificationRequest.content
       val data = content.body ?: return original
       val chat = data.optString("category") == "chat-message"
