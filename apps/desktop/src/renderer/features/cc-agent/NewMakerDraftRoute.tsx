@@ -693,7 +693,7 @@ function getCurrentRoutePath(): string {
  * 该语义已提到 store 侧共享,其它「另起一段干净对话」的入口也走同一个函数。
  */
 function resetDraftWorkspaceAfterSend(): void {
-  resetDraftWorkspaceTargets();
+  resetDraftWorkspaceTargets({ explicitNoProject: false });
 }
 
 /**

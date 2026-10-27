@@ -976,14 +976,18 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
  *
  * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * 功能引导默认保留「无项目」意图；发送成功后传 explicitNoProject=false，
+ * 让下一次通用新建可以选用用户设置的默认目录。
  * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
  * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
  * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
  */
-export function resetDraftWorkspaceTargets(): void {
+export function resetDraftWorkspaceTargets(
+  { explicitNoProject = true }: { explicitNoProject?: boolean } = {},
+): void {
   patchDraft({
     workingDir: null,
-    explicitNoProject: false,
+    explicitNoProject,
     extraDirs: [],
     writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },

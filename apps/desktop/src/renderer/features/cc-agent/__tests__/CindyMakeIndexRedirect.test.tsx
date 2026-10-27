@@ -60,7 +60,12 @@ async function mount() {
 }
 
 function expectRoute(route: string) {
-  expect(state.navigate).toHaveBeenCalledExactlyOnceWith(route, { replace: true });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith(
+    route,
+    route === '/cc-agent/new'
+      ? { replace: true, state: { workspacePrompt: 'generic' } }
+      : { replace: true },
+  );
 }
 
 describe('startup after hiding Cindy Make', () => {
@@ -81,7 +86,10 @@ describe('startup after hiding Cindy Make', () => {
     state.sessions = [{ id: 'make', source: 'cindy-make' }] as Session[];
     render(<CCAgentIndexRedirect />);
     await waitFor(() =>
-      expect(state.navigate).toHaveBeenCalledWith('/cc-agent/new', { replace: true }),
+      expect(state.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+        replace: true,
+        state: { workspacePrompt: 'generic' },
+      }),
     );
     expect(state.navigate).toHaveBeenCalledTimes(1);
   });
