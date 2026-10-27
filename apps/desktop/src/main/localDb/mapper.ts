@@ -265,6 +265,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
+    projectPinnedAt: msToIso(row.projectPinnedAt),
     hiddenAt: msToIso(row.hiddenAt),
     userSendAt: msToIso(row.userSendAt),
     lastActivityAt: msToIso(row.lastActivityAt),
@@ -488,6 +489,7 @@ export function sessionPatchToRow(
     contextWindow?: number;
     clearedAt?: string | null;
     pinnedAt?: string | null;
+    projectPinnedAt?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
@@ -515,6 +517,7 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.projectPinnedAt !== undefined) out.projectPinnedAt = isoToMs(patch.projectPinnedAt);
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);

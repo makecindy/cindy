@@ -60,8 +60,8 @@ describe('/ctr control project/session picker', () => {
     try {
       sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT,
         status TEXT, working_dir TEXT, orca_role TEXT, user_send_at INTEGER,
-        updated_at INTEGER, pinned_at INTEGER)`);
-      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        updated_at INTEGER, pinned_at INTEGER, project_pinned_at INTEGER)`);
+      const insert = sqlite.prepare('INSERT INTO sessions (id, title, source, status, working_dir, orca_role, user_send_at, updated_at, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const [id, source, role, dir] of [
         ['main', 'desktop', null, '/workspace/main'],
         ['child', 'side-chat', null, '/workspace/main'],

@@ -34,7 +34,8 @@ function createDatabase(): Database.Database {
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL,
       status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      project_pinned_at INTEGER
     );
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY,
@@ -83,8 +84,8 @@ function createDatabase(): Database.Database {
       ('link-canonical', 'bot-1', 'canonical', 1, 'canonical', NULL, 1, NULL),
       ('link-delegation', 'bot-1', 'delegation-session', 1, 'delegation', 'delegation:d-1', 1, NULL);
     INSERT INTO sessions VALUES
-      ('canonical', 'bot', 'active', 1),
-      ('delegation-session', 'bot', 'active', 1);
+      ('canonical', 'bot', 'active', 1, 1),
+      ('delegation-session', 'bot', 'active', 1, 1);
   `);
   return sqlite;
 }
@@ -405,6 +406,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(row(sqlite, 'sessions', 'canonical')).toMatchObject({
       source: 'desktop',
       status: 'archived',
+      project_pinned_at: null,
     });
     expect(result).toMatchObject({ action: 'delete', status: 'deleted', affected: { sessions: 2 } });
   });

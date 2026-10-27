@@ -27,6 +27,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'archive_sessions',
   'unarchive_sessions',
   'rename_sessions',
+  'set_session_project_pin',
   'move_session',
 ]);
 

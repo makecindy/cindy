@@ -71,6 +71,17 @@ function project(key: string, sessions: Session[]): ProjectNode {
   } as unknown as ProjectNode;
 }
 
+// #7402: project-only pins override each ordinary group sort, never flat-list sorting.
+it.each(['recency', 'created', 'priority'] as const)('keeps project pins ahead of %s rows', sortBy => {
+  const older = session({ id: 'pin', workingDir: '/repo', workspaceKind: 'project',
+    updatedAt: '2026-01-01T00:00:00Z', projectPinnedAt: '2026-10-27T00:00:00Z' });
+  const newer = session({ id: 'ordinary', workingDir: '/repo', workspaceKind: 'project',
+    updatedAt: '2026-10-27T01:00:00Z' });
+  const entries = buildMainListEntries({ projects: [project('/repo', [newer, older])],
+    dialogues: [], groupBy: 'project', groupDialogue: false, manualProjectOrder: [], sortBy });
+  expect(getMainListEntrySessions(entries[0]).map(row => row.id)).toEqual(['pin', 'ordinary']);
+});
+
 function labels(entries: MainListEntry[]): string[] {
   return entries.map((entry) =>
     entry.kind === 'project'

@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `project_pinned_at` integer;

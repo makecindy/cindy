@@ -33,7 +33,7 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { Archive, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
+import { Archive, ChevronRight, Crown, EllipsisVertical, Pin, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 
@@ -166,7 +166,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const { t } = useTranslation();
   const followers = useSessionFollowers(session);
   // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
-  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
+  const hasTitleMarks = session.projectPinnedAt != null || !!session.tags?.length || followers.length > 0;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -814,6 +814,11 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                       : displayTitle}
                   </SidebarTitleMarquee>
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
+                  {session.projectPinnedAt != null && (
+                    <span title={t('ccAgent.sidebar.sessionMenu.pinnedInProject')} className="inline-flex shrink-0 text-sidebar-action-icon">
+                      <Pin size={12} aria-hidden="true" />
+                    </span>
+                  )}
                   <TaskTagDots tags={session.tags} />
                   <BotFollowMark followers={followers} />
                   {remoteIconKind && (
@@ -1015,6 +1020,11 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             {/* 任务标签与「伙伴在跟进」常显、紧跟标题首行；标题两行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
+                {session.projectPinnedAt != null && (
+                  <span title={t('ccAgent.sidebar.sessionMenu.pinnedInProject')} className="inline-flex shrink-0 text-sidebar-action-icon">
+                    <Pin size={12} aria-hidden="true" />
+                  </span>
+                )}
                 <TaskTagDots tags={session.tags} />
                 <BotFollowMark followers={followers} />
               </span>

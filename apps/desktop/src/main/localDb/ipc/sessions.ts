@@ -28,7 +28,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { ipcMain, app, BrowserWindow } from 'electron';
-import { eq, ne, and, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
+import { eq, ne, and, or, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
 import {
   clearPiSubagentDeletedTombstone,
@@ -37,6 +37,7 @@ import {
   writePiSubagentDeletedTombstone,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
@@ -147,7 +148,16 @@ import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDi
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'projectPinnedAt']);
+
+/** Reject malformed timestamps instead of silently converting them into an unpin. */
+function validateProjectPinTimestamp(patch: Record<string, unknown>): void {
+  const value = patch.projectPinnedAt;
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throwIpcError('INVALID_PARAMS', 'projectPinnedAt must be a timestamp or null');
+  }
+}
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
@@ -367,18 +377,46 @@ async function writeSessionPatch(
   sessionId: string,
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
+  beforeWrite?: () => void,
 ): Promise<void> {
   if (Object.keys(setObj).length === 0) return;
+  // Pinning is tied to project membership. Re-check in the write predicate so a
+  // concurrent move/archive cannot install a pin for an obsolete project.
+  let projectPinMembership: SQL | undefined;
+  if (setObj.projectPinnedAt !== undefined || setObj.workingDir !== undefined ||
+      setObj.workspaceKind !== undefined || status === 'archived' || status === 'deleted') {
+    const [current] = await db.select({
+      workingDir: sessions.workingDir, workspaceKind: sessions.workspaceKind, status: sessions.status,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!current) throwIpcError('NOT_FOUND', 'Session does not exist');
+    if (status === 'archived' || status === 'deleted' || setObj.workspaceKind === 'dialogue' ||
+        (setObj.workingDir !== undefined && (!setObj.workingDir || !current.workingDir ||
+          !workingDirEquals(collapseWorktreeDirForGrouping(setObj.workingDir),
+            collapseWorktreeDirForGrouping(current.workingDir))))) {
+      setObj.projectPinnedAt = null;
+    }
+    if (setObj.projectPinnedAt != null) {
+      if (current.status !== 'active' || current.workspaceKind === 'dialogue' || !current.workingDir) {
+        throwIpcError('PRECONDITION_FAILED', 'Only active project tasks can be pinned within a project');
+      }
+      projectPinMembership = and(eq(sessions.status, 'active'),
+        eq(sessions.workingDir, current.workingDir), ne(sessions.workspaceKind, 'dialogue'));
+    }
+  }
+  beforeWrite?.();
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
     .set(setObj)
-    .where(
+    .where(and(projectPinMembership,
       deletedIsTerminal
         ? and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'))
         : eq(sessions.id, sessionId),
-    )
+    ))
     .run();
+  if (projectPinMembership && result.changes === 0) {
+    throwIpcError('PRECONDITION_FAILED', 'Task project or status changed');
+  }
   if (!deletedIsTerminal || result.changes > 0) return;
 
   const [existing] = await db
@@ -482,6 +520,9 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  if (patch.status === 'archived' || patch.status === 'deleted') {
+    patch = { ...patch, projectPinnedAt: null };
+  }
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   try {
@@ -1623,7 +1664,7 @@ export function registerSessionIpc(
         if (includePinned) {
           const pinnedRows = await selectSessionListRows(
             db,
-            and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
+            and(sourceFilter, statusWhere(), or(isNotNull(sessions.pinnedAt), isNotNull(sessions.projectPinnedAt))),
             null,
           );
           mergedRows = mergeSessionListRows(rows, pinnedRows);
@@ -2189,6 +2230,7 @@ export async function updateSessionInDb(
 ): Promise<ReturnType<typeof sessionToCamel>> {
   moveGuard?.assertCurrent();
   const ownerScope = captureOwnerScope();
+  validateProjectPinTimestamp(p);
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
       'UNSUPPORTED_CAPABILITY',
@@ -2357,6 +2399,7 @@ export async function updateSessionInDb(
       'extraDirs',
       'writableDirs',
       'pinnedAt',
+      'projectPinnedAt',
       'workingDir',
       'workspaceKind',
       'title',
@@ -2430,12 +2473,12 @@ export async function updateSessionInDb(
         if (terminal) {
           if (typeof dbClient.tx === 'function') {
             const { status: _status, ...nonTerminalPatch } = setObj;
-            await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
+            await writeSessionPatch(db, sid, nonTerminalPatch, undefined, moveGuard?.assertCurrent);
             deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted');
           } else {
             const prepared = await prepareSharedTaskClosure(sid, dbClient);
             try {
-              await writeSessionPatch(db, sid, setObj, p.status);
+              await writeSessionPatch(db, sid, setObj, p.status, moveGuard?.assertCurrent);
             } catch (error) {
               await rollbackSharedTaskClosure(dbClient, prepared);
               throw error;
@@ -2443,7 +2486,7 @@ export async function updateSessionInDb(
             await finalizeSharedTaskClosure(dbClient, prepared);
           }
         } else {
-          await writeSessionPatch(db, sid, setObj, p.status);
+          await writeSessionPatch(db, sid, setObj, p.status, moveGuard?.assertCurrent);
         }
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
         if (terminal) {
@@ -2519,10 +2562,13 @@ export async function updateSessionInDb(
       if (currentRow) broadcastStatus = currentRow.status;
     }
     const broadcastPatch =
-      p.pinnedAt === undefined && p.status === undefined
+      p.pinnedAt === undefined && p.projectPinnedAt === undefined && p.status === undefined && !projectTargetChanged
         ? p
         : {
             ...p,
+            ...(p.projectPinnedAt !== undefined || projectTargetChanged ||
+              p.status === 'archived' || p.status === 'deleted'
+              ? { projectPinnedAt: updated.projectPinnedAt } : {}),
             ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
             ...(p.status !== undefined ? { status: broadcastStatus } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
@@ -2536,7 +2582,7 @@ export async function updateSessionInDb(
       settingsChanged ||
       titleChanged ||
       statusChanged ||
-      p.pinnedAt !== undefined
+      p.pinnedAt !== undefined || p.projectPinnedAt !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, broadcastPatch, ownerScope);
@@ -2651,10 +2697,12 @@ export async function patchSessionMetaInDb(
     status?: 'active' | 'archived' | 'deleted';
     title?: string;
     pinnedAt?: string | null;
+    projectPinnedAt?: string | null;
   },
   options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
+  validateProjectPinTimestamp(patch);
   for (const k of Object.keys(patch)) {
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
@@ -2685,14 +2733,14 @@ export async function patchSessionMetaInDb(
     if (terminal) {
       if (typeof dbClient.tx === 'function') {
         const { status: _status, ...nonTerminalPatch } = setObj;
-        await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
+        await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined, options.beforeWrite);
         options.beforeWrite?.();
         deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
           options.beforeWrite?.();
-          await writeSessionPatch(db, sessionId, setObj, patch.status);
+          await writeSessionPatch(db, sessionId, setObj, patch.status, options.beforeWrite);
         } catch (error) {
           await rollbackSharedTaskClosure(dbClient, prepared);
           throw error;
@@ -2703,7 +2751,7 @@ export async function patchSessionMetaInDb(
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-      await writeSessionPatch(db, sessionId, setObj, patch.status);
+      await writeSessionPatch(db, sessionId, setObj, patch.status, options.beforeWrite);
     }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -2742,8 +2790,11 @@ export async function patchSessionMetaInDb(
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
   //   - CCAgentSessionView.onPatched → 合并进 serverSession。
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
-  const broadcastPatch =
-    patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
+  const broadcastPatch = {
+    ...(patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch),
+    ...(patch.projectPinnedAt !== undefined || patch.status === 'archived' || patch.status === 'deleted'
+      ? { projectPinnedAt: updated.projectPinnedAt } : {}),
+  };
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(sessionId, broadcastPatch, ownerScope);
   }

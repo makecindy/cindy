@@ -182,7 +182,7 @@ describe('setSessionsStatusInDb', () => {
       for (const sessionId of ids)
         expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
           sessionId,
-          patch: { status: 'archived' },
+          patch: { status: 'archived', projectPinnedAt: null },
         });
     } finally {
       finish?.();

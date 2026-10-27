@@ -41,6 +41,8 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   orcaRole?: 'lead' | 'worker' | string | null;
   permissionMode?: string | null;
   pinnedAt?: string | null;
+  /** Absent on older hosts; independent from the global pin. */
+  projectPinnedAt?: string | null;
   source?: string | null;
   status: 'active' | 'archived' | 'deleted' | string;
   title: string;
@@ -68,6 +70,22 @@ export interface RemoteSessionListMessageLike {
   role: string;
   sessionId?: string;
   toolUseId?: string | null;
+}
+
+/** Project-only pins precede an already sorted list; ordinary order stays intact. */
+export function sortProjectPinnedSessions<T extends { id: string; projectPinnedAt?: string | null }>(
+  sessions: readonly T[],
+): T[] {
+  const at = (session: T) => {
+    const value = session.projectPinnedAt ? Date.parse(session.projectPinnedAt) : NaN;
+    return Number.isFinite(value) ? value : -Infinity;
+  };
+  return sessions.slice().sort((a, b) => {
+    const left = at(a);
+    const right = at(b);
+    if (left === right) return left === -Infinity ? 0 : a.id.localeCompare(b.id);
+    return left < right ? 1 : -1;
+  });
 }
 
 export type RemoteSessionListSession = RemoteSessionListSessionLike;

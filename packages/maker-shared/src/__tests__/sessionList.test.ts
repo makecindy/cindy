@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
   compareSessionListStrings,
+  sortProjectPinnedSessions,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
@@ -26,6 +27,19 @@ it('preserves default locale ordering for dates, paths, IDs and multilingual tit
   for (const left of values) for (const right of values) {
     expect(Math.sign(compareSessionListStrings(left, right))).toBe(Math.sign(left.localeCompare(right)));
   }
+});
+
+// #7402: project pins must stay ahead of any ordinary sort, including priority.
+it('orders project pins by pin time and keeps ordinary order unchanged', () => {
+  const rows = [
+    { id: 'ordinary-b' },
+    { id: 'older-pin', projectPinnedAt: '2026-10-26T00:00:00Z' },
+    { id: 'ordinary-a', projectPinnedAt: null },
+    { id: 'newer-pin', projectPinnedAt: '2026-10-27T00:00:00Z' },
+  ];
+  expect(sortProjectPinnedSessions(rows).map(row => row.id))
+    .toEqual(['newer-pin', 'older-pin', 'ordinary-b', 'ordinary-a']);
+  expect(rows[0].id).toBe('ordinary-b');
 });
 import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';

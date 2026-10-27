@@ -1,3 +1,4 @@
+import { sortProjectPinnedSessions } from '@cindy/maker-shared/session-list';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -1869,9 +1870,9 @@ function ExpandedView({
       return [
         {
           project,
-          // Individually pinned conversations stay as their own siblings in the
-          // Pinned section; the project container only shows the remainder.
-          displaySessions: project.sessions.filter((session) => session.pinnedAt == null),
+          // Global-only pins stay in the Pinned section; dual pins also remain
+          // visible inside their project.
+          displaySessions: project.sessions.filter((session) => session.pinnedAt == null || session.projectPinnedAt != null),
         },
       ];
     });
@@ -2048,11 +2049,11 @@ function ExpandedView({
       entry.kind === 'project'
         ? {
             ...entry,
-            displaySessions: sortSessionsForMainList(
+            displaySessions: sortProjectPinnedSessions(sortSessionsForMainList(
               entry.displaySessions ?? entry.project.sessions,
               filter.sortBy,
               pinnedSortContext,
-            ),
+            )),
           }
         : entry,
     ),
@@ -2077,7 +2078,7 @@ function ExpandedView({
       return [
         {
           ...project,
-          sessions: matchingSessions.filter((session) => session.pinnedAt == null),
+          sessions: matchingSessions.filter((session) => session.pinnedAt == null || session.projectPinnedAt != null),
         },
       ];
     });

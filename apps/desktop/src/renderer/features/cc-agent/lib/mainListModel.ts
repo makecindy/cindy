@@ -1,3 +1,4 @@
+import { sortProjectPinnedSessions } from '@cindy/maker-shared/session-list';
 /**
  * mainListModel — 主列表混排模型(sidebar-redesign D 期)。
  * ---------------------------------------------------------------------------
@@ -396,7 +397,7 @@ export function buildMainListEntries({
   if (groupBy === 'flat') {
     const flatEntries = buildFlatSessionEntries(
       [
-        ...projects.flatMap((project) => project.sessions),
+        ...projects.flatMap((project) => project.sessions.filter(session => session.pinnedAt == null)),
         ...bots.flatMap((bot) => bot.sessions),
         ...dialogues,
         ...unclassified,
@@ -432,7 +433,7 @@ export function buildMainListEntries({
   for (const project of projects) {
     entries.push({
       kind: 'project',
-      project: { ...project, sessions: sortSessionsForMainList(project.sessions, sortBy, ctx) },
+      project: { ...project, sessions: sortProjectPinnedSessions(sortSessionsForMainList(project.sessions, sortBy, ctx)) },
     });
   }
 

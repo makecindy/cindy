@@ -143,7 +143,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '会话列表带搜索、按时间和工程目录组织。',
       'Fork:在任意历史消息处分裂出新会话,继承到该点为止的全部上文。',
       'Rewind:在当前会话回到历史点,改写发送内容后重新运行,原分支被替换。',
-      'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换；跨电脑传 deviceId::sessionId，单次限定一台电脑)。',
+      'agent 整理任务:control 类工具 set_session_project_pin（项目内置顶/取消，支持本机及 deviceId::sessionId 跨电脑）、rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换；跨电脑传 deviceId::sessionId，单次限定一台电脑)。',
       '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。恢复不启动执行、不发旧消息、不恢复暂停自动化；之后可用 send_to_session 发送新消息。',
       '本机批次原子写入；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
       '以上操作都不破坏原数据,可放心试错。',

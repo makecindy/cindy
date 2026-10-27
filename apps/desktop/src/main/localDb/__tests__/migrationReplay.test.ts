@@ -103,6 +103,18 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  // #7402: upgrade a non-empty schema-133 table without changing global pins.
+  it('adds an empty independent project pin while preserving existing tasks', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, pinned_at INTEGER, title TEXT); INSERT INTO sessions VALUES ('existing', 123, 'Existing task')");
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 133 });
+      expect(result.applied.map(migration => migration.seq)).toEqual([134]);
+      expect(db.prepare('SELECT * FROM sessions').all()).toEqual([
+        { id: 'existing', pinned_at: 123, title: 'Existing task', project_pinned_at: null },
+      ]);
+    } finally { cleanup(); }
+  });
   it.each(['missing', 'legacy', 'partial'])('replays remote report persistence with %s Worker schema', (shape) => {
     const { db, cleanup } = createTempDb();
     try {
@@ -112,7 +124,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133, 134]);
       expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(columnNames(db, 'sessions')).toContain('last_activity_at');
@@ -133,6 +145,7 @@ describeMigrationReplay('migration replay', () => {
     try {
       db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)');
       db.exec(readFileSync(path.join(drizzleDir(), '0128_demonic_odin.sql'), 'utf-8'));
+      db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY)');
       db.prepare('INSERT INTO plugin_usage_subjects (id,source_kind,ghost_id,display_name,recording_started_at) VALUES (?,?,?,?,?)')
         .run('subject', 'manual', 'plugin', 'Plugin', 100);
       db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')

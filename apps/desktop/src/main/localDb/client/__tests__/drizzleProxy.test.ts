@@ -37,7 +37,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, project_pinned_at INTEGER,
       hidden_at INTEGER,
       user_send_at INTEGER,
       last_activity_at INTEGER,

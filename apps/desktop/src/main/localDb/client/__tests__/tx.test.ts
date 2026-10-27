@@ -85,7 +85,7 @@ CREATE TABLE sessions (
   context_window_runtime INTEGER,
   fast_mode INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER,
-  pinned_at INTEGER,
+  pinned_at INTEGER, project_pinned_at INTEGER,
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
@@ -1869,6 +1869,7 @@ describe('db worker tx handlers', () => {
         async (client) => {
           await seedSession(client, 'local', { workingDir: '/local/repo' });
           await seedSession(client, 'remote', { workingDir: '/remote/repo' });
+          await client.exec('UPDATE sessions SET project_pinned_at = 1 WHERE id = ?', ['local']);
           await client.exec('UPDATE sessions SET remote_host_id = ?, source = ? WHERE id = ?', [
             'host-a',
             'plugin',
@@ -1892,6 +1893,8 @@ describe('db worker tx handlers', () => {
               source: 'plugin',
             }),
           ]);
+          expect(await client.query<{ project_pinned_at: number | null }>('SELECT project_pinned_at FROM sessions WHERE id = ?', ['local']))
+            .toEqual([{ project_pinned_at: null }]);
         },
         { useInlineWorker },
       );

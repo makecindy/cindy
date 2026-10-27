@@ -651,7 +651,7 @@ function botsReplaceCanonicalSession(
       ).run(now, botId, canonicalSessionId);
       if (previous?.source === 'bot') {
         if (previous.status !== 'deleted') {
-          db.prepare("UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ?").run(
+          db.prepare("UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ? WHERE id = ?").run(
             now,
             canonicalSessionId,
           );
@@ -992,7 +992,7 @@ function botsArchiveChannelLanes(
       .all(routeKey, routeKeyPrefix, routeKeyPrefix, routeKeyPrefix) as Array<{ botId: string; sessionId: string }>;
     const targets = exceptBotId ? rows.filter((row) => row.botId !== exceptBotId) : rows;
     const archiveLink = db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?');
-    const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+    const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ?
       WHERE id = ? AND status = 'active'`);
     for (const row of targets) {
       archiveLink.run(now, row.sessionId);
@@ -1038,7 +1038,7 @@ function botsFinishDelegation(
       // Only legacy Bot-to-Bot execution containers have this archive lifecycle.
       // An independent Session (target_bot_id IS NULL) outlives a turn, including
       // failure/cancellation: visibility and explicit archive belong to its user.
-      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+      db.prepare(`UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ?
         WHERE id = ? AND status = 'active'`)
         .run(completedAt, row.childSessionId);
       // 保留 route_key('delegation:<id>')作为来源标记:bot_delegations 行会随发起伙伴
@@ -1263,7 +1263,7 @@ function botsArchiveLifecycle(db: Database.Database, args: unknown): { sessions:
   const botId = expectString(p.botId, 'botId');
   const at = expectNumber(p.at, 'at');
   return db.transaction(() => {
-    const sessions = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+    const sessions = db.prepare(`UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ?
           WHERE source = 'bot' AND id IN (SELECT session_id FROM bot_session_links WHERE bot_id = ?)`)
         .run(at, botId).changes;
     db.prepare("UPDATE bot_session_links SET role = 'history', archived_at = ? WHERE bot_id = ?")
@@ -1470,7 +1470,7 @@ function botsDeleteProfile(
       // keeps what was said.
       const hasLinkRoles = tableColumns(db, 'bot_session_links').has('role');
       if (hasLinkRoles) {
-        db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+        db.prepare(`UPDATE sessions SET status = 'deleted', project_pinned_at = NULL, updated_at = ?
           WHERE source = 'bot' AND id IN (${placeholders}) AND id IN
             (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))`)
           .run(at, ...sessionIds, botId);
@@ -2273,7 +2273,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, project_pinned_at = CASE WHEN ? = 1 THEN NULL ELSE project_pinned_at END, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -2301,7 +2301,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
           code: 'PRECONDITION_FAILED',
         });
       }
-      const updated = updateSession.get(status, now, sessionId) as
+      const updated = updateSession.get(status, status === 'archived' ? 1 : 0, now, sessionId) as
         | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
         | undefined;
       if (!updated) {
@@ -2348,7 +2348,7 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     const now = Date.now();
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = db.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+      'UPDATE sessions SET status = ?, project_pinned_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
     ).get(status, now, sessionId) as {
       id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null;
     } | undefined;
@@ -2356,7 +2356,7 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     // Hidden children must become unreachable in the same commit as the parent.
     // A failure in either the status write or its closure fence rolls back all rows.
     const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
-      ? db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+      ? db.prepare(`UPDATE sessions SET status = 'deleted', project_pinned_at = NULL, updated_at = ?
           WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted'
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
@@ -3359,7 +3359,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
     // 这里仅改 DB 状态,不能走 patchSessionMetaInDb——它会 fire-and-forget 清理
     // 图片/媒体引用/附件/worktree,那些副作用无法随 SQLite 事务回滚。
     const deleteReplacedSession = db.prepare(
-      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+      "UPDATE sessions SET status = 'deleted', project_pinned_at = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'",
     );
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
@@ -3566,7 +3566,7 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const now = expectNumber(payload.now, 'now');
   const selectWorker = db.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
+  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', project_pinned_at = NULL, orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
     const row = selectWorker.get(workerId) as { sessionId: string; deviceId: string | null; releasedAt: number | null } | undefined;
     if (!row) return null;
@@ -3602,7 +3602,7 @@ function orcaArchiveWorkersByTeam(db: Database.Database, args: unknown): string[
   const now = expectNumber(payload.now, 'now');
   const archiveSession = db.prepare(
     `UPDATE sessions
-        SET status = 'archived', updated_at = ?
+        SET status = 'archived', project_pinned_at = NULL, updated_at = ?
       WHERE id = ? AND status = 'active'
         AND EXISTS (
           SELECT 1 FROM orca_workers
@@ -3640,7 +3640,7 @@ function orcaReconcileInactiveTeamWorkersForLead(
   );
   const archiveSession = db.prepare(
     `UPDATE sessions
-        SET status = 'archived', updated_at = ?
+        SET status = 'archived', project_pinned_at = NULL, updated_at = ?
       WHERE id = ? AND status = 'active'
         AND EXISTS (
           SELECT 1

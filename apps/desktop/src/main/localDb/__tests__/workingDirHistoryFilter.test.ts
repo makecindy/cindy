@@ -51,7 +51,7 @@ function createLocalDb(): Database.Database {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, project_pinned_at INTEGER,
       summary TEXT,
       provider_id TEXT,
       forked_at_message_id TEXT,

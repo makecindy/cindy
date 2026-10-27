@@ -86,7 +86,7 @@ function createLocalDb(): Database.Database {
       list_preview_role TEXT,
       list_message_count INTEGER,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, project_pinned_at INTEGER,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,
