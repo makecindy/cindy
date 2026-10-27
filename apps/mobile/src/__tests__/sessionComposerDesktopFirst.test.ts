@@ -65,10 +65,10 @@ describe('mobile session composer desktop-first surface', () => {
 
   it('uses icon controls for attachment quick actions near the composer', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
+    const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async (forConversation = false) => {');
     const voiceEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceStart);
     const voiceSource = source.slice(voiceStart, voiceEnd);
-    const finishVoiceStart = source.indexOf('const finishVoiceRecording = useCallback(async (options: { sendAfterTranscribe?: boolean; focusInput?: boolean } = {}) => {');
+    const finishVoiceStart = source.indexOf('const finishVoiceRecording = useCallback(async (options: { sendAfterTranscribe?: boolean; focusInput?: boolean } = {}): Promise<string | null> => {');
     const finishVoiceEnd = source.indexOf('const cancelVoiceRecording = useCallback', finishVoiceStart);
     const finishVoiceSource = source.slice(finishVoiceStart, finishVoiceEnd);
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
@@ -544,9 +544,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(voiceSource).toContain('|| voiceStopInFlightRef.current');
-    expect(finishVoiceSource).toContain('if (voiceStopInFlightRef.current) return;');
+    expect(finishVoiceSource).toContain('if (voiceStopInFlightRef.current) return null;');
     expect(finishVoiceSource).toContain('const controller = voiceControllerSessionRef.current;');
-    expect(finishVoiceSource).toContain('if (!controller) return;');
+    expect(finishVoiceSource).toContain('if (!controller) return null;');
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = true;');
     expect(finishVoiceSource.indexOf('voiceControllerSessionRef.current = null;')).toBeLessThan(
       finishVoiceSource.indexOf('const latestDraft = await controller.stop();'),
@@ -689,7 +689,7 @@ describe('mobile session composer desktop-first surface', () => {
     // the AVAudioEngine record tap (see mobileVoiceCue.ts). Only the end cue is wired.
     expect(source).not.toContain('playMobileVoiceInputStartCue');
     expect(source).not.toContain('onReadyForStartCue');
-    expect(source).toContain('onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,');
+    expect(source).toContain('onReadyForEndCue: !forConversation && credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,');
     expect(source).toContain('const startController = async () => {');
     expect(source).toContain('await startController();');
     // openLink is fired before the credential/history read (which precedes controller.start()).
@@ -742,7 +742,7 @@ describe('mobile session composer desktop-first surface', () => {
   it('projects mobile voice feedback into the composer draft with the recording timer pill', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
-    const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
+    const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async (forConversation = false) => {');
     const voiceEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceStart);
     const voiceSource = source.slice(voiceStart, voiceEnd);
     const composerInputStart = source.indexOf('<MobileComposerInputRow');
