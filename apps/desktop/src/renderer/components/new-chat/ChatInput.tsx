@@ -504,6 +504,7 @@ interface ChatInputProps {
       deliveryMode?: MessageDeliveryMode;
       builtInSkillIntent?: BuiltInSkillDraftIntent;
       providerId?: string | null;
+      baselineRecovery?: boolean;
       /** chat-text-quote:message 开头的 blockquote 为引用功能拼接产出。 */
       quotesEncoded?: boolean;
       /** Ordered semantic projection metadata for session/project/message chips. */
@@ -6279,6 +6280,7 @@ export function ChatInput({
             {
               deliveryMode,
               providerId: sendProviderId,
+              ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
               ...(builtInSkillIntent
                 ? {
                     builtInSkillIntent: {

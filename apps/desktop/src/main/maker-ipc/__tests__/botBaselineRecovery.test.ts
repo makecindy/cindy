@@ -18,7 +18,7 @@ function fixture() {
   let owner = 'one';
   let activeBot = true;
   let restoreError: Error | null = createIpcError('MODEL_SELECTION_UNAVAILABLE', 'old source unavailable');
-  const stage = vi.fn(async (_id: string, route: typeof state.current) => { state.current = { ...route }; });
+  const stage = vi.fn(async (_id: string, route: typeof state.current): Promise<typeof state.current | void> => { state.current = { ...route }; });
   const clear = vi.fn(async (_id: string, expected?: string | null) => {
     if (state.scheduledModelBaseline !== expected) return false;
     state.scheduledModelBaseline = null;
@@ -56,6 +56,25 @@ describe('automatic companion baseline recovery', () => {
     expect(h.clear).toHaveBeenCalledWith('bot', h.old);
     expect(h.onApplied).not.toHaveBeenCalled(); // No unconditional early cleanup.
     expect(h.write).not.toHaveBeenCalled(); // No old route persistence after fallback.
+  });
+  it('dispatches after the ordinary switch rebinds the saved provider', async () => {
+    const h = fixture();
+    h.stage.mockImplementation(async (_id, route) => {
+      const resolved = { ...route, providerId: 'xai' };
+      h.state.current = resolved;
+      return resolved;
+    });
+    await h.scope.restore('bot');
+    expect(h.state.current.providerId).toBe('xai');
+    expect(h.state.scheduledModelBaseline).toBeNull();
+    expect(h.clear).toHaveBeenCalledWith('bot', h.old);
+  });
+  it('retains recovery state when the resolved provider does not land', async () => {
+    const h = fixture();
+    h.stage.mockImplementation(async (_id, route) => ({ ...route, providerId: 'xai' }));
+    await expect(h.scope.restore('bot')).rejects.toThrow('did not become ready');
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.state.scheduledModelBaseline).toBe(h.old);
   });
   it('keeps the old record if the saved route also fails', async () => {
     const h = fixture();
@@ -155,17 +174,40 @@ function registeredFunction(name: string, deps: Record<string, unknown>) {
   const js = ts.transpileModule('return (' + declaration.getText(register) + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(deps), js)(...Object.values(deps));
 }
-it('offers legacy baseline recovery on reads/pushes and explicitly revokes it after cleanup', () => {
+it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-device'] as const)('returns the validated provider from %s production staging', async (path) => {
+  const route = { agentDeviceId: null, agentKind: 'pi', model: 'saved', providerId: 'gateway', effort: null, fastMode: false };
+  const apply = vi.fn(async () => path === 'same-harness-staged'
+    ? { deferred: true, superseded: false, pendingUntilSend: true } : { effectiveProviderId: 'xai' });
+  const switchAgent = vi.fn(async () => {});
+  const stage = registeredFunction('stageSessionRouteSelection', {
+    readSessionAgentDeviceId: async () => path === 'back-to-task-device' ? 'other-device' : null,
+    performSessionAgentSwitch: switchAgent, agentSwitchDeps: {},
+    agentSwitchPending: { get: () => ({ targetAgentKind: 'pi', model: 'saved', providerId: 'xai' }) },
+    applyWithVerifiedModelWindow: (run: () => unknown) => run(), applySessionRuntimeSelection: apply,
+  });
+  const sameHarness = path === 'same-harness' || path === 'same-harness-staged';
+  await expect(stage('bot', route, sameHarness ? 'pi' : 'codex')).resolves.toMatchObject({
+    agentKind: 'pi', model: 'saved', providerId: 'xai',
+  });
+  expect(apply).toHaveBeenCalledTimes(sameHarness ? 1 : 0);
+  if (path === 'back-to-task-device') {
+    expect(switchAgent).toHaveBeenCalledWith({}, expect.objectContaining({ agentDeviceId: null }));
+  }
+});
+it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes after recovering a legacy baseline to %s', (agentKind) => {
   const project = registeredFunction('projectScheduledPreferences', {
     projectSessionRuntimeControl, makerToDbAgentKind: (kind: string) => kind,
   });
-  const baseline = { agentKind: 'pi' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
+  const baseline = { agentKind: 'codex' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
   const legacy = project('projection-test', baseline);
   expect(legacy.runtimeBaselineRecoveryPending).toBe(true);
   expect(legacy.runtimeEffective).toEqual(baseline); // Does not assert a different/available source.
   expect(project('projection-test', { ...baseline, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
-  const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', { ...baseline, providerId: 'saved' }) };
+  const recovered = { ...baseline, agentKind, model: 'saved-model', providerId: 'saved' };
+  const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', recovered) };
   expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
+  expect(cleared.agentKind).toBe(agentKind === 'claude-code' ? 'cc' : agentKind);
+  expect(cleared.runtimeEffective).toEqual(recovered);
 });
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };

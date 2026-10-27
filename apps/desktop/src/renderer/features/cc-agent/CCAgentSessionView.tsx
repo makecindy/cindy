@@ -3979,6 +3979,8 @@ function CCAgentSessionContent({
       mentions?: MentionedResource[],
       opts?: {
         deliveryMode?: MessageDeliveryMode;
+        providerId?: string | null;
+        baselineRecovery?: boolean;
         literalText?: boolean;
         independent?: boolean;
         beforeEnqueue?: () => Promise<boolean>;
@@ -4135,7 +4137,13 @@ function CCAgentSessionContent({
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
-      if (!remoteDeviceId) {
+      // The old Harness may no longer be authenticated. Only the unchanged
+      // host-offered route may defer this UI precheck to main's recovery.
+      const recoveringBaseline = opts?.baselineRecovery === true && session?.source === 'bot' &&
+        session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
+        model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
+        (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
+      if (!remoteDeviceId && !recoveringBaseline) {
         const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
@@ -4344,6 +4352,8 @@ function CCAgentSessionContent({
       readOnly,
       t,
       vendorAuthGate,
+      displayAgentKind,
+      agentSwitchIntent,
       confirmWithCheckbox,
       remoteDeviceId,
       sessionHandoffPreparing,

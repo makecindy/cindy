@@ -66,14 +66,14 @@ function sameRoute(a: RuntimeRoute, b: RuntimeRoute): boolean {
 
 /** Apply through both runtime switch paths before retiring recovery state. */
 export function createBotModelRouteApplier(deps: {
-  stage(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
+  stage(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<RuntimeRoute | void>;
   isIdle(sessionId: string): boolean;
   applyPendingSwitch(sessionId: string): Promise<void>;
   hasPendingSwitch(sessionId: string): boolean;
   onApplied(sessionId: string): Promise<void>;
 }) {
-  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<void> => {
-    await deps.stage(sessionId, route, current);
+  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute> => {
+    const resolved = await deps.stage(sessionId, route, current) ?? route;
     if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.
     // Staging alone must not retire the durable recovery marker.
@@ -81,6 +81,7 @@ export function createBotModelRouteApplier(deps: {
       throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
     }
     if (!options?.preserveScheduledBaseline) await deps.onApplied(sessionId);
+    return resolved;
   };
 }
 
@@ -92,7 +93,7 @@ export function createBotModelRouteReconciler(deps: {
   ownerEpoch(): string;
   withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
-  apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<void>;
+  apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute | void>;
   /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
 }) {
@@ -204,16 +205,16 @@ export function createBotModelRouteReconciler(deps: {
       const key = JSON.stringify(state.chain);
       // Even an equal route must pass validation and the runtime switch boundary.
       // Unconditional onApplied cleanup would race a newer durable recovery record.
-      await deps.apply(sessionId, route, state.current, { preserveScheduledBaseline: true });
+      const resolved = await deps.apply(sessionId, route, state.current, { preserveScheduledBaseline: true }) ?? route;
       assertCurrent();
       const latest = await deps.read(sessionId, 'apply');
       assertCurrent();
       if (!latest || latest.scheduledModelBaseline !== expectedBaseline || JSON.stringify(latest.chain) !== key) {
         throw new ScheduledModelSelectionBusyError('Companion selection changed during baseline recovery');
       }
-      if (latest.current.agentKind !== route.agentKind || latest.current.model !== route.model ||
-        (route.providerId !== null && latest.current.providerId !== route.providerId) ||
-        (latest.current.agentDeviceId ?? null) !== (route.agentDeviceId ?? null)) {
+      if (latest.current.agentKind !== resolved.agentKind || latest.current.model !== resolved.model ||
+        (resolved.providerId !== null && latest.current.providerId !== resolved.providerId) ||
+        (latest.current.agentDeviceId ?? null) !== (resolved.agentDeviceId ?? null)) {
         throw new ScheduledModelSelectionBusyError('Saved companion route did not become ready');
       }
       if (await deps.onSelectionAccepted(sessionId, expectedBaseline) === false) {

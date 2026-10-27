@@ -16559,7 +16559,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     route: SessionRouteSelection,
     currentAgentKind: AgentKind,
-  ): Promise<void> => {
+  ): Promise<SessionRouteSelection | void> => {
     // Legacy callers without a location must not move a remote session implicitly.
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
@@ -16570,12 +16570,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(route.agentDeviceId !== undefined ? { agentDeviceId: route.agentDeviceId } : {}),
         configStaged: true,
       });
+      const intent = agentSwitchPending.get(sessionId);
+      return intent ? {
+        ...route, agentKind: intent.targetAgentKind, model: intent.model,
+        providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
+      } : route;
     } else {
-      await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+      const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
         applySessionRuntimeSelection(sessionId, route.model, route.providerId,
           { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
             ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
           { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
+      // SET_MODEL stages local user selections without returning their provider.
+      // The pending intent already contains the validated/rebound connection.
+      const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
+      return { ...route, providerId: result.effectiveProviderId === undefined
+        ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
     }
   };
   followMovedCindyAutoRoutesNow = async () => {

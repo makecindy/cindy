@@ -125,6 +125,7 @@ it.each(['removed-source', 'removed-model'])('sends the first message through ho
   await act(async () => { fireEvent.click(send); });
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
   expect(onSend.mock.calls[0][0]).toBe('Retry companion');
+  expect(onSend.mock.calls[0][6]).toMatchObject({ baselineRecovery: true, providerId: route.providerId });
   expect(h.confirm).not.toHaveBeenCalled();
 });
 
