@@ -323,12 +323,14 @@ type AgentResourceSettingsWire = {
   maxConcurrentCommands: number;
   processPriority: AgentResourceProcessPriority;
   capToolchainThreads: boolean;
+  disableToolLoopGuard: boolean;
   isCustomized: boolean;
   customizedKeys: string[];
   defaults: {
     maxConcurrentCommands: number;
     processPriority: AgentResourceProcessPriority;
     capToolchainThreads: boolean;
+    disableToolLoopGuard: boolean;
   };
 };
 
@@ -6678,7 +6680,7 @@ interface ElectronAPI {
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
     agentResourceSettingsSet: (
-      key: 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads',
+      key: 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads' | 'disableToolLoopGuard',
       value: number | string | boolean,
     ) => Promise<AgentResourceSettingsWire>;
     agentResourceSettingsReset: () => Promise<AgentResourceSettingsWire>;

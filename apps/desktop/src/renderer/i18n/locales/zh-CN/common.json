@@ -4823,9 +4823,11 @@
       "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。"
     },
     "agentResource": {
+      "disableToolLoopGuard": "关闭工具循环检测",
+      "disableToolLoopGuardHint": "开启后，本机不再因重复工具调用停止执行，包含最终次数和时长上限。真正陷入循环时需手动停止，可能持续消耗用量。",
       "saveFailed": "保存失败，请重试。",
       "title": "Agent 资源占用",
-      "description": "限制 Agent 命令行任务占用的系统资源，避免并行测试或构建拖慢电脑。默认全速，只作用于本机 Agent，不影响远端（SSH）机器。",
+      "description": "资源限制默认全速，仅作用于本机 Agent，不限制远端（SSH）机器的资源。工具循环检测开关作用于本机管理的检测，也包括 SSH 任务。",
       "preset": "档位",
       "presets": {
         "full": "全速",

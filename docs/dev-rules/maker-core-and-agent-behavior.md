@@ -29,6 +29,18 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 
 ## 工具循环与无响应的分工
 
+Desktop「设置 → Agent 资源占用」提供「关闭工具循环检测」（`disableToolLoopGuard`），
+默认 false，检测照常生效；开启后跳过全部 Cindy 工具循环判据、辅助复核和最终上限。
+复用 `agent-resource-settings.json` 的 override 存储；恢复默认删除 override。设置热生效，
+由 host 将实时读取回调分别注入 Maker/Session（Pi、Codex）和 AgentDeps（Claude Code），
+统一由 `ToolLoopMonitor` 跳过观察、清空轨迹并丢弃迟到复核。设置写入与恢复默认在落盘成功后
+同步通知活动 monitor，重置轨迹及复核预算，并清除 Session 等待摘要的中断；即使两次工具事件
+之间快速开关也从新轨迹开始。monitor dispose 时注销监听。直接改 JSON 文件仍在下一次读取时
+生效，不承诺捕获两次读取之间的文件改动。
+这是管理检测的 Desktop 的全局设置，包含其 SSH 任务；资源预设不修改此开关。
+资源限制本身仍只作用于本机进程；不更改引擎原生限制、权限或无响应检测。
+回归见 `tool-loop-review.test.ts`、`session.tool-loop.test.ts` 与 Agent 资源设置测试。
+
 工具持续返回但反复原地搜索时，复用
 `agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
 Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对

@@ -26,7 +26,8 @@ import {
 } from './settingsRowClasses';
 
 type Wire = AgentResourceSettingsWire;
-type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
+type PresetKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
+type SettingKey = PresetKey | 'disableToolLoopGuard';
 
 type PresetId = 'full' | 'balanced' | 'background';
 
@@ -59,7 +60,7 @@ function balancedConcurrency(): number {
   return Math.min(MAX_CONCURRENT_CAP, Math.max(2, Math.ceil(cores / 2)));
 }
 
-function presetValues(id: PresetId): Pick<Wire, SettingKey> {
+function presetValues(id: PresetId): Pick<Wire, PresetKey> {
   switch (id) {
     case 'full':
       return { maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false };
@@ -74,7 +75,7 @@ function presetValues(id: PresetId): Pick<Wire, SettingKey> {
   }
 }
 
-function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
+function matchPreset(s: Pick<Wire, PresetKey>): PresetId | null {
   for (const id of ['full', 'balanced', 'background'] as const) {
     const p = presetValues(id);
     if (
@@ -120,12 +121,14 @@ export function AgentResourceSection() {
           maxConcurrentCommands: 0,
           processPriority: 'normal',
           capToolchainThreads: false,
+          disableToolLoopGuard: false,
           isCustomized: false,
           customizedKeys: [],
           defaults: {
             maxConcurrentCommands: 0,
             processPriority: 'normal',
             capToolchainThreads: false,
+            disableToolLoopGuard: false,
           },
         });
       });
@@ -338,6 +341,23 @@ export function AgentResourceSection() {
             disabled={applyingPreset}
             onCheckedChange={(next) => persist('capToolchainThreads', next)}
             aria-label={t('settings.agentResource.capThreads')}
+          />
+        </div>
+
+        <div className={DIVIDER_CLASS} />
+
+        <div className={ROW_CLASS}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id="settings-search-settings-agentResource-disableToolLoopGuard" className={ROW_LABEL_CLASS}>
+              {t('settings.agentResource.disableToolLoopGuard')}
+            </p>
+            <p className={ROW_HINT_CLASS}>{t('settings.agentResource.disableToolLoopGuardHint')}</p>
+          </div>
+          <Switch
+            checked={settings.disableToolLoopGuard}
+            disabled={applyingPreset}
+            onCheckedChange={(next) => persist('disableToolLoopGuard', next)}
+            aria-label={t('settings.agentResource.disableToolLoopGuard')}
           />
         </div>
       </div>

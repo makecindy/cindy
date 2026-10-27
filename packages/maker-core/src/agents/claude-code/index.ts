@@ -3118,7 +3118,19 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return mutableModel;
     };
+    // 会话已终止后迟到的工具事件:不得新建带全局偏好监听的检测器(否则关闭时的
+    // 清理会被绕过),也不再复核。共用一个永不检测、不订阅的占位实例。
+    let closedToolLoopMonitor: ToolLoopMonitor | undefined;
     const getToolLoopMonitor = (parentToolUseId?: string): ToolLoopMonitor => {
+      if (closed) {
+        closedToolLoopMonitor ??= new ToolLoopMonitor(new ToolLoopGuard(), {
+          isDisabled: () => true,
+          context: () => ({ sessionId: sid, agentKind: 'claude-code', model: mutableModel }),
+          onReviewedStop: () => undefined,
+          logger: log,
+        });
+        return closedToolLoopMonitor;
+      }
       const scopeKey = parentToolUseId ?? null;
       const existing = toolLoopMonitors.get(scopeKey);
       if (existing) return existing;
@@ -3131,6 +3143,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 供应商分享受邀者同样复核：与本机自己的任务一样走本机(分享者)的辅助模型链
         // (2026-10-13 用户裁决)。
         reviewer: this.deps.toolLoopReviewer,
+        isDisabled: this.deps.isToolLoopGuardDisabled,
+        onPreferenceChanged: this.deps.onToolLoopGuardChanged,
         reviewBudget: toolLoopReviewBudget,
         context: () => ({
           sessionId: sid,
@@ -3151,7 +3165,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       toolLoopMonitors.set(scopeKey, monitor);
       return monitor;
     };
-    /** 清空各 scope 的检测轨迹;复核次数仍计在当前 turn。 */
+    /** 清空各 scope 的检测轨迹并注销偏好监听;复核次数仍计在当前 turn。close / detach /
+     *  死 handle 终结共用:这些路径之后不会再有 turn 边界来销毁检测器。 */
     const clearToolLoopObservations = (): void => {
       for (const monitor of toolLoopMonitors.values()) monitor.dispose();
       toolLoopMonitors.clear();
@@ -4631,6 +4646,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       terminalBackgroundTaskIds.clear();
       closed = true;
+      clearToolLoopObservations();
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
         log.warn(`${logLabel}: dismissAllPending threw`, { error: String(e) });
       }
@@ -7370,6 +7386,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnInFlight = false;
         clearBridgeState();
         closed = true;
+        clearToolLoopObservations();
         try {
           // 任何挂着的 interaction 强制 deny + emit dismissed, 防止 host 卡住等永远不会来的回应
           dismissAllPending('session_closed', 'deny');
@@ -7406,6 +7423,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               turnInFlight = false;
               clearBridgeState();
               closed = true;
+              clearToolLoopObservations();
               try {
                 dismissAllPending('session_closed', 'deny');
                 inputQueue.end();

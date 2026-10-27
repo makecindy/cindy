@@ -17,6 +17,7 @@ const AGENT_RESOURCE_SETTING_KEYS = [
   'maxConcurrentCommands',
   'processPriority',
   'capToolchainThreads',
+  'disableToolLoopGuard',
 ] as const;
 export type AgentResourceSettingKey = (typeof AGENT_RESOURCE_SETTING_KEYS)[number];
 const AGENT_RESOURCE_PRIORITIES = ['normal', 'low', 'lowest'] as const;

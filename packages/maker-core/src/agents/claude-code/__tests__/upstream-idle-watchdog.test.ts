@@ -149,6 +149,8 @@ async function startSessionWithStream(
   hosted?: { providerId: string; deviceHosted: (workingDir: string) => DeviceHostedSession },
   resumeSessionId?: string,
   remote = false,
+  isToolLoopGuardDisabled?: () => boolean,
+  onToolLoopGuardChanged?: (listener: () => void) => () => void,
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -170,6 +172,8 @@ async function startSessionWithStream(
   });
 
   const deps = createDeps(toolLoopReviewer);
+  deps.isToolLoopGuardDisabled = isToolLoopGuardDisabled;
+  deps.onToolLoopGuardChanged = onToolLoopGuardChanged;
   let onApprovalRequest: ((params: unknown) => Promise<unknown>) | undefined;
   if (remote) {
     deps.remoteCcQueryFactory = async (options) => {
@@ -690,6 +694,101 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 });
 
 describe('Claude Code tool-loop guard runtime integration', () => {
+  // #6516, unit: real adapter + controlled SDK stream; no existing test covers a
+  // live bypass. Forty identical Bash results must survive, including sidechains
+  // and SSH queries; toggling back must restore the four-result interruption.
+  it.each([
+    { remote: false, parentToolUseId: null },
+    { remote: false, parentToolUseId: 'toolu_agent' },
+    { remote: true, parentToolUseId: null },
+  ])('hot-applies loop bypass: remote=$remote parent=$parentToolUseId', async ({ remote, parentToolUseId }) => {
+    let disabled = false;
+    const listeners = new Set<() => void>();
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream(
+      'claude-opus-4-6', undefined, undefined, undefined, remote, () => disabled,
+      listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    );
+    const setDisabled = (next: boolean) => {
+      disabled = next;
+      for (const listener of listeners) listener();
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const call = async (i: number) => {
+      const id = 'echo-' + i;
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: parentToolUseId,
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id, name: 'Bash', input: { command: 'echo loop-guard-test-ok' },
+        }] },
+      });
+      stream.emit({
+        type: 'user', parent_tool_use_id: parentToolUseId,
+        message: { role: 'user', content: [{
+          type: 'tool_result', tool_use_id: id, content: 'loop-guard-test-ok',
+        }] },
+      });
+      await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'echo delivered');
+    };
+    try {
+      await handle.send({ type: 'user', content: 'repeat forty times' });
+      for (let i = 0; i < 3; i++) await call(i);
+      // No tool event between switches: the old three-call streak must be gone.
+      setDisabled(true);
+      setDisabled(false);
+      await call(3);
+      expect(toolLoopError(events)).toBeUndefined();
+      setDisabled(true);
+      for (let i = 4; i < 40; i++) await call(i);
+      expect(toolLoopError(events)).toBeUndefined();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(handle.isTurnRunning?.()).toBe(true);
+      setDisabled(false);
+      for (let i = 40; i < 44; i++) await call(i);
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'loop interrupted');
+      expect(toolLoopError(events)).toMatchObject({ data: { loopKind: 'consecutive', loopCount: 4 } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  // #6516 review: a Claude Code handle registers a global preference listener per
+  // monitor. Every exit path must release it, including late tool events after exit.
+  it.each([
+    { exit: 'close', remote: false },
+    { exit: 'close', remote: true },
+    { exit: 'detach', remote: true },
+  ] as const)('releases the loop preference listener on $exit: remote=$remote', async ({ exit, remote }) => {
+    const listeners = new Set<() => void>();
+    const { handle, stream, events, collected } = await startSessionWithStream(
+      'claude-opus-4-6', undefined, undefined, undefined, remote, () => false,
+      listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    );
+    const emitTool = (id: string) => stream.emit({
+      type: 'assistant', parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'echo ' + id } }] },
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'run one tool' });
+      emitTool('exit-1');
+      await pumpUntil(() => listeners.size === 1, 'monitor subscribed');
+      await (exit === 'detach' ? handle.detach!() : handle.close());
+      expect(listeners.size).toBe(0);
+      emitTool('late-after-exit');
+      await vi.advanceTimersByTimeAsync(5);
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+    expect(events.some(e => e.type === 'tool_use' && (e.data as { toolUseId?: string }).toolUseId === 'late-after-exit')).toBe(false);
+  });
+
   const editErrors = [
     'The required parameter `file_path` is missing',
     'String to replace not found in file.',

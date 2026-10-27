@@ -4854,9 +4854,11 @@
       "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes."
     },
     "agentResource": {
+      "disableToolLoopGuard": "Disable tool loop detection",
+      "disableToolLoopGuardHint": "When enabled, this computer will not stop repeated tool calls, including at the final count and duration limits. Actual loops must be stopped manually and may keep consuming usage.",
       "saveFailed": "Failed to save. Try again.",
       "title": "Agent Resource Usage",
-      "description": "Limit the system resources Agent command-line work can use, so parallel tests or builds don't slow down your computer. Defaults to full speed and applies only to local Agents, not remote (SSH) machines.",
+      "description": "Resource limits default to full speed and apply only to local Agents, not remote (SSH) machine resources. The tool loop toggle controls detection managed by this computer, including SSH sessions.",
       "preset": "Profile",
       "presets": {
         "full": "Full Speed",

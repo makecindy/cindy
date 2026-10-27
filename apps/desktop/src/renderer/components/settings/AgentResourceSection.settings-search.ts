@@ -9,6 +9,7 @@ export default {
     { id: 'settings.agentResource.maxConcurrent', fallbackTargetId: 'settings-agent-resource', tab: 'general', targetId: 'settings-search-settings-agentResource-maxConcurrent', titleKey: 'settings.agentResource.maxConcurrent', sectionKey: 'settings.sections.agentResource', descriptionKey: 'settings.agentResource.maxConcurrentHint' },
     { id: 'settings.agentResource.priority', fallbackTargetId: 'settings-agent-resource', tab: 'general', targetId: 'settings-search-settings-agentResource-priority', titleKey: 'settings.agentResource.priority', sectionKey: 'settings.sections.agentResource', descriptionKey: 'settings.agentResource.priorityHint' },
     { id: 'settings.agentResource.capThreads', fallbackTargetId: 'settings-agent-resource', tab: 'general', targetId: 'settings-search-settings-agentResource-capThreads', titleKey: 'settings.agentResource.capThreads', sectionKey: 'settings.sections.agentResource', descriptionKey: 'settings.agentResource.capThreadsHint' },
+    { id: 'settings.agentResource.disableToolLoopGuard', fallbackTargetId: 'settings-agent-resource', tab: 'general', targetId: 'settings-search-settings-agentResource-disableToolLoopGuard', titleKey: 'settings.agentResource.disableToolLoopGuard', sectionKey: 'settings.sections.agentResource', descriptionKey: 'settings.agentResource.disableToolLoopGuardHint' },
 
   ],
 } satisfies SettingsSearchModule;

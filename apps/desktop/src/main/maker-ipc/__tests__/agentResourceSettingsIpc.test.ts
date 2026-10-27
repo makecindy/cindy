@@ -7,6 +7,7 @@ const DEFAULTS: AgentResourceSettings = {
   maxConcurrentCommands: 0,
   processPriority: 'normal',
   capToolchainThreads: false,
+  disableToolLoopGuard: false,
 };
 
 function makeIpc(overrides?: {
@@ -86,6 +87,8 @@ describe('agent resource settings IPC business body', () => {
     [{ key: 'processPriority', value: 19 }, 'must be one of'],
     [{ key: 'capToolchainThreads', value: 1 }, 'must be a boolean'],
     [{ key: 'capToolchainThreads', value: 'yes' }, 'must be a boolean'],
+    // #6516, unit: existing IPC matrices must reject truthy non-booleans.
+    [{ key: 'disableToolLoopGuard', value: 'true' }, 'must be a boolean'],
   ])('hard-rejects invalid payload %j with INVALID_PARAMS', (body, messagePart) => {
     const { ipc, write } = makeIpc();
     expect(() => ipc.set(EVENT, body)).toThrow(`[INVALID_PARAMS]`);
@@ -98,6 +101,8 @@ describe('agent resource settings IPC business body', () => {
     ['maxConcurrentCommands', 64],
     ['processPriority', 'lowest'],
     ['capToolchainThreads', true],
+    ['disableToolLoopGuard', true],
+    ['disableToolLoopGuard', false],
   ] as const)('accepts boundary/valid value %s=%j', (key, value) => {
     const { ipc } = makeIpc();
     const next = ipc.set(EVENT, { key, value });

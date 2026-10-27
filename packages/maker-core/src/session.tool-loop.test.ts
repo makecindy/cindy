@@ -14,7 +14,9 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: ToolLoopReviewer) {
+function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: ToolLoopReviewer,
+  isToolLoopGuardDisabled?: () => boolean,
+  onToolLoopGuardChanged?: (listener: () => void) => () => void) {
   vi.useFakeTimers();
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
@@ -35,6 +37,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   const session = new Session({
     id: 'test-session', agentKind, handle, workDir: '/test', capabilities: {} as never, logger, toolLoopReviewer,
+    isToolLoopGuardDisabled, onToolLoopGuardChanged,
   });
   sessions.push(session);
   const seen: AgentEvent[] = [];
@@ -59,6 +62,52 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
 }
 
 describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentKind) => {
+  // #6516, unit: Session event stream must stay active for 40 repeated calls when
+  // bypassed, then interrupt after re-enabling. Existing coverage has no preference.
+  it('hot-applies the bypass to an active turn and preserves tool results', async () => {
+    let disabled = false;
+    const t = setup(agentKind, false, undefined, () => disabled);
+    await t.session.send('repeat');
+    for (let i = 0; i < 3; i++) await t.tool(String(i));
+    disabled = true;
+    for (let i = 3; i < 40; i++) await t.tool(String(i));
+    expect(t.errors()).toEqual([]);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+    expect(t.seen.filter(e => e.type === 'tool_result_full')).toHaveLength(40);
+    disabled = false;
+    for (let i = 0; i < 3; i++) await t.tool('resumed-' + i);
+    expect(t.errors()).toEqual([]);
+    await t.tool('resumed-3');
+    expect(t.errors()).toHaveLength(1);
+    expect(t.handle.abort).toHaveBeenCalledOnce();
+  });
+
+  it('discards a pending interruption on a rapid switch before the result summary', async () => {
+    let disabled = false;
+    const listeners = new Set<() => void>();
+    const t = setup(agentKind, false, undefined, () => disabled, listener => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    });
+    await t.session.send('repeat');
+    for (let i = 0; i < 3; i++) await t.tool(String(i));
+    await vi.advanceTimersByTimeAsync(3_000);
+    t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
+    t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const next of [true, false]) {
+      disabled = next;
+      for (const listener of listeners) listener();
+    }
+    t.queue.push({ type: 'tool_result', source: agentKind, data: { toolUseIds: ['last'], summary: 'done' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toEqual([]);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+    disabled = false;
+    for (let i = 0; i < 3; i++) await t.tool('resumed-' + i);
+    expect(t.errors()).toEqual([]);
+  });
+
   it.each(['sync', 'async'] as const)('only suspends loop detection for a blocking question: %s', async (delivery) => {
     const t = setup(agentKind);
     let answer!: (decision: InteractionDecision) => void;

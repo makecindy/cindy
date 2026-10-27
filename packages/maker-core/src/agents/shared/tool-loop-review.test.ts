@@ -6,6 +6,7 @@ import {
   ToolLoopMonitor,
   type HardToolLoopVerdict,
   type ToolLoopReviewBudget,
+  type ToolLoopMonitorOptions,
   type ToolLoopReviewDecision,
   type ToolLoopReviewer,
 } from './tool-loop-review.js';
@@ -19,12 +20,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup(reviewer?: ToolLoopReviewer, reviewBudget?: ToolLoopReviewBudget) {
+function setup(reviewer?: ToolLoopReviewer, reviewBudget?: ToolLoopReviewBudget,
+  options: Pick<ToolLoopMonitorOptions, 'isDisabled' | 'onPreferenceChanged' | 'onPreferenceReset'> = {}) {
   vi.useFakeTimers();
   const stops: HardToolLoopVerdict[] = [];
   const monitor = new ToolLoopMonitor(new ToolLoopGuard(), {
     reviewer,
     reviewBudget,
+    ...options,
     context: () => ({ sessionId: 's1', agentKind: 'codex', model: 'm1' }),
     onReviewedStop: (verdict) => stops.push(verdict),
     logger,
@@ -49,6 +52,74 @@ function deferredReviewer() {
 }
 
 describe('ToolLoopMonitor', () => {
+  // #6516, unit: public monitor verdicts and stop callback. Existing tests only
+  // cover detection enabled. Minimum inputs: 4 identical calls / a pending review.
+  it('bypasses suspicion, final count, and duration limits, then detects from a fresh history', () => {
+    let disabled = false;
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'stop');
+    const t = setup(reviewer, undefined, { isDisabled: () => disabled });
+    t.repeatTimes(3);
+    disabled = true;
+    expect(t.repeatTimes(40).every(v => v.kind === 'ok')).toBe(true);
+    vi.advanceTimersByTime(60 * 60_000);
+    expect(t.repeat().kind).toBe('ok');
+    expect(reviewer).not.toHaveBeenCalled();
+    disabled = false;
+    expect(t.repeatTimes(3).every(v => v.kind === 'ok')).toBe(true);
+    expect(reviewer).not.toHaveBeenCalled();
+    t.repeat();
+    expect(reviewer).toHaveBeenCalledOnce();
+    t.monitor.dispose();
+  });
+
+  it('discards a review if disabled before it settles, without another tool event', async () => {
+    let disabled = false;
+    const { reviewer, pending } = deferredReviewer();
+    const t = setup(reviewer, undefined, { isDisabled: () => disabled });
+    t.repeatTimes(4);
+    disabled = true;
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.stops).toEqual([]);
+    expect(pending[0]?.signal.aborted).toBe(true);
+    disabled = false;
+    expect(t.repeatTimes(3).every(v => v.kind === 'ok')).toBe(true);
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    t.repeat();
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    t.monitor.dispose();
+  });
+
+  // #6516, unit: no tool event between two preference changes. Previously the
+  // monitor retained its old streak/review; dispose must release the subscription.
+  it('resets synchronously on rapid switches and unregisters when disposed', async () => {
+    let disabled = false;
+    const listeners = new Set<() => void>();
+    const { reviewer, pending } = deferredReviewer();
+    const cleared = vi.fn();
+    const t = setup(reviewer, undefined, {
+      isDisabled: () => disabled,
+      onPreferenceChanged: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      onPreferenceReset: cleared,
+    });
+    t.repeatTimes(4);
+    for (const next of [true, false]) {
+      disabled = next;
+      for (const listener of listeners) listener();
+    }
+    expect(pending[0]?.signal.aborted).toBe(true);
+    expect(cleared).toHaveBeenCalledTimes(2);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.stops).toEqual([]);
+    t.repeatTimes(3);
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    t.repeat();
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    t.monitor.dispose();
+    expect(listeners.size).toBe(0);
+  });
+
   it('interrupts immediately when no reviewer is configured', () => {
     const t = setup();
     const verdicts = t.repeatTimes(4);

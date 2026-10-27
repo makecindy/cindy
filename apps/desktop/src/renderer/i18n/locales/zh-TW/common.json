@@ -4823,9 +4823,11 @@
       "idleReleaseHint": "設為 0 時關閉後臺自動釋放；正數表示空閒超過該時長後自動釋放。"
     },
     "agentResource": {
+      "disableToolLoopGuard": "關閉工具循環偵測",
+      "disableToolLoopGuardHint": "開啟後，本機不再因重複工具呼叫停止執行，包含最終次數與時長上限。真正陷入循環時需手動停止，可能持續消耗用量。",
       "saveFailed": "儲存失敗，請重試。",
       "title": "Agent 資源佔用",
-      "description": "限制 Agent 命令列任務佔用的系統資源，避免並行測試或構建拖慢電腦。預設全速，只作用於本機 Agent，不影響遠端（SSH）機器。",
+      "description": "資源限制預設全速，僅作用於本機 Agent，不限制遠端（SSH）機器的資源。工具循環偵測開關作用於本機管理的偵測，也包括 SSH 任務。",
       "preset": "檔位",
       "presets": {
         "full": "全速",

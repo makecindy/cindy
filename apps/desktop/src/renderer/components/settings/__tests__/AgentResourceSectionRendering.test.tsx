@@ -50,12 +50,14 @@ type WireShape = {
   maxConcurrentCommands: number;
   processPriority: 'normal' | 'low' | 'lowest';
   capToolchainThreads: boolean;
+  disableToolLoopGuard: boolean;
   isCustomized: boolean;
   customizedKeys: string[];
   defaults: {
     maxConcurrentCommands: number;
     processPriority: 'normal' | 'low' | 'lowest';
     capToolchainThreads: boolean;
+    disableToolLoopGuard: boolean;
   };
 };
 
@@ -63,9 +65,10 @@ const DEFAULT_WIRE: WireShape = {
   maxConcurrentCommands: 0,
   processPriority: 'normal',
   capToolchainThreads: false,
+  disableToolLoopGuard: false,
   isCustomized: false,
   customizedKeys: [],
-  defaults: { maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false },
+  defaults: { maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false, disableToolLoopGuard: false },
 };
 
 function installElectronApi(initial: WireShape) {
@@ -113,7 +116,7 @@ describe('AgentResourceSection', () => {
     expect(numberInput.className).toContain('text-[var(--settings-input-text)]');
     expect(numberInput.className).toContain('border-[var(--settings-input-border)]');
     expect(numberInput.className).toContain('focus:border-[var(--settings-input-border-focus)]');
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('switch', { name: 'settings.agentResource.capThreads' }).getAttribute('aria-checked')).toBe('false');
   });
 
   it('applies a preset by writing all three fields', async () => {
@@ -282,6 +285,22 @@ describe('AgentResourceSection', () => {
     expect(api.settingsSet).toHaveBeenCalledTimes(1);
   });
 
+  // #6516, unit: real settings Switch writes the bypass key; presets preserve it
+  // and restore-default clears it. Existing tests only cover resource controls.
+  it('keeps loop bypass independent of resource presets and clears it on reset', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    render(<AgentResourceSection />);
+    const toggle = await screen.findByRole('switch', { name: 'settings.agentResource.disableToolLoopGuard' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.settingsSet).toHaveBeenCalledWith('disableToolLoopGuard', true));
+    fireEvent.click(screen.getByText('settings.agentResource.presets.background'));
+    await waitFor(() => expect(api.settingsSet).toHaveBeenCalledTimes(4));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.defaults.restore' }));
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+  });
+
   it('persists single-field edits through the settings IPC', async () => {
     const api = installElectronApi(DEFAULT_WIRE);
     render(<AgentResourceSection />);
@@ -298,7 +317,7 @@ describe('AgentResourceSection', () => {
       expect(api.settingsSet).toHaveBeenCalledWith('processPriority', 'low');
     });
 
-    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByRole('switch', { name: 'settings.agentResource.capThreads' }));
     await waitFor(() => {
       expect(api.settingsSet).toHaveBeenCalledWith('capToolchainThreads', true);
     });

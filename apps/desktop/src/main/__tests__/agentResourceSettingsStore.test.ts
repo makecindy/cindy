@@ -27,6 +27,8 @@ import {
   __testing,
   readAgentResourceSettings,
   writeAgentResourceSetting,
+  resetAgentResourceSettings,
+  onToolLoopGuardChanged,
 } from '../maker-host/agent-resource-settings-store';
 
 describe('agent resource settings store', () => {
@@ -69,6 +71,38 @@ describe('agent resource settings store', () => {
     expect(__testing.normalize({ capToolchainThreads: 1 }).capToolchainThreads).toBe(false);
   });
 
+  // #6516, unit: public store persists an override and reset removes it. Existing
+  // coverage has no loop preference; absent/invalid data must keep detection on.
+  it('defaults detection on, persists bypass, and removes its override on reset', () => {
+    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-loop-setting-'));
+    const file = path.join(electronMock.userDataDir, 'agent-resource-settings.json');
+    // #6516: notify only after persistence, including reset and rapid switches.
+    const observed: boolean[] = [];
+    const unsubscribe = onToolLoopGuardChanged(() => observed.push(readAgentResourceSettings().disableToolLoopGuard));
+    try {
+      expect(readAgentResourceSettings().disableToolLoopGuard).toBe(false);
+      writeAgentResourceSetting('disableToolLoopGuard', true);
+      expect(readAgentResourceSettings().disableToolLoopGuard).toBe(true);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).disableToolLoopGuard).toBe(true);
+      expect(resetAgentResourceSettings().disableToolLoopGuard).toBe(false);
+      expect(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).disableToolLoopGuard : undefined).toBeUndefined();
+      expect(__testing.normalize({ disableToolLoopGuard: 'true' }).disableToolLoopGuard).toBe(false);
+      expect(observed).toEqual([true, false]);
+      writeAgentResourceSetting('disableToolLoopGuard', true);
+      writeAgentResourceSetting('disableToolLoopGuard', false);
+      writeAgentResourceSetting('disableToolLoopGuard', false);
+      writeAgentResourceSetting('maxConcurrentCommands', 2);
+      expect(observed).toEqual([true, false, true, false]);
+      unsubscribe();
+      writeAgentResourceSetting('disableToolLoopGuard', true);
+      expect(observed).toHaveLength(4);
+    } finally {
+      unsubscribe();
+      fs.rmSync(electronMock.userDataDir, { recursive: true, force: true });
+      electronMock.userDataDir = '';
+    }
+  });
+
   it('does not clobber out-of-process file edits when writing another key', () => {
     // 隐藏配置约定:直接改文件也是正式入口。写路径必须先按 mtime 失效缓存,
     // 否则 writePatch 基于旧 overrides 计算,把手改的其它 key 静默覆盖回去。
@@ -92,6 +126,7 @@ describe('agent resource settings store', () => {
         maxConcurrentCommands: 5,
         processPriority: 'low',
         capToolchainThreads: true,
+        disableToolLoopGuard: false,
       });
     } finally {
       fs.rmSync(electronMock.userDataDir, { recursive: true, force: true });
