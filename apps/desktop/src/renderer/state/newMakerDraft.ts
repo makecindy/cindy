@@ -110,6 +110,8 @@ export interface NewMakerDraft {
   vendor: MakerVendor;
   /** 选中的 workingDir;初次 null,Project 行内 + 会预填到此。 */
   workingDir: string | null;
+  /** 用户明确选过「对话（不在项目中）」；本次草稿不得再由默认目录回填。 */
+  explicitNoProject: boolean;
   /** 远程项目所属 host。null = 本地项目或对话。 */
   remoteHostId: string | null;
   /**
@@ -254,6 +256,7 @@ function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
     workingDir: null,
+    explicitNoProject: false,
     remoteHostId: null,
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
@@ -489,6 +492,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   return {
     vendor,
     workingDir,
+    explicitNoProject: workingDir == null && r.explicitNoProject === true,
     remoteHostId: workingDir == null ? null : remoteHostId,
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
@@ -903,6 +907,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
+  if ('workingDir' in normalizedPatch && next.workingDir != null) {
+    next.explicitNoProject = false;
+  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -976,6 +983,7 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
 export function resetDraftWorkspaceTargets(): void {
   patchDraft({
     workingDir: null,
+    explicitNoProject: false,
     extraDirs: [],
     writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },

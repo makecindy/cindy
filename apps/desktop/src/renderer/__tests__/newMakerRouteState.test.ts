@@ -18,6 +18,13 @@ describe('default directory for a new local task', () => {
     expect(
       shouldPrefillDefaultNewTaskWorkingDir({ workspacePrompt: 'generic' }, emptyLocalDraft),
     ).toBe(true);
+    expect(shouldPrefillDefaultNewTaskWorkingDir(null, emptyLocalDraft)).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(
+        { workspacePrompt: 'generic' },
+        { ...emptyLocalDraft, explicitNoProject: true },
+      ),
+    ).toBe(false);
     expect(
       shouldPrefillDefaultNewTaskWorkingDir(
         { workspacePrompt: 'generic' },
