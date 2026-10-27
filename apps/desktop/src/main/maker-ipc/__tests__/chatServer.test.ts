@@ -181,6 +181,15 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+  // #6800, unit: exercise the production adapter and HTTP actor header, not just the injected transport.
+  it('discovers joined groups with the registered companion actor and rejects unknown companions', async () => {
+    fixture.requests = [];
+    fixture.handle.mockImplementation(route => route.startsWith('/conversations?') ? { body: [room(roomId)] } : response(route));
+    expect(await service.companionMessages!.list('local-bot', async () => {})).toEqual({ ok: true, groups: [{ id: roomId, name: 'Room' }] });
+    expect(fixture.requests.filter(r => r.url.includes('/conversations?'))).toEqual([expect.objectContaining({ actor: botId })]);
+    expect(fixture.requests.some(r => r.url.includes('/messages'))).toBe(false);
+    expect(await service.companionMessages!.list('not-owned', async () => {})).toMatchObject({ ok: false, errorCode: 'BOT_UNAVAILABLE' });
+  });
 
   // Unit: exercise the real transport and read.changed path. The former notification-only
   // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.

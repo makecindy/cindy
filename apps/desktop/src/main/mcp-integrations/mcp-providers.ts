@@ -991,6 +991,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botMessaging: {
+        listJoinedGroups: async ({ callerSessionId }) => {
+          const svc = tryGetBotDirectMessageService();
+          return svc ? svc.listJoinedGroups(callerSessionId) : { ok: false, errorCode: 'HOST_NOT_READY', message: 'Group messaging is unavailable.' };
+        },
+        sendToGroup: async params => {
+          const svc = tryGetBotDirectMessageService();
+          return svc ? svc.sendToGroup(params) : { ok: false, errorCode: 'HOST_NOT_READY', message: 'Group messaging is unavailable.' };
+        },
+        checkGroupMessage: async params => {
+          const svc = tryGetBotDirectMessageService();
+          return svc ? svc.checkGroupMessage(params) : { ok: false, errorCode: 'HOST_NOT_READY', message: 'Group messaging is unavailable.' };
+        },
         sendToUser: async (params) => {
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: t('groupTools.privateUnavailable') };

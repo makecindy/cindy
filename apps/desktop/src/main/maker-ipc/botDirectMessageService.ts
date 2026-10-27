@@ -1,4 +1,6 @@
 import type { CapturedAgentRequest } from './forwardedRequest.js';
+import type { CompanionGroupMessages, CompanionGroupRequest } from './chatCompanionMessages.js';
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -109,6 +111,7 @@ export interface BotMessageTransport {
 }
 
 export interface BotDirectMessageServiceDeps {
+  groupMessages?: () => CompanionGroupMessages | undefined;
   transport?: BotMessageTransport;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
@@ -1202,7 +1205,38 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         message: error instanceof GroupToolAuthorizationError ? error.message : t('groupTools.privateUnconfirmed') };
     }
   };
+  async function groupMessageCall<T>(callerSessionId: string, operation: (service: CompanionGroupMessages, botId: string, guard: () => Promise<void>) => Promise<T>) {
+    try {
+      const scope = deps.captureOwnerScope?.();
+      const db = getDbClient().drizzle;
+      const caller = await loadCaller(callerSessionId);
+      const guard = async () => {
+        if (db !== getDbClient().drizzle || (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope)))
+          throw new Error('OWNER_CHANGED');
+        const live = await loadCaller(callerSessionId);
+        if (db !== getDbClient().drizzle || (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope)))
+          throw new Error('OWNER_CHANGED');
+        if (!live || !caller || live.botId !== caller.botId || !['canonical', 'thread'].includes(live.role)
+          || live.linkArchivedAt !== null || live.sessionSource !== 'bot' || live.sessionStatus !== 'active'
+          || live.botStatus !== 'active' || isCompanionShadowed(live.botId)) throw new Error('BOT_PRIVATE_CHAT_REQUIRED');
+        await assertTaskActionCurrent();
+      };
+      await guard();
+      const service = deps.groupMessages?.();
+      if (!service) return { ok: false as const, errorCode: 'HOST_NOT_READY', message: 'Group messaging is unavailable.' };
+      const result = await operation(service, caller!.botId, guard);
+      await guard();
+      return result;
+    } catch {
+      return { ok: false as const, errorCode: 'BOT_PRIVATE_CHAT_REQUIRED', message: 'Use the active teammate’s private chat. Account or execution authority may have changed.' };
+    }
+  }
   return { messageAgent, sendToUser, receiveRemote, verifyRemoteMessage, readRemoteReceipt,
+    listJoinedGroups: (callerSessionId: string) => groupMessageCall(callerSessionId, (service, botId, guard) => service.list(botId, guard)),
+    sendToGroup: (input: Omit<CompanionGroupRequest, 'botId'> & { callerSessionId: string; message: string }) =>
+      groupMessageCall(input.callerSessionId, (service, botId, guard) => service.send({ ...input, botId }, guard)),
+    checkGroupMessage: (input: Omit<CompanionGroupRequest, 'botId'> & { callerSessionId: string }) =>
+      groupMessageCall(input.callerSessionId, (service, botId, guard) => service.check({ ...input, botId }, guard)),
     listAgents: async (sessionId: string) => {
       try { return await listAgents(sessionId); } catch (error) {
         if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };

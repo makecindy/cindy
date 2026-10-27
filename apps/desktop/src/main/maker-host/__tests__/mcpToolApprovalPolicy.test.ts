@@ -89,6 +89,14 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  // #6800, unit: group delivery must not inherit the helper's read-only trust.
+  it('reviews group sends through direct and progressive tool entry points', () => {
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'send_to_group' })).toBe('prompt-each-time');
+    for (const args of [{ group_id: 'group', message: 'text' }, JSON.stringify({ group_id: 'group', message: 'text' })]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool',
+        toolParams: { name: 'send_to_group', args } })).toBe('prompt-each-time');
+    }
+  });
   // #6826 security review 4354459321, unit: the shared policy must route each
   // recipe invocation through normal session approval, including read-labelled
   // recipes overridden by the user layer. Existing tests trusted the whole server.

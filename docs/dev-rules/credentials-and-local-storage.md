@@ -318,3 +318,14 @@ Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 
 
 升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
 技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。
+
+
+## 伙伴私聊发群回执
+
+`chatCompanionMessageReceipts.ts` 在 `ownerScopedUserDataPath('chat-companion-message-receipts')`
+下按端点及主人 actor 的哈希隔离，文件名是伙伴 actor、群 ID 与请求 key 的哈希。
+仅保存正文指纹、确认的消息 ID 或明确拒绝标记，不保存正文、凭证或私聊上下文。
+独占创建占位（目录 0700 / 文件 0600），确认复用原子文件写入；损坏或不可读时阻断重发。
+回执随账号用户数据保留，不自动过期或清理：删除占位会丢失本机防重证据。
+这些记录不随主力电脑迁移；换电脑后仍使用服务端同一 operationId，但服务端幂等保留期与未知回执恢复待联调。
+测试使用独立系统临时目录，结束清理，不接触真实账号数据。

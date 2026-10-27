@@ -831,6 +831,34 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // #6800: actual MCP discovery/dispatch, not a snapshot of the tool source. Unit tier.
+  it('discovers group delivery, binds the caller and preserves exact text while rejecting forged authors', async () => {
+    const groupId = '10000000-0000-4000-8000-000000000001';
+    const sendToGroup = vi.fn(async () => ({ ok: true as const, groupId, status: 'unknown' as const, read: null, mayTriggerReplies: true as const }));
+    const checkGroupMessage = vi.fn(async () => ({ ok: true as const, groupId, status: 'unknown' as const, read: null, mayTriggerReplies: true as const }));
+    const listJoinedGroups = vi.fn(async () => ({ ok: true as const, groups: [{ id: groupId, name: 'Work' }] }));
+    const messageAgent = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'must not run' }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'bot', botMessaging: { sendToGroup, checkGroupMessage, listJoinedGroups, messageAgent } },
+      { agentKind: 'codex', workingDir: '/fixture', sessionId: 'private-chat' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'group-send', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(JSON.stringify(catalog)).toContain('send_to_group');
+      const call = (name: string, args: Record<string, unknown>) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+      expect(parsePayload(await call('list_joined_groups', {}))).toMatchObject({ groups: [{ id: groupId, name: 'Work' }] });
+      const args = { group_id: groupId, message: '  exact text\n', idempotency_key: 'request-123' };
+      expect(parsePayload(await call('send_to_group', { ...args, bot_id: 'forged-author' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(sendToGroup).not.toHaveBeenCalled();
+      expect(parsePayload(await call('send_to_group', args))).toMatchObject({ status: 'unknown', message_id: null, read: null, may_trigger_replies: true });
+      expect(sendToGroup).toHaveBeenCalledWith({ callerSessionId: 'private-chat', groupId, message: args.message, idempotencyKey: 'request-123' });
+      await call('check_group_message', { group_id: groupId, idempotency_key: 'request-123' });
+      expect(checkGroupMessage).toHaveBeenCalledWith({ callerSessionId: 'private-chat', groupId, idempotencyKey: 'request-123' });
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(["default", "restricted", "error", "unbound"] as const)("hides and blocks all companion commands on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
     const server = createXdtHelperMcpServer({
@@ -839,7 +867,7 @@ describe("cindy_helper MCP server", () => {
         return surface === "unbound" ? "bot" : surface;
       },
       sessionTasks: { startSessionTask: callback, getSessionTask: callback, messageSessionTask: callback, stopSessionTask: callback },
-      botMessaging: { messageAgent: callback, checkMessage: callback, sendToUser: callback },
+      botMessaging: { messageAgent: callback, checkMessage: callback, sendToUser: callback, listJoinedGroups: callback, sendToGroup: callback, checkGroupMessage: callback },
       botProfiles: { create: callback },
     }, { agentKind: "codex", workingDir: "/repo", sessionId: surface === "unbound" ? undefined : "normal-session" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -849,7 +877,7 @@ describe("cindy_helper MCP server", () => {
       expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
       expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "check_agent_message", "create_teammate"]) {
+      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "list_joined_groups", "send_to_group", "check_group_message", "check_agent_message", "create_teammate"]) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }

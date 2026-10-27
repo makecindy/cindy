@@ -155,7 +155,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息，或新建任务。发给已有任务可跨电脑（deviceId::sessionId）；新建只在本机。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
+  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑；私聊发 Cindy 群（list_joined_groups / send_to_group / check_group_message，当前伙伴已加入的服务端群，宿主执行）。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -196,6 +196,12 @@ interface SessionTaskCallbacks {
 }
 
 interface BotMessagingCallbacks {
+  listJoinedGroups?(params: { callerSessionId: string }): Promise<
+    { ok: true; groups: Array<{ id: string; name: string }> } | { ok: false; errorCode: string; message: string }>;
+  sendToGroup?(params: { callerSessionId: string; groupId: string; message: string; idempotencyKey: string }): Promise<
+    { ok: true; groupId: string; status: 'confirmed' | 'unknown' | 'not_recorded'; messageId?: string; read: null; mayTriggerReplies: true }
+    | { ok: false; errorCode: string; message: string }>;
+  checkGroupMessage?(params: { callerSessionId: string; groupId: string; idempotencyKey: string }): ReturnType<NonNullable<BotMessagingCallbacks['sendToGroup']>>;
   sendToUser?(params: { callerSessionId: string; message: string; idempotencyKey: string }): Promise<
     { ok: true; messageId: string; targetSessionId: string; delivered: boolean }
     | { ok: false; errorCode: string; message: string }>;
@@ -450,6 +456,40 @@ function registerSendToAgentEntry(
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   if (!deps.botMessaging) return;
+  if (deps.botMessaging.listJoinedGroups) registry.register({
+    name: 'list_joined_groups', category: 'bots',
+    description: 'From your private chat, discover active Cindy server groups this teammate has joined. Returns names and stable group IDs, not message history. Only this teammate on this host; not Feishu or other IM. Clarify namesakes, then use the exact returned ID with send_to_group. Does not create groups or add members.',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate private chat is required.');
+      const result = await deps.botMessaging!.listJoinedGroups!({ callerSessionId });
+      return result.ok ? okPayload({ ...result, scope: 'current-teammate-on-this-host' }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  for (const name of ['send_to_group', 'check_group_message'] as const) {
+    const send = name === 'send_to_group';
+    if (send ? !deps.botMessaging.sendToGroup : !deps.botMessaging.checkGroupMessage) continue;
+    registry.register({
+      name, category: 'bots',
+      description: send
+        ? 'From your private chat, send the exact user-requested text to an explicitly selected Cindy group as yourself, never as the owner. Discover its exact group_id with list_joined_groups; clarify ambiguous names. Only joined, active groups. Ordinary server message semantics apply: replies may follow; do not promise silence. No tasks, attachments, implicit mentions or private context are added. Current task permissions apply, without an extra feature-specific confirmation. Keep the same idempotency_key for the same request. If status is unknown, use check_group_message; never resend with a new key to bypass uncertainty.'
+        : 'Read this host’s durable receipt for your group send without sending or retrying. Use the same group_id and idempotency_key. confirmed means the server acknowledged persistence, not that anyone read or answered it. unknown and not_recorded do not prove non-delivery; the current server contract has no operation-ID lookup. Stop and reconcile in the group before any new send; do not poll or invent a fresh key.',
+      inputShape: { group_id: z.string().uuid(), idempotency_key: z.string().regex(/^[\w-]{8,100}$/),
+        ...(send ? { message: z.string().min(1).max(8000).refine(text => !!text.trim()) } : {}) },
+      handler: async (args) => {
+        const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+        if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate private chat is required.');
+        const input = { callerSessionId, groupId: args.group_id as string, idempotencyKey: args.idempotency_key as string };
+        const result = send
+          ? await deps.botMessaging!.sendToGroup!({ ...input, message: args.message as string })
+          : await deps.botMessaging!.checkGroupMessage!(input);
+        return result.ok ? okPayload({ action: name, group_id: result.groupId, status: result.status,
+          message_id: result.messageId ?? null, read: null, may_trigger_replies: result.mayTriggerReplies })
+          : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
   if (deps.botMessaging.sendToUser) registry.register({
     name: 'send_to_user', category: 'bots',
     description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',

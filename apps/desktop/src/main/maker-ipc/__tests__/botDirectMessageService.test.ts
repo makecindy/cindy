@@ -154,6 +154,29 @@ describe('botDirectMessageService', () => {
     } finally { release(); }
   });
 
+  // #6800: caller identity is read from the real in-memory database, never tool parameters.
+  it.each(['a-main', 'a-thread', 'a-group', 'a-route', 'a-history', 'ordinary', 'paused-main'])('checks private caller %s before exposing group access', async callerSessionId => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-thread','bot','active'), ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-thread-link','bot-a','a-thread','thread',NULL), ('a-group-link','bot-a','a-group','group',NULL)");
+    const list = vi.fn(async (botId: string, guard: () => Promise<void>) => {
+      await guard();
+      return { ok: true as const, groups: [{ id: 'group', name: botId }] };
+    });
+    const service = createBotDirectMessageService({ dispatch, groupMessages: () => ({ list,
+      send: vi.fn(), check: vi.fn() }) });
+    const result = await service.listJoinedGroups(callerSessionId);
+    if (['a-main', 'a-thread'].includes(callerSessionId)) expect(result).toEqual({ ok: true, groups: [{ id: 'group', name: 'bot-a' }] });
+    else { expect(result).toMatchObject({ ok: false }); expect(list).not.toHaveBeenCalled(); }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('invalidates group access when the owner changes during discovery', async () => {
+    let current = true;
+    const service = createBotDirectMessageService({ dispatch, captureOwnerScope: () => ({}) as never, isOwnerScopeCurrent: () => current,
+      groupMessages: () => ({ list: async () => { current = false; return { ok: true, groups: [{ id: 'private', name: 'old-owner-group' }] }; },
+        send: vi.fn(), check: vi.fn() }) });
+    expect(await service.listJoinedGroups('a-main')).toMatchObject({ ok: false });
+  });
+
   it.each(['deleted', 'archived'])('keeps the original private receipt after canonical recovery from %s', async status => {
     sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
     const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1' },

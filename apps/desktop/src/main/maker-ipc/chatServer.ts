@@ -1,6 +1,8 @@
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
+import { createCompanionGroupMessages } from './chatCompanionMessages.js';
+import { companionMessageReceipts } from './chatCompanionMessageReceipts.js';
 /** Production chat transport. The server owns messages and execution leases;
  * local group rows only supply Agent lane metadata and the upgrade source. */
 import { app, net, nativeImage } from 'electron';
@@ -317,6 +319,7 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
   };
   return {
     get chatServer() { return service().chatServer; },
+    get companionMessages() { return service().companionMessages; },
     listGroups: (...args) => service().listGroups(...args),
     getGroup: (...args) => service().getGroup(...args),
     createGroup: (...args) => service().createGroup(...args),
@@ -2999,8 +3002,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // A lost controller ACK must not consume the phone upload or submit the same message twice.
   const pendingSends = new Map<string, ReturnType<BotGroupChatService['sendMessage']>>();
   const sendReceipts = new Map<string, Awaited<ReturnType<BotGroupChatService['sendMessage']>>>();
+  const companionMessages = createCompanionGroupMessages({
+    api,
+    identity: async botId => {
+      await register();
+      const actor = actors.find(a => a.kind === 'bot' && a.externalId === botId && !a.disabled);
+      if (!current()) throw new Error('OWNER_CHANGED');
+      if (!actor || (companionHome && actor.homeDeviceId !== selfDeviceId)) throw new Error('BOT_UNAVAILABLE');
+      return { actorId: actor.id, ownerId: selfId };
+    },
+    receipts: ownerId => companionMessageReceipts(config.baseUrl, ownerId, current),
+    changed,
+  });
   return {
     chatServer,
+    companionMessages,
     listGroups: () => safe(async () => {
       await ensureRegistered(); await syncPersonalList(); beginUpgrade();
       const groups: BotGroupDetail[] = [];

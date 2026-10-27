@@ -1008,3 +1008,22 @@ Desktop 群聊、话题与伙伴私聊的服务器图片共用持久附件索引
 以下作为实现讨论默认值，尚不替代产品裁决：显式编辑／删除同步到各端，Agent 内部上下文压缩不删聊天；历史补传不制造未读；草稿先按设备保存；离线发送明确展示待发送且不静默切换执行电脑；权限变化优先于缓存命中；聊天列表以本地投影显示，服务器仍是共享记录与权限的最终依据。
 
 真正需要长期维护的是一份按账号隔离、可增量修正、可恢复的聊天数据库，以及低成本的工作唤醒机制。单纯加长当前 snapshot TTL，无法解决历史变化、跨端一致性、可靠发送，也无法解决本次观察到的主要服务器开销。
+
+
+## 私聊向指定群发送正文（#6800，服务端联调待验）
+
+伙伴私聊的 `list_joined_groups` 只列当前伙伴已加入的有效服务端群名称与稳定 ID，不读取群历史。
+`send_to_group` 必须使用明确的群 ID 与用户指定正文；同名群须先澄清。
+身份从当前活跃私聊任务反查，限 canonical / thread；群专线、路由、历史及暂停伙伴不可调用。
+发送前复核账号、主力电脑、任务执行权限和成员归属；使用伙伴 actor，不冒充主人。
+沿用既有权限审核，不增加功能专属二次确认；不创建群、加人、创建后台任务或携带私聊上下文。
+POST 仅含原样文字、固定 operationId 与空 mentions。普通群消息可能引发响应，不能承诺静默。
+
+相同请求沿用 idempotency_key；宿主先保存持久占位，确认后保存消息 ID。
+`check_group_message` 查询本机回执：confirmed 仅代表服务端曾返回消息 ID，read 为 null；
+unknown 或 not_recorded 都不能作为未送达证明，禁止换 key 盲重发。
+当前客户端没有按 operationId 查询服务端回执的合同，跨电脑回执恢复与真实群唤醒语义尚待隔离服务端验证；
+本实现不得被视为这两项验收已完成。客户端不调用额外的规划／继续讨论入口。
+
+实现：`maker-ipc/chatCompanionMessages.ts`、`chatCompanionMessageReceipts.ts`、
+`botDirectMessageService.ts`；工具索引：`packages/lizi-mcps/src/lizi_xdtHelperMcpServer.ts`。
