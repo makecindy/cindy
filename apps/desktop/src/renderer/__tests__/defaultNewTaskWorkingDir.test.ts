@@ -24,4 +24,10 @@ describe('default new task working directory preference', () => {
     localStorage.setItem('xdt:defaultNewTaskWorkingDir:v1:owner-a', 'relative/project');
     expect(getDefaultNewTaskWorkingDir('owner-a')).toBeNull();
   });
+
+  it('shows the repository root when a managed worktree is selected', () => {
+    setDefaultNewTaskWorkingDir('owner-a', '/projects/cindy/.cindy-worktrees/task-a');
+    expect(getDefaultNewTaskWorkingDir('owner-a')).toBe('/projects/cindy');
+    expect(localStorage.getItem('xdt:defaultNewTaskWorkingDir:v1:owner-a')).toBe('/projects/cindy');
+  });
 });

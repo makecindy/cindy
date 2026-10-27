@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 
 const STORAGE_KEY = 'xdt:defaultNewTaskWorkingDir:v1';
@@ -8,11 +9,16 @@ function keyForOwner(ownerId: string): string {
   return `${STORAGE_KEY}:${encodeURIComponent(ownerId)}`;
 }
 
+function normalizeDefaultDir(path: string | null | undefined): string | null {
+  const normalized = normalizeWorkingDirForStorage(path);
+  return normalized ? (getManagedWorktreeBasePath(normalized) ?? normalized) : null;
+}
+
 /** This preference is local to this computer and isolated by data owner. */
 export function getDefaultNewTaskWorkingDir(ownerId: string | null): string | null {
   if (!ownerId) return null;
   try {
-    const value = normalizeWorkingDirForStorage(localStorage.getItem(keyForOwner(ownerId)));
+    const value = normalizeDefaultDir(localStorage.getItem(keyForOwner(ownerId)));
     // Only absolute paths selected on this computer can become a task target.
     return value && (/^\//.test(value) || /^[A-Za-z]:\//.test(value)) ? value : null;
   } catch {
@@ -21,7 +27,7 @@ export function getDefaultNewTaskWorkingDir(ownerId: string | null): string | nu
 }
 
 export function setDefaultNewTaskWorkingDir(ownerId: string, path: string | null): void {
-  const normalized = normalizeWorkingDirForStorage(path);
+  const normalized = normalizeDefaultDir(path);
   if (normalized && !(/^\//.test(normalized) || /^[A-Za-z]:\//.test(normalized))) {
     throw new Error('Default working directory must be absolute');
   }
