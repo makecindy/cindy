@@ -40,7 +40,7 @@ it.each([false, true])('atomically applies a selected slash command while queue 
 
 it.each([false, true])('routes touch and accessibility activation through the actual dictation overlay (native=%s)', (nativeComposerAvailable) => {
   const finish = vi.fn();
-  const press = pageCallback('handleComposerInputPressIn', { voiceRecordingActiveRef: { current: true }, voiceState: 'listening', finishVoiceRecordingRef: { current: finish } });
+  const press = pageCallback('handleComposerInputPressIn', { voiceRecordingActiveRef: { current: true }, voiceState: 'listening', finishVoiceRecordingRef: { current: finish }, voiceConversationBridgeRef: { current: null } });
   const bindings = { React, voiceIsListening: true, nativeComposerAvailable, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', VoiceMicWaveCaret: 'Caret',
     t: (key: string) => key, styles: {}, handleComposerInputPressIn: press, voiceDraftScrollRef: {}, voiceDraftCaretFrame: { top: 0 },
     composerCardActive: true, composerInputScrollEnabled: false, voiceDraftShowsListeningPrompt: true, colors: { textPrimary: '#000' }, composerLayout: { input: { placeholder: 'Listening' } } };
