@@ -27,13 +27,22 @@ export function hasControlSubscription(topics: readonly string[]): boolean {
 /**
  * 后台只读请求新建链路后的确认:旧被控端不认后台能力、已装上 legacy `'*'`。本机仍无控制
  * 意图时关掉这条链路(撤掉对方的受控状态),并以 UNSUPPORTED_CAPABILITY 失败,不发请求;
- * 期间用户已开始控制(有了订阅)时保留链路,只让这次后台请求失败。
+ * 期间用户已开始控制(有了实时订阅或前台调用)时保留链路,只让这次后台请求失败。
  */
 export function assertBackgroundLinkAccepted(
   accepted: Pick<LinkAcceptPayload, 'capabilities'>,
-  deps: { hasOutboundControlSubscription(): boolean; closeLink(): void },
+  deps: { hasOutboundControlSubscription(): boolean; hasForegroundInvoke?(): boolean; closeLink(): void },
 ): void {
   if (accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1)) return;
-  if (!deps.hasOutboundControlSubscription()) deps.closeLink();
+  if (!deps.hasOutboundControlSubscription() && !deps.hasForegroundInvoke?.()) deps.closeLink();
   throw new Error('[UNSUPPORTED_CAPABILITY] remote device does not support background links');
+}
+
+/** A foreground subscription may share an in-flight background open with an old peer. */
+export function assertSubscriptionLinkAccepted(
+  accepted: Pick<LinkAcceptPayload, 'capabilities'>,
+  deps: { hasOutboundControlSubscription(): boolean; hasForegroundInvoke?(): boolean; closeLink(): void },
+): void {
+  if (deps.hasOutboundControlSubscription() || deps.hasForegroundInvoke?.()) return;
+  assertBackgroundLinkAccepted(accepted, deps);
 }

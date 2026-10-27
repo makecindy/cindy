@@ -2110,7 +2110,7 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 （`apps/desktop/src/main/device-link/backgroundLink.ts`，所有建链与自动重开入口共用这一判据）；新被控端
 见到后不装 legacy `'*'`，不亮被控横幅、不转发推送、不挡无人值守更新重启，控制端之后显式 subscribe
 照常生效。只订阅 `sessions` 列表或 `fs-watch:*` 文件监听仍属于后台连接。旧被控端忽略该能力、照旧装 legacy `'*'`，所以用量读取走 `remoteBackgroundInvoke`：
-0.1.93 及更早的正式版或版本未知的电脑不建链；所有新建链路都检查对端在 link-accept 中的声明；若对端不支持，且本机只有 sessions 或 fs-watch:* 后台订阅，
+0.1.93 及更早的正式版或版本未知的电脑不建链；后台只读请求与后台订阅在新建链路后检查对端的 link-accept 声明；若对端不支持，且本机只有 sessions 或 fs-watch:* 后台订阅、没有正在进行的前台调用，
 就立即关闭这条链路并按需要更新处理，同一版本不再重试。已就绪的链路直接复用。
 旧控制端与 Mobile 不声明该能力，行为不变。
 旧被控端回 `CHANNEL_NOT_ALLOWED`，控制端把该电脑标为需要更新，不影响其它电脑；旧控制端

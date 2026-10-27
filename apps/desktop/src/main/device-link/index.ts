@@ -16,7 +16,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
-import { assertBackgroundLinkAccepted, hasControlSubscription, linkOpenCapabilities } from './backgroundLink';
+import { assertBackgroundLinkAccepted, assertSubscriptionLinkAccepted, hasControlSubscription, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName } from './deviceName';
 import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
@@ -1959,6 +1959,8 @@ async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
 
 /** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
 const openLinkCloseEpochs = new Map<string, number>();
+/** Keep an old peer's shared link while a foreground invoke (for example, remote desktop) opens it. */
+const foregroundInvokesInFlight = new Map<string, number>();
 
 /** Long-lived consumers bind to this generation so later reads cannot undo an explicit close. */
 export function getRemoteLinkCloseEpoch(deviceId: string): number {
@@ -2021,14 +2023,6 @@ export async function openRemoteLink(
       // 没有会话实时流订阅时声明后台链路；列表/文件监听不应点亮对端接入提示。
       capabilities,
     });
-    if (capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1)) {
-      assertBackgroundLinkAccepted(accepted, {
-        hasOutboundControlSubscription: () => hasControlSubscription(
-          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
-        ),
-        closeLink: () => closeRemoteLink(deviceId),
-      });
-    }
     revokedByRemote.delete(deviceId);
     return accepted;
   };
@@ -2124,7 +2118,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2138,9 +2132,10 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean },
+  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
+  const { passiveLink, ...invokeOptions } = options ?? {};
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   // 取消代次快照(不变量 3 的对称路径,review P1):等待上线期间用户 CLOSE_LINK
@@ -2164,7 +2159,7 @@ async function remoteInvokeLive(
     preSend();
     if (!client?.isLinkReady(deviceId))
       throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
-    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
@@ -2190,7 +2185,7 @@ async function remoteInvokeLive(
       () => openRemoteLink(deviceId, { observed: false }),
       preSend,
     );
-    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
@@ -2207,8 +2202,16 @@ async function remoteInvokeLive(
     );
   // 熔断门禁:目标设备连续超时判定无响应后,新请求立即以 DEVICE_UNRESPONSIVE 快速失败
   // (不占管道、不等 12~30s 超时),恢复由周期单飞探测驱动。tracker 未初始化时直通。
-  if (!responsivenessTracker) return run();
-  return responsivenessTracker.guardInvoke(deviceId, channel, run);
+  const result = responsivenessTracker ? responsivenessTracker.guardInvoke(deviceId, channel, run) : run();
+  if (passiveLink || options?.background) return result;
+  foregroundInvokesInFlight.set(deviceId, (foregroundInvokesInFlight.get(deviceId) ?? 0) + 1);
+  try {
+    return await result;
+  } finally {
+    const remaining = (foregroundInvokesInFlight.get(deviceId) ?? 1) - 1;
+    if (remaining > 0) foregroundInvokesInFlight.set(deviceId, remaining);
+    else foregroundInvokesInFlight.delete(deviceId);
+  }
 }
 
 /**
@@ -2300,11 +2303,12 @@ async function backgroundInvokeDeviceLive(deviceId: string, channel: string, arg
       hasOutboundControlSubscription: () => hasControlSubscription(
         snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
       ),
+      hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
       closeLink: () => closeRemoteLink(deviceId),
     });
   }
   // 账号等调用方状态必须穿过建链、上线与排队等待，在实际发送边界复验。
-  return remoteInvokeLive(deviceId, channel, args, options);
+  return remoteInvokeLive(deviceId, channel, args, { ...options, passiveLink: true });
 }
 
 /**
@@ -2345,9 +2349,16 @@ export async function remoteSubscribe(
         throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
       }
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
-      await openRemoteLink(deviceId, { observed: false });
+      const accepted = await openRemoteLink(deviceId, { observed: false });
       // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
       liveTopics = liveTopicsNow();
+      assertSubscriptionLinkAccepted(accepted, {
+        hasOutboundControlSubscription: () => hasControlSubscription(
+          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+        ),
+        hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
+        closeLink: () => closeRemoteLink(deviceId),
+      });
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);

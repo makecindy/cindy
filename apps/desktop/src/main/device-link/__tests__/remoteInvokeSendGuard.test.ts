@@ -32,6 +32,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     assertNotStandby: () => {},
     assertRemoteControlTargetEnabled: () => {},
     openLinkCloseEpochs: epochs,
+    foregroundInvokesInFlight: new Map<string, number>(),
     ensureOnlineForRequest: async () => {},
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
@@ -57,6 +58,25 @@ it.each(['host', providerShareHostPeer('share', 'host')])('sends a live recovery
   await expect(remoteBackgroundInvoke(target, 'maker:provider:list', [], { liveProviderMetadata: true }))
     .resolves.toMatchObject({ ok: true, result: { providers: [] } });
   expect(invoke).toHaveBeenCalledTimes(1); expect(metadata).not.toHaveBeenCalled();
+});
+
+it('tracks a foreground invoke while it is pending without treating background reads as foreground', async () => {
+  const foregroundInvokesInFlight = new Map<string, number>();
+  let release!: () => void;
+  const pendingReply = new Promise<{ ok: true; result: null }>((resolve) => {
+    release = () => resolve({ ok: true, result: null });
+  });
+  const remoteInvoke = loadRemoteInvoke({
+    foregroundInvokesInFlight,
+    client: { invoke: vi.fn().mockReturnValueOnce(pendingReply).mockResolvedValue({ ok: true, result: null }) },
+  });
+  const foreground = remoteInvoke('host', 'remote-desktop', []);
+  expect(foregroundInvokesInFlight.get('host')).toBe(1);
+  release();
+  await foreground;
+  expect(foregroundInvokesInFlight.has('host')).toBe(false);
+  await remoteInvoke('host', 'provider-group:remote', [], { passiveLink: true });
+  expect(foregroundInvokesInFlight.has('host')).toBe(false);
 });
 
 it.each(['target resolution', 'link opening', 'online wait', 'reliable link recovery'])(
