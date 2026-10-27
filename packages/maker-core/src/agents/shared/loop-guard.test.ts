@@ -710,6 +710,35 @@ describe('ToolLoopGuard pacing and final limits', () => {
     expect(verdicts[4]).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
   });
 
+  // Regression: 2026-10-27 device QA refreshed small.jpg between observations.
+  // Unit gap: existing paced cases use one call per round; mixed paced actions
+  // and immediate reads were filtered into an artificial read-only cycle.
+  it.each([0, 40_000])('keeps changing device actions in the recent window (duration %i)', (duration) => {
+    const { guard, advance } = clockGuard();
+    for (let step = 0; step < 32; step++) {
+      advance(minute);
+      guard.onToolUse(`action-${step}`, 'Bash', { command: `python device.py tap ${step} 100; python device.py shot small` });
+      advance(duration);
+      expect(guard.onToolResult(`action-${step}`, '').kind).toBe('ok');
+      advance(1_000);
+      // Image payloads may be absent from the text projection. Even an empty
+      // result must not erase the distinct action that refreshed this path.
+      expect(feed(guard, `image-${step}`, 'Read', { file_path: 'small.jpg' }, '').kind).toBe('ok');
+    }
+  });
+
+  it('still suspects a repeated mixed cycle after paced actions', () => {
+    const { guard, advance } = clockGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let step = 0; step < 6; step++) {
+      advance(minute);
+      expect(feed(guard, `action-${step}`, 'Bash', { command: 'python device.py tap 100 100' }, '').kind).toBe('ok');
+      advance(1_000);
+      verdict = feed(guard, `image-${step}`, 'Read', { file_path: 'small.jpg' }, 'unchanged');
+    }
+    expect(verdict).toMatchObject({ kind: 'hard', reason: 'pingpong', count: 12, final: false });
+  });
+
   it('lets a paced command break the long read window', () => {
     const { guard, advance } = clockGuard();
     for (let i = 0; i < 127; i++) {
