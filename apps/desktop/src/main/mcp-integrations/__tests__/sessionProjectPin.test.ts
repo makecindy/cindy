@@ -13,7 +13,7 @@ function setup(remote?: Parameters<typeof createSessionProjectPinSetter>[0]['rem
   const setter = createSessionProjectPinSetter({ patch, remote });
   const registry = new XdtHelperToolRegistry();
   registerSetSessionProjectPinTool(registry, {
-    getSessionContext: () => ({ sessionId: 'caller', agentKind: 'codex' }),
+    getSessionContext: () => ({ sessionId: 'caller', agentKind: 'codex', workingDir: '/test/project' }),
     setSessionProjectPin: setter,
   });
   const call = async (id: string, pinned = true) => {
