@@ -404,7 +404,8 @@ export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageV
       const label = richString(node, 'label');
       if (['image', 'video', 'audio', 'svg'].includes(node.kind)) {
         // Group body has no task-local media authority. Keep its description readable.
-        add([label, richString(node, 'alt'), richString(node, 'caption'), richString(node, 'src')].filter(Boolean).join('\n'));
+        const description = [label, richString(node, 'alt'), richString(node, 'caption')].filter(value => value.trim()).join('\n');
+        add(description || `[${node.kind}]`);
       } else {
         const markdown = richMarkdown(node);
         if (markdown !== null) {

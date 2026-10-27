@@ -231,12 +231,21 @@ describe('group body component display', () => {
   it.each([rich({ kind: 'text', props: { text: '' } }), rich({ kind: 'range' }), '```cindy-ui\ninvalid\n```'])('retains unreadable source %s', content => {
     expect(botGroupBodyParts(content, 'bot')).toEqual([{ kind: 'markdown', content }]);
   });
+  // #6892: unavailable media remains readable without leaking a URI or raw component source.
+  it.each(['image', 'video', 'audio', 'svg'])('shows a %s placeholder when descriptions are empty', kind => {
+    const content = rich({ kind, props: { src: 'file:///private/media', label: ' ', alt: '', caption: '' } });
+    expect(botGroupBodyParts(content, 'bot')).toEqual([{ kind: 'text', content: `[${kind}]` }]);
+  });
+  it('keeps all media descriptions and never includes source addresses', () => {
+    const content = rich({ kind: 'image', props: { label: 'Photo', alt: 'A cat', caption: 'Bath time', src: 'xdt-image://task/image.png' } });
+    expect(botGroupBodyParts(content, 'bot')).toEqual([{ kind: 'text', content: 'Photo\nA cat\nBath time' }]);
+  });
   it('uses final tree content and exposes media descriptions without requesting local media', () => {
     const content = rich({ kind: 'stack', props: { label: 'Summary' } }, { parent: 'n0', kind: 'text', props: { text: 'Old' } },
       { op: 'patch', id: 'n1', props: { text: 'Updated' } }, { kind: 'image', props: { alt: 'Diagram', src: 'cindy-media://blobs/example.png' } });
     expect(botGroupBodyParts(content, 'bot')).toEqual([
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
-      { kind: 'text', content: 'Diagram\ncindy-media://blobs/example.png' },
+      { kind: 'text', content: 'Diagram' },
     ]);
   });
 });
