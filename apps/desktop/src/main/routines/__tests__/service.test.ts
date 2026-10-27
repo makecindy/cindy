@@ -116,7 +116,13 @@ it('dispatches into the routine lane and records its task for inspection', async
 it('rebinds a stored canonical backing schedule to its independent lane before running', async () => {
   const routine = await routineTools.save('bot', { name: 'Legacy review', prompt: 'Keep original instructions', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
-  mock.storage.get.mockResolvedValueOnce({ id: `routine-${routine.id}`, targetSessionId: 'canonical-task', createdAt: 123 });
+  mock.storage.get.mockResolvedValueOnce({
+    id: `routine-${routine.id}`, name: 'Legacy review', prompt: 'Keep original instructions',
+    source: 'bot', kind: 'cron', cronExpr: '* * * * *', timezone: 'UTC',
+    recurring: true, manual: true, agentKind: 'pi', workspaceKind: 'dialogue', useWorktree: false,
+    targetSessionId: 'canonical-task', notify: { desktop: false, feishu: false },
+    status: 'active', createdAt: 123, updatedAt: 123,
+  });
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
   expect(mock.storage.update).toHaveBeenCalledWith(`routine-${routine.id}`, expect.objectContaining({
