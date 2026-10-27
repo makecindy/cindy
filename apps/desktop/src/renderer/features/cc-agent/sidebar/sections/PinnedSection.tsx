@@ -21,7 +21,7 @@
  * 受控组件——entries 为空时返回 null（不渲染段）。
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlignJustify,
   ChevronDown,
@@ -57,7 +57,14 @@ import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { aggregateSessionLamps } from '../../lib/sessionLampAggregation';
-import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+  subscribeRemoteSessionActivity,
+  useRemoteSessionActivityRevision,
+} from '@/features/device-link/remoteSessionActivityStore';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 
 // This header consumes only running state; unread tones remain on task rows.
 const EMPTY_ATTENTION_KINDS = new Map<string, never>();
@@ -201,21 +208,41 @@ export function PinnedSection({
   const visibleEntries = entries;
   // 聚合不受段级折叠影响；远程状态与 rail 入口复用同一设备隔离的灯语。
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const pinnedSessions = useMemo(
+    () =>
+      visibleEntries.flatMap((entry) =>
+        entry.kind === 'session' ? [entry.session] : entry.displaySessions,
+      ),
+    [visibleEntries],
+  );
+  // Pinned rows are absent from ProjectsSection's starting settlement.
+  // Settle only the activity being pushed, never an old waiting phase on rerender.
+  useEffect(
+    () =>
+      subscribeRemoteSessionActivity((deviceId, sessionId) => {
+        if (!deviceId || !sessionId || getSessionDeviceId(sessionId) !== deviceId) return;
+        if (
+          !pinnedSessions.some(
+            (session) => session.id === sessionId && session.deviceLinkDeviceId === deviceId,
+          )
+        )
+          return;
+        if (isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId))) {
+          absorbSessionStarting([sessionId]);
+        }
+      }),
+    [pinnedSessions],
+  );
   const hasRunningSession = useMemo(
     () =>
-      aggregateSessionLamps(
-        visibleEntries.flatMap((entry) =>
-          entry.kind === 'session' ? [entry.session] : entry.displaySessions,
-        ),
-        {
-          runningSessionIds,
-          notifications: EMPTY_SESSION_IDS,
-          attentionKinds: EMPTY_ATTENTION_KINDS,
-          urgentSessionIds: EMPTY_SESSION_IDS,
-        },
-      ).running,
+      aggregateSessionLamps(pinnedSessions, {
+        runningSessionIds,
+        notifications: EMPTY_SESSION_IDS,
+        attentionKinds: EMPTY_ATTENTION_KINDS,
+        urgentSessionIds: EMPTY_SESSION_IDS,
+      }).running,
     // revision tracks the shared aggregate's remote store reads.
-    [visibleEntries, runningSessionIds, remoteActivityRevision],
+    [pinnedSessions, runningSessionIds, remoteActivityRevision],
   );
   const visibleSessions = useMemo(
     () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),

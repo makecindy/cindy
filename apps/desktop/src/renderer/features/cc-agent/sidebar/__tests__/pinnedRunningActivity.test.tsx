@@ -7,6 +7,13 @@ import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  getStartingSessionIds,
+  markSessionStarting,
+  resetSessionStartingStoreForTests,
+  useStartingSessionIds,
+} from '@/lib/sessionStartingStore';
 import {
   PinnedSection,
   type PinnedSectionProps,
@@ -55,6 +62,8 @@ const isRunning = (container: HTMLElement) =>
 afterEach(() => {
   cleanup();
   clearRemoteSessionActivity();
+  resetSessionStartingStoreForTests();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   view.mode = 'text';
 });
 
@@ -110,4 +119,65 @@ describe('pinned section running indicator', () => {
     act(() => clearRemoteSessionActivity());
     expect(isRunning(container)).toBe(false);
   });
+
+  it.each(['session', 'project'] as const)(
+    'settles remote optimistic starting for a collapsed pinned %s',
+    (kind) => {
+      const task = session('optimistic', 'device-a');
+      remoteProjectsStore.pinSessionOrigin('device-a', task.id);
+      const entries: PinnedSidebarEntry[] =
+        kind === 'session'
+          ? [entry(task)]
+          : [
+              {
+                kind: 'project',
+                id: 'remote-project',
+                project: { sessions: [task] },
+                displaySessions: [task],
+              } as PinnedSidebarEntry,
+            ];
+      function StartingPinned() {
+        const starting = useStartingSessionIds();
+        return <PinnedSection {...props([...entries])} runningSessionIds={starting} />;
+      }
+      markSessionStarting(task.id);
+      const { container } = render(<StartingPinned />);
+      expect(isRunning(container)).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+      act(() => applyRemoteSessionActivity('device-b', { sessionId: task.id, phase: 'running' }));
+      expect(getStartingSessionIds().has(task.id)).toBe(true);
+      act(() => applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'running' }));
+      expect(getStartingSessionIds().has(task.id)).toBe(false);
+      expect(isRunning(container)).toBe(true);
+      act(() =>
+        applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'needs-interaction' }),
+      );
+      expect(isRunning(container)).toBe(false);
+      // Answering an existing interaction must keep the new send's prelight.
+      act(() => markSessionStarting(task.id));
+      expect(isRunning(container)).toBe(true);
+      act(() =>
+        applyRemoteSessionActivity('device-b', { sessionId: 'unrelated', phase: 'running' }),
+      );
+      expect(isRunning(container)).toBe(true);
+      act(() => applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'running' }));
+      expect(getStartingSessionIds().has(task.id)).toBe(false);
+      act(() =>
+        applyRemoteSessionActivity('device-a', {
+          sessionId: task.id,
+          phase: 'completed',
+          attention: true,
+        }),
+      );
+      expect(isRunning(container)).toBe(false);
+      // A new send discards the old terminal mirror and keeps its optimistic lamp.
+      act(() => markSessionStarting(task.id));
+      expect(isRunning(container)).toBe(true);
+      act(() =>
+        applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'needs-interaction' }),
+      );
+      expect(getStartingSessionIds().has(task.id)).toBe(false);
+      expect(isRunning(container)).toBe(false);
+    },
+  );
 });
