@@ -37,6 +37,8 @@ export interface ResolvePathResult {
 }
 
 export interface ResolveOptions {
+  /** Explicit user retry: bypass the shared TTL entry and replace it with a fresh result. */
+  refresh?: boolean;
   /** Optional path-allowlist guard, applied to every candidate. */
   isPathAllowed?: (absPath: string) => boolean;
   /** Stop BFS after this many file matches. Default 10. */
@@ -274,7 +276,7 @@ export async function resolveWorkspacePathCached(
   const key = makeCacheKey(workingDir, href);
   const now = Date.now();
   const hit = cache.get(key);
-  if (hit && hit.expireAt > now) return hit.result;
+  if (!options.refresh && hit && hit.expireAt > now) return hit.result;
   if (hit) cache.delete(key);
 
   const result = await resolveWorkspacePath(href, workingDir, options);

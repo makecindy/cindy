@@ -218,16 +218,18 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(mocks.createMessage.mock.calls[0][1].content).toBe('check the PR status');
   });
 
-  it.each([true, false])(
-    'keeps ordinary task events visible without duplicating the final report (silenced=%s)',
-    async (silenced) => {
+  // Independent routines must retain the same inspectable transcript as ordinary tasks.
+  it.each([true, false].flatMap(silenced => ['ordinary', 'routine'].map(kind => ({ silenced, kind }))))(
+    'keeps $kind events visible without duplicating the final report (silenced=$silenced)',
+    async ({ silenced, kind }) => {
       const h = createSessionHarness(acceptingSend());
       const { runner, notifier } = createRunnerHarness(h.session, { silenced });
-      const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+      const id = kind === 'routine' ? 'routine-check' : 'schedule-1';
+      const promise = runner.fire(baseSchedule({ id, source: kind === 'routine' ? 'bot' : 'user', silentWhenIdle: true }), createFireContext());
       await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
       const origin = {
         kind: 'scheduler' as const,
-        scheduleId: 'schedule-1',
+        scheduleId: id,
         scheduleName: 'pr follow-up',
         runId: 'run-1',
       };
@@ -252,7 +254,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       h.emit({ type: 'text', turnOrigin: origin, data: { text: 'Review fixed', isFinal: true } });
       h.emit(done);
       await promise;
-      expect(mocks.createMessage.mock.calls[0][1].content).toBe('check the PR status');
+      expect(mocks.createMessage.mock.calls[0][1].content).toBe(kind === 'routine' ? '[UI_ACTION_TRIGGER]check the PR status' : 'check the PR status');
       expect(
         mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant'),
       ).toHaveLength(0);

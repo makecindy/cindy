@@ -41,6 +41,7 @@
  *   发布前仍需用 packaged build 做最终跨平台验证。
  */
 
+import { isValidPluginResourceId } from '@cindy/plugin-protocol';
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
@@ -54,6 +55,7 @@ import {
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
 import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap';
 
 const log = createLogger('deepLink');
 
@@ -73,6 +75,7 @@ export type DeepLinkPayload =
   | { type: 'shared-task-join'; invitation: string; server: string }
   /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
   | { type: 'provider-share-join'; link: string }
+  | { type: 'plugin'; pluginId: string }
   /**
    * islandEntryId 只由主进程的灵动岛点击写入(URL 解析从不产生它),标识这一次点击,
    * 供 renderer 在导航落地后申请处置被点的那张卡。
@@ -118,6 +121,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
   if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
+  if (/^(?:cindy|xdt-maker):\/\/plugin(?:[/?#]|$)/i.test(url)) {
+    const match = /^(?:cindy|xdt-maker):\/\/plugin\/(c[a-z0-9]{24})$/.exec(url);
+    return match && isValidPluginResourceId(match[1]) ? { type: 'plugin', pluginId: match[1] } : null;
+  }
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
@@ -301,6 +308,9 @@ export function buildFocusDeepLink(source: string): string {
 //   - mainWindow 已存在 + MainLayout 必然已 mount (用户已登录),dispatchDeepLink
 //     直接 webContents.send,不进 pending
 let pendingDeepLink: DeepLinkPayload | null = null;
+// Internal notification ownership stays in Main; external URLs keep their
+// existing ability to survive login without binding to the signed-out owner.
+let pendingDeepLinkOwner: DataOwnerBroadcastScope | undefined;
 // Invitation targets must survive unrelated navigation and login focus callbacks.
 const pendingChatInvitations: Array<Extract<DeepLinkPayload, { type: 'chat-invite' | 'chat-invite-malformed' }>> = [];
 let mainWindowRef: BrowserWindow | null = null;
@@ -434,13 +444,16 @@ export function openMainWindowBillingTopUp(): void {
  */
 export function openMainWindowSession(
   sessionId: string,
-  options?: { focus?: boolean; islandEntryId?: string },
+  options?: { focus?: boolean; islandEntryId?: string; deviceId?: string; messageClientId?: string },
 ): void {
   dispatchDeepLink(
-    options?.islandEntryId
-      ? { type: 'session', id: sessionId, islandEntryId: options.islandEntryId }
-      : { type: 'session', id: sessionId },
+    { type: 'session', id: sessionId,
+      ...(options?.islandEntryId ? { islandEntryId: options.islandEntryId } : {}),
+      ...(options?.deviceId ? { deviceId: options.deviceId } : {}),
+      ...(options?.messageClientId ? { messageClientId: options.messageClientId } : {}),
+    },
     options?.focus !== false,
+    captureDataOwnerBroadcastScope(),
   );
 }
 
@@ -470,7 +483,7 @@ function safeDeepLinkLog(payload: DeepLinkPayload) {
   return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' ? { type: payload.type } : payload;
 }
 
-function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
+function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: DataOwnerBroadcastScope): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {
     if (shouldFocus) focusMainWindow();
@@ -487,9 +500,9 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
     if (windowReady) win!.webContents.send('deep-link:navigate', payload);
     return;
   }
-  // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
+  // A loaded login/LocalDbGate page has no MainLayout listener yet. These intents stay
   // in the existing pending slot until the authenticated consumer takes them.
-  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join') {
+  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'plugin') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
@@ -504,6 +517,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
       });
     }
     pendingDeepLink = payload;
+    pendingDeepLinkOwner = owner;
     log.debug('buffered pending deep link until renderer pull', safeDeepLinkLog(payload));
     // Agent-key first tap may switch in the background. A buffered deep link
     // from that path must not steal the frontmost app.
@@ -512,7 +526,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
       return;
     }
   }
-  // Imports use this event only as a wake-up; MainLayout consumes the pending slot.
+  // Retained intents use this event only as a wake-up; MainLayout consumes the pending slot.
   // Other existing navigation events retain their direct-delivery behavior.
   // 同时把窗口拉前台 — open-url / second-instance 本身不会唤起,用户点链接的
   // 意图就是要看到 app。
@@ -543,7 +557,10 @@ export function takePendingDeepLink(): DeepLinkPayload | null {
   if (invitation) return invitation;
   if (!pendingDeepLink) return null;
   const payload = pendingDeepLink;
+  const owner = pendingDeepLinkOwner;
   pendingDeepLink = null;
+  pendingDeepLinkOwner = undefined;
+  if (owner && !isDataOwnerBroadcastScopeCurrent(owner)) return null;
   log.info('renderer pulled pending deep link', safeDeepLinkLog(payload));
   return payload;
 }

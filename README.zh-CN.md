@@ -139,17 +139,45 @@ agent；进入后应用内的账号状态显示为「未登录」。依赖服务
 ## 隐私与遥测
 
 **官方分发的安装包**包含 [TapDB](https://www.taptap.cn/tapdb) 使用统计，用于
-产品层面的匿名量级分析（设备 / 系统 / 应用版本等元数据；登录后关联账号 ID）。
-它**不采集**聊天内容、文件内容或工作目录数据。此外，登录云端账号时客户端会向
-Cindy 服务发送在线心跳（仅账号 ID、平台与版本号）。崩溃转储只保留在本地，
-不会自动上传。
+产品层面的汇总分析，包括设备标识、系统 / 应用版本、启动与活跃事件；登录后会
+关联账号 ID，因此不应理解为完全匿名。TapDB **不采集**聊天内容、文件内容或
+工作目录数据。
+
+**无需修改代码即可关闭使用统计**：桌面端在「设置 → 关于 → 使用统计」，移动端在
+设置页的「使用统计」关闭。SDK 检查本地记录的隐私同意状态和统计开关，统计开关
+默认开启。同意《隐私政策》会记录同意状态；符合条件的存量已登录用户也会通过一次性
+迁移记录为已同意。
+
+**移动端已知例外**：企业 SSO 跳过协议勾选。如果本机尚无统计同意记录，并在重启应用后
+恢复该登录态，当前迁移逻辑可能把新装用户也标记为已同意。在已配置 TapDB 且统计开启时，
+即使用户未明确接受隐私政策，也可能开始上报。实现见
+[移动端登录恢复](apps/mobile/src/auth/AuthContext.tsx)与
+[同意状态迁移](apps/mobile/src/analytics/analyticsConsentStore.ts)。
+关闭「使用统计」可避免该迁移放行统计上报。
+
+- 桌面端关闭后立即停止后续统计上报；「跳过登录」的本地模式不上报 TapDB。
+- 移动端关闭后立即解绑账号并停止 Cindy 主动触发的上报；已初始化的原生 SDK
+  不支持反初始化，需彻底退出并重新启动应用，才会保持 SDK 未初始化。
+
+实现依据：[桌面端同意与开关](apps/desktop/src/main/analyticsSettingsService.ts)、
+[桌面端 SDK](apps/desktop/src/renderer/analytics/tapdbClient.ts)、
+[移动端同意状态](apps/mobile/src/analytics/analyticsConsentStore.ts)、
+[移动端 SDK](apps/mobile/src/analytics/mobileTapdb.ts)。
+
+在线心跳与诊断日志是独立机制，不受「使用统计」开关控制。桌面端仅在已验证的云端
+登录态下向 Cindy 服务发送在线心跳（账号 ID、平台与版本号），本地模式不发送。
+桌面端原生崩溃转储只保留在本地，不会自动上传；诊断日志可手动上传，另外有默认关闭的
+「崩溃时自动上传」选项，上传均须通过隐私同意门槛。详见
+[心跳实现](apps/desktop/src/main/heartbeatService.ts)与
+[日志上报规则](docs/dev-rules/log-upload-and-redaction.md)。
 
 **从源码自行构建**时不必保留统计：
 
-- 移动端默认即关闭 —— 未在构建时注入 TapDB 凭据（`clientId` / `clientToken`）
-  时，`apps/mobile/src/analytics/mobileTapdb.ts` 自动空转；
-- 桌面端可移除 `apps/desktop/src/renderer/index.tsx` 中的 `initTapdb()` 调用
-  （实现见 `apps/desktop/src/renderer/analytics/`），即可完全剥离。
+- 桌面端开发构建默认不初始化 TapDB；仅显式设置 `XDT_TAPDB_DEV=1` 才放开构建闸，
+  仍须满足同意与开关条件。自行打包的桌面版与官方包使用相同统计门槛，可在设置中关闭；
+- 移动端未注入 TapDB 配置（`clientId` / `clientToken`）时不会初始化 SDK。
+  这不等于所有源码构建都默认关闭：自建正式发布流程要求配置非空，本地开发允许留空，
+  见[移动端构建说明](apps/mobile/docs/simulator-debugging.md)。
 
 ## 许可证 / License
 

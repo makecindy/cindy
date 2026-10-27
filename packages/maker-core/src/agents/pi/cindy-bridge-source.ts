@@ -4635,6 +4635,26 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // This uses the existing RPC UI channel; no model tool or prompt is added.
+  const runHarnessHook = async (name: string, event: any, ctx: any): Promise<boolean> => {
+    if (process.env.CINDY_PI_HARNESS_HOOKS !== '1') return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const payload = name === 'tool.before'
+        ? { name, toolName: event.toolName, toolUseId: event.toolCallId, input: event.input }
+        : { name };
+      const value = await Promise.race([
+        ctx.ui.input('cindy:harness-hook', JSON.stringify(payload)),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 2000); }),
+      ]);
+      return typeof value === 'string' && JSON.parse(value)?.action === 'block';
+    } catch { return false; }
+    finally { if (timer) clearTimeout(timer); }
+  };
+  pi.on('session_before_compact', async (event: any, ctx: any) => {
+    if (await runHarnessHook('compaction.before', event, ctx)) return { cancel: true };
+  });
+
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {
@@ -4657,6 +4677,9 @@ export default async function cindyBridge(piApi: any) {
         block: true,
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
+    }
+    if (await runHarnessHook('tool.before', event, ctx)) {
+      return { block: true, reason: 'Blocked by an approved task plugin.' };
     }
     if (event.toolName === 'ask_user_question') return;
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {

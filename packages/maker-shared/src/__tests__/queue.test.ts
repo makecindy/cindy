@@ -336,6 +336,14 @@ describe('queueItemVisibleText', () => {
     })).toBe('heartbeat prompt');
   });
 
+  it('keeps an intentionally empty persisted body instead of exposing agent instructions', () => {
+    expect(queueItemVisibleText({
+      text: '[silent-run protocol] internal agent instructions',
+      persistedContent: '',
+      origin: { kind: 'session', senderSessionId: 'bot-task' },
+    })).toBe('');
+  });
+
   it('unwraps the host attachment envelope only when files are attached', () => {
     const origin = { kind: 'session', senderSessionId: 'caller' };
     expect(queueItemVisibleText({

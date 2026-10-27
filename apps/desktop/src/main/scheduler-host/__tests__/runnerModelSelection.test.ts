@@ -1398,10 +1398,10 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setEffort).not.toHaveBeenCalledWith('max');
     });
 
-    it('冷 resume + follow-effort + setEffort 失败 → 不落库 effort,留待下次重试(PR #479 review)', async () => {
-      // 冷 resume(会话不在进程内,reusedLiveSession=false):createSession 只拿到 undefined effort
-      // (follow → schedule.effort 空),真正要落的 clamp 后档只经 setEffort 生效。setEffort 抛错 = 没生效,
-      // 必须跳过落库,否则 DB 记了假值、下次 fire 判"已同步"不再重试(effortSwitchApplied 旧逻辑只护复用路径)。
+    it('冷 resume 已应用 follow-effort 时，幂等 setEffort 失败仍保留实际档位', async () => {
+      // #7256 实跑修复：冷恢复现在把跟随档位直接传入 createSession，避免默认为高档。
+      // unit：max 在目标模型下 clamp 为 xhigh，初始化已应用；后续幂等 setEffort 失败不能丢掉这个事实。
+      // 原用例只覆盖“createSession effort=undefined”的旧路径；复用会话真正切档失败仍由相邻用例保护。
       const h = createSessionHarness();
       h.setEffort.mockRejectedValue(new Error('setEffort rejected'));
       const harness = createRunnerHarness(
@@ -1435,13 +1435,15 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      // follow 的 max 按新模型 clamp 到 xhigh,经 setEffort 下发但失败。
+      expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'claude-opus-4-8', effort: 'xhigh',
+      }));
+      // 初始化已经应用 xhigh；后续幂等同步失败不把持久化档位变回未知。
       expect(h.setEffort).toHaveBeenCalledWith('xhigh');
-      // setEffort 是本次 effort 的唯一生效通道(createSession 只拿到 undefined)→ 失败不落库,下次重试。
       expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
         expect.anything(),
         'scheduler-session',
-        expect.objectContaining({ effort: undefined }),
+        expect.objectContaining({ effort: 'xhigh' }),
         expect.anything(),
       );
     });

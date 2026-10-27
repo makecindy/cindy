@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { GitExecError, gitExec } from './gitExec';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { extractRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
@@ -139,6 +140,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     }
     if (!legacyGuardHeld()) return false;
     if (identity === null) {
+      await ensureManagedWorktreeExcluded(record.meta.baseRepo, worktreePath);
       record.phase = 'restoring';
       record.restoredGeneration ??= randomUUID();
       record.directoryIdentity = null;

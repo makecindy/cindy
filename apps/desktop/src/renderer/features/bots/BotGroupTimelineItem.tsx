@@ -244,6 +244,8 @@ export interface BotGroupTimelineItemProps {
   locale: string;
   shareScope: string;
   sharing: boolean;
+  /** Context-only roots have no action owner; do not offer sharing or mutations. */
+  showActions?: boolean;
   /** Server group id: reactions and the toolbar's reaction picker. */
   reactionGroupId?: string;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
@@ -259,8 +261,8 @@ export interface BotGroupTimelineItemProps {
   highlighted?: boolean;
   /** Focusable only as a jump target, so a click elsewhere keeps its usual focus. */
   focusable?: boolean;
-  /** The timeline owns arrival identity across pending/confirmed delivery and history loads. */
-  entranceRef?: (node: HTMLDivElement | null) => void;
+  /** Arrived while the reader was watching: fade in (opacity only). */
+  entering?: boolean;
   // Round and plan pieces; the Thread panel leaves them out.
   canContinue?: boolean;
   continuing?: boolean;
@@ -280,20 +282,20 @@ export interface BotGroupTimelineItemProps {
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
 }
 
-function Row({ message, highlighted, focusable, entranceRef, block, children }: {
-  message: BotGroupTimelineMessage; highlighted?: boolean; focusable?: boolean; entranceRef?: (node: HTMLDivElement | null) => void;
+function Row({ message, highlighted, focusable, entering, block, children }: {
+  message: BotGroupTimelineMessage; highlighted?: boolean; focusable?: boolean; entering?: boolean;
   /** Space above: a new author block, a merged line, or a compact system line. */
   block: 'author' | 'continued' | 'system';
   children: ReactNode;
 }) {
   return (
     <div
-      ref={entranceRef}
       data-bot-group-message-id={message.id}
       tabIndex={focusable ? -1 : undefined}
       className={cn(
         'rounded-lg outline-none transition-colors first:mt-0',
         block === 'continued' ? 'mt-0.5' : block === 'author' ? 'mt-3.5' : 'mt-3',
+        entering && 'animate-fade-in motion-reduce:animate-none',
         highlighted && 'bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
       )}
     >
@@ -321,7 +323,7 @@ export function botGroupTaskOwned(authorBotId: string | null, members: readonly 
 function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const { t } = useTranslation();
   const { message, continued, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
-  const rowProps = { message, highlighted: props.highlighted, focusable: props.focusable, entranceRef: props.entranceRef };
+  const rowProps = { message, highlighted: props.highlighted, focusable: props.focusable, entering: props.entering };
 
   if (message.kind === 'round-end') {
     return (
@@ -389,7 +391,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
-  const actions = shareable ? (
+  const actions = shareable && props.showActions !== false ? (
     <ChatMessageHoverActions
       groupId={props.reactionGroupId}
       shareScope={shareScope}

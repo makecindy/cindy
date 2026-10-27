@@ -28,6 +28,27 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+  it('clears reconnecting after an empty successful poll', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.spyOn(transport, 'poll');
+    poll.mockRejectedValueOnce(new WechatIlinkError('NETWORK_ERROR', 'offline', true));
+    poll.mockResolvedValueOnce({ cursor: 'recovered', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(poll).toHaveBeenCalledTimes(3);
+      expect(im.getState().phase).toBe('connected');
+      expect(im.getState().errorCode).toBeUndefined();
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
 
   // Exercise the durable inbox through the public host lifecycle. Only the
   // credential-verified owner can request native permissions on a resolved companion route.

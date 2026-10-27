@@ -110,6 +110,22 @@ export interface DeferredProductTurnFailureGate {
   pending(sessionId: string): ProductTurnFailureOwner | undefined;
 }
 
+export function createProductTurnFailureFinalizer(deps: {
+  gate: Pick<DeferredProductTurnFailureGate, 'clear'>;
+  isCurrentOwner: (owner: ProductTurnFailureOwner) => boolean;
+  commitActivity: (sessionId: string) => void;
+  interrupt: (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void>;
+}): (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void> {
+  return async (sessionId, owner) => {
+    if (owner) {
+      deps.gate.clear(owner);
+      if (!deps.isCurrentOwner(owner)) return;
+    }
+    deps.commitActivity(sessionId);
+    await deps.interrupt(sessionId, owner);
+  };
+}
+
 function sameOwner(a: ProductTurnFailureOwner, b: ProductTurnFailureOwner): boolean {
   return (
     a.session === b.session &&

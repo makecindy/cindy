@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -73,6 +74,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
@@ -346,6 +348,9 @@ function ModelOptionsFloatingPanel({
             data-state="open"
             data-side={placedSide}
             data-testid="model-options-floating-panel"
+            // 与统一面板同因:portal 在 body,模态对话框里滚轮会被 react-remove-scroll
+            // 拦掉;stopPropagation 放行原生滚动(见 stopWheelPropagation 注释)。
+            onWheel={stopWheelPropagation}
             onPointerEnter={onCancelClose}
             onPointerLeave={onScheduleClose}
             onFocusCapture={onCancelClose}
@@ -1763,7 +1768,7 @@ function ModelSelectorContentView({
       const groupSize = groupMembers ? providerGroupDeviceCount(groupMembers) : readProviderShareGroupSize(provider);
       const values = {
         provider: provider ? providerDisplayName(provider, t) : providerId,
-        device: device?.name || targetDeviceId,
+        device: deviceDisplayName(targetDeviceId, device?.name),
       };
       return groupSize != null
         ? t('newChat.modelSelector.unified.railRemoteProviderGroup', {
@@ -1809,7 +1814,7 @@ function ModelSelectorContentView({
         );
         return {
           kind: 'running',
-          deviceName: homeDeviceId ? remoteAgent?.homeDeviceName || homeDeviceId : null,
+          deviceName: homeDeviceId ? deviceDisplayName(homeDeviceId, remoteAgent?.homeDeviceName) : null,
           usage: provider ? { provider, scope: { deviceId: homeDeviceId ?? null } } : null,
         };
       }
@@ -3407,7 +3412,7 @@ function ModelSelectorContentView({
       const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
       const agentDevice = {
         deviceId: targetDeviceId,
-        name: remoteAgentDevices?.find((device) => device.deviceId === targetDeviceId)?.name || targetDeviceId,
+        name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
       };
       const dismissIfApplied = (applied: boolean) => {
         if (applied) {

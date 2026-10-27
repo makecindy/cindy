@@ -4,6 +4,10 @@ import type { CodexRateLimitResetSummary } from '@cindy/maker-shared/session-con
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
+import type {
+  DeepSeekAccountUsageSnapshot,
+  ZhipuCodingPlanQuotaSnapshot,
+} from '../../../shared/providerAccountUsage';
 import {
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
@@ -136,6 +140,105 @@ export function buildClaudeUsageCard(
           ? [{ text: t('quotaCard.limitWarning'), tone: 'warn' }]
           : [],
     details: snapshot.extraUsage?.isEnabled === true ? [t('quotaCard.extraUsageEnabled')] : [],
+  };
+}
+
+/** DeepSeek 余额卡：余额不是限额窗口，与 Codex credits 同层走 details 行。 */
+export function buildDeepSeekUsageCard(
+  snapshot: DeepSeekAccountUsageSnapshot | null,
+  t: TFunction,
+  locale?: string,
+): UsageCardAccount {
+  if (!snapshot) return { title: 'DeepSeek', windows: [], emptyText: t('quotaCard.waiting') };
+  const format = (value: string, currency: string): string => {
+    try {
+      const fractionLength = value.split('.')[1]?.replace(/0+$/, '').length ?? 0;
+      const defaultDigits =
+        new Intl.NumberFormat(locale, { style: 'currency', currency }).resolvedOptions()
+          .minimumFractionDigits ?? 0;
+      const formatter = new Intl.NumberFormat(locale, {
+        style: 'currency',
+        currency,
+        maximumFractionDigits: Math.max(defaultDigits, fractionLength),
+      });
+      // ECMA-402 允许直接 format 十进制字符串，避免先过 Number 再舍入。
+      return (formatter.format as unknown as (input: string) => string)(value);
+    } catch {
+      return `${value} ${currency}`;
+    }
+  };
+  // isAvailable=false 时上游仍会返回余额明细：保留展示，另用警示条说明账户状态，
+  // 不能与输入框积分条（同源数据仍显示余额）互相矛盾。
+  const details = snapshot.balances.map((balance) =>
+    t('providerAccountUsage.deepSeek.balanceLine', {
+      total: format(balance.totalBalance, balance.currency),
+      granted: format(balance.grantedBalance, balance.currency),
+      toppedUp: format(balance.toppedUpBalance, balance.currency),
+    }),
+  );
+  if (!snapshot.isAvailable || snapshot.balances.length === 0) {
+    return {
+      title: 'DeepSeek',
+      windows: [],
+      details: snapshot.balances.length > 0 ? details : undefined,
+      notices: snapshot.balances.length > 0
+        ? [{ text: t('providerAccountUsage.deepSeek.unavailable'), tone: 'warn' }]
+        : undefined,
+      updatedAt: snapshot.fetchedAt,
+      emptyText: snapshot.balances.length > 0 ? undefined : t('quotaCard.noWindows'),
+    };
+  }
+  return {
+    title: 'DeepSeek',
+    windows: [],
+    details,
+    updatedAt: snapshot.fetchedAt,
+  };
+}
+
+/** 智谱 GLM Coding Plan 额度卡：与 Claude 订阅同构（5 小时 + 每周窗口）。 */
+export function buildZhipuUsageCard(
+  snapshot: ZhipuCodingPlanQuotaSnapshot | null,
+  t: TFunction,
+): UsageCardAccount {
+  if (!snapshot) return { title: 'GLM Coding Plan', windows: [], emptyText: t('quotaCard.waiting') };
+  if (snapshot.noPlan) {
+    return {
+      title: 'GLM Coding Plan',
+      windows: [],
+      updatedAt: snapshot.fetchedAt,
+      emptyText: t('providerAccountUsage.zhipuCodingPlan.noPlan'),
+    };
+  }
+  const windows: UsageCardWindow[] = [];
+  if (snapshot.fiveHour) {
+    windows.push({
+      key: 'five-hour',
+      title: t('quotaCard.fiveHourLabel'),
+      showRemaining: true,
+      window: {
+        utilization: snapshot.fiveHour.usedPercent,
+        resetsAt: snapshot.fiveHour.resetsAt != null ? snapshot.fiveHour.resetsAt / 1000 : null,
+      },
+    });
+  }
+  if (snapshot.weekly) {
+    windows.push({
+      key: 'weekly',
+      title: t('quotaCard.weeklyLabel'),
+      showRemaining: true,
+      window: {
+        utilization: snapshot.weekly.usedPercent,
+        resetsAt: snapshot.weekly.resetsAt != null ? snapshot.weekly.resetsAt / 1000 : null,
+      },
+    });
+  }
+  return {
+    title: 'GLM Coding Plan',
+    planLabel: snapshot.level ? snapshot.level.toUpperCase() : undefined,
+    windows,
+    updatedAt: snapshot.fetchedAt,
+    emptyText: windows.length ? undefined : t('quotaCard.noWindows'),
   };
 }
 

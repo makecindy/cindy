@@ -11,6 +11,11 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, options?: { value?: string }) => options?.value !== undefined ? `${options.value} ${key}` : key, i18n: { language: 'en' } }),
 }));
+// The public share action reads the current account; these detail/install cases
+// keep it signed out without loading the application's account lifecycle.
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ isAuthenticated: false, dataOwnerId: null, dataOwnerGeneration: 0 }),
+}));
 
 import { MarketPluginDetailView } from '../MarketPluginDetailView';
 import type { GhostManifest } from '../../../../shared/ghost';

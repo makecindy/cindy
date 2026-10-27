@@ -128,23 +128,10 @@ const group = (
   childItems,
 });
 
-function containerPreview() {
-  return document.querySelector('[data-live-work-preview]')?.parentElement?.parentElement;
-}
-
 function clickGroup(label: string) {
   const button = screen.getByText(label).closest('button');
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
-  // The outgoing preview now retains its rows until its height transition ends.
-  // Finish that real production lifecycle event instead of counting both the
-  // exiting preview and expanded details, or waiting on a wall-clock fallback.
-  for (const preview of document.querySelectorAll('[data-live-work-preview]')) {
-    const body = preview.parentElement;
-    if (body?.getAttribute('aria-hidden') === 'true') {
-      fireEvent.transitionEnd(body.parentElement!, { propertyName: 'height' });
-    }
-  }
 }
 
 // #6351: production grouping feeds the real disclosure/Collapse/state store.
@@ -502,8 +489,6 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     const doneButton = screen.getByText('chat.workGroup.worked:12s').closest('button');
     expect(doneButton?.hasAttribute('disabled')).toBe(false);
     expect(doneButton?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
-    const outgoing = containerPreview();
-    if (outgoing) fireEvent.transitionEnd(outgoing, { propertyName: 'height' });
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
@@ -816,17 +801,14 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     expect(screen.queryByTestId('assistant-progress')).toBeNull();
     // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
-    const body = container.querySelector('[data-live-work-preview]')?.parentElement?.parentElement?.nextElementSibling;
+    const body = container.querySelector('.grid');
     expect(body).not.toBeNull();
 
     rerender(createElement(WorkGroupBlock, {
       ...props, deferred: { ...deferred(lines), awaitingDetails: false },
     }));
-    const exiting = containerPreview();
-    if (exiting) fireEvent.transitionEnd(exiting, { propertyName: 'height' });
     expect(container.querySelector('[data-live-work-preview]')).toBeNull();
-    expect(body?.isConnected).toBe(true);
-    expect(body?.contains(screen.getByTestId('assistant-progress'))).toBe(true);
+    expect(container.querySelector('.grid')).toBe(body);
     expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
   });
 

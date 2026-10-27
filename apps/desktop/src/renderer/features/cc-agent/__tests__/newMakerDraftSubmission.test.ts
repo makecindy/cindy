@@ -15,6 +15,7 @@ import type { Effort } from '@/lib/userPreferences.types';
 import type { AgentSkillCommand } from '@cindy/maker-core';
 import { plainTextToTiptapDoc, type BuiltInSkillDraftIntent } from '@/lib/composerDraftStore';
 import { leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend } from '@/lib/slashCommands';
+import { deviceDisplayName } from '@/lib/deviceName';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -163,6 +164,7 @@ async function submit(options: {
   const setPending = vi.fn();
   const toastError = vi.fn();
   const environment = {
+    deviceDisplayName,
     ...draftEffort, getModel, window,
     localProviders: providers, localProvidersLoading: false, providers,
     capabilityAgentKind: agentKind, persistedAgentKind: agentKind,

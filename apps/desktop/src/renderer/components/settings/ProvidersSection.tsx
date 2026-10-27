@@ -91,6 +91,7 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
@@ -872,7 +873,7 @@ function DetailHeader({
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {assetModule ??
-          (subscription && (
+          (subscription ? (
             <div
               data-testid="provider-usage-module"
               className="border-t px-1 py-2"
@@ -910,6 +911,8 @@ function DetailHeader({
                 ) : null}
               </QuotaHoverCard>
             </div>
+          ) : (
+            <ProviderAccountUsageModule provider={provider} />
           ))}
         {children}
       </div>

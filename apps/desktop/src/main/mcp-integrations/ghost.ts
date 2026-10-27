@@ -1793,6 +1793,18 @@ export function getCindyGhostsMcpDeps(
       searchMarket: (query: string) => marketTools.search(query),
       installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),
     } : {}),
+    ...(sessionCtx?.agentKind === 'codex' ? {
+      nativeHarnessHook: async (input: unknown, metadata: unknown) => {
+        // Never fall back to the server factory's process-wide context.
+        // Only the existing opaque route for this live root instance may call
+        // the native adapter, which verifies the native Hook receipt as well.
+        const context = getLiziMcpSessionContext();
+        if (context?.agentKind !== 'codex' || !context.sessionInstanceId ||
+            context.mcpCallerAttested !== true || context.mcpCallerKind !== 'root' ||
+            !context.nativeHarnessHook) throw new Error('NATIVE_HOOK_UNAVAILABLE');
+        return context.nativeHarnessHook(input, metadata);
+      },
+    } : {}),
     connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);

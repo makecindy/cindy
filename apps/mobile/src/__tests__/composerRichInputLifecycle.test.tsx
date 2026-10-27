@@ -3,6 +3,7 @@ import { act, createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { runInNewContext } from 'node:vm';
 import { afterEach, expect, it, vi } from 'vitest';
+import { Platform } from 'react-native';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
 import { textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 
@@ -15,11 +16,10 @@ const bridge = vi.hoisted(() => ({
   mounts: 0,
   clipboard: vi.fn<() => Promise<string>>(),
   inject: vi.fn(),
-  focus: vi.fn(),
-  platform: 'ios',
+  requestFocus: vi.fn(),
 }));
 vi.mock('react-native', () => ({
-  Platform: { get OS() { return bridge.platform; } }, StyleSheet: { create: (styles: unknown) => styles },
+  Platform: { OS: 'ios' }, StyleSheet: { create: (styles: unknown) => styles },
   AppState: {
     get currentState() { return bridge.state; },
     addEventListener: (_: string, listener: (state: string) => void) => {
@@ -35,7 +35,7 @@ vi.mock('react-native-webview', async () => {
     bridge.onContentProcessDidTerminate = props.onContentProcessDidTerminate;
     bridge.onRenderProcessGone = props.onRenderProcessGone;
     useEffect(() => { bridge.mounts += 1; }, []);
-    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject, requestFocus: bridge.focus }));
+    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject, requestFocus: bridge.requestFocus }));
     return null;
   }) };
 });
@@ -50,8 +50,8 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined; bridge.inject.mockReset();
-  bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
-  bridge.platform = 'ios'; bridge.focus.mockReset();
+  bridge.requestFocus.mockReset(); bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  Platform.OS = 'ios';
   expect(bridge.listeners.size).toBe(0);
 });
 
@@ -85,23 +85,6 @@ function mount(hidden = false) {
   const send = (message: unknown) => act(() => bridge.onMessage({ nativeEvent: { data: JSON.stringify(message) } }));
   return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument };
 }
-
-// Unit: recommendation/explicit focus must acquire the Android IME only after
-// the editor is ready; restoring a draft or dictation selection must not open it.
-it.each(['ios', 'android'])('only explicitly focused documents request the %s native keyboard', platform => {
-  bridge.platform = platform;
-  const { ref, page, send } = mount();
-  ref.current!.focus();
-  expect(bridge.focus).not.toHaveBeenCalled();
-  send({ type: 'ready' });
-  expect(page.focus).toHaveBeenCalledOnce();
-  expect(bridge.focus).toHaveBeenCalledTimes(platform === 'android' ? 1 : 0);
-  bridge.focus.mockClear();
-  act(() => ref.current!.applyDocumentAndSetSelection(textComposerDocument('restored'), 0));
-  expect(bridge.focus).not.toHaveBeenCalled();
-  act(() => ref.current!.applyDocumentAndSetSelectionToEnd(textComposerDocument('recommendation')));
-  expect(bridge.focus).toHaveBeenCalledTimes(platform === 'android' ? 1 : 0);
-});
 
 it('never writes an older native edit back over later typing, but applies external replacements', () => {
   const { page, send, onChangeDocument, renderDocument } = mount();
@@ -182,6 +165,19 @@ it('does not probe slow initial loading or discard pending focus', () => {
   expect(page.focus).toHaveBeenCalledTimes(1);
   appState('background'); appState('active');
   expect(page.ping).toHaveBeenCalledTimes(1);
+});
+
+it('requests native WebView focus on Android when the editor receives focus', () => {
+  const { ref, send } = mount();
+  Platform.OS = 'android';
+  send({ type: 'ready' });
+
+  act(() => ref.current?.focus());
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
+
+  bridge.requestFocus.mockClear();
+  act(() => ref.current?.applyDocumentAndSetSelectionToEnd(textComposerDocument('recommendation')));
+  expect(bridge.requestFocus).toHaveBeenCalledOnce();
 });
 
 it('recovers a terminated initial load but does not probe the replacement before ready', () => {

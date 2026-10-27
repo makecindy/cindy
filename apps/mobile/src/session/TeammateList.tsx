@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { readWorkingPhase } from '@cindy/maker-shared';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
@@ -63,7 +64,8 @@ export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[],
     const bots = orderedTeammates(items, query, i18n.language).map((row) => ({ kind: 'bot' as const, row }));
     if (!groups) return bots;
     const chats = orderedBotGroups(groups, query, i18n.language).map((row) => ({ kind: 'group' as const, row }));
-    return [...bots, ...chats].sort((a, b) => (b.row.item.display.timestamp ?? 0) - (a.row.item.display.timestamp ?? 0));
+    return [...bots, ...chats].sort((a, b) => (b.row.item.display.timestamp ?? 0) - (a.row.item.display.timestamp ?? 0)
+      || a.row.key.localeCompare(b.row.key));
   }, [groups, items, query, i18n.language]);
 }
 
@@ -93,6 +95,9 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
     }
     return names;
   }, [items, i18n.language]);
+  const deviceNameSources = useMemo(() => items.map(row => ({
+    deviceId: row.host.deviceId, name: row.host.deviceName,
+  })), [items]);
   const renderBot = (row: HostedRemoteCollectionItem, last: boolean) => {
     const display = row.item.display;
     const title = resolveRemoteText(display.title, i18n.language);
@@ -109,7 +114,7 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
     const time = timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
       ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '';
     return <TeammateRow key={`bot:${row.key}`} rowKey={row.key} deviceId={row.host.deviceId} botId={row.item.ref.id}
-      title={title} device={ambiguous ? row.host.deviceName : undefined}
+      title={title} device={ambiguous ? deviceDisplayName(row.host.deviceId, row.host.deviceName, deviceNameSources) : undefined}
       rawPreview={!generating && display.preview ? resolveRemoteText(display.preview, i18n.language) : ''}
       subtitle={display.subtitle ? resolveRemoteText(display.subtitle, i18n.language) : ''}
       avatarKind={display.avatar?.kind} avatarValue={display.avatar?.value}

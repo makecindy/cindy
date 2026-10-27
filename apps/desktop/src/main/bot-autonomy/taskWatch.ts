@@ -59,7 +59,7 @@ const USER_SOURCES = new Set(['desktop', 'feishu', 'slack', 'telegram', 'x', 'di
  * 伙伴的历史 / 私聊话题 / 群 / IM 渠道专线不是「任务」，不进表。主任务（canonical）进表：总调度是另一个伙伴时要能
  * 发现它坏了；但它永远不是主任务所属伙伴自己的事件对象（见 followerFor），也不进它自己的工作台。
  */
-const BOT_LANE_ROLES = new Set(['history', 'thread', 'group', 'channel']);
+const BOT_LANE_ROLES = new Set(['history', 'thread', 'group', 'channel', 'routine']);
 
 export interface LocalSessionMeta {
   id: string;
@@ -86,6 +86,24 @@ export interface OwnershipSnapshot {
   creatorBySession: Map<string, string>;
   /** 伙伴 → 它负责的任务（委派 + 明确接手 - 解除）。 */
   responsibleByBot: Map<string, Set<string>>;
+}
+
+/** The directory reference is a dispatch consent token: identical IO refreshes
+ * must not revoke a queued follow-up, while any ownership/availability change must. */
+function sameOwnership(a: OwnershipSnapshot, b: OwnershipSnapshot): boolean {
+  if (a.bots.size !== b.bots.size || a.creatorBySession.size !== b.creatorBySession.size
+    || a.responsibleByBot.size !== b.responsibleByBot.size) return false;
+  for (const [id, bot] of a.bots) {
+    const other = b.bots.get(id);
+    if (!other || bot.status !== other.status || bot.allowSchedulerFollow !== other.allowSchedulerFollow
+      || !!bot.shadowed !== !!other.shadowed || (bot.canonicalSessionId ?? null) !== (other.canonicalSessionId ?? null)) return false;
+  }
+  for (const [id, creator] of a.creatorBySession) if (b.creatorBySession.get(id) !== creator) return false;
+  for (const [id, sessions] of a.responsibleByBot) {
+    const other = b.responsibleByBot.get(id);
+    if (!other || sessions.size !== other.size || [...sessions].some(session => !other.has(session))) return false;
+  }
+  return true;
 }
 
 export interface RemoteDeviceTarget {
@@ -139,6 +157,7 @@ function inputProjectionErrorReason(projection: BotAutonomyInputProjection): str
 interface LocalFacts {
   activity: SessionActivitySnapshot | null;
   execution?: BotAutonomyExecution;
+  delivery?: { execution: BotAutonomyExecution; final: boolean };
   /** Live activity reached completion before ownership/metadata could create a row. */
   observedCompletion: boolean;
   inputError: string | null;
@@ -283,6 +302,18 @@ export class TaskWatch {
     if (!current && !facts.inputError && !facts.usageLimitWait) this.local.delete(sessionId);
     else this.local.set(sessionId, facts);
     if (this.observesLocal(sessionId) || !this.ownershipLoaded) this.queue(sessionId);
+  }
+
+  /** A report belongs to one live execution, never to the next turn or another task. */
+  reportDelivery(sessionId: string, execution: BotAutonomyExecution, final: boolean): boolean {
+    if (this.stopped) return false;
+    const facts = this.local.get(sessionId);
+    const live = this.deps.readSessionExecution?.(sessionId);
+    if (!facts?.activity || facts.activity.phase !== 'running'
+      || !live || live.instanceId !== execution.instanceId || live.generation !== execution.generation) return false;
+    this.local.set(sessionId, { ...facts, delivery: { execution: { ...execution }, final } });
+    this.queue(sessionId);
+    return true;
   }
 
   applyInputProjection(projection: BotAutonomyInputProjection): void {
@@ -509,6 +540,9 @@ export class TaskWatch {
       lastActivityAt: activity?.lastActivityAtMs ?? previous?.lastActivityAt ?? phaseSince,
       startedAt: activity?.startedAtMs ?? previous?.startedAt ?? null,
       ...(facts.execution ? { execution: facts.execution } : {}),
+      finalDelivery: facts.delivery?.final === true
+        && facts.delivery.execution.instanceId === facts.execution?.instanceId
+        && facts.delivery.execution.generation === facts.execution?.generation,
       pendingQuestion,
       pendingRequestId,
       pendingInteractionId,
@@ -623,7 +657,7 @@ export class TaskWatch {
       try {
         const next = await this.deps.readOwnership();
         if (this.stopped) return;
-        this.ownership = next;
+        this.ownership = sameOwnership(this.ownership, next) ? { ...next, bots: this.ownership.bots } : next;
         this.ownershipAt = this.deps.now();
         this.ownershipLoaded = true;
         this.ownershipReadFailures = 0;
@@ -949,6 +983,7 @@ function localSource(meta: LocalSessionMeta, creatorBotId: string | null): Watch
 
 function sameRow(a: WatchedSession | null, b: WatchedSession): boolean {
   return !!a
+    && a.finalDelivery === b.finalDelivery
     && a.phase === b.phase
     && a.phaseSince === b.phaseSince
     && a.title === b.title

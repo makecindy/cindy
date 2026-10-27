@@ -628,6 +628,8 @@ describe('group mention and prompt helpers', () => {
     const twins = [{ botId: 'x1', name: '小满' }, { botId: 'x2', name: '小满' }];
     expect(resolveGroupMentions('@小满 在吗', { all: false, botIds: ['x2'] }, twins))
       .toEqual({ all: false, botIds: ['x2'] });
+    // Typed text alone cannot tell same-named members apart: all of them are addressed, never just the first.
+    expect(resolveGroupMentions('@小满 在吗', null, twins)).toEqual({ all: false, botIds: ['x1', 'x2'] });
     expect(resolveGroupMentions('@小满帮我查一下', null, members)).toEqual({ all: false, botIds: ['xiaoman'] });
     expect(resolveGroupMentions('@所有人看这里', null, members).all).toBe(true);
     expect(resolveGroupMentions('@Everyone look', null, members).all).toBe(true);

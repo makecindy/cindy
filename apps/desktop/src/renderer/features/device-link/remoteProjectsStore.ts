@@ -114,7 +114,7 @@ const detailPatchEpoch = new Map<string, number>();
 const sessionContentOrigins = new WeakMap<Session, Session>();
 // Activity and list presentation pushes do not establish a newer model route.
 const activityFields = ['totalMoney', 'totalCostUsd', 'totalTokenUsage', 'lastTurnEndedAt',
-  'preview', 'title', 'userSendAt', 'updatedAt'] as const;
+  'preview', 'title', 'userSendAt', 'lastActivityAt', 'updatedAt'] as const;
 const activityFieldNames: ReadonlySet<string> = new Set(activityFields);
 type ActivityField = typeof activityFields[number];
 // Per-field markers distinguish pushes after a GET began, even equal-value pushes.

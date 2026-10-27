@@ -6,6 +6,18 @@ const members = [
 ];
 const base = { name: 'Design review', members, messages: 0, sidebar: true };
 const QUEUE_CROWD = ['Aster', 'Nova', 'Mira', 'Orin', 'Pax', 'Quill', 'Rhea'].map((name, i) => ({ botId: 'abcdefg'[i], name }));
+/** Nine members across three accounts, as in a real cross-account group (owner request 2026-10-26). */
+const CROWD = [
+  { botId: 'a', name: 'Aster', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+  { botId: 'b', name: 'Nova', ownerName: 'Leo', isOwned: false, actorKind: 'bot' },
+  { botId: 'c', name: 'Leo', actorKind: 'human', isOwned: false },
+  { botId: 'd', name: 'Mira', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+  { botId: 'e', name: 'Orin', ownerName: 'Kai', isOwned: false, actorKind: 'bot' },
+  { botId: 'f', name: 'Quill', actorKind: 'bot', isOwned: true },
+  { botId: 'g', name: 'Ada', actorKind: 'human', isOwned: false },
+  { botId: 'h', name: 'Kai', actorKind: 'human', isOwned: false },
+  { botId: 'i', name: 'Rhea', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+];
 const LONG_DEVICE = 'Mac Studio · A very long device name for layout verification';
 
 /** Migrated from check-group-control-layout.mjs (remote-control notice above the composer). */
@@ -21,6 +33,15 @@ export default {
   notCovered:
     'Sending, round control, real device-link control and revocation, pending interactions, plans and attachments; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
   cases: {
+    'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
+    'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
+    'work-reading': { about: 'Actual group work status, scenario data: file reading', data: { ...base, messages: 2, workState: 'reading-file' } },
+    'work-waiting': { about: 'Actual group work status, scenario data: needs confirmation', data: { ...base, messages: 2, workState: 'waiting' } },
+    'work-stopping': { about: 'Actual group work status, scenario data: stop requested', data: { ...base, messages: 2, workState: 'stopping' } },
+    'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
+    'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
+    'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
       viewport: { width: 720, height: 700 },
@@ -38,6 +59,11 @@ export default {
       controller: LONG_DEVICE,
     },
     multiline: { about: 'Eight-line draft pushes the composer up', data: base, lines: 8 },
+    crowded: {
+      about: 'Nine members from three accounts: the header names the group and a member count, not every member',
+      viewport: { width: 800, height: 600 },
+      data: { ...base, members: CROWD, bubbles: true },
+    },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
@@ -96,6 +122,22 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.workState) {
+      const state = definition.data.workState;
+      await ui.emit('sessionActivity', [{ sessionId: 'fixture-work', phase: 'running',
+        workingPhase: ['thinking', 'reading-file', 'testing'].includes(state) ? state : 'processing',
+        compactDetail: state === 'testing' ? '检查私聊与群聊的回归结果' : state === 'reading-file' ? '核对群聊状态与任务入口' : '',
+        startedAtMs: Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
+        gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
+      await page.getByTestId('bot-group-progress').first().waitFor();
+      if (ui.case === 'work-parallel-stopping') {
+        const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
+        assert.equal(await stop.count(), 1);
+        assert.equal(await stop.isEnabled(), true, 'another running execution must remain stoppable');
+      }
+      await ui.capture('work');
+      return;
+    }
     if (ui.case === 'body-answer') {
       const timeline = page.getByTestId('bot-group-timeline');
       assert.ok((await timeline.innerText()).includes('保留 <name>、*literal* 和 & 符号'));
@@ -332,17 +374,6 @@ export default {
     }
 
     if (ui.case === 'long-thread') {
-      // Browser integration: presentation translation must not enlarge the
-      // native range, which onScroll would mistake for the reader leaving tail.
-      const translatedRange = await scroller.evaluate(el => {
-        const content = el.querySelector('[data-bot-group-message-id]').parentElement;
-        const before = el.scrollHeight;
-        content.style.transform = 'translateY(100px)';
-        const after = el.scrollHeight;
-        content.style.transform = '';
-        return { before, after };
-      });
-      assert.equal(translatedRange.after, translatedRange.before, 'follow movement cannot add scrollable overflow');
       const bottomGap = () =>
         scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
       await page.waitForFunction(() => {

@@ -216,6 +216,9 @@ export function createDefaultRouteFollower(deps: {
     // 的系统意图, 调用方必须暂缓通用意图应用(PR #5155 review P2)。
     if (!providers) return 'defer-unknown';
     const defaults = await deps.resolveTarget(providers);
+    // Automatic settings are stable while their catalog-resolved route may change.
+    // Skip writes when re-resolution confirms the last adopted route is still current.
+    if (defaults.fingerprint === record.fp && !record.pendingRoute) return null;
     const target: ImDefaultRoute = {
       agentKind: defaults.agentKind,
       model: defaults.model,

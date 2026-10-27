@@ -698,7 +698,9 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     next.emit({ type: 'done', data: {} });
   });
 
-  it.each(['rich-card', 'chunked-text'] as const)('%s 回传纯工具图片并去重，不依赖最终正文', async (kind) => {
+  // Unit: sent-image results stay visible in chat without being auto-sent a
+  // second time. Previously only generated-image collection was covered here.
+  it.each(['rich-card', 'chunked-text'] as const)('%s 回传新工具图片并去重，跳过工具已经发送的图片', async (kind) => {
     const stub = streamingHandleStub();
     mocks.slackIm.startStreamingText.mockResolvedValue(stub);
     if (kind === 'chunked-text') {
@@ -710,6 +712,10 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
     const absPath = path.resolve('generated.png');
     mocks.resolveXdtImageUrl.mockReturnValue({ absPath });
+    h.emit({ type: 'tool_result_full', data: {
+      fullText: JSON.stringify({ xdt_image_urls: ['xdt-image://already-sent'], _xdt_forward_media: false }),
+    } });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
     const event: AgentEvent = { type: 'tool_result_full', data: {
       fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated' }),
     } };

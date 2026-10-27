@@ -105,7 +105,7 @@ export async function writeScheduledModelBaselineIfProfileCurrent(
       AND (SELECT json_array(p.id, p.current_version)
            FROM bot_session_links l JOIN bot_profiles p ON p.id = l.bot_id
            WHERE l.session_id = sessions.id AND l.archived_at IS NULL
-             AND l.role IN ('canonical', 'group', 'channel', 'thread') LIMIT 1) IS ?`,
+             AND l.role IN ('canonical', 'group', 'channel', 'thread', 'routine') LIMIT 1) IS ?`,
   [JSON.stringify(baseline), sessionId, expectedBaseline, profileRevision]);
   return result.changes === 1;
 }

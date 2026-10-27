@@ -43,6 +43,8 @@ export interface AgentIslandCompanionSnapshot {
  * Renderer-facing session snapshot for the macOS Agent Island overlay.
  */
 export interface AgentIslandSessionSnapshot {
+  /** Group-message UI only; never a maker task or a remotely relayed activity. */
+  groupChat?: { avatars: AgentIslandCompanionSnapshot[]; mentionLabel?: string };
   /** Opaque identity of the completed card, issued by its owning process. */
   completionToken?: string;
   /** This completion preserves older unread state without requesting a new alert. */

@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
@@ -214,6 +215,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     status,
     agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
+    lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
@@ -243,7 +245,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
 }
 
 function lastActivityTime(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function truncateText(value: string): string {

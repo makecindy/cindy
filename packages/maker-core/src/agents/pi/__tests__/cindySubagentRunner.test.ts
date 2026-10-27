@@ -805,9 +805,16 @@ describe('Cindy durable PI Subagent runner', () => {
   it('accepts steering while a child is backing off for automatic retry', async () => {
     const fixture = await makeFixture({ retryThenHang: true });
     try {
+      // Regression: Linux CI #7232 observed the failed attempt's status snapshot
+      // together with the later auto_retry_start transcript entry. The runner
+      // appends events immediately but batches status publication, so these two
+      // reads are not an atomic snapshot. Wait for both before asserting readiness.
+      // Existing unit coverage still uses the real runner/list/control entries
+      // and verifies that the child receives the correction; no timeout is widened.
       const retrying = await waitFor(async () => {
         const [run] = await listPiSubagentRuns(fixture.root);
-        if (run?.totalTokens !== 1 || run.state !== 'running') return null;
+        if (run?.totalTokens !== 1 || run.state !== 'running'
+          || run.tasks[0]?.resultReady !== false) return null;
         const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
         return transcript.includes('auto_retry_start') ? run : null;
       });

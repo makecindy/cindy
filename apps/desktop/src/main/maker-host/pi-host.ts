@@ -5,7 +5,7 @@ import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
-import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -1437,9 +1437,14 @@ export function buildPiNativeProvidersFromConfigs(
         // bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
         // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
+        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
+        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        const nativeGoogleBaseUrl =
+          modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
+            ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
         const modelBaseUrl =
           m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1686,6 +1691,16 @@ export function resolvePiCindyGatewayModelApi(
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+// #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.
+// Keep this Gateway policy independent of whether a Pi catalog version lists the model.
+const PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS = new Set([
+  'deepseek/deepseek-v4.1-flash',
+  'deepseek/deepseek-flash',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-vision-exp',
+  'deepseek/deepseek-v4-flash',
+]);
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
@@ -1703,6 +1718,13 @@ export function resolvePiCindyGatewayModelSpec(
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (
+    api === 'openai-completions' &&
+    PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS.has(modelId) &&
+    compat?.requiresReasoningContentOnAssistantMessages === undefined
+  ) {
+    compat = { ...compat, requiresReasoningContentOnAssistantMessages: true };
+  }
   if (api === 'anthropic-messages') compat = pruneAnthropicCompatForGateway(compat);
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.

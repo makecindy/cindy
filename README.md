@@ -160,21 +160,56 @@ privately rather than opening a public issue.
 ## Privacy & telemetry
 
 **Official distribution builds** include [TapDB](https://www.taptap.io/tapdb)
-usage analytics for product-level aggregate statistics (device / OS / app-version
-metadata; associated with your account ID after sign-in). It does **not** collect
-chat content, file content, or working-directory data. In addition, while signed
-in to a cloud account the client sends an online heartbeat to Cindy services
-(account ID, platform, and version only). Crash dumps stay on the local machine
-and are never uploaded automatically.
+usage analytics for product-level aggregate statistics, including device identifiers,
+OS / app version, startup and activity events. Events are associated with your account
+ID after sign-in, so this is not fully anonymous. TapDB does **not** collect chat
+content, file content, or working-directory data.
+
+**You can disable usage analytics without editing code**: on Desktop, use
+Settings → About → Usage statistics; on Mobile, use Usage statistics in Settings.
+The SDK checks the stored privacy-consent state and the statistics preference,
+which defaults to on. Accepting the Privacy Policy records consent; a one-time
+migration also records consent for eligible existing signed-in users.
+
+**Known Mobile exception:** enterprise SSO skips the policy-acceptance step. If no
+analytics consent record exists and that sign-in is restored after restarting the
+app, the current migration can mark even a new installation as consented. With
+TapDB configured and statistics enabled, reporting can then start without explicit
+policy acceptance. See [Mobile sign-in restoration](apps/mobile/src/auth/AuthContext.tsx)
+and the [consent migration](apps/mobile/src/analytics/analyticsConsentStore.ts).
+Turning off Usage statistics prevents reporting from being enabled by this migration.
+
+- Desktop stops subsequent analytics reporting immediately when disabled. Local
+  mode (Skip sign-in) does not report to TapDB.
+- Mobile immediately unlinks the account and stops reports explicitly triggered
+  by Cindy. An already initialized native SDK cannot be uninitialized; fully quit
+  and relaunch the app to keep the SDK uninitialized.
+
+Implementation: [Desktop consent and settings](apps/desktop/src/main/analyticsSettingsService.ts),
+[Desktop SDK](apps/desktop/src/renderer/analytics/tapdbClient.ts),
+[Mobile consent](apps/mobile/src/analytics/analyticsConsentStore.ts), and
+[Mobile SDK](apps/mobile/src/analytics/mobileTapdb.ts).
+
+Online heartbeats and diagnostic logs are separate mechanisms, unaffected by the
+usage statistics switch. Desktop sends heartbeats to Cindy services only during a
+verified cloud sign-in (account ID, platform, and version); local mode sends none.
+Desktop native crash dumps stay local and are never uploaded automatically.
+Diagnostic logs can be uploaded manually; a separate, default-off automatic crash
+log upload option is also available. Log uploads require privacy consent. See the
+[heartbeat implementation](apps/desktop/src/main/heartbeatService.ts) and
+[log upload rules](docs/dev-rules/log-upload-and-redaction.md).
 
 **Building from source?** You are not required to keep analytics:
 
-- Mobile is off by default — without TapDB credentials (`clientId` /
-  `clientToken`) injected at build time, `apps/mobile/src/analytics/mobileTapdb.ts`
-  is a no-op;
-- Desktop can be fully stripped by removing the `initTapdb()` call in
-  `apps/desktop/src/renderer/index.tsx` (implementation lives in
-  `apps/desktop/src/renderer/analytics/`).
+- Desktop development builds do not initialize TapDB by default. Explicitly setting
+  `XDT_TAPDB_DEV=1` lifts the build gate but still requires consent and the statistics
+  preference. Self-packaged Desktop builds use the same analytics gates as official
+  builds; you can disable analytics in Settings.
+- Mobile does not initialize the SDK without injected TapDB configuration
+  (`clientId` / `clientToken`). This does not mean all source builds default to off:
+  the self-hosted release pipeline requires nonempty configuration, while local
+  development permits empty values. See the
+  [Mobile build guide](apps/mobile/docs/simulator-debugging.md).
 
 ## License / 许可证
 

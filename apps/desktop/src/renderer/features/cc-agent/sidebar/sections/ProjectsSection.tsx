@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
  * ProjectsSection — Sidebar 中部的 Projects 段
@@ -742,6 +743,10 @@ export function ProjectsSection({
     filter.manualProjectOrder,
     priorityContext,
   ]);
+  const deviceNameSources = useMemo(() => deviceSections.flatMap((section) => section.deviceId ? [{
+    deviceId: section.deviceId,
+    name: remoteDeviceIndex?.get(section.deviceId)?.name ?? cachedDeviceNames.get(section.deviceId),
+  }] : []), [deviceSections, remoteDeviceIndex, cachedDeviceNames]);
   // 设备段折叠按本地显示偏好恢复，设置页往返导致重挂时也保留。
   const [collapsedDevices, setCollapsedDevices] = useState(loadDeviceGroupCollapsedKeys);
   useEffect(() => {
@@ -1215,7 +1220,7 @@ export function ProjectsSection({
                   ? remoteDeviceIndex?.get(section.deviceId)
                   : undefined;
                 const name = section.deviceId
-                  ? (device?.name ?? cachedDeviceNames.get(section.deviceId) ?? section.deviceId)
+                  ? deviceDisplayName(section.deviceId, device?.name ?? cachedDeviceNames.get(section.deviceId), deviceNameSources)
                   : t('ccAgent.sidebar.deviceGroup.local');
                 const online = section.deviceId ? (device?.online ?? false) : true;
                 const sectionCollapsed = collapsedDevices.has(key);

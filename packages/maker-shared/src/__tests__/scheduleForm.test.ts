@@ -165,6 +165,16 @@ describe('mobile schedule form model', () => {
     ).toBeNull();
   });
 
+  it.each([90_000, 84_000])('preserves a sub-minute interval when only other fields are edited: %sms', (intervalMs) => {
+    const draft = createMobileScheduleDraft(schedule({ intervalMs }));
+    expect(draft.intervalMinutes).toBe('');
+    expect(draft.sourceIntervalMs).toBe(intervalMs);
+
+    // 非整分钟间隔即使四舍五入后受支持，也不能被表单伪装成可编辑分钟。
+    const untouched = buildMobileScheduleInput({ ...draft, prompt: 'new prompt' });
+    expect(untouched.intervalMs).toBe(intervalMs);
+  });
+
   it('writes an explicit false when mobile disables WeCom group notifications', () => {
     const draft = createMobileScheduleDraft(schedule({
       notify: { desktop: true, feishu: false, wecomGroup: true },

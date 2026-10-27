@@ -128,6 +128,7 @@ export interface GhostInstallReceipt {
   /** Explicit Host confirmation; absent on older receipts, never inferred from manifest. */
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
+  harnessCapabilityApproved?: string[];
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1268,6 +1269,7 @@ export function createGhostInstallReceipt(input: {
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
+  harnessCapabilityApproved?: string[];
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1298,6 +1300,7 @@ export function createGhostInstallReceipt(input: {
     enabled: input.enabled,
     trust: input.trust,
     skillContentSha256: input.skillContentSha256,
+    ...(input.harnessCapabilityApproved?.length ? { harnessCapabilityApproved: [...input.harnessCapabilityApproved] } : {}),
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
@@ -1511,6 +1514,8 @@ function validateReceipt(
       enabled: value.enabled,
       trust,
       skillContentSha256,
+      ...(Array.isArray(value.harnessCapabilityApproved) && value.harnessCapabilityApproved.every(key => typeof key === 'string' && key.startsWith('harness:'))
+        ? { harnessCapabilityApproved: [...value.harnessCapabilityApproved] as string[] } : {}),
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),

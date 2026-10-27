@@ -137,6 +137,22 @@ it('shows the computer name only when two teammates share a name, on the title l
   expect(node.textContent).toContain('· Office iMac');
 });
 
+// #7237 / unit: two equally named teammates on ID-as-name hosts. The existing
+// named-host case missed identical fallback suffixes; press must keep its host.
+it('distinguishes unnamed teammate hosts in visible and accessible labels', async () => {
+  const rows = ['host-b', 'host-a'].map(deviceId => ({ ...item, key: `${deviceId}:bot`,
+    host: { deviceId, deviceName: deviceId } }));
+  const onSelect = vi.fn();
+  await act(async () => root.render(el(Rows, { items: rows, isOnline: () => true, onSelect })));
+  for (const [id, ordinal] of [['host-a', 1], ['host-b', 2]] as const) {
+    const row = node.querySelector(`[data-testid="teammates.item.${id}.bot"]`) as HTMLButtonElement;
+    expect(row.textContent).toContain(`another computer (${ordinal})`);
+    expect(row.getAttribute('aria-label')).toContain(`another computer (${ordinal})`);
+    await act(async () => row.click());
+    expect(onSelect).toHaveBeenLastCalledWith(rows.find(item => item.host.deviceId === id));
+  }
+});
+
 it('prefixes a teammate stopped on a question or permission with 「等你确认」', async () => {
   const waiting = { ...item, item: { ...item.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 's1' } }] } };
   h.awaiting = new Set(['s1']);

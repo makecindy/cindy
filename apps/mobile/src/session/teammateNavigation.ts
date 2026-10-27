@@ -94,5 +94,6 @@ export function orderedTeammates(items: readonly HostedRemoteCollectionItem[], q
     if (needle && !title.normalize('NFKC').toLocaleLowerCase(locale).includes(needle)) continue;
     unique.set(JSON.stringify(identity), row);
   }
-  return [...unique.values()].sort((a, b) => (b.item.display.timestamp ?? 0) - (a.item.display.timestamp ?? 0));
+  return [...unique.values()].sort((a, b) => (b.item.display.timestamp ?? 0) - (a.item.display.timestamp ?? 0)
+    || a.key.localeCompare(b.key));
 }

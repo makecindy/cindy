@@ -1,4 +1,6 @@
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
+import type { GhostPipeHarnessEvent, GhostPipeHarnessHook } from '@cindy/plugin-protocol';
+import { parseGhostHarnessNeeds, ghostHarnessPermissionKeys, type GhostHarnessNeeds } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
@@ -1570,6 +1572,8 @@ export interface GhostManifest {
   subscribe?: GhostSubscribeNeeds;
   /** Autonomous publishing of declared events into user-configured routines. */
   routineEvents?: GhostRoutineEvents;
+  /** Native Harness bridge; each named metadata, content, hook or action capability requires approval. */
+  harness?: GhostHarnessNeeds;
   /**
    * 网络能力与范围。
    * 域名白名单 + 凭证声明,插件详情逐项展示,运行期主机代发并守门。
@@ -1702,6 +1706,8 @@ export interface InstalledGhost {
   taskCapabilityApproved?: true;
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
+  /** Explicitly confirmed named Harness capabilities; absent on older receipts. */
+  harnessCapabilityApproved?: string[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2360,6 +2366,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detailKey: 'taskViewDetail',
     });
   }
+  for (const key of ghostHarnessPermissionKeys(manifest.harness)) {
+    const [, group, ...name] = key.split(':');
+    const specific = group === 'read' && name.join(':') === 'messages' ? 'harnessMessages'
+      : group === 'read' && name.join(':') === 'tool-content' ? 'harnessToolContent' : undefined;
+    const labelKey = specific ?? `harness${group[0].toUpperCase()}${group.slice(1)}`;
+    items.push({ key, kind: 'subscribe', labelKey,
+      labelArgs: { name: name.join(':') }, detailKey: `${labelKey}Detail` });
+  }
   if (manifest.routineEvents) {
     items.push({ key: 'routine-events', kind: 'subscribe', labelKey: 'routineEvents', detail: manifest.routineEvents.events.map((event) => `${event.name} (${event.type}: ${event.fields.join(", ")})`).join(', ') });
   }
@@ -2624,6 +2638,14 @@ export function diffGhostPermissionItems(
   };
 }
 
+/** Both declaration and explicit Host receipt are required; old unknown fields grant nothing. */
+export function hasGhostHarnessPermission(ghost: InstalledGhost, group: 'read' | 'events' | 'hooks' | 'actions', name: string): boolean {
+  const key = `harness:${group}:${name}`;
+  return ghost.enabled && ghost.approval.state === 'approved'
+    && ghostHarnessPermissionKeys(ghost.manifest.harness).includes(key)
+    && ghost.harnessCapabilityApproved?.includes(key) === true;
+}
+
 /**
  * Compare an installed Plugin with a candidate package without trusting a
  * mutable live manifest. Legacy or invalid installs have no approved baseline,
@@ -2634,7 +2656,15 @@ export function diffInstalledGhostPermissionItems(
   next: GhostManifest,
 ): GhostPermissionDiff {
   if (installed.approval.state === 'approved') {
-    return diffGhostPermissionItems(installed.manifest, next);
+    // Older Hosts preserved unknown declarations without displaying/approving them.
+    const approvedHarness = new Set(installed.harnessCapabilityApproved ?? []);
+    const previous = { ...installed.manifest, harness: Object.fromEntries(
+      (['read', 'events', 'hooks', 'actions'] as const).map(group => [group,
+        Array.isArray(installed.manifest.harness?.[group])
+          ? installed.manifest.harness[group]!.filter(name => approvedHarness.has(`harness:${group}:${name}`)) : undefined,
+      ]),
+    ) };
+    return diffGhostPermissionItems(previous, next);
   }
   return {
     added: ghostPermissionItems(next),
@@ -3057,6 +3087,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
+  'harness',
   'schemaVersion',
   'id',
   'name',
@@ -3938,12 +3969,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   return validateGhostManifestInput(value, false);
 }
 
-/** Installed snapshots retain historical unknown tasks data without granting it. */
+/** Installed snapshots retain historical unknown capability data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
   return validateGhostManifestInput(value, true);
 }
 
-function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
+function validateGhostManifestInput(value: unknown, preserveHistoricalDeclarations: boolean): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -4557,12 +4588,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
       return { ok: false, reason: 'agent.errand 必须是布尔值' };
     }
-    if (!preserveHistoricalTasks && agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
+    if (!preserveHistoricalDeclarations && agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
       return { ok: false, reason: 'agent.tasks must be boolean' };
     }
-    // hiddenTasks 依赖 tasks。已安装快照(preserveHistoricalTasks)不因历史值拒绝,
+    // hiddenTasks 依赖 tasks。已安装快照(preserveHistoricalDeclarations)不因历史值拒绝,
     // 非 true+true 组合只作为未知数据保留,运行期经 ghostDeclaresHiddenTasks 判定不授予。
-    if (!preserveHistoricalTasks && agentRaw.hiddenTasks !== undefined) {
+    if (!preserveHistoricalDeclarations && agentRaw.hiddenTasks !== undefined) {
       if (typeof agentRaw.hiddenTasks !== 'boolean') {
         return { ok: false, reason: 'agent.hiddenTasks must be boolean' };
       }
@@ -4570,7 +4601,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
         return { ok: false, reason: 'agent.hiddenTasks: true 需要同时声明 agent.tasks: true' };
       }
     }
-    if (!preserveHistoricalTasks && agentRaw.targets !== undefined) {
+    if (!preserveHistoricalDeclarations && agentRaw.targets !== undefined) {
       if (typeof agentRaw.targets !== 'boolean') return { ok: false, reason: 'agent.targets must be boolean' };
       if (agentRaw.targets === true && agentRaw.tasks !== true) {
         return { ok: false, reason: 'agent.targets: true 需要同时声明 agent.tasks: true' };
@@ -4579,7 +4610,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalDeclarations ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -4587,7 +4618,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalDeclarations ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -5037,6 +5068,17 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
   // 无详单允许装入但零事件,同 cindy 语义)。硬规则:声明了 hooks(拦截)
   // 必须 launch:'resident'——要挡路就得常驻在场,每条消息等冷启动不可接受。
+  if (raw.harness !== undefined && prepared.schemaVersion !== 3) {
+    return { ok: false, reason: 'harness requires schemaVersion 3' };
+  }
+  const parsedHarness = raw.harness === undefined ? undefined : parseGhostHarnessNeeds(raw.harness);
+  if (parsedHarness === null && !preserveHistoricalDeclarations) return { ok: false, reason: 'Invalid harness declaration' };
+  // A released Host preserved this entire unknown field. Receipt reads keep the
+  // original declaration as data without granting it; package ingestion remains strict.
+  const harness = parsedHarness === null ? raw.harness as GhostHarnessNeeds : parsedHarness;
+  if (!preserveHistoricalDeclarations && ghostHarnessPermissionKeys(harness).some(key => key.startsWith('harness:hooks:')) && raw.launch !== 'resident') {
+    return { ok: false, reason: 'harness.hooks requires launch: resident' };
+  }
   if (raw.routineEvents !== undefined && prepared.schemaVersion !== 3) {
     return { ok: false, reason: 'routineEvents requires schemaVersion 3' };
   }
@@ -6233,6 +6275,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(node !== undefined ? { node } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
+      ...(harness !== undefined ? { harness } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(skill !== undefined ? { skill } : {}),
@@ -8197,6 +8240,8 @@ export type GhostMessageHookData = { sessionId: string; text: string; model?: st
  * GhostPipeEventVerdict,不回视为放行。
  */
 export type GhostPipeEventPush =
+  | GhostPipeHarnessEvent
+  | GhostPipeHarnessHook
   | GhostPipeDownloadProgress
   | {
       type: 'event';

@@ -53,12 +53,13 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const helperStart = source.indexOf('let textOnlyTurnActive = false');
   const helperEnd = source.indexOf('function currentPermissionState', helperStart);
+  const harnessHookStart = source.indexOf('  const runHarnessHook =');
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   let permissionReads = 0;
   const compiled = ts.transpileModule(
-    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(harnessHookStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   runInNewContext(compiled, {

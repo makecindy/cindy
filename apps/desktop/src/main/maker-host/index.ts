@@ -121,6 +121,7 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
+  captureLocalWorkerReport,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
@@ -1298,6 +1299,7 @@ export function getMaker(): Maker {
         };
       },
       dispatchInterAgentMessage,
+      captureLocalWorkerReport,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
@@ -2215,6 +2217,7 @@ export function getMaker(): Maker {
         sessionInstanceId,
         mcpCallerKind,
         mcpCallerAttested,
+        nativeHarnessHook,
         workingDir,
         memoryScopeKey,
         remoteHostId,
@@ -2231,6 +2234,7 @@ export function getMaker(): Maker {
           sessionId,
           mcpCallerKind,
           mcpCallerAttested,
+          ...(nativeHarnessHook ? { nativeHarnessHook } : {}),
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           ...(memoryScopeKey ? { memoryScopeKey } : {}),

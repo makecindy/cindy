@@ -5,6 +5,20 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 
 describe('im default settings IPC security contract', () => {
+  // Guard tier: the async catalog projection must not return another owner's settings after switching accounts.
+  it('fences the automatic-model projection by the owner generation before returning', () => {
+    const start = source.indexOf('async function imDefaultSettingsWire(');
+    const end = source.indexOf('\nfunction parseImDefaultSettingsChannel', start);
+    const body = source.slice(start, end);
+    const capture = body.indexOf('const ownerGeneration = getActiveAppSession().generation;');
+    const resolve = body.indexOf('await projectImDefaultSettings(');
+    const guard = body.indexOf('getActiveAppSession().generation !== ownerGeneration');
+    expect(capture).toBeGreaterThan(0);
+    expect(resolve).toBeGreaterThan(capture);
+    expect(guard).toBeGreaterThan(resolve);
+    expect(body.indexOf('return {')).toBeGreaterThan(guard);
+    expect(body).toContain('isAppSessionBoundaryPending()');
+  });
   // 保存/重置会按旧默认批量补写老任务的跟随记录, 并让下一条 IM 消息切换现有任务的
   // 运行路由 —— sender 校验必须拦在任何回填或写设置之前, 不能让导航到外部页面的
   // preload frame 改写渠道默认并推动任务切路由(codex review P1, PR #5155)。

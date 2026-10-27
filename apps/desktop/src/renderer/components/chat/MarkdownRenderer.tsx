@@ -66,6 +66,7 @@ import {
   MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
   resolveLocalPath,
+  resolveLocalPathSmart,
   resolveLocalPathSmartCached,
   peekResolveLocalPathSmart,
   toLocalFileUrl,
@@ -1522,7 +1523,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = () => {
+  const openInlineTarget = async () => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1530,6 +1531,48 @@ function MarkdownTargetLink({
       else toast.error(t('chat.markdownRenderer.anchorNotFound'));
     } else if (target.kind === 'local-image-url') {
       setLightboxSrc(rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin));
+    } else if (target.kind === 'local-candidate' && !fromBarePath) {
+      // An authored link keeps its destination even after the file moves. Retry
+      // resolution on click instead of trusting a cached "not found" result.
+      try {
+        let result: SmartResolveResult;
+        if (isRemoteFileOrigin(fileCtx.origin)) {
+          const absPath = resolveLocalPath(target.href, workingDir);
+          const { verdict } = await window.electronAPI.fileBrowser.chatStat({
+            origin: fileCtx.origin,
+            workdir: workingDir,
+            absPath,
+          });
+          if (verdict === 'nonfile') {
+            toast.error(t('chat.markdownRenderer.fileUnavailable'));
+            return;
+          }
+          // Unknown may mean offline: the existing preview can still serve a
+          // cached copy or explain the connection failure. Never open locally.
+          result = { status: 'unique', absPath, kind: verdict === 'directory' ? 'directory' : 'file' };
+        } else {
+          result = await resolveLocalPathSmart(target.href, workingDir, { refresh: true });
+        }
+        if (result.status === 'multiple') {
+          toast.error(t('chat.markdownRenderer.duplicateFiles', { count: result.candidates.length }));
+          return;
+        }
+        const resolved = resolvedLocalFromResult(target, result);
+        if (!resolved) {
+          toast.error(t('chat.markdownRenderer.fileUnavailable'));
+          return;
+        }
+        if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
+          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+        } else {
+          await activateResolvedLocalTarget(
+            resolved, { ...fileCtx, sidebarTargetSessionId },
+            setLightboxSrc, setTextLightboxFile, setModelLightboxPath,
+          );
+        }
+      } catch {
+        toast.error(t('chat.markdownRenderer.openLinkFailed'));
+      }
     }
   };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
@@ -1550,11 +1593,8 @@ function MarkdownTargetLink({
   //   - resolved-local (path uniquely resolves to an existing file) → chip if
   //     the label reads as a file reference, underlined link if the label is
   //     freeform prose.
-  //   - local-candidate (not yet resolved, OR resolved to multiple, OR not
-  //     found) and code-reference (directory / unsupported scheme) → plain
-  //     <span>. We don't reserve a chip slot for paths that may never become
-  //     clickable; instead the chip only appears as a one-shot "lit up"
-  //     upgrade once unique resolution lands after streaming.
+  //   - unresolved authored links remain underlined and resolve again on click.
+  //   - automatically detected paths still require a verified target.
   if (target.kind === 'resolved-local') {
     const openResolvedTarget = () =>
       activateResolvedLocalTarget(
@@ -1600,13 +1640,11 @@ function MarkdownTargetLink({
     );
   }
 
-  if (target.kind === 'code-reference' || target.kind === 'local-candidate') {
+  if (target.kind === 'code-reference' || (target.kind === 'local-candidate' && fromBarePath)) {
     return <span>{children}</span>;
   }
 
-  // Remaining: external / anchor / local-image-url — none of these flow
-  // through the streaming → resolution transition, so the underlined-link
-  // visual is stable from first paint. No jitter risk here.
+  // Explicit local candidates retain the same open/copy-link menu as links.
   return (
     <>
     <a
@@ -1728,19 +1766,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
-  // Completion must not replace the streamed tree or cut off the final batch's
-  // in-flight fades. Historical messages still take the static path on mount.
-  const hasStreamed = useRef(isStreaming);
-  if (isStreaming) hasStreamed.current = true;
-  const progressive = hasStreamed.current;
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
-  // 完成后保留原分片与淡入时间线；重新打开的历史消息直接用静态 Markdown。
+  // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
   // 用户开关(Settings → 外观 → 回复动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
   const streamFadeEnabled = useStreamFadeEnabled();
-  const streamFade = progressive && !reducedMotion && streamFadeEnabled;
+  const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
   const wordFadeState = useMemo(() => {
     if (!streamFade) return null;
     return getOrCreateWordFadeState(streamFadeKey);
@@ -1758,8 +1791,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   // 只看 isStreaming):它是淡入动效的配套层(消除触发重淡的结构翻转源头),
   // 用户关闭流式动效后应回到与改动前完全一致的原始渲染路径;终版渲染恒用原文。
   const repairedContent = useMemo(
-    () => (streamFade && isStreaming ? repairStreamingMarkdown(throttledContent) : throttledContent),
-    [throttledContent, streamFade, isStreaming],
+    () => (streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent),
+    [throttledContent, streamFade],
   );
   const renderedContent = useMemo(
     () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
@@ -1767,10 +1800,10 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   );
   const streamingChunks = useMemo(
     () =>
-      progressive && !emitSourceLines
+      isStreaming && !emitSourceLines
         ? splitStreamingMarkdownChunks(renderedContent)
         : [{ start: 0, content: renderedContent }],
-    [emitSourceLines, progressive, renderedContent],
+    [emitSourceLines, isStreaming, renderedContent],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1977,7 +2010,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 
   return (
     <div className="msg-markdown select-text">
-      {progressive ? (
+      {isStreaming ? (
         streamingChunks.map((chunk) => (
           <StreamingMarkdownChunk
             key={chunk.start}

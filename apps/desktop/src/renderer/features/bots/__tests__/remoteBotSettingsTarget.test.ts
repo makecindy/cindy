@@ -127,6 +127,19 @@ it('does not re-read a deleted teammate after the lifecycle action', async () =>
   expect(host.invoke).toHaveBeenCalledTimes(1);
 });
 
+it('offers routine session modes only to hosts that keep them', async () => {
+  // A host that predates session modes accepts saveWithModel but drops sessionMode.
+  const older = create([...ALL_OPS, 'routines.saveWithModel']);
+  expect(older.target.routineSessionModes).toBe(false);
+  host.invoke.mockResolvedValue(ok([]));
+  await older.target.routines.save('bot-1', { name: 'Digest' } as never, 'r1');
+  expect(sent()).toMatchObject({ input: { op: 'routines.saveWithModel' } });
+  const current = create([...ALL_OPS, 'routines.saveWithModel', 'routines.saveWithSessionMode']);
+  expect(current.target.routineSessionModes).toBe(true);
+  await current.target.routines.save('bot-1', { name: 'Digest', sessionMode: 'fresh' } as never, 'r1');
+  expect(sent(1)).toMatchObject({ input: { op: 'routines.saveWithSessionMode', args: { input: { sessionMode: 'fresh' } } } });
+});
+
 it('runs routines on the teammate computer and tells the page when they change there', async () => {
   const { target, changed } = create();
   host.invoke.mockResolvedValue(ok([]));

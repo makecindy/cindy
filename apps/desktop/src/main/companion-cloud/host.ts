@@ -205,7 +205,7 @@ function createMaterializer(input: {
       fence.assertCurrent();
       await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
         ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
-      { templateId });
+      { templateId, allowSameName: true });
     },
     updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
       const restored = await cloudAvatar(avatar, fence.signal);
@@ -214,7 +214,7 @@ function createMaterializer(input: {
         ...(description !== undefined ? { description } : {}),
         ...(identitySource !== undefined ? { identitySource } : {}),
         ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId, replacesUnfinishedMeeting: true });
+        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId, replacesUnfinishedMeeting: true, allowSameName: true });
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();

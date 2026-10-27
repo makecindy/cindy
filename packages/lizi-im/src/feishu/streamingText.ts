@@ -14,8 +14,8 @@
  *                                   2) parse xdt-file URLs (dedup), send each
  *                                      as a separate file message
  *                                   3) strip xdt-file from card text
- *                                   4) send final card with text/images, then
- *                                      recall the progress card
+ *                                   4) update the progress card with final
+ *                                      text/images
  *   handle.close()                → cancel pending throttle, no further patches
  *
  * Design parity: matches the legacy feishuBot/replyClient.ts behaviour
@@ -216,7 +216,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const log = getLog();
     this.inFlight = (async () => {
       try {
-        await patchCardRaw(this.messageId, buildMarkdownCardV2(text));
+        await patchCardRaw(
+          this.messageId,
+          fitCardToLimit(text, buildMarkdownCardV2(text), buildMarkdownCardV2),
+        );
         this.flushed = this.buffer;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -230,7 +233,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     await this.inFlight;
   }
 
-  // ── finalize: upload media, send final, recall progress ───────────────────
+  // ── finalize: upload media, replace progress with the final ───────────────
 
   private async doFinalize(): Promise<void> {
     const log = getLog();
@@ -329,7 +332,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const cardText = stripXdtFileLinks(text);
     const cardTextTrimmed = cardText.trim();
 
-    // 4. Send a new final message, then remove the progress card. Terminal shapes:
+    // 4. Update the original card without a recall notice. Terminal shapes:
     //    a) text only → plain markdown card v2
     //    b) text + images (markdown 内联 OR tool_result 追加) → mixed elements card
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
@@ -353,32 +356,25 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
           : buildMarkdownCardV2(visibleText),
       );
-      const progressId = this.messageId;
-      const result = await sendCardRaw(this.openId, card, { ...this.opts, advanceRound: false });
-      this.messageIdValue = result.messageId;
+      await patchCardRaw(this.messageId, card);
       this.flushed = this.buffer;
-      // Cleanup is best-effort: a failed recall must never resend the final.
-      if (getAccountEpoch() !== this.accountEpoch) return;
-      try {
-        await recallMessage(progressId);
-        if (this.claimedOpener && getAccountEpoch() === this.accountEpoch) {
-          rearmAnchorToTrigger(this.openId, progressId);
-        }
-      } catch (err) {
-        log.warn(`[feishu/streamingText] progress recall failed: ${String(err)}`);
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`[feishu/streamingText] finalize send failed: ${msg}`);
+      log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
       if (getAccountEpoch() !== this.accountEpoch) return;
       const notice = transportMessages.streaming.deliveryFailed;
       try {
-        // Preserve the answer on the progress card when fresh delivery fails.
-        await patchCardRaw(this.messageId, card ?? buildMarkdownCardV2(notice));
+        // Preserve the full answer if the original card can no longer be edited.
+        // Stay on this round's target and never recall the user's progress card.
+        const result = await sendCardRaw(this.openId, card ?? buildMarkdownCardV2(notice), {
+          ...this.opts, advanceRound: false,
+        });
+        this.messageIdValue = result.messageId;
+        this.flushed = this.buffer;
       } catch (fallbackErr) {
         const fallbackMsg =
           fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        log.warn(`[feishu/streamingText] fallback patch failed: ${fallbackMsg}`);
+        log.warn(`[feishu/streamingText] fallback send failed: ${fallbackMsg}`);
         if (getAccountEpoch() !== this.accountEpoch) return;
         try {
           await sendText(this.openId, notice, this.opts);

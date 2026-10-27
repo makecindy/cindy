@@ -1665,6 +1665,7 @@ interface ElectronAPI {
   pluginMarket: {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
@@ -2302,6 +2303,7 @@ interface ElectronAPI {
 
   // ── Discord Bot (Settings → IM Bot tab) ──
   discordBot: {
+    reconnect: () => Promise<{ status: DiscordBotTransportStatus; ownerUserId: string | null }>;
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
@@ -3071,6 +3073,7 @@ interface ElectronAPI {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
+        | { type: 'plugin'; pluginId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
@@ -3092,6 +3095,7 @@ interface ElectronAPI {
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
+    | { type: 'plugin'; pluginId: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
     | null
   >;
@@ -5569,6 +5573,8 @@ interface ElectronAPI {
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
+    chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
+    botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (
@@ -5741,6 +5747,13 @@ interface ElectronAPI {
     testProviderConnection: (
       input: import('../shared/providerConnectionTest').ProviderConnectionTestRequest,
     ) => Promise<import('../shared/providerConnectionTest').ProviderConnectionTestResult>;
+    /** 供应商账户余额查询（API Key 计费连接的余额卡，查询型结构化结果，快照不含密钥材料）。 */
+    fetchProviderAccountUsage: (input: {
+      providerId: string;
+      forceRefresh?: boolean;
+    }) => Promise<
+      import('../shared/providerAccountUsage').ProviderAccountUsageResult
+    >;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     detectProvider?: (input: ({ requestId: string; cancel: true } | {
       requestId: string; agent: 'claude-code' | 'codex' | 'pi'; baseUrl: string;

@@ -93,6 +93,7 @@ async function setup(options: {
         log,
         onChange,
         getActivitySnapshots: () => [],
+        readSessionExecution: (id) => ({ instanceId: id, generation: 1 }),
         isToolCallInFlight: () => false,
         getPendingInteractions: () => [],
         readLocalSessions: async (ids) => ids.map(meta),
@@ -554,7 +555,10 @@ it.each([false, true])('keeps a fast delegation completion across delayed owners
   try {
     await runtime.start();
     options.creators.child = options.creators.stopped = options.creators.stale = 'a';
-    for (const id of ['child', 'unrelated', 'stopped']) runtime.watch.applyActivity(id, running(id));
+    for (const id of ['child', 'unrelated', 'stopped']) {
+      runtime.watch.applyActivity(id, running(id));
+      runtime.watch.reportDelivery(id, { instanceId: id, generation: 1 }, true);
+    }
     for (const id of ['child', 'unrelated', 'stale']) runtime.watch.applyActivity(id, completed(id));
     runtime.watch.applyActivity('stopped', null);
     await runtime.watch.settled();
@@ -601,6 +605,7 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     await runtime.start();
     runtime.watch.applyActivity('child', running('child'));
     await runtime.watch.settled();
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(true);
     runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
     await runtime.watch.settled();
     await vi.advanceTimersByTimeAsync(0);
@@ -620,6 +625,7 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     expect(publish).toHaveBeenCalledOnce();
     // The event ledger expires after 24h. A later settings/activity refresh must not replay it.
     t.advance(25 * 60 * 60_000);
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(false);
     runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
     await runtime.refreshFollowers();
     await vi.advanceTimersByTimeAsync(0);
@@ -628,4 +634,30 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     runtime.stop();
     vi.useRealTimers();
   }
+});
+
+// Unit / #7253: the production runtime must wake only on an explicit delivery,
+// regardless of idle duration. Existing tests cover terminal delivery/retries, not
+// semantic intermediate turns. Minimal input: false/absent report + completed.
+it('publishes final delivery immediately and stays silent for intermediate or unreported ends', async () => {
+  const t = await setup({ schedulerOff: true, creators: { child: 'a' } });
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => ({ accepted: 1, duplicate: false }));
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => ({} as never)) });
+  await runtime.start({ timers: false });
+  try {
+    for (const final of [undefined, false, true]) {
+      runtime.watch.applyActivity('child', running('child'));
+      await runtime.watch.settled();
+      if (final !== undefined) expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, final)).toBe(true);
+      const ended = t.now();
+      runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed', lastActivityAtMs: ended } as SessionActivitySnapshot);
+      await runtime.watch.settled();
+      await runtime.evaluate();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+      if (final) expect(publish.mock.calls[0][1]).toMatchObject({ type: 'finished', occurredAt: ended });
+      t.advance(3_600_000);
+      await runtime.sweep();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+    }
+  } finally { runtime.stop(); }
 });

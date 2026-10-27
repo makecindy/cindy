@@ -1,3 +1,4 @@
+import { confirmedHarnessCapabilities } from '../ghostInstallConsent.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
@@ -39,7 +40,7 @@ describe('local root installation consent identity', () => {
       rejectBrokerWithoutDeclaredRedirectPort: vi.fn(), rejectUnauthorizedTokenBroker: vi.fn(),
       throwIpcError: (code: string) => { throw new Error(code); },
       throwInstallError: () => { throw new Error('install rejected'); },
-      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability,
+      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedHarnessCapabilities,
       createWindowGhostInstallConsentPrompt: () => prompt,
       findInstalledGhostForDeliveryTarget, installedGhostStoragePart,
       withGhostInstallLock: async (_id: string, operation: () => unknown) => operation(),

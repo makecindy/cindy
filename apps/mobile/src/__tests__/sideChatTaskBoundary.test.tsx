@@ -221,7 +221,7 @@ describe('side chat task lifecycle', () => {
     state.route = { deviceId: 'host', sessionId: 'old', resourceHistorySessionId: 'old', resourceId: 'bot', resourceKind: 'bot', focusClientId: 'message' };
     act(() => root.render(<SessionTaskLayout>{() => <textarea aria-label="Legacy history" />}</SessionTaskLayout>));
     expect(host.querySelector('textarea')).toBeNull();
-    expect(state.replaceParams).toHaveBeenCalledWith({ deviceId: 'host', deviceName: 'host', sessionId: 'old', focusClientId: 'message' });
+    expect(state.replaceParams).toHaveBeenCalledWith({ deviceId: 'host', deviceName: 'another computer', sessionId: 'old', focusClientId: 'message' });
   });
 
   // #7105: a same-ID search hit must exit the companion resource skin, whereas
@@ -235,7 +235,7 @@ describe('side chat task lifecycle', () => {
     } as unknown as RemoteSessionListItem;
     act(() => state.sidebar!.onSelectSession!(target));
     if (search) expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
-      deviceId: 'host', deviceName: 'host', sessionId: 'child',
+      deviceId: 'host', deviceName: 'another computer', sessionId: 'child',
     });
     else expect(state.replaceParams).not.toHaveBeenCalled();
   });

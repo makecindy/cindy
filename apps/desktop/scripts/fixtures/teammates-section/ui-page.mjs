@@ -25,7 +25,7 @@ export default {
     'src/renderer/features/bots/BotCreateMenu': 'export const BotCreateMenu=()=>null;',
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
-  cases: Object.fromEntries([
+  cases: { ...Object.fromEntries([
     ['default', '/bots/mate-6'],
     ['session', '/bots/mate-6/session/session-6'],
     ['history', '/bots/mate-6/history/session-6'],
@@ -47,7 +47,24 @@ export default {
       data: { profiles: localProfiles, remoteBots, route },
     }];
   })),
+    'device-names': {
+      about: 'Duplicate and missing computer names never expose device fingerprints in teammate rows',
+      data: { profiles: [], route: '/bots', remoteBots: [
+        { id: 'writer', name: 'Writer', deviceId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deviceName: 'Mac Studio', online: true, preview: 'Ready', activityAt: 0 },
+        { id: 'researcher', name: 'Researcher', deviceId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', deviceName: 'Mac Studio', online: true, preview: 'Ready', activityAt: 0 },
+        { id: 'designer', name: 'Designer', deviceId: 'cccccccccccccccccccccccccccccccc', deviceName: '', online: false, preview: 'Ready', activityAt: 0 },
+      ] },
+    },
+  },
   async check(page, ui) {
+    if (ui.case === 'device-names') {
+      const text = await page.locator('body').innerText();
+      assert.match(text, /Mac Studio \(1\)/);
+      assert.match(text, /Mac Studio \(2\)/);
+      assert.ok(text.includes(await ui.t('bots.cloud.unknownDevice')));
+      assert.doesNotMatch(text, /[abc]{32}/);
+      return;
+    }
     const rows = page.getByText('Ready', { exact: true });
     assert.equal(await rows.count(), 5);
     assert.equal(await page.getByText('Translator', { exact: true }).count(), 0);

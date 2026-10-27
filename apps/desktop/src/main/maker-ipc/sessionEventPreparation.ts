@@ -38,6 +38,7 @@ import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-erro
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  type SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
@@ -64,6 +65,7 @@ interface DismissedInteraction {
 }
 
 export interface PrepareSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn'>;
@@ -350,6 +352,11 @@ export function prepareSessionEvent(
         clearPending: typeof event.turnAttemptToken === 'number',
       });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
+      if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
+        deps.sessionListActivityTracker.start(session.id, event.sessionTurnGeneration === undefined
+          ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`);
+      }
       if (!wasInTurn && event.source === 'claude-code') {
         const startedProductTurn = deps.productTurnWallClockTracker.start(session.id);
         if (startedProductTurn) deps.productTurnUsageTargetTracker.clear(session.id);

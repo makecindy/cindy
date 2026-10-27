@@ -367,6 +367,8 @@ export type CindyMediaToolRequest =
 
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
+  /** Internal Codex native Hook ingress; ordinary model calls cannot dispatch it. */
+  nativeHarnessHook?(input: unknown, metadata: unknown): Promise<Record<string, unknown>>;
   /** Cindy's own catalog, separate from installed plugins and provider app marketplaces. */
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;

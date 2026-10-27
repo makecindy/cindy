@@ -22,6 +22,13 @@ import type { ModelSelector } from '../ModelSelector';
 import type { UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
+import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  __testing as promptRecommendations,
+  beginPromptRecommendationPrediction,
+  clearPromptRecommendationSession,
+  resolvePromptRecommendationPrediction,
+} from '@/lib/promptRecommendationStore';
 import type { InputDeviceRendererAction } from '../../../../shared/inputDevices';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
@@ -193,6 +200,28 @@ it('does not replace the empty editor after an external empty-draft notification
   expect(h.editor!.state.selection.from).toBe(1);
 });
 
+// Companion chat 「回复」 bug: the quote appeared above the composer but focus stayed on the
+// message's button. Each new quote (also a second one on the same message) is a new request.
+it('focuses the editor for each new focus request, not on mount or a repeated value', async () => {
+  supplyRangeGeometry();
+  const quote = { clientId: 'm1' };
+  const view = renderComposer({ focusRequest: quote });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  expect(h.editor!.isFocused).toBe(false);
+  const outside = document.body.appendChild(document.createElement('button'));
+  view.rerender(<ChatInput {...view.props} focusRequest={quote} />);
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={null} />);
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={{ clientId: 'm1' }} />);
+  await waitFor(() => expect(h.editor!.isFocused).toBe(true));
+  outside.focus();
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={{ clientId: 'm1' }} />);
+  await waitFor(() => expect(h.editor!.isFocused).toBe(true));
+  outside.remove();
+});
+
 it('does not rehydrate an empty stored document when voice busy state changes', async () => {
   saveDraft('composer-regression', { text: { type: 'doc', content: [{ type: 'paragraph' }] }, attachments: [] });
   const view = renderComposer();
@@ -238,6 +267,8 @@ it('locks editor and attachments for the whole voice run, but keeps permissions 
 // User request 2026-10-24: empty composer hints must follow hover/hold/click,
 // and native selection must not take over a recording. Existing voice tests
 // only cover editability; minimal inputs below drive real DOM handlers (unit/jsdom).
+// 2026-10-26 Bluetooth regression: preparation must also wait for the hold
+// threshold; even a microphone opened without recording changes headset audio.
 it('shows voice guidance only in an empty composer and distinguishes holding from clicking', async () => {
   const view = renderComposer();
   await waitFor(() => expect(h.editor).not.toBeNull());
@@ -261,9 +292,13 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
     // mousedown path inert while the real composer handler still receives it.
     Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
     fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
-    expect(h.prepare).toHaveBeenCalledOnce();
+    expect(h.prepare).not.toHaveBeenCalled();
     expect(h.listening).toBe(false);
-    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(599); });
+    expect(h.prepare).not.toHaveBeenCalled();
+    expect(h.listening).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(h.prepare).toHaveBeenCalledOnce();
     view.rerender(<ChatInput {...view.props} />);
     expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakRelease');
     for (const type of ['selectstart', 'dragstart', 'mousemove']) {
@@ -302,6 +337,45 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
   view.rerender(<ChatInput {...view.props} />);
   fireEvent.pointerEnter(area);
   expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+});
+
+// 2026-10-26 regression (unit/jsdom): existing guidance must survive the 500ms
+// voice hover delay. The empty-composer test above has no recommendation/preview.
+it.each(['recommendation', 'preview'] as const)('keeps %s visible while hovering the empty composer', async kind => {
+  const sessionId = 'voice-hint-priority';
+  const prompt = 'Continue with this plan';
+  const view = renderComposer({ sessionId, previewPrompt: kind === 'preview' ? prompt : undefined });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  if (kind === 'recommendation') {
+    await act(async () => {
+      promptRecommendations.applyRunningSnapshot(new Map([[sessionId, { isRunning: true }]]));
+      promptRecommendations.noteTurnEnded(sessionId, 200);
+      promptRecommendations.applyRunningSnapshot(new Map());
+      promptRecommendations.settleCompletion(sessionId);
+      const seq = beginPromptRecommendationPrediction(sessionId, 200)!;
+      resolvePromptRecommendationPrediction(sessionId, 200, seq, prompt);
+    });
+  }
+  expect(screen.getByText(prompt)).toBeTruthy();
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerEnter(h.editor!.view.dom.parentElement!.parentElement!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    expect(screen.getByText(prompt)).toBeTruthy();
+    if (kind === 'recommendation') {
+      supplyRangeGeometry();
+      await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Tab' }); });
+      expect(h.editor!.getText()).toBe(prompt);
+    }
+  } finally {
+    vi.useRealTimers();
+    clearPromptRecommendationSession(sessionId);
+  }
 });
 
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control

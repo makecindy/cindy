@@ -21,6 +21,7 @@ export interface PluginTargetReceipt {
   approvalRevision?: string;
   status: 'pending' | 'accepted' | 'cancelled';
   delivery?: PluginTargetDelivery;
+  invocationId?: string;
 }
 export interface PluginTargetStore {
   get(pluginId: string, requestKey: string): Promise<PluginTargetReceipt | undefined>;
@@ -53,6 +54,8 @@ export interface PluginTargetAdapter {
     images?: PluginMessageImage[],
   ): Promise<PluginTargetDelivery>;
   withdraw(taskId: string, clientId: string, guard: () => void): Promise<void>;
+  prepareInvocation?(pluginId: string, id: string, parentId?: string, operation?: string, sessionId?: string): string;
+  acceptInvocation?(pluginId: string, id: string): void;
 }
 const fail = (code: string): never => {
   throw Object.assign(new Error(code), { code });
@@ -131,6 +134,7 @@ export class PluginTargetSlot {
       !isTarget(request.target) ||
       typeof request.text !== 'string' || !request.text.trim() || request.text.length > 64000 ||
       (request.delivery !== undefined && !['queue', 'steer'].includes(request.delivery)) ||
+      (request.invocationId !== undefined && !keyString(request.invocationId)) ||
       (request.title !== undefined && (typeof request.title !== 'string' || request.title.length > 200))
     ) return fail('INVALID_PARAMS');
     const target = request.target;
@@ -150,9 +154,10 @@ export class PluginTargetSlot {
       model: request.route.model, effort: request.route.effort, fastMode: request.route.fastMode,
     };
     return withParsedPluginMessageAttachments(request.attachments, async images => {
+      const contentIdentity = [target.kind, target.id, request.text, request.title, route, delivery,
+        images.map(({ hash, name }) => [hash, name])];
       const hash = createHash('sha256')
-        .update(JSON.stringify([target.kind, target.id, request.text, request.title, route, delivery,
-          images.map(({ hash, name }) => [hash, name])]))
+        .update(JSON.stringify(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]))
         .digest('hex');
       const pending = this.inFlight.get(runtimeKey);
       if (pending) {
@@ -185,6 +190,8 @@ export class PluginTargetSlot {
           hash, target, approvalRevision, status: 'pending',
           taskId: target.kind === 'project' ? randomUUID() : await adapter.session(target.kind, target.id),
         };
+        receipt.invocationId = adapter.prepareInvocation?.(pluginId, receipt.id.slice('plugin-target:'.length),
+          request.invocationId, 'targets.send', receipt.taskId);
         guard();
         // A per-key reservation uses the existing receipt DB, never a whole-history rewrite.
         const reserved = await store.reserve(receipt);
@@ -204,6 +211,9 @@ export class PluginTargetSlot {
           pluginId, taskId, receipt.id, request.text, guard, validateTarget, delivery, images,
         );
         authorized();
+        if (receipt.invocationId) {
+          try { adapter.acceptInvocation?.(pluginId, receipt.invocationId); } catch { /* Statistics never retry real delivery. */ }
+        }
         await store.accept(receipt.id, actualDelivery);
         authorized();
         const current = await store.getById(receipt.id);

@@ -1,3 +1,5 @@
+/// <reference path="../vite-env.d.ts" />
+
 /**
  * Site Recipe + SiteGuide registry.
  *

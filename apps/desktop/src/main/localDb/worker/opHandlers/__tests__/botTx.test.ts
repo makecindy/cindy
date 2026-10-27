@@ -97,8 +97,9 @@ describe('Bot named worker transactions', () => {
         const row = db.prepare(`SELECT p.status, v.capabilities_json AS capabilities FROM bot_profiles p
           JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
           WHERE p.id = 'saved-bot'`).get() as { status: string; capabilities: string };
+        const config = JSON.parse(row.capabilities);
         return row.status === 'active' ? {
-          chain: normalizeBotModelChain(JSON.parse(row.capabilities).modelChain), current,
+          chain: normalizeBotModelChain(config.modelChain, config), current,
           hasRuntimeOverride: false, scheduledModelBaseline: readBaseline(),
         } : null;
       },
@@ -194,6 +195,23 @@ describe('Bot named worker transactions', () => {
     await h.reconcile()('saved-session');
     await h.scope.restore('saved-session');
     expect(h.current().model).toBe('temporary');
+    expect(h.readBaseline()).toBeNull();
+  });
+
+  it('keeps a legacy location-only save across restart and old automation cleanup', async () => {
+    const h = savedModelFixture();
+    const legacy = { harness: 'codex', model: 'old', providerId: 'connected-custom', effort: 'high', fastMode: false };
+    db.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(legacy), 'saved-bot');
+    h.pause(true);
+    h.save('old', 1, { capabilitiesJson: JSON.stringify({ ...legacy, agentDeviceId: 'share:new-location' }) });
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2 });
+    await h.scope.restore('saved-session', 'automation');
+    expect(h.current().model).toBe('temporary');
+    h.pause(false);
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session', 'automation');
+    expect(h.current()).toMatchObject({ model: 'old', agentDeviceId: 'share:new-location' });
     expect(h.readBaseline()).toBeNull();
   });
 
@@ -498,6 +516,14 @@ describe('Bot named worker transactions', () => {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1, session: session('main'), now: 1,
     } });
     tx(db, { name: 'bots.createChannelLane', args: { botId: 'bot-1', routeKey: 'im:feishu:g:1', session: session('feishu') } });
+    // Routine context is keyed by the standing instruction, never the main task.
+    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r1', session: session('routine') } }))
+      .toMatchObject({ sessionId: 'routine', created: true });
+    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r1', session: session('duplicate') } }))
+      .toMatchObject({ sessionId: 'routine', created: false });
+    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r2', session: session('second-routine') } }))
+      .toMatchObject({ sessionId: 'second-routine', created: true });
+    expect(db.prepare("SELECT canonical_session_id FROM bot_profiles WHERE id = 'bot-1'").pluck().get()).toBe('main');
     for (const role of ['group', 'thread', 'delegation', 'history']) {
       db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, workspace_kind, model, effort, permission_mode, status,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
@@ -509,7 +535,7 @@ describe('Bot named worker transactions', () => {
     const mode = (id: string) => db.prepare('SELECT permission_mode FROM sessions WHERE id = ?').pluck().get(id);
     for (const next of ['bypassPermissions', 'auto', 'ask']) {
       tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'main', mode: next } });
-      expect(['main', 'feishu', 'group', 'thread'].map(mode)).toEqual([next, next, next, next]);
+      expect(['main', 'feishu', 'group', 'thread', 'routine', 'second-routine'].map(mode)).toEqual(Array(6).fill(next));
       expect(['delegation', 'history'].map(mode)).toEqual(['ask', 'ask']);
     }
     // A stale preflight must not mint a lane with authority older than the Profile.
@@ -519,18 +545,22 @@ describe('Bot named worker transactions', () => {
     db.prepare("UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = 'bot-1'").run(JSON.stringify({ permissions: 'ask' }));
     expect(tx(db, { name: 'bots.reconcileLanePermission', args: { sessionId: 'feishu' } }))
       .toMatchObject({ mode: 'bypassPermissions', canonicalSessionId: 'main' });
-    expect(['main', 'feishu', 'group', 'thread', 'new'].map(mode))
-      .toEqual(Array(5).fill('bypassPermissions'));
+    expect(['main', 'feishu', 'group', 'thread', 'new', 'routine', 'second-routine'].map(mode))
+      .toEqual(Array(7).fill('bypassPermissions'));
     expect(JSON.parse(db.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ?').pluck().get('bot-1') as string).permissions)
       .toBe('trusted');
     // Main is authoritative in both directions; never choose the widest snapshot.
     db.prepare("UPDATE sessions SET permission_mode = 'ask' WHERE id = 'main'").run();
     expect(tx(db, { name: 'bots.reconcileLanePermission', args: { sessionId: 'main' } }))
       .toMatchObject({ mode: 'ask', canonicalSessionId: 'main' });
-    expect(['main', 'feishu', 'group', 'thread', 'new'].map(mode)).toEqual(Array(5).fill('ask'));
+    expect(['main', 'feishu', 'group', 'thread', 'new', 'routine', 'second-routine'].map(mode)).toEqual(Array(7).fill('ask'));
     expect(['delegation', 'history'].map(mode)).toEqual(['ask', 'ask']);
+    // A lone stale routine must also be repaired when the Profile already matches main.
+    db.prepare("UPDATE sessions SET permission_mode = 'bypassPermissions' WHERE id = 'routine'").run();
+    expect(tx(db, { name: 'bots.reconcileLanePermission', args: { sessionId: 'routine' } })).toMatchObject({ mode: 'ask', changed: true });
+    expect(mode('routine')).toBe('ask');
     expect(tx(db, { name: 'bots.reconcileLanePermission', args: { sessionId: 'history' } })).toMatchObject({ mode: null });
-    expect(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(7);
+    expect(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(9);
   });
 
   it('does not insert a losing canonical CAS session', () => {

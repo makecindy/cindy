@@ -387,6 +387,7 @@ export interface Session {
    * 与 updatedAt 解耦——改 model/effort/title 等字段不会动它。
    */
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   status: SessionStatus;
   /** 当前 session 接的 agent。老 session DEFAULT 'cc'。 */
   agentKind: AgentKind;

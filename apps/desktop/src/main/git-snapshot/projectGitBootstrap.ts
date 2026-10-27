@@ -7,7 +7,9 @@
  * until a future explicit-confirmation flow exists.
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as nativeFs } from 'node:fs';
+import { operationFileSystem } from '../utils/operationFileSystem';
+import { operationCheckpoint, operationWait } from '../utils/operationBudget';
 import path from 'node:path';
 
 import { detectCwd } from '../worktree/WorktreeManager';
@@ -16,6 +18,7 @@ import { createLogger } from '../logger';
 import { createSnapshotDetailed, type CreateSnapshotDetailedResult } from './gitSnapshotService';
 
 const log = createLogger('project-git-bootstrap');
+const fs = operationFileSystem(nativeFs);
 const INITIAL_PROJECT_LABEL = 'Initialize project snapshot';
 const FALLBACK_SESSION_ID = 'project-bootstrap';
 
@@ -155,12 +158,15 @@ async function withProjectBootstrapQueue<T>(
     () => current,
   );
   bootstrapQueues.set(key, queued);
+  void queued.finally(() => {
+    if (bootstrapQueues.get(key) === queued) bootstrapQueues.delete(key);
+  });
 
-  await previous.catch(() => undefined);
   try {
+    await operationWait(previous.catch(() => undefined));
+    operationCheckpoint();
     return await task();
   } finally {
     releaseCurrent();
-    if (bootstrapQueues.get(key) === queued) bootstrapQueues.delete(key);
   }
 }

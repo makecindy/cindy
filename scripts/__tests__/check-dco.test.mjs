@@ -449,6 +449,18 @@ test('resolvePosixShell never probes relative candidates from blank or invalid W
 // --- 端到端：真 git 仓库 ---
 
 const canRunGitFixture = process.platform !== 'win32';
+const canCreateFileSymlink = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-dco-symlink-probe-'));
+  try {
+    fs.symlinkSync(CHECK_DCO, path.join(dir, 'check-dco.mjs'), 'file');
+    return true;
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOSYS', 'ENOTSUP'].includes(error?.code)) return false;
+    throw error;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 function createRepo() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-dco-')));
@@ -513,6 +525,30 @@ test('CLI fails on an unsigned commit and passes once it is signed off', { skip:
   assert.equal(passed.code, 0);
   assert.match(passed.output, /DCO check passed/);
 });
+
+test(
+  'CLI runs when invoked through a symbolic link',
+  {
+    skip: !canRunGitFixture
+      ? 'Git fixture requires POSIX git configuration'
+      : !canCreateFileSymlink
+        ? 'File symbolic links are unavailable on this host'
+        : false,
+  },
+  (t) => {
+    const repo = createRepo();
+    t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+
+    repo.commit('history.txt', 'chore: pre-DCO history');
+    repo.run(['git', 'checkout', '--quiet', '-b', 'feature']);
+    repo.commit('feature.txt', 'feat: signed work', ['-s']);
+    const linkedCheckDco = path.join(repo.dir, 'linked-check-dco.mjs');
+    fs.symlinkSync(CHECK_DCO, linkedCheckDco, 'file');
+
+    const output = repo.run(['node', linkedCheckDco, '--base', 'main']);
+    assert.match(output, /DCO check passed: 1 commit signed off/);
+  },
+);
 
 test('installed hook signs off subsequent commits automatically', { skip: !canRunGitFixture }, (t) => {
   const repo = createRepo();

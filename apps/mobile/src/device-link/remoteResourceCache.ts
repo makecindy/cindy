@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { ChatActor } from '@/chat/chatServerClient';
 import { resolveRemoteText } from '@cindy/device-link';
 import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
 
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
 type ChatRoster = { items: HostedRemoteCollectionItem[]; ids: string[] };
-type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string>; chatRosters?: Record<string, ChatRoster> };
+export type CachedCloudHome = { supported: boolean; actors: ChatActor[]; deviceNames: Array<[string, string]> };
+type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string>; chatRosters?: Record<string, ChatRoster>; cloudHomes?: Record<string, CachedCloudHome> };
 const empty = (): Snapshot => ({ home: [], items: {}, read: {}, readSequences: {} });
 const validSequence = (value: unknown): value is string => typeof value === 'string' && /^\d{1,30}$/.test(value);
 let epoch = 0;
@@ -24,6 +26,16 @@ function normalize(raw: unknown): Snapshot {
   const out = empty();
   if (!raw || typeof raw !== 'object') return out;
   const value = raw as Partial<Snapshot>;
+  if (value.cloudHomes && typeof value.cloudHomes === 'object') for (const realm of ['cn', 'global']) {
+    const home = value.cloudHomes[realm];
+    if (!home || typeof home.supported !== 'boolean' || !Array.isArray(home.actors) || !Array.isArray(home.deviceNames)) continue;
+    (out.cloudHomes ??= {})[realm] = { supported: home.supported,
+      actors: home.actors.filter(actor => actor && typeof actor.id === 'string' && typeof actor.name === 'string'
+        && typeof actor.kind === 'string' && typeof actor.externalId === 'string'
+        && (actor.homeDeviceId === null || typeof actor.homeDeviceId === 'string')
+        && (actor.avatar === null || typeof actor.avatar === 'string')),
+      deviceNames: home.deviceNames.filter(pair => Array.isArray(pair) && pair.length === 2 && pair.every(part => typeof part === 'string')) };
+  }
   if (Array.isArray(value.home)) for (const row of value.home.slice(0, 32)) {
     if (!row || typeof row.id !== 'string' || row.id.length > 160 || typeof row.title !== 'string' || typeof row.resourceKind !== 'string') continue;
     if (!isMobileRemoteCollectionSupported(row.id)) continue;
@@ -89,6 +101,16 @@ export async function readRemoteResourceSnapshot(userId: string): Promise<Snapsh
   return snapshots.get(userId)!;
 }
 
+/** Reopening a page paints the same saved rows in its first render, without an async blank frame. */
+export const peekRemoteResourceSnapshot = (userId: string): Snapshot | undefined => snapshots.get(userId);
+export const peekCachedChatRoster = (userId: string, realm: string): ChatRoster | null => snapshots.get(userId)?.chatRosters?.[realm] ?? null;
+export const peekCachedCloudHome = (userId: string, realm: string): CachedCloudHome | null => snapshots.get(userId)?.cloudHomes?.[realm] ?? null;
+export const readCachedCloudHome = async (userId: string, realm: string): Promise<CachedCloudHome | null> =>
+  (await readRemoteResourceSnapshot(userId)).cloudHomes?.[realm] ?? null;
+export const cacheCloudHome = (userId: string, realm: string, value: CachedCloudHome, current: () => boolean = () => true) => update(userId, s => {
+  if (current()) (s.cloudHomes ??= {})[realm] = value;
+});
+
 /** Trim only the disposable disk mirror; live rows and read positions stay intact. */
 function diskSnapshot(raw: string): string {
   if (raw.length <= MAX_CHARS) return raw;
@@ -120,6 +142,10 @@ function diskSnapshot(raw: string): string {
     remaining -= JSON.stringify(roster.ids.shift()).length;
   }
   while (remaining > 0 && copy.home.length) remaining -= JSON.stringify(copy.home.shift()).length;
+  for (const home of Object.values(copy.cloudHomes ?? {})) {
+    while (remaining > 0 && home.actors.length) remaining -= JSON.stringify(home.actors.pop()).length;
+    while (remaining > 0 && home.deviceNames.length) remaining -= JSON.stringify(home.deviceNames.pop()).length;
+  }
   return JSON.stringify(copy);
 }
 

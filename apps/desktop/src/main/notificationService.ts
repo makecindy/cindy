@@ -3,8 +3,7 @@
  * ---------------------------------------------------------------------------
  * 主进程层。提供单一 IPC handler `notification:show-session-event`：
  *   - macOS / Linux / Windows：统一走 Electron 原生 `Notification`。
- *   - 点通知后把窗口拉到前台，并通过 `notification:focus-session` 把 sessionId
- *     广播给 renderer，由 renderer 路由跳转。
+ *   - 点通知后通过持久到 renderer 就绪的 deep-link 队列打开原任务及其所属电脑。
  *   - 飞书通道：payload.channels.feishu === true 时通过 feishuIm 给当前 owner
  *     私聊发通知。伙伴回复用纯文本，普通任务沿用 markdown；复用现有 IM API。
  *
@@ -30,7 +29,7 @@ import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
 import { companionAvatarThumbnail } from './agent-island/companionIdentity';
-import { getDeepLinkMainWindow, openMainWindowChatMessage } from './deepLink';
+import { getDeepLinkMainWindow, openMainWindowChatMessage, openMainWindowSession } from './deepLink';
 import type { ChatMessageNotification } from './maker-ipc/chatMessageNotifications';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
@@ -176,29 +175,6 @@ function isFeishuReplyPending(key: string, eventId: string | undefined): boolean
 const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
 
 /**
- * 把窗口拉到前台并广播 sessionId 给 renderer 路由跳转。
- *
- * Windows 防焦点劫持：非前台进程直接 `focus()` 会被系统拒绝，只让任务栏图标
- * 闪烁不抢前台。绕过办法：先 `setAlwaysOnTop(true)` 触发系统允许该窗口前置，
- * `show() + focus()` 之后立刻 `setAlwaysOnTop(false)` 回到正常 z-order，但
- * 焦点已经成功转移过来了。这是 Electron 社区在 Windows 上的稳定 hack。
- *
- * macOS 的 SetForegroundWindow 等价物是 `app.focus({ steal: true })`，但 Mac
- * 默认 `focus()` 行为已经够强，不需要多余处理；这里的 alwaysOnTop 在 Mac 上
- * 是无害 no-op（窗口本来就允许前置）。
- */
-function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): void {
-  const win = getWindow();
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.setAlwaysOnTop(true);
-  win.show();
-  win.focus();
-  win.setAlwaysOnTop(false);
-  if (sessionId) win.webContents.send('notification:focus-session', sessionId);
-}
-
-/**
  * 从 main 内其它模块发送与会话通知同语义的桌面 toast。
  * Scheduler 运行在 main，必须直接调用此入口；`webContents.send` 同名 IPC 只会
  * 发给 renderer，不会命中 main 的 `ipcMain.handle`。
@@ -206,6 +182,8 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
   payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
+    deviceId?: string;
+    messageClientId?: string;
     body?: string;
     teammate?: boolean;
     avatarJpeg?: string;
@@ -216,7 +194,14 @@ export function showDesktopSessionEvent(
   const { sessionId, title, kind } = payload;
   if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
-  return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate, payload.avatarJpeg);
+  const owner = captureDataOwnerBroadcastScope();
+  return showDesktopToast(safeTitle, kind, () => {
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
+    if (sessionId) openMainWindowSession(sessionId, {
+      ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
+      ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
+    });
+  }, payload.body, payload.teammate, payload.avatarJpeg);
 }
 
 /**
@@ -225,11 +210,12 @@ export function showDesktopSessionEvent(
  */
 export function showDeviceSessionDesktopEvent(
   getWindow: () => BrowserWindow | null,
-  event: { sessionId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
+  event: { sessionId: string; deviceId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
 ): void {
   if (!desktopNotificationsEnabled) return;
   showDesktopSessionEvent(getWindow, {
     sessionId: event.sessionId,
+    deviceId: event.deviceId,
     title: [event.title ?? getSessionNotificationUntitled(), event.deviceName].filter(Boolean).join(' · '),
     kind: event.kind,
     markAttention: false,
@@ -390,6 +376,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
+              messageClientId: preview?.reply?.clientId,
               body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
             if (kind === 'done' && accepted) {

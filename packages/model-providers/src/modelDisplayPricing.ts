@@ -96,7 +96,9 @@ function parseSummary(value: unknown): ModelDisplayPricingSummary | undefined {
       if (
         result.some(
           (previous) =>
-            previous.unit === item.unit && previous.quantity === item.quantity,
+            previous.unit === item.unit &&
+            previous.quantity === item.quantity &&
+            previous.tier === item.tier,
         )
       ) {
         return undefined;

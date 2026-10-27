@@ -1,3 +1,4 @@
+import { deviceDisplayName } from './deviceName';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -34,6 +35,7 @@ export function DeviceManagementList(props: DeviceManagementListProps) {
   const [offlineExpanded, setOfflineExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const sections = useMemo(() => buildDeviceManagementSections(props.rows), [props.rows]);
+  const devices = useMemo(() => props.rows.map((row) => row.device), [props.rows]);
   const offlineRows = visibleOfflineDeviceRows(sections.offline, offlineExpanded);
   const { onRefresh } = props;
   const refresh = useCallback(() => {
@@ -45,7 +47,8 @@ export function DeviceManagementList(props: DeviceManagementListProps) {
     openRow.current = ref;
   };
   const renderRow = (row: DeviceManagementListProps['rows'][number]) => (
-    <DeviceRow key={row.device.deviceId} {...props} row={row} onWillOpen={onWillOpen} />
+    <DeviceRow key={row.device.deviceId} {...props} row={row}
+      name={deviceDisplayName(row.device.deviceId, row.device.name, devices)} onWillOpen={onWillOpen} />
   );
   return (
     <ScrollView
@@ -95,6 +98,7 @@ export function DeviceManagementList(props: DeviceManagementListProps) {
 
 function DeviceRow({
   row,
+  name,
   busy,
   onOpen,
   onRename,
@@ -102,6 +106,7 @@ function DeviceRow({
   onWillOpen,
 }: DeviceManagementListProps & {
   row: DeviceManagementListProps['rows'][number];
+  name: string;
   onWillOpen(ref: ClassicSwipeableMethods | null): void;
 }) {
   const ref = useRef<ClassicSwipeableMethods | null>(null);
@@ -146,7 +151,7 @@ function DeviceRow({
       onSwipeableWillOpen={() => onWillOpen(ref.current)}
     >
       <Pressable
-        accessibilityLabel={t('devices.management.openDevice', { name: row.device.name })}
+        accessibilityLabel={t('devices.management.openDevice', { name })}
         accessibilityRole="button"
         onPress={() => onOpen(row.device)}
         testID={`deviceManagement.open.${row.device.deviceId}`}
@@ -158,7 +163,7 @@ function DeviceRow({
           color={colors.textSecondary}
         />
         <View style={styles.labels}>
-          <Text numberOfLines={1} style={styles.name}>{row.device.name}</Text>
+          <Text numberOfLines={1} style={styles.name}>{name}</Text>
           <View style={styles.status}>
             {/* 状态点:可控用品牌 teal,其余(离线 / 未开远控 / 已撤销)用 muted(borderStrong)。 */}
             <StatusDot tone={row.canOpen ? 'ready' : 'muted'} />
