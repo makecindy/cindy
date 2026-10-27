@@ -159,7 +159,7 @@ privately rather than opening a public issue.
 
 ## Privacy & telemetry
 
-**Official distribution builds** include [TapDB](https://www.taptap.io/tapdb)
+**Official distribution builds** include [TapDB](https://developer.taptap.io/docs/sdk/tapdb/features/)
 usage analytics for product-level aggregate statistics (device / OS / app-version
 metadata; associated with your account ID after sign-in). It does **not** collect
 chat content, file content, or working-directory data. In addition, while signed
