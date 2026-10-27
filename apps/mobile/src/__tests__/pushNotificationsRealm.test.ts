@@ -62,6 +62,7 @@ vi.mock('@/config/devServerEnvironment', () => ({
 
 import {
   configureForegroundNotificationBehavior,
+  usesLocalSessionNotifications,
   retryPendingUnregister,
   syncPushRegistration,
   unregisterPushTokenBestEffort,
@@ -147,6 +148,19 @@ describe('push notification realm routing', () => {
     await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
     expect(apiFetch).not.toHaveBeenCalled();
     expect(store.has(REGISTERED_KEY)).toBe(false);
+    expect(usesLocalSessionNotifications()).toBe(true);
+  });
+  it('revokes an older Google registration before selecting local task delivery, and disables it at logout', async () => {
+    mocks.platform.OS = 'android';
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('FCM_UNAVAILABLE'));
+    setStoredRealms(REGISTERED_KEY, ['cn']);
+    const apiFetch = vi.fn(async (_path: string, _options: { method?: string }) => undefined as never);
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(apiFetch.mock.calls.map(([path, options]) => [path, options.method])).toEqual([
+      ['/api/device-link/push-token', 'DELETE'], ['/v1/push-token', 'DELETE'],
+    ]);
+    await unregisterPushTokenBestEffort(null);
+    expect(usesLocalSessionNotifications()).toBe(false);
   });
 
   it('keeps Android notification permission denial distinct from unavailable Google push', async () => {

@@ -70,7 +70,7 @@ internal class ChatMessagingDelegate(context: Context) : FirebaseMessagingDelega
   override fun createNotificationRequest(identifier: String, content: INotificationContent,
     notificationTrigger: FirebaseNotificationTrigger): NotificationRequest {
     val visible = if (content is RemoteNotificationContent && content.isDataOnly
-      && content.body?.optString("category") == "chat-message") ChatNotificationContent(content) else content
+      && content.body?.optString("category") in setOf("chat-message", "session-done")) ChatNotificationContent(content) else content
     return super.createNotificationRequest(identifier, visible, notificationTrigger)
   }
 }
@@ -111,7 +111,7 @@ class ChatNotificationsService : NotificationsService() {
       val text = (content.text ?: "").removePrefix("$name: ")
       return NotificationCompat.Builder(context, original)
         .setCategory(NotificationCompat.CATEGORY_MESSAGE).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-        .setOnlyAlertOnce(true)
+        .setOnlyAlertOnce(chat)
         .setStyle(NotificationCompat.MessagingStyle(Person.Builder().setName("Cindy").build())
           .setConversationTitle(if (group) content.title else null).setGroupConversation(group)
           .addMessage(text, notification.originDate.time.takeIf { it > 0 } ?: System.currentTimeMillis(), person)).build()

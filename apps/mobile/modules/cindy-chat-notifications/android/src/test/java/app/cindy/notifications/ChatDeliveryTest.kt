@@ -7,6 +7,13 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Bundle
 import android.os.Parcel
+import android.os.Handler
+import android.os.Looper
+import okhttp3.OkHttpClient
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.Request
+import okhttp3.Response
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -19,6 +26,7 @@ import expo.modules.notifications.notifications.model.Notification
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
+import io.mockk.verify
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
@@ -81,6 +89,8 @@ class ChatDeliveryTest {
     registry.getModuleHolder(handler)!!.post(EventName.MODULE_CREATE)
     context.getSharedPreferences("cindy-chat-notification-ids", 0).edit().clear().commit()
     context.getSharedPreferences("cindy-chat-background", 0).edit().clear().commit()
+    SessionDelivery.identity(context, "fixture-owner")
+    context.getSharedPreferences("cindy-session-notification-ids", 0).edit().remove("ids").commit()
     ChatDelivery.identity(context, actor)
     lifecycle(Lifecycle.State.RESUMED)
   }
@@ -183,5 +193,100 @@ class ChatDeliveryTest {
     assertFalse(body.has("sender")); assertFalse(body.has("senderName")); assertFalse(body.has("body"))
     assertEquals(route, body.getString("deepLink"))
     assertEquals("", content.getString("body"))
+  }
+
+  private fun sessionInput(id: String = "a".repeat(64)) = JSONObject().put("eventId", id)
+    .put("category", "session-done").put("collapseId", "b".repeat(32)).put("title", "Ztw")
+    .put("body", "Final reply").put("deepLink", "/sessions/canonical?deviceId=desktop&resourceCollectionId=teammates&resourceId=ztw&resourceKind=bot")
+
+  // Integration tier: new production native intake, actual Expo delegates and pending intent.
+  // No existing chat-message case covers task category, owner fencing or task event-ID storage.
+  @Test fun liveTaskAndCompanionReplyReachExpoWithPrivacyAndStableEventDeduplication() {
+    context.getSharedPreferences("cindy-chat-background", 0).edit().putBoolean("preview", false).commit()
+    SessionDelivery.receive(context, "fixture-owner", "wrong-desktop", sessionInput())
+    SessionDelivery.receive(context, "old-owner", "desktop", sessionInput())
+    assertTrue(broadcasts.isEmpty())
+    SessionDelivery.receive(context, "fixture-owner", "desktop", sessionInput())
+    val receive = broadcasts.single()
+    ChatNotificationsService().handleIntent(context, receive)
+    assertEquals(1, events.size)
+    val content = events.single().second.getBundle("notification")!!.getBundle("request")!!.getBundle("content")!!
+    assertEquals("", content.getString("body"))
+    val data = JSONObject(content.getString("dataString")!!)
+    assertFalse(data.has("body")); assertEquals(sessionInput().getString("deepLink"), data.getString("deepLink"))
+    SessionDelivery.receive(context, "fixture-owner", "desktop", sessionInput())
+    assertEquals(1, broadcasts.size)
+    // The next final reply has a new identity even when title/body/collapse key are unchanged.
+    SessionDelivery.receive(context, "fixture-owner", "desktop", sessionInput("c".repeat(64)))
+    assertEquals(2, broadcasts.size)
+    SessionDelivery.identity(context, "")
+    SessionDelivery.receive(context, "fixture-owner", "desktop", sessionInput("d".repeat(64)))
+    assertEquals(2, broadcasts.size)
+  }
+
+  @Test fun completedTaskBackgroundPresentationKeepsTheCanonicalDeviceInTheRealClickResponse() {
+    lifecycle(Lifecycle.State.STARTED)
+    val input = sessionInput().put("sender", JSONObject().put("id", "fixture-bot"))
+    SessionDelivery.receive(context, "fixture-owner", "desktop", input)
+    ChatNotificationsService().handleIntent(context, broadcasts.single())
+    ChatNotificationsService().handleIntent(context, broadcasts.last())
+    val notification = published.get(5, TimeUnit.SECONDS)
+    assertEquals(0, notification.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE)
+    val click = shadowOf(notification.contentIntent).savedIntent
+    val response = NotificationsService.getNotificationResponseFromBroadcastIntent(click)
+    assertEquals(sessionInput().getString("deepLink"), response.notification.notificationRequest.content.body!!.getString("deepLink"))
+    assertEquals(sessionInput().getString("eventId"), response.notification.notificationRequest.identifier)
+    assertEquals("Final reply", response.notification.notificationRequest.content.text)
+  }
+
+  @Test fun nativeRelayRequiresTheAuthenticatedDeviceAcceptedPeerAndFreshSubscriptionBeforeDelivery() {
+    val sent = mutableListOf<JSONObject>()
+    val ws = mockk<WebSocket>(relaxed = true)
+    every { ws.send(any<String>()) } answers { sent.add(JSONObject(firstArg<String>())); true }
+    val http = mockk<OkHttpClient>()
+    lateinit var listener: WebSocketListener
+    every { http.newWebSocket(any<Request>(), any()) } answers { listener = secondArg(); ws }
+    var enabled = true
+    val relay = SessionRelay(context, Handler(Looper.getMainLooper()), http) { enabled }
+    val config = SessionRelayConfiguration("fixture-owner", "fixture-member", "phone",
+      "wss://invalid.example/api/device-link/ws", "invalid-test-token", listOf("desktop", "desktop-two"))
+    fun receive(frame: JSONObject) {
+      listener.onMessage(ws, frame.toString()); shadowOf(Looper.getMainLooper()).idle()
+    }
+    try {
+      relay.update(config)
+      listener.onOpen(ws, mockk<Response>()); shadowOf(Looper.getMainLooper()).idle()
+      assertEquals("hello", sent.single().getString("kind"))
+      receive(JSONObject().put("v", 1).put("kind", "hello-ack").put("payload", JSONObject()
+        .put("serverProtocolVersion", 1).put("deviceId", "phone").put("userId", "fixture-member")))
+      val open = sent.single { it.getString("kind") == "link-open" && it.getString("dst") == "desktop" }
+      receive(JSONObject().put("v", 1).put("kind", "link-accept").put("src", "desktop").put("dst", "phone")
+        .put("id", open.getString("id")).put("payload", JSONObject().put("capabilities", org.json.JSONArray().put("mobile-local-notifications-v1"))))
+      val subscribe = sent.single { it.getString("kind") == "invoke" }
+      assertEquals("device-link:subscribe", subscribe.getJSONObject("payload").getString("channel"))
+      val topic = subscribe.getJSONObject("payload").getJSONArray("args").getJSONObject(0).getJSONArray("topics").getString(0)
+      val notice = sessionInput().put("subscriptionId", topic.removePrefix("notifications:"))
+      fun push(source: String = "desktop", payload: JSONObject = notice) = JSONObject().put("v", 1).put("kind", "push")
+        .put("src", source).put("dst", "phone").put("payload", JSONObject().put("channel", "device-link:mobile-notification").put("payload", payload))
+      receive(push("unaccepted-device"))
+      receive(push(payload = sessionInput().put("subscriptionId", "old-subscription")))
+      receive(push().put("sharedTask", JSONObject()))
+      assertTrue(broadcasts.isEmpty())
+      receive(push()); assertEquals(1, broadcasts.size)
+      receive(push()); assertEquals(1, broadcasts.size)
+      val otherOpen = sent.single { it.getString("kind") == "link-open" && it.getString("dst") == "desktop-two" }
+      receive(JSONObject().put("v", 1).put("kind", "link-accept").put("src", "desktop-two").put("dst", "phone")
+        .put("id", otherOpen.getString("id")).put("payload", JSONObject().put("capabilities", org.json.JSONArray().put("mobile-local-notifications-v1"))))
+      val otherSubscribe = sent.single { it.getString("kind") == "invoke" && it.getString("dst") == "desktop-two" }
+      val otherTopic = otherSubscribe.getJSONObject("payload").getJSONArray("args").getJSONObject(0).getJSONArray("topics").getString(0)
+      receive(JSONObject().put("v", 1).put("kind", "relay-error").put("payload", JSONObject().put("dst", "desktop").put("code", "DEVICE_OFFLINE")))
+      receive(push("desktop-two", sessionInput("c".repeat(64)).put("deepLink", "/sessions/other?deviceId=desktop-two")
+        .put("subscriptionId", otherTopic.removePrefix("notifications:"))))
+      assertEquals(2, broadcasts.size)
+      verify(exactly = 1) { http.newWebSocket(any<Request>(), any()) }
+      enabled = false
+      receive(push(payload = sessionInput("e".repeat(64)).put("subscriptionId", topic.removePrefix("notifications:"))))
+      assertEquals(2, broadcasts.size)
+    } finally { relay.stop() }
   }
 }

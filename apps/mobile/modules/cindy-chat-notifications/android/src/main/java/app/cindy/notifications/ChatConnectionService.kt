@@ -32,8 +32,25 @@ class ChatConnectionService : Service() {
     @Volatile private var configuration: ChatConnection? = null
     @Volatile var running = false; private set
     @Volatile var refreshRequested: (() -> Unit)? = null
-    internal fun configure(value: ChatConnection) { configuration = value }
-    fun clear() { configuration = null }
+    @Volatile internal var appForeground = true
+    private var instance: ChatConnectionService? = null
+    private var relayConfiguration: SessionRelayConfiguration? = null
+    private var relayBackground = false
+    internal fun configureRelay(value: SessionRelayConfiguration?) {
+      relayConfiguration = value
+      instance?.updateRelay()
+    }
+    internal fun setRelayBackground(value: Boolean) {
+      relayBackground = value && !appForeground
+      instance?.updateRelay()
+    }
+    internal fun receiveSession(context: android.content.Context, owner: String, device: String, payload: JSONObject) {
+      val relay = relayConfiguration ?: return
+      if (configuration?.owner != owner || relay.owner != owner || device !in relay.targets) return
+      SessionDelivery.receive(context, owner, device, payload)
+    }
+    internal fun configure(value: ChatConnection) { configuration = value; instance?.updateRelay() }
+    fun clear() { configuration = null; relayConfiguration = null; relayBackground = false; instance?.relay?.stop() }
     private const val CHANNEL = "chat-background"
     private const val ID = 7041
     private const val STOP = "app.cindy.notifications.STOP"
@@ -43,6 +60,15 @@ class ChatConnectionService : Service() {
   private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
     .callTimeout(25, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
   private var socket: WebSocket? = null
+  private val relay by lazy { SessionRelay(this, handler, http) { config ->
+    !stopped && relayBackground && !appForeground && configuration?.owner == config.owner
+      && relayConfiguration?.owner == config.owner
+  } }
+  private fun updateRelay() {
+    val config = relayConfiguration
+    if (config != null && configuration?.owner == config.owner) SessionDelivery.identity(this, config.owner)
+    if (config != null && relayBackground && !appForeground) relay.update(config) else relay.stop()
+  }
   @Volatile private var active: ChatConnection? = null
   @Volatile private var stopped = false
   private var retry = 1000L
@@ -78,11 +104,12 @@ class ChatConnectionService : Service() {
       val next = configuration
       if (next == null) { stopSelf(); return }
       if (next != active) executor.execute { connect(next) }
+      updateRelay()
       handler.postDelayed(this, 60000)
     }
   }
   override fun onBind(intent: Intent?): IBinder? = null
-  override fun onCreate() { super.onCreate(); running = true }
+  override fun onCreate() { super.onCreate(); running = true; instance = this }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == STOP) {
       getSharedPreferences("cindy-chat-background", MODE_PRIVATE).edit().putBoolean("paused", true).apply()
@@ -103,12 +130,15 @@ class ChatConnectionService : Service() {
       .addAction(0, config.stopLabel, stop).build()
     ServiceCompat.startForeground(this, ID, notification,
       if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
+    updateRelay()
     handler.removeCallbacks(refresh); handler.post(refresh)
     return START_NOT_STICKY
   }
   override fun onDestroy() {
     ChatDiagnostics.connection("stopped")
     stopped = true; running = false; active = null; clear()
+    relay.stop(); instance = null
+    SessionDelivery.identity(this, "")
     handler.removeCallbacksAndMessages(null); socket?.cancel(); socket = null
     http.dispatcher.cancelAll(); executor.shutdownNow()
     stopForeground(STOP_FOREGROUND_REMOVE)

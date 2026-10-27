@@ -18,7 +18,7 @@ export function recordChatBackgroundStage(value: Stage) {
 const connections = new Set(['stopped', 'connecting', 'authenticating', 'ready', 'auth-timeout', 'actor-mismatch',
   'server-error', 'protocol-error', 'closed', 'disconnected', 'auth-or-connect-failed']);
 const numbers = ['inboxAt', 'inboxRows', 'httpStatus', 'messageChannelImportance', 'invalid', 'wrongRecipient',
-  'duplicates', 'dispatched', 'constructed', 'changeFrames'] as const;
+  'duplicates', 'dispatched', 'constructed', 'changeFrames', 'sessionDispatched', 'sessionDuplicates', 'sessionInvalid'] as const;
 
 /** Explicit local export only. Old native runtimes remain supported; no arbitrary native fields escape. */
 export async function readChatNotificationDiagnostics(): Promise<Record<string, string | number | boolean>> {
@@ -29,6 +29,7 @@ export async function readChatNotificationDiagnostics(): Promise<Record<string, 
     const { default: Native } = await import('../../modules/cindy-chat-notifications/src');
     const snapshot = await Native?.getDiagnostics?.();
     if (!snapshot || typeof snapshot !== 'object') return result;
+    if (typeof snapshot.sessionRelay === 'string' && ['stopped', 'connecting', 'ready', 'subscribed', 'unsupported', 'denied', 'reconnecting', 'peer-timeout'].includes(snapshot.sessionRelay)) result.sessionRelay = snapshot.sessionRelay;
     for (const key of ['connection', 'connectionError']) {
       const value = snapshot[key];
       if (typeof value === 'string' && (connections.has(value) || value === 'none')) result[key] = value;

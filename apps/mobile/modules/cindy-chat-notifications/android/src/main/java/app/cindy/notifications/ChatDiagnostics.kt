@@ -14,8 +14,10 @@ internal object ChatDiagnostics {
   private var inboxRows = 0
   private var httpStatus = 0
   private val counts = mutableMapOf<String, Int>()
+  private var sessionRelay = "stopped"
+  @Synchronized fun sessionRelay(value: String) { sessionRelay = value }
   @Synchronized fun reset() {
-    connection = "stopped"; connectionError = "none"; inbox = "unchecked"; inboxAt = 0; inboxRows = 0; httpStatus = 0; counts.clear()
+    connection = "stopped"; connectionError = "none"; inbox = "unchecked"; inboxAt = 0; inboxRows = 0; httpStatus = 0; counts.clear(); sessionRelay = "stopped"
   }
   @Synchronized fun connection(value: String) {
     connection = value
@@ -30,7 +32,7 @@ internal object ChatDiagnostics {
       context.getSystemService(NotificationManager::class.java).getNotificationChannel("chat-messages")?.importance ?: -1 else -2
     return mapOf("connection" to connection, "connectionError" to connectionError, "inbox" to inbox, "inboxAt" to inboxAt,
       "inboxRows" to inboxRows, "httpStatus" to httpStatus,
-      "serviceRunning" to ChatConnectionService.running,
+      "serviceRunning" to ChatConnectionService.running, "sessionRelay" to sessionRelay,
       "notificationsEnabled" to NotificationManagerCompat.from(context).areNotificationsEnabled(),
       "messageChannelImportance" to channel) + counts
   }

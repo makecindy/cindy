@@ -9,6 +9,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as subscriptions from '../subscriptions';
 
 describe('subscriptions topic lifecycle listeners', () => {
+  // Unit: existing registry tests covered remembered read topics, not notification leases.
+  // A disconnected/legacy receiver must not regain a live notification lease implicitly.
+  it('requires an explicit current notification lease and drops it at disconnect', () => {
+    const topic = 'notifications:50000000-0000-4000-8000-000000000005';
+    subscriptions.subscribe('phone', [topic], 'Phone', ['mobile-local-notifications-v1']);
+    subscriptions.subscribe('legacy', ['*'], 'Old phone');
+    expect(subscriptions.getMobileNotificationReceivers()).toEqual([
+      { deviceId: 'phone', subscriptionId: topic.slice(14), subscribed: true, capable: true },
+    ]);
+    subscriptions.clearController('phone');
+    expect(subscriptions.getMobileNotificationReceivers()).toEqual([]);
+    subscriptions.updateControllerMetadata('phone', 'Phone');
+    expect(subscriptions.getMobileNotificationReceivers()).toEqual([]);
+  });
   const subscribed = vi.fn();
   const released = vi.fn();
 

@@ -17,6 +17,7 @@
  */
 
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from './remoteResources.js';
+import { MOBILE_NOTIFICATION_CHANNEL, isMobileNotificationTopic } from './mobileNotifications.js';
 
 /**
  * 订阅 / 路由的 topic。
@@ -27,7 +28,7 @@ import { REMOTE_RESOURCE_CHANGED_CHANNEL } from './remoteResources.js';
  *    fs watch、最后一个订阅者退订/断链即停,没有常驻监听成本;不触发被控横幅
  *    (纯只读观察,活跃控制语义仍由 `session:<id>` 承担)。
  */
-export type Topic = 'sessions' | `session:${string}` | `fs-watch:${string}`;
+export type Topic = 'sessions' | `notifications:${string}` | `session:${string}` | `fs-watch:${string}`;
 
 /** 被控端文件树变更事件的 push channel(与 desktop FILE_BROWSER_PUSH.EVENT 同名约定)。 */
 export const FILE_BROWSER_EVENT_CHANNEL = 'maker:file-browser:event';
@@ -233,6 +234,10 @@ function readStringField(payload: unknown, key: string): string | null {
  *  - 取不到 session 标识 → null
  */
 export function topicForPush(channel: string, payload: unknown): Topic | null {
+  if (channel === MOBILE_NOTIFICATION_CHANNEL) {
+    const topic = `notifications:${readStringField(payload, 'subscriptionId')}`;
+    return isMobileNotificationTopic(topic) ? topic : null;
+  }
   if (SESSION_LIST_CHANNELS.has(channel) || ACCOUNT_CHANNELS.has(channel)) {
     return 'sessions';
   }

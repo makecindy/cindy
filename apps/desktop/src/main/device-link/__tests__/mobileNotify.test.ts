@@ -1,7 +1,33 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH, NOTIFY_DEEP_LINK_MAX_LENGTH } from '@cindy/device-link';
-import { MobileNotifyDeduper, buildBotGroupNotifyPayload, buildSessionNotifyPayload } from '../mobileNotify';
+import { MobileNotifyDeduper, buildBotGroupNotifyPayload, buildSessionNotifyPayload, sendLiveMobileNotification } from '../mobileNotify';
+
+// Unit tier: the production sender emits live protocol frames. Existing payload tests
+// covered only APNs/FCM. A completed reply with no Google token previously had no receiver.
+it('delivers stable live completion IDs only to opted-in same-account receivers', () => {
+  const frames: unknown[] = [];
+  const options = {
+    notification: buildSessionNotifyPayload({ sessionId: 's1', title: 'Ztw', kind: 'done', selfDeviceId: 'desktop', fallbackBody: 'Reply' }),
+    sourceEventId: 'turn:100:200', sourceDeviceId: 'desktop', now: 200,
+    targets: [{ deviceId: 'phone', subscribed: true, capable: true, subscriptionId: 'lease' },
+      { deviceId: 'legacy', subscribed: true, capable: false },
+      { deviceId: 'disconnected', subscribed: false, capable: true }],
+    send: (...args: unknown[]) => { frames.push(args); },
+  };
+  expect(sendLiveMobileNotification(options)).toBe(true);
+  expect(frames).toEqual([['phone', 'device-link:mobile-notification', expect.objectContaining({
+    category: 'session-done', deepLink: '/sessions/s1?deviceId=desktop', eventId: expect.stringMatching(/^[a-f0-9]{64}$/), createdAt: 200,
+  })]]);
+  sendLiveMobileNotification({ ...options, now: 300 });
+  expect((frames[0] as any)[2].eventId).toBe((frames[1] as any)[2].eventId);
+  sendLiveMobileNotification({ ...options, sourceEventId: 'turn:100:201' });
+  expect((frames[2] as any)[2].eventId).not.toBe((frames[0] as any)[2].eventId);
+  frames.length = 0;
+  expect(sendLiveMobileNotification({ ...options, sourceEventId: undefined })).toBe(false);
+  expect(sendLiveMobileNotification({ ...options, notification: { ...options.notification, category: 'session-error' } })).toBe(false);
+  expect(frames).toEqual([]);
+});
 
 describe('buildSessionNotifyPayload', () => {
   it('identifies only teammate replies and isolates the same bot on different hosts', () => {

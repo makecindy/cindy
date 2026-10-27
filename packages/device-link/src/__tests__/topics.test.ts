@@ -15,6 +15,12 @@ import {
 } from '../topics.js';
 
 describe('topicForPush', () => {
+  // Unit: live notification leases must never fall back to list/session fan-out or historical replay.
+  it('routes a local completion only to its fresh receiver lease', () => {
+    const nonce = '50000000-0000-4000-8000-000000000005';
+    expect(topicForPush('device-link:mobile-notification', { subscriptionId: nonce })).toBe(`notifications:${nonce}`);
+    expect(topicForPush('device-link:mobile-notification', { sessionId: 's1' })).toBeNull();
+  });
   it('routes historical file summaries only to the owning task', () => {
     expect(topicForPush('maker:turn-change-set:updated', { sessionId: 's1' })).toBe('session:s1');
     expect(topicForPush('maker:turn-change-set:updated', {})).toBeNull();
