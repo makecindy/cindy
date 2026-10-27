@@ -14,6 +14,8 @@ import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTes
 import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
 import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
+import { botGroupWorkPreview } from '../BotGroupLivePreview';
 import { BotGroupChatView } from '../BotGroupChatView';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
@@ -26,7 +28,8 @@ import type {
 const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
-    options && 'name' in options ? `${key}:${String(options.name)}` : key,
+    options && 'name' in options ? `${key}:${String(options.name)}`
+      : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
   navigate: vi.fn(),
   getBotGroup: vi.fn(),
@@ -55,6 +58,7 @@ const mocks = vi.hoisted(() => ({
   /** Live activity of the speaking Session (null = not running on this machine). */
   activity: null as null | { compactDetail: string; startedAtMs: number | null; phase: string },
   ownerGeneration: { dataOwnerId: 'account-a', generation: 1 },
+  remoteInvoke: vi.fn(),
   reply: vi.fn(),
   shareToMain: vi.fn(),
 }));
@@ -267,6 +271,8 @@ function renderView() {
 }
 
 beforeEach(() => {
+  resetCompanionCloudStoreForTests();
+  mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   // 话题 reply drafts persist like the group's own; start every test without one.
@@ -310,6 +316,8 @@ beforeEach(() => {
     configurable: true,
     value: {
       deviceLink: {
+        invoke: mocks.remoteInvoke,
+        onRemotePush: () => () => {},
         getState: mocks.getControlledState,
         onControlledState: (callback: NonNullable<typeof mocks.controlledPush>) => {
           mocks.controlledPush = callback;
@@ -1218,7 +1226,9 @@ describe('BotGroupChatView', () => {
     expect(screen.getByText('bots.groupChat.timeline.roundEnded')).toBeTruthy();
     const header = screen.getByTestId('content-header');
     expect(header.textContent).toContain('周末出游');
-    expect(header.textContent).toContain('咪咪');
+    // The line under the name reads the group's size, not every member; the names stay in the tooltip.
+    expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:2');
+    expect(header.querySelector('button[title]')?.getAttribute('title')).toBe('咪咪bots.groupChat.memberSeparator小满');
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.open' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
   });
@@ -1255,7 +1265,7 @@ describe('BotGroupChatView', () => {
     renderView();
     const speaking = await screen.findByTestId('bot-group-speaking');
     expect(speaking.textContent).toContain('咪咪');
-    expect(speaking.textContent).toContain('phase:thinking');
+    expect(speaking.textContent).toContain('phase:processing');
     expect(screen.getByTestId('pending-interaction').textContent).toBe('lane-mimi');
     expect(screen.queryByRole('button', { name: 'bots.groupChat.timeline.continue' })).toBeNull();
 
@@ -1433,7 +1443,7 @@ describe('BotGroupChatView', () => {
       renderView();
       const header = screen.getByTestId('content-header');
       expect(header.textContent).toContain('周末出游');
-      expect(header.textContent).toContain('咪咪');
+      expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:2');
       expect(screen.queryByTestId('bot-group-timeline-loading')).toBeNull();
       expect(screen.queryByRole('textbox')).toBeNull();
       expect(await screen.findByRole('status', { name: 'ccAgent.common.loading' })).toBeTruthy();
@@ -2399,7 +2409,7 @@ describe('BotGroupChatView', () => {
       expect(card.textContent).toContain('bots.groupChat.plan.intro');
       expect(card.textContent).toContain('想清楚这页讲什么');
       expect(card.textContent).toContain('画设计稿');
-      // The organizer tag sits next to the plan card's author (the header shows it too).
+      // The organizer tag sits next to the plan card's author.
       expect(within(card.closest('article')!).getByText('bots.groupChat.organizer')).toBeTruthy();
       expect(screen.getByText('bots.groupChat.plan.editHint')).toBeTruthy();
       expect(screen.getByText('bots.groupChat.plan.pauseNote')).toBeTruthy();
@@ -3297,7 +3307,7 @@ describe('Telegram / Slack-grade timeline', () => {
     }) });
     renderView();
     const strip = await screen.findByTestId('bot-group-progress');
-    expect(strip.textContent).toContain('bots.groupChat.progress.speaking');
+    expect(strip.textContent).toContain('phase:processing');
     expect(strip.textContent).not.toContain('bots.groupChat.progress.step');
   });
 
@@ -3393,6 +3403,7 @@ describe('Telegram / Slack-grade timeline', () => {
 });
 
 describe('thread previews and posting to the main chat', () => {
+  afterEach(() => { mocks.ownerGeneration = { dataOwnerId: 'account-a', generation: 1 }; });
   const t = (name: string) => `bots.groupChat.server.thread.${name}`;
   const preview = (id: string, authorName: string, text: string, extra: Record<string, unknown> = {}) => ({
     id, authorKind: 'bot' as const, authorBotId: 'xiaoman', authorName, text, attachments: [], createdAt: 1_700_000_000_000, ...extra });
@@ -3403,6 +3414,133 @@ describe('thread previews and posting to the main chat', () => {
     return detail({ serverBacked: true, messages });
   }
   beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
+
+  // Unit: opening a downloaded topic must show it before IPC completes; a permission
+  // failure must erase that preview. Existing tests never reopened with a pending read.
+  it('shows a reopened topic immediately and clears its cached replies when access is revoked', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, historyRevision: 'topic-warm' }) });
+    const value = { ok: true, historyRevision: 'topic-warm', root: msg({ id: 'u1', content: 'Root' }),
+      replies: [msg({ id: 'r1', content: 'Cached topic reply' })], hasMore: false };
+    mocks.thread.mockResolvedValue(value);
+    const user = userEvent.setup(); renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    await within(screen.getByRole('complementary')).findByText('Cached topic reply');
+    await user.keyboard('{Escape}');
+    let finish!: (result: unknown) => void;
+    mocks.thread.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    expect(within(screen.getByRole('complementary')).getByText('Cached topic reply')).toBeTruthy();
+    await act(async () => finish({ ok: false, errorCode: 'NOT_MEMBER' }));
+    expect(screen.queryByText('Cached topic reply')).toBeNull();
+    await user.keyboard('{Escape}');
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    expect(screen.queryByText('Cached topic reply')).toBeNull();
+  });
+
+  it('repairs loaded topic history and rejects an old page after a room generation reset', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const root = msg({ id: 'u1', content: 'Root' });
+    const latest = msg({ id: 'r100', sequence: 100, content: 'Latest reply' });
+    const old = msg({ id: 'r50', sequence: 50, content: 'Old reply' });
+    const value = { ok: true, historyRevision: 'topic-before', root, replies: [latest], hasMore: true };
+    mocks.thread.mockResolvedValueOnce(value).mockResolvedValueOnce({ ...value, replies: [old] });
+    const user = userEvent.setup(); renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    await within(panel).findByText('Latest reply');
+    await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await within(panel).findByText('Old reply');
+    mocks.thread.mockResolvedValue({ ...value, messageUpdates: [{ ...old, content: 'Edited old reply' }] });
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await within(panel).findByText('Edited old reply');
+    let finish!: (result: unknown) => void;
+    mocks.thread.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ ...value, historyRevision: 'topic-after', replies: [{ ...latest, content: 'New history reply' }], hasMore: false });
+    await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await within(panel).findByText('New history reply');
+    await act(async () => finish({ ...value, replies: [msg({ id: 'r1', sequence: 1, content: 'Revoked reply' })] }));
+    expect(within(panel).queryByText('Edited old reply')).toBeNull();
+    expect(within(panel).queryByText('Revoked reply')).toBeNull();
+    expect(within(panel).queryByText('Latest reply')).toBeNull();
+  });
+
+  // Unit, PR #7396: topic pagination was tested for history resets, but not failure
+  // snapshots overtaken by a latest-page refresh. Newly added replies still need
+  // their own notices, without restoring a cleared notice on an already shown source.
+  it('keeps failures for newly loaded topic replies when a newer refresh overtakes pagination', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const root = msg({ id: 'u1', content: 'Root' });
+    const latest = msg({ id: 'r100', sequence: 100, content: 'Latest reply' });
+    const older = msg({ id: 'r50', sequence: 50, content: 'Earlier reply' });
+    const failure = (source: string, name: string) => ({ executionId: `failure-${source}`, epoch: 1,
+      sourceMessageId: source, botId: name, botName: name, code: 'AUTH_REQUIRED' as const, planId: null });
+    const rootFailure = failure(root.id, 'Root bot');
+    const latestFailure = failure(latest.id, 'Latest bot');
+    const olderFailure = failure(older.id, 'Earlier bot');
+    const page = { ok: true, historyRevision: 'topic-failures', root, replies: [latest], hasMore: true };
+    let finishOlder!: (value: unknown) => void;
+    let finishRecheck!: (value: unknown) => void;
+    mocks.thread.mockResolvedValueOnce({ ...page, executionFailures: [rootFailure] })
+      .mockImplementationOnce(() => new Promise(resolve => { finishOlder = resolve; }))
+      .mockResolvedValueOnce({ ...page, executionFailures: [latestFailure] })
+      .mockImplementation(() => new Promise(resolve => { finishRecheck = resolve; }));
+    const user = userEvent.setup(); renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    await within(panel).findByText('Latest reply');
+    await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await within(panel).findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Latest bot');
+    await act(async () => finishOlder({ ...page, replies: [older], executionFailures: [olderFailure, rootFailure] }));
+    expect(within(panel).getByText('Earlier reply')).toBeTruthy();
+    expect(within(panel).getByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Earlier bot')).toBeTruthy();
+    expect(within(panel).getByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Latest bot')).toBeTruthy();
+    expect(within(panel).queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Root bot')).toBeNull();
+    expect(mocks.thread.mock.calls.at(-1)?.[0].sourceMessageIds).toContain(older.id);
+    // The extra reconciliation is scoped to newly visible sources and can clear their old notice.
+    await act(async () => finishRecheck({ ...page, executionFailures: [latestFailure] }));
+    expect(within(panel).queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Earlier bot')).toBeNull();
+    expect(within(panel).getByText('Earlier reply')).toBeTruthy();
+  });
+
+  // Unit: a reset discovered by pagination must clear even the latest page while
+  // its replacement is in flight, instead of displaying a mixed history window.
+  it('clears the topic window when an older page first discovers a history reset', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const value = { ok: true, historyRevision: 'before-pagination', root: msg({ id: 'u1', content: 'Old root' }),
+      replies: [msg({ id: 'r100', sequence: 100, content: 'Old visible reply' })], hasMore: true };
+    let finish!: (result: unknown) => void;
+    mocks.thread.mockResolvedValueOnce(value).mockResolvedValueOnce({ ...value, historyRevision: 'after-pagination', replies: [] })
+      .mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const user = userEvent.setup(); renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    await within(panel).findByText('Old visible reply');
+    await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(within(panel).queryByText('Old root')).toBeNull();
+    expect(within(panel).queryByText('Old visible reply')).toBeNull();
+    await act(async () => finish({ ...value, historyRevision: 'after-pagination', root: msg({ content: 'New root' }),
+      replies: [], hasMore: false }));
+    expect(within(panel).getByText('New root')).toBeTruthy();
+  });
+
+  // Unit: two owners may open the same room/root; display caching must not cross login boundaries.
+  it('never restores another account’s warm topic window', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, historyRevision: 'same-room' }) });
+    mocks.thread.mockResolvedValue({ ok: true, historyRevision: 'same-room', root: msg({ id: 'u1' }),
+      replies: [msg({ id: 'r1', content: 'Account A reply' })], hasMore: false });
+    const user = userEvent.setup(); const view = renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    await within(screen.getByRole('complementary')).findByText('Account A reply');
+    view.unmount();
+    mocks.ownerGeneration = { dataOwnerId: 'account-b', generation: 2 };
+    mocks.thread.mockImplementation(() => new Promise(() => {}));
+    renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    expect(within(screen.getByRole('complementary')).queryByText('Account A reply')).toBeNull();
+  });
 
   it('describes the newest replies on the thread entry under the root and opens the thread from it', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: group([
@@ -4018,4 +4156,65 @@ it('renders component body as readable text without changing the message', async
   expect(body.textContent).toContain('After');
   expect(body.textContent).not.toContain('"op":"create"');
   expect(reply.content).toBe(content);
+});
+
+// Regression: tool boundaries clear streaming text; keep this turn's public progress,
+// without reviving old turns, private replies or reasoning. Unit tier, no clock waits.
+it('keeps only the current public progress note between tool calls', () => {
+  const note = { clientId: 'public-progress', role: 'assistant', content: 'Checking the result', assistantPhase: 'commentary', createdAt: '2026-10-26T01:00:01Z' };
+  const state = { streamingText: '', messages: [note], agentStatus: { startedAt: Date.parse('2026-10-26T01:00:00Z') } } as Parameters<typeof botGroupWorkPreview>[0];
+  expect(botGroupWorkPreview(state, 2)).toBe('Checking the result');
+  for (const patch of [{ botPrivateReply: true }, { failedSamplingAttempt: true }, { assistantPhase: 'analysis' }, { createdAt: '2026-10-25T01:00:00Z' }]) {
+    expect(botGroupWorkPreview({ ...state, messages: [{ ...note, ...patch }] } as Parameters<typeof botGroupWorkPreview>[0], 2)).toBe('');
+  }
+  expect(botGroupWorkPreview({ ...state, streamingText: 'NO_REPLY' }, 2)).toBe('');
+});
+
+// Group work identity: the source computer returns two concurrent executions of the
+// same companion. Open only the requested execution on its original host (unit tier).
+it('opens the exact remote execution and leaves other members’ private tasks unavailable', async () => {
+  resetCompanionCloudStoreForTests({ enabled: true, selfDeviceId: 'here', humanActorId: 'me', demotedBotIds: [], actors: [{
+    id: 'actor-mimi', externalId: 'mimi', name: '咪咪', avatar: null, homeDeviceId: 'studio',
+    homeDevice: { deviceId: 'studio', name: 'Studio', online: true, isSelf: false, remoteControlEnabled: true },
+  }] });
+  mocks.remoteInvoke.mockResolvedValue({ ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, blocks: [{ primitive: 'bot-group-chat', data: {
+    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', sessionId: 'correct-lane' }] },
+  } }] });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi', 'xiaoman'], round: {
+    status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', sessionId: null, startedAt: Date.now() - 10_000 },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'theirs', sessionId: null, startedAt: Date.now() - 10_000 },
+    ],
+  } }) });
+  renderView();
+  const process = await screen.findByRole('button', { name: 'bots.groupChat.progress.viewProcess' });
+  expect(screen.getAllByTestId('bot-group-progress')).toHaveLength(2);
+  fireEvent.click(process);
+  expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/correct-lane?device=studio');
+  expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'studio')).toBe(true);
+});
+
+// A stopping last row must not disable the group control while an earlier
+// execution is still stoppable (Greptile review #4375066338).
+it.each([false, true])('keeps the group stop control enabled for another running execution (admin: %s)', async admin => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+    canStopAll: admin,
+    speakingBotIds: ['mimi', 'xiaoman'],
+    round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+    ] },
+  }) });
+  renderView();
+  const buttons = await screen.findAllByRole('button', { name: 'bots.groupChat.progress.stop' });
+  expect(buttons).toHaveLength(1);
+  expect((buttons[0] as HTMLButtonElement).disabled).toBe(false);
+  if (admin) {
+    fireEvent.pointerDown(buttons[0]!, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.progress\.stopAll/ }));
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1', 'all'));
+  } else {
+    fireEvent.click(buttons[0]!);
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1'));
+  }
 });

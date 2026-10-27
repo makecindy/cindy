@@ -62,6 +62,7 @@ export type DbTxName =
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
+  | 'bots.createRoutineLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
@@ -1447,6 +1448,7 @@ export type DbTxArgsByName = {
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
+  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
@@ -1548,6 +1550,7 @@ export type DbTxResultByName = {
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
+  'bots.createRoutineLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;

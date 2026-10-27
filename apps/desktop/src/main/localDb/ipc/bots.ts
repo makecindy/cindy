@@ -1,3 +1,4 @@
+import type { RoutineModel } from '@cindy/maker-scheduler';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
 import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
@@ -444,13 +445,17 @@ export type EnsureBotChannelLaneResult =
 
 /** Read-only lookup of an active IM channel lane (`role = 'channel'`). */
 export async function findBotChannelLaneSession(botId: string, routeKey: string): Promise<string | null> {
+  return findBotOwnedLaneSession(botId, routeKey, 'channel');
+}
+
+async function findBotOwnedLaneSession(botId: string, routeKey: string, role: 'channel' | 'routine'): Promise<string | null> {
   const [existing] = await getDbClient()
     .drizzle.select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
       eq(botSessionLinks.botId, botId),
-      eq(botSessionLinks.role, 'channel'),
+      eq(botSessionLinks.role, role),
       eq(botSessionLinks.routeKey, routeKey),
       isNull(botSessionLinks.archivedAt),
       eq(sessions.source, 'bot'),
@@ -472,10 +477,19 @@ export async function ensureBotChannelLaneSession(input: {
   routeKey: string;
   title: string;
 }): Promise<EnsureBotChannelLaneResult> {
+  return ensureBotOwnedLaneSession(input, 'channel');
+}
+
+/** A persistent execution context for one standing instruction, sharing its companion's Home. */
+export async function ensureBotRoutineLaneSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<EnsureBotChannelLaneResult> {
+  return ensureBotOwnedLaneSession({ ...input, routeKey: `routine:${input.routineId}` }, 'routine');
+}
+
+async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string; modelOverride?: RoutineModel | null }, role: 'channel' | 'routine'): Promise<EnsureBotChannelLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
-  const existing = await findBotChannelLaneSession(input.botId, input.routeKey);
+  const existing = await findBotOwnedLaneSession(input.botId, input.routeKey, role);
   if (existing) {
     await syncBotLanePermission(existing);
     owner.assertCurrent();
@@ -495,7 +509,11 @@ export async function ensureBotChannelLaneSession(input: {
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const override = input.modelOverride;
+  const primaryRoute = override ? { harness: override.agentKind === 'claude-code' ? 'claude' as const : override.agentKind,
+    model: override.model, providerId: override.providerId ?? null, effort: override.effort ?? '',
+    fastMode: override.fastMode ?? false, agentDeviceId: override.agentDeviceId ?? null }
+    : (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   const workspaceKind = 'dialogue' as const;
   const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
@@ -507,7 +525,7 @@ export async function ensureBotChannelLaneSession(input: {
       {
         workspaceKind,
         workingDir,
-        ...botSessionRouteFields(config, primaryRoute),
+        ...botSessionRouteFields(override ? { ...config, providerId: null, effort: undefined } : config, primaryRoute),
         remoteHostId: undefined,
         source: 'bot',
       },
@@ -528,7 +546,7 @@ export async function ensureBotChannelLaneSession(input: {
   owner.assertCurrent();
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
+    result = await client.tx<BotGroupsCreateLaneResult>(role === 'routine' ? 'bots.createRoutineLane' : 'bots.createChannelLane', {
       botId: input.botId,
       routeKey: input.routeKey,
       session: {
@@ -1325,9 +1343,11 @@ async function readProfile(
                   ? 'group'
                   : link.role === 'channel'
                     ? 'channel'
-                    : link.role === 'thread'
-                      ? 'thread'
-                      : 'history',
+                    : link.role === 'routine'
+                      ? 'routine'
+                      : link.role === 'thread'
+                        ? 'thread'
+                        : 'history',
           updatedAt: row.updatedAt,
           status: row.status,
           role: link.role,
@@ -2115,7 +2135,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     && Object.prototype.hasOwnProperty.call(body.capabilities, 'permissions');
   const modelFollowers = acceptsModelSelection ? await db.select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks).where(and(eq(botSessionLinks.botId, id),
-      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread']),
+      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine']),
       isNull(botSessionLinks.archivedAt))) : [];
   const commitProfile = async () => {
     await coordinateBotModelSelection(modelFollowers.map((link) => link.sessionId), async () => {

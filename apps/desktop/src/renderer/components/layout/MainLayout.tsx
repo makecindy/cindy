@@ -719,6 +719,7 @@ export function MainLayout() {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
+        | { type: 'plugin'; pluginId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
       if (payload.type === 'chat-message') {
@@ -742,6 +743,10 @@ export function MainLayout() {
       }
       if (payload.type === 'shared-task-join') {
         setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        return;
+      }
+      if (payload.type === 'plugin') {
+        navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
         return;
       }
       if (payload.type === 'session') {
@@ -804,11 +809,11 @@ export function MainLayout() {
         void pullChatInvitations();
         return;
       }
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin') {
         handleDeepLinkPayload(payload);
         return;
       }
-      // Main retains imports through login. Both this wake-up and the mount pull
+      // Main retains these intents through login. Both this wake-up and the mount pull
       // use the same atomic take, so either ordering navigates only once.
       void pullChatInvitations();
     });

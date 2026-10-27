@@ -665,8 +665,8 @@ describe('agentInputQueue', () => {
 
     const projected = getAgentFacingText(entry);
     expect(projected).toContain('Complete target message body');
-    expect(projected).toContain('Session ID: session-a');
-    expect(projected).toContain('Message ID: message-a');
+    expect(projected).toContain('Session ID: "session-a"');
+    expect(projected).toContain('Message ID: "message-a"');
     expect(projected).not.toContain(href);
   });
 

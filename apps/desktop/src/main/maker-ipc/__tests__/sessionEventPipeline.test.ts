@@ -328,6 +328,7 @@ function harness() {
       handleWorkerTurnStarted: effects.fn('worker-start'),
       captureWorkerText: vi.fn(),
       captureWorkerTerminalTurn: vi.fn(() => ({ owner: 'old-turn' })),
+      noteWorkerProductTerminal: vi.fn(),
       handleWorkerTerminalTurn: effects.fn('worker-terminal'),
     },
     turnModelPromiseBySession: new Map<string, Promise<string>>(),
@@ -969,6 +970,7 @@ describe('production Session event pipeline', () => {
     expect(effects.fn('resetTurnPersistState')).toHaveBeenCalledOnce();
     await microtasks();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
     effects.fn('recordTurnUsageOnMessage').mockClear();
     vi.setSystemTime(5000);
     h.emit(event('done', { total_cost_usd: 0, duration_ms: 20 }, { source }));
@@ -1293,6 +1295,7 @@ describe('production Session event pipeline', () => {
     expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
     expect(h.deps.autoResumeBookkeeping.stashOrcaSuppressedTerminal).toHaveBeenCalledOnce();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
     expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
     await h.dispose();
   });
@@ -1479,6 +1482,8 @@ describe('production Session event pipeline', () => {
     );
     expect(effects.fn('refreshSessionListPreview')).not.toHaveBeenCalled();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    // Seal A synchronously before the start barrier lets queued B report against A's debt.
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).toHaveBeenCalledWith({ owner: 'old-turn' });
     h.deps.orcaTeamServiceForEvents.captureWorkerTerminalTurn.mockReturnValue({
       owner: 'new-turn',
     });

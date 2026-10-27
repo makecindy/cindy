@@ -67,6 +67,29 @@ export function noteBotAutonomyInputProjection(projection: unknown): void {
   runtime.watch.applyInputProjection(projection as BotAutonomyInputProjection);
 }
 
+/** Only followed work needs a model delivery report; no extra teammate context. */
+export async function readTaskDeliveryNote(sessionId: string): Promise<string | null> {
+  const active = current;
+  if (!active || !scopeIsCurrent(active.scope)) return null;
+  const ownership = await readTaskOwnership(ownerScopedUserDataPath());
+  if (current !== active || !scopeIsCurrent(active.scope)) return null;
+  if ([...ownership.bots.values()].some(bot => bot.canonicalSessionId === sessionId)) return null;
+  if (!ownership.creatorBySession.has(sessionId) && !active.runtime.watch.getSchedulerBotId()) return null;
+  return '[Task delivery] Host bookkeeping, not a user message: before your final answer in every turn, call cindy_helper.call_tool({name:"report_task_delivery",args:{final_delivery:true|false}}). Judge whether this turn newly delivers the requested result: PR delivered for human review, merged/closed, or goal achieved is true; intermediate review fixes, waiting for CI, or repeated status is false. A true report followed by normal completion notifies the following teammate.';
+}
+
+export function reportTaskDelivery(sessionId: string, finalDelivery: boolean, sessionInstanceId?: string):
+  { ok: true } | { ok: false; errorCode: string; message: string } {
+  const active = current;
+  const execution = hostDeps.readSessionExecution?.(sessionId);
+  if (!active || !scopeIsCurrent(active.scope) || !execution
+    || (sessionInstanceId !== undefined && sessionInstanceId !== execution.instanceId)
+    || !active.runtime.watch.reportDelivery(sessionId, execution, finalDelivery)) {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The current task execution is not running.' };
+  }
+  return { ok: true };
+}
+
 export function getBotAutonomyGlance(
   botId: string, options?: GlanceOptions, refreshRemote = true,
 ): BotGlance {

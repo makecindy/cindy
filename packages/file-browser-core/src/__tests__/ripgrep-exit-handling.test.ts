@@ -128,6 +128,17 @@ describe('listAllFiles error handling', () => {
     expect(result.files).toEqual(['file1.ts', 'file2.js']);
   });
 
+  it('does not kill rg or truncate when the file count exactly reaches cap', async () => {
+    const child = createFakeChild(0, ['file1.ts', 'file2.ts']);
+    spawnHandler = () => child;
+
+    const { listAllFiles } = await import('../listAllFiles.js');
+    const result = await listAllFiles({ rgPath: '/fake/rg', workdir: '/tmp/work', cap: 2 });
+    expect(result.files).toEqual(['file1.ts', 'file2.ts']);
+    expect(result.truncated).toBe(false);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it('resolves when truncated (rg killed by us, exit code non-zero is OK)', async () => {
     // When we kill rg after cap, it exits non-zero — should still resolve
     spawnHandler = () => createFakeChild(1, ['a.ts', 'b.ts']);
@@ -146,6 +157,8 @@ describe('listAllFiles error handling', () => {
     const { listAllFiles } = await import('../listAllFiles.js');
     const resultPromise = listAllFiles({ rgPath: '/fake/rg', workdir: '/tmp/work', cap: 1 });
     (child.stdout as PassThrough).write('a.ts\n');
+    expect(child.kill).not.toHaveBeenCalled();
+    (child.stdout as PassThrough).write('b.ts\n');
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
 
     await vi.advanceTimersByTimeAsync(200);

@@ -9355,6 +9355,85 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); vi.useRealTimers(); }
   });
 
+  it.each((['pending', 'snapshot', 'after-result'] as const).flatMap(stage =>
+    (['retry', 'restart'] as const).map(recovery => ({ stage, recovery })),
+  ))(
+    'recovers completion after a $stage read timeout via $recovery without duplicate wake-ups', async ({ stage, recovery }) => {
+      await seedPair();
+      vi.useFakeTimers();
+      const execution = { instanceId: 'completion-read-timeout', generation: 1 };
+      const runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+      let restarted: ReturnType<typeof createDelegationRuntime> | undefined;
+      const originalDb = h.db;
+      try {
+        const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Report the completed result.' });
+        if (!task.ok) throw new Error(task.message);
+        const resultCount = () => h.sqlite!.prepare(
+          "SELECT count(*) FROM messages WHERE session_id='session-1' AND client_id LIKE 'bot-delegation-result:%'",
+        ).pluck().get();
+        const wakeCount = () => h.sqlite!.prepare(
+          "SELECT count(*) FROM messages WHERE session_id='session-1' AND client_id LIKE 'bot-delegation-completion:%'",
+        ).pluck().get();
+        const delivered = () => h.sqlite!.prepare(
+          'SELECT completion_delivered_at FROM bot_delegations WHERE id=?',
+        ).pluck().get(task.delegationId);
+        let failures = 0;
+        // Use the production async query proxy: both the initial delivery and
+        // its timer must handle a rejected worker read, not just sync SQLite.
+        const transport: DbTransport = {
+          async send<R>(op: string, args: unknown): Promise<R> {
+            const { sql, params } = args as { sql: string; params: unknown[] };
+            const pendingRead = sql.startsWith('select "status", "child_session_id", "run_sequence", "completion_delivered_at" from "bot_delegations"');
+            const snapshotRead = sql.startsWith('select "permission_snapshot_json" from "bot_delegations"');
+            if (failures < 2 && (stage === 'snapshot' ? snapshotRead
+              : pendingRead && (stage === 'pending' || resultCount() === 1))) {
+              failures++;
+              throw new Error('db-worker RPC timeout after 30000ms');
+            }
+            const statement = h.sqlite!.prepare(sql);
+            if (op === 'rawAll') return statement.raw().all(...params) as R;
+            if (op === 'rawGet') return statement.raw().get(...params) as R;
+            if (op === 'run') return statement.run(...params) as R;
+            throw new Error(`unexpected completion operation: ${op}`);
+          },
+          on() {}, onTerminated() {}, async close() {},
+        };
+        h.db = createDrizzleProxy(transport);
+        await expect(runtime.settleChild(task.childSessionId, 'Completed output', execution)).resolves.toBeUndefined();
+        expect(failures).toBe(1);
+        expect(delivered()).toBeNull();
+        expect(wakeCount()).toBe(0);
+        // Ownership suppresses autonomous follow-up while reliable delivery
+        // retries; it must not be mistaken for evidence of a successful send.
+        expect(await runtime.delegation.isCompletionHandledByTeammate(task.childSessionId, { pendingForBotId: 'bot-a', execution })).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(failures).toBe(2);
+        expect(delivered()).toBeNull();
+        expect(wakeCount()).toBe(0);
+        if (recovery === 'restart') {
+          runtime.dispose();
+          restarted = createDelegationRuntime({ readSessionExecution: () => execution });
+          await restarted.delegation.restore();
+        } else {
+          await vi.advanceTimersByTimeAsync(1_999);
+          expect(wakeCount()).toBe(0);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(delivered()).not.toBeNull();
+        expect(resultCount()).toBe(1);
+        expect(wakeCount()).toBe(1);
+        runtime.dispose(); restarted?.dispose();
+        restarted = createDelegationRuntime({ readSessionExecution: () => execution });
+        await restarted.delegation.restore();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(resultCount()).toBe(1);
+        expect(wakeCount()).toBe(1);
+      } finally {
+        runtime.dispose(); restarted?.dispose(); h.db = originalDb; vi.useRealTimers();
+      }
+    },
+  );
+
   // #6737 review / db: accepted input is not a terminal receipt. Fail both
   // sides of terminal persistence; follow-up must not be consumed as handled.
   it.each(['terminal', 'status'] as const)('does not consume completion when %s persistence fails', async stage => {

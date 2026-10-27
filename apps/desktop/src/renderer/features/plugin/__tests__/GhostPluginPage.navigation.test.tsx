@@ -242,6 +242,30 @@ async function openFromCatalog() {
 }
 
 describe('plugin page return navigation', () => {
+  // Public-share deep links must open the existing installation without starting
+  // an install. Catalog-only cases below cannot cover this query entry (unit).
+  it.each(['installed', 'update-available'] as const)(
+    'opens the local detail for a shared %s plugin without installing it',
+    async (installState) => {
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, name: 'Installed Plugin', version: '0.9.0' },
+        dir: path.join('plugins', detail.ghostId),
+        enabled: true,
+        approval: { state: 'approved', revision: 'market-navigation-revision' },
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      loadDetail.mockResolvedValue({ ...detail, installState });
+      const install = vi.fn();
+      Object.assign(window.electronAPI.pluginMarket, { install });
+
+      render(page(`/plugins?market=${detail.pluginId}`));
+
+      await screen.findByRole('heading', { level: 1, name: 'Installed Plugin' });
+      expect(loadDetail).toHaveBeenCalledWith(detail.pluginId);
+      expect(install).not.toHaveBeenCalled();
+    },
+  );
+
   // Regression #2871 (98929118d6): the real market-detail install flow must refresh
   // the current page after an update/replacement. The card helper only checks the
   // navigation decision; it cannot catch clearing marketDetail in the parent.
@@ -288,7 +312,8 @@ describe('plugin page return navigation', () => {
         };
       });
       Object.assign(window.electronAPI.pluginMarket, { install });
-      render(page(`/plugins?market=${detail.pluginId}`));
+      render(page('/plugins'));
+      await openFromCatalog();
       await screen.findByRole('heading', { level: 1, name: detail.name });
       const marketPage = screen.getByRole('main');
       const snapshotsBeforeInstall = snapshot.mock.calls.length;

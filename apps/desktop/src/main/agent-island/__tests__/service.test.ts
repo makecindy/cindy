@@ -573,6 +573,121 @@ describe('AgentIslandService native publishing', () => {
     await import('../service.js');
   }, 60_000);
 
+  // Unit: native click -> existing chat deep link must preserve unread; group cards never
+  // have task archive/read actions, sounds or relay rows. Existing tests only clicked tasks.
+  it('opens the exact group/thread message without reading it, and falls back when native publishing fails', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    setDeepLinkMainWindow(null);
+    takePendingDeepLink();
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const nativeHost = { failed: false, available: false, publish, playSound, suspend: () => undefined };
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost });
+    syncEnabledForTest(service, publish);
+    const input = { groupId: 'group', name: 'Product', messageId: 'message', threadRootId: 'topic',
+      mentioned: true, preview: 'Chris: hello', lastMessageAt: 1, members: [] };
+    service.setGroupChat(input.groupId, input);
+    expect(publish.mock.calls.at(-1)![0].mode).toBe('compact');
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].mode).toBe('compact');
+    nativeHost.available = true;
+    expect(service.notifyGroupChat(input.groupId)).toBe(true);
+    expect(publish.mock.calls.at(-1)![0].displayPolicy).toBe('transient');
+    expect(playSound).not.toHaveBeenCalled();
+    expect(service.getSessionActivitySnapshot('chat-group:group')).toBeNull();
+    (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:group');
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-message', groupId: 'group', messageId: 'message', threadRootId: 'topic' });
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(1);
+    expect(await service.handleCompletionAction('chat-group:group', 'mark-read', 'forged')).toBe(false);
+    nativeHost.failed = true;
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    nativeHost.failed = false;
+    publish.mockReturnValue(false);
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    service.setGroupChat(input.groupId, null);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+  });
+
+  it('defers to native notifications when disabled or headless and keeps late avatar reads out of cleared cards', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    let avatar!: (value: string) => void;
+    mocks.companionAvatarThumbnail.mockReturnValueOnce(new Promise(resolve => { avatar = resolve; }));
+    const input = { groupId: 'group', name: 'Product', messageId: 'message', mentioned: false,
+      preview: 'hello', lastMessageAt: 1, members: [{ name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue' }] };
+    service.setGroupChat('group', input);
+    service.setEnabled(false);
+    expect(service.notifyGroupChat('group')).toBe(false);
+    service.setGroupChat('group', null);
+    avatar('late-avatar');
+    await Promise.resolve();
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+    const headless = new AgentIslandService({ getMainWindow: () => null, nativeHost: { headless: true, failed: false, publish } });
+    headless.setGroupChat('group', { ...input, members: [] });
+    headless.setEnabled(true);
+    expect(headless.notifyGroupChat('group')).toBe(false);
+    headless.resetRuntimeState();
+  });
+
+  it('keeps group lane approvals but lets chat unread own the successful reply reminder', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', title: 'Chris', userSendAt: null,
+      workingDir: '/home', workspaceKind: null, source: 'bot' });
+    mocks.readAgentIslandCompanion.mockResolvedValue({ botId: 'bot', groupId: 'group',
+      companion: { name: 'Chris', groupName: 'Product', hue: 'blue', glyph: 'C', glyphIsInitial: true } });
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 'lane' }, 'please help');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.companion?.groupName).toBe('Product'));
+    handleInteractionRequestForTest(service, { sessionId: 'lane' }, { kind: 'ask_user_question', requestId: 'q', questions: [] });
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
+    service.handleInteractionDismissed('lane', 'q');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'lane' }, { type: 'done', source: 'codex', data: { result: 'done' } });
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'reply', mentioned: false,
+      preview: 'Chris: done', lastMessageAt: Date.now(), members: [] });
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.attentionCount).toBe(1);
+    service.resetRuntimeState();
+  });
+
+  // #7307 review: accepted group input provenance exists before the avatar/identity read.
+  // Unit: done arriving during that read must never emit completion attention or sound.
+  it('silences a fast group reply before companion identity finishes loading', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let finishIdentity!: (identity: AgentIslandCompanionIdentity | null) => void;
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', title: 'Chris', userSendAt: null,
+      workingDir: '/home', workspaceKind: null, source: 'bot' });
+    mocks.readAgentIslandCompanion.mockReturnValueOnce(new Promise(resolve => { finishIdentity = resolve; }));
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 'fast-lane' }, 'please help');
+    await vi.waitFor(() => expect(finishIdentity).toBeTypeOf('function'));
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'fast-lane' }, { type: 'done', source: 'codex',
+      agentMeta: { botGroupLane: true }, data: { result: 'done' } });
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(service.getSessionActivitySnapshot('fast-lane')).toBeNull();
+    expect(playSound).not.toHaveBeenCalled();
+    finishIdentity({ botId: 'bot', groupId: 'group', companion: { name: 'Chris', groupName: 'Product', hue: 'blue', glyph: 'C', glyphIsInitial: true } });
+    await vi.waitFor(() => expect((service as unknown as {
+      metadataCache: Map<string, { companion?: AgentIslandCompanionIdentity | null }>;
+    }).metadataCache.get('fast-lane')?.companion?.groupId).toBe('group'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    service.resetRuntimeState();
+  });
+
   // Old unread has no runtime event after restart. Verify the real IPC -> native -> read
   // route, including owner fencing and stale-card rejection; existing event tests miss this (unit).
   it('restores companion chats from the owner snapshot and reads offline chats locally', async () => {

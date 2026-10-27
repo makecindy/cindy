@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { currentOperationBudget, operationCheckpoint } from '../utils/operationBudget';
 
 import {
   GitSnapshotCoordinator,
@@ -52,6 +53,192 @@ function makeDeps(overrides: Partial<GitSnapshotCoordinatorDeps> = {}): GitSnaps
 }
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.useRealTimers());
+
+// #7259, unit: Git failures degrade, but unrecorded dispatches cannot be made
+// safe after restart. A stalled intent must reject within the same total budget.
+describe('durable snapshot dispatch intent', () => {
+  it('rejects a stalled intent and never starts Git after its late resolution', async () => {
+    vi.useFakeTimers();
+    const pending = deferred<{ attemptId: string; anchor: string }>();
+    const deps = makeDeps({ snapshotTimeoutMs: 50, recordTurnAttempt: () => pending.promise });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    const result = coordinator.onTurnStart('s1');
+    const rejected = expect(result).rejects.toThrow('deadline');
+    await vi.advanceTimersByTimeAsync(50);
+    await rejected;
+    expect(coordinator.hasPendingTurnStart('s1')).toBe(false);
+    pending.resolve({ attemptId: 'late', anchor: 'm1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.getSessionContext).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+  });
+
+  it('pins one durable identity to both boundaries without borrowing a later message', async () => {
+    const deps = makeDeps({ recordTurnAttempt: vi.fn().mockResolvedValue({ attemptId: 'a1', anchor: 'original' }) });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+    const inputs = vi.mocked(deps.createShadowSavepoint).mock.calls.map((call) => call[1].meta);
+    expect(inputs).toEqual([
+      expect.objectContaining({ kind: 'turn-start', attemptId: 'a1', anchor: 'original' }),
+      expect.objectContaining({ kind: 'after-edit', attemptId: 'a1', anchor: 'original' }),
+    ]);
+    expect(deps.recordTurnAttempt).toHaveBeenCalledOnce();
+    expect(deps.resolveAnchor).not.toHaveBeenCalled();
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+// #7259 / #6901: existing tests covered successful snapshots, not stalled
+// dependencies or cancellation. Minimal inputs are one suspended stage/two
+// queued turns. Unit tier, fake timers (no real deadline waits).
+describe('automatic snapshot total budget', () => {
+  it.each(['context', 'root', 'bootstrap', 'anchor', 'savepoint'] as const)(
+    'bounds a stalled %s and fences late completion', async (stage) => {
+      vi.useFakeTimers();
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const deps = makeDeps({ snapshotTimeoutMs: 50 });
+      const stall = async <T>(result: T) => { entered.resolve(); await release.promise; return result; };
+      if (stage === 'context') deps.getSessionContext = vi.fn(() => stall({ workingDir: '/repo', agentKind: 'codex' as const }));
+      if (stage === 'root') deps.detectRepoRoot = vi.fn(() => stall('/repo'));
+      if (stage === 'bootstrap') {
+        deps.detectRepoRoot = vi.fn().mockResolvedValue(null);
+        deps.initializeProjectGit = vi.fn(() => stall({ repoRoot: '/repo' }));
+      }
+      if (stage === 'anchor') deps.resolveAnchor = vi.fn(() => stall('msg-1'));
+      const published = vi.fn();
+      if (stage === 'savepoint') deps.createShadowSavepoint = vi.fn(async () => {
+        await stall(undefined);
+        operationCheckpoint();
+        published();
+        return savepointResult('late');
+      });
+      const coordinator = new GitSnapshotCoordinator(deps);
+      const start = coordinator.onTurnStart('s1');
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      await start;
+      release.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(published).not.toHaveBeenCalled();
+      if (stage !== 'savepoint') expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+      coordinator.onSessionClosed('s1');
+    },
+  );
+
+  it('counts metadata and repo queue waiting in the same budget, and skips expired jobs', async () => {
+    vi.useFakeTimers();
+    const release = deferred<void>();
+    const blocker = enqueueGitRepoWrite('/budget-repo', () => release.promise);
+    const deps = makeDeps({ snapshotTimeoutMs: 50, detectRepoRoot: vi.fn().mockResolvedValue('/budget-repo') });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    const start = coordinator.onTurnStart('s1');
+    await vi.advanceTimersByTimeAsync(30);
+    // A different repository remains independent while the first one is stuck.
+    const other = new GitSnapshotCoordinator(makeDeps());
+    await other.onTurnStart('other');
+    await vi.advanceTimersByTimeAsync(20);
+    await start;
+    release.resolve();
+    await blocker;
+    await enqueueGitRepoWrite('/budget-repo', async () => {});
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    coordinator.onSessionClosed('s1');
+    other.onSessionClosed('other');
+  });
+
+  it('does not reset the budget after context resolution', async () => {
+    vi.useFakeTimers();
+    const context = deferred<{ workingDir: string; agentKind: 'codex' }>();
+    const root = deferred<string>();
+    const deps = makeDeps({ snapshotTimeoutMs: 50, getSessionContext: () => context.promise, detectRepoRoot: () => root.promise });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    const start = coordinator.onTurnStart('s1');
+    await vi.advanceTimersByTimeAsync(30);
+    context.resolve({ workingDir: '/repo', agentKind: 'codex' });
+    await vi.advanceTimersByTimeAsync(20);
+    await start;
+    root.resolve('/repo');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    coordinator.onSessionClosed('s1');
+  });
+
+  it.each(['signal', 'close', 'abort'] as const)('cancels a waiting start through %s without late writes', async (kind) => {
+    const entered = deferred<void>();
+    const release = deferred<string | null>();
+    const deps = makeDeps({ detectRepoRoot: async () => { entered.resolve(); return release.promise; } });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    const controller = new AbortController();
+    const start = coordinator.onTurnStart('s1', controller.signal);
+    await entered.promise;
+    if (kind === 'signal') controller.abort();
+    else if (kind === 'close') coordinator.onSessionClosed('s1');
+    else coordinator.onTurnAbort('s1');
+    await start;
+    release.resolve('/repo');
+    await Promise.resolve();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    coordinator.onSessionClosed('s1');
+  });
+
+  it('waits for child cleanup before releasing the repository write slot', async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const cleanup = deferred<void>();
+    const deps = makeDeps({ snapshotTimeoutMs: 50, createShadowSavepoint: async () => {
+      currentOperationBudget()!.track(cleanup.promise);
+      entered.resolve();
+      return new Promise<ShadowSavepointResult>(() => {});
+    } });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    let settled = false;
+    const start = coordinator.onTurnStart('s1').then(() => { settled = true; });
+    await entered.promise;
+    const following = vi.fn(async () => {});
+    const next = enqueueGitRepoWrite('/repo', following);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(settled).toBe(false);
+    expect(following).not.toHaveBeenCalled();
+    cleanup.resolve();
+    await Promise.all([start, next]);
+    expect(following).toHaveBeenCalledOnce();
+    coordinator.onSessionClosed('s1');
+  });
+
+  it('bounds after-edit label generation and never publishes its late result', async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const label = deferred<string>();
+    const published = vi.fn();
+    const deps = makeDeps({ snapshotTimeoutMs: 50, oneShot: async () => { entered.resolve(); return label.promise; } });
+    vi.mocked(deps.createShadowSavepoint).mockImplementation(async (_repo, input) => {
+      if (typeof input.label === 'function') {
+        await input.label({ diffStat: 'a | 1 +', diffText: '+a' });
+        operationCheckpoint();
+        published();
+      }
+      return savepointResult('baseline');
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    await coordinator.onTurnStart('s1');
+    const end = coordinator.onTurnEnd('s1');
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(50);
+    await end;
+    label.resolve('late');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(published).not.toHaveBeenCalled();
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+});
 
 async function waitFor(condition: () => boolean): Promise<void> {
   for (let i = 0; i < 20; i += 1) {

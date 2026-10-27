@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { voiceTaskFailure } from '../bots/voice/VoiceReplyTracker';
@@ -6142,7 +6143,7 @@ function CCAgentSessionContent({
                       : botChatIdentity
                       ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
-                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
+                          device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }

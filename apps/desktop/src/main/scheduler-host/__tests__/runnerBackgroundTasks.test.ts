@@ -254,11 +254,11 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     const h = createSessionHarness(acceptingSend());
     Object.assign(h.session, { stablePermissionModeState: { mode, generation: 0 } });
     const { runner, maker } = createRunnerHarness(h.session);
-    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'low', workDir: '/repo/project' } as never);
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: mode, planModeEnabled: true });
     const fire = runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), createFireContext());
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: mode, planMode: true, id: 'bot-session' }));
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: mode, planMode: true, effort: 'low', id: 'bot-session' }));
     expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ permissionMode: null }), expect.anything());
     expect(h.session.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ planMode: true }));
     expect(mocks.createMessage.mock.calls[0][1].content).not.toBe('review pending PRs');

@@ -619,6 +619,32 @@ Debug 日志区分两层耗时：
 性能复测应同时包含前台发送、另一控制端刷新与补读、本地读取；分别报告请求数量和延迟，
 不能把内存数据库基准当成真机网络端到端改善。
 
+自动 Git 保存点的发送前基线和轮末保存各有一份 **8 秒整体预算**，包括元数据、目录探测、
+空项目初始化、仓库队列等待、文件过滤、暂存、标签和隐藏 ref 写入。嵌套操作共享同一单调
+时钟 deadline；Git 超时或主动取消后另留最多 3 秒进程树清理预算。超时继续发送；Stop
+通过发送 reservation / 输入队列 / 目标续跑的取消信号终止准备，不能迟到派发。原生文件系统
+请求无法强杀，停止等待后丢弃结果，并在后续写入前检查取消；临时文件由原操作清理。
+
+故障限于当前保存点；不能因此重建设备连接或重试发送。Git 清理无法确认时，本进程暂停该
+仓库后续保存点与文件回退写入，其它仓库照常工作。回退不仅看缺口标记，还要求范围内每条
+用户消息有完成证据、已记录的 shadow 基线均有对应完成点；未变化的自动轮次也写完成点，
+被过滤路径发生变化时不发布完成点。旧历史缺少证据时保守降级为仅回退消息。
+同一消息的每次执行在 Git 操作之前写入独立、不可覆盖的派发意图，保存点以可选的
+`X-Cindy-Attempt` trailer 绑定该标识。回退逐个核对所选消息的全部意图，基线与缺口标记均
+写入失败也能识别，后续成功不能抹掉中间失败。意图落盘也占用上述 8 秒预算；意图无法
+写入或超时时拒绝本次派发，迟到写入只能留下保守缺口，不能重新发送。意图写成之后的
+Git 故障仍按原约定继续发送。这是安全降级与无法确认派发记录两类失败的区别。
+
+意图仅存 UUID 和消息锚点，位于当前账号的
+`owners/<owner-key>/git-snapshot-attempts/<sha256(sessionId)>/<attempt-uuid>.json`，
+用独占新建与 flush 写入，不依赖内存、不改用户仓库或数据库 schema。账号和目录在异步
+操作前捕获，切账号后不放行发送。记录作为回退安全证据随账号数据保留，不按成功轮次
+清除失败意图。读取限 8 秒、每条 4 KiB、每个任务 10000 条；损坏、读取失败或超限一律
+降级为仅回退消息，不能当成空历史。旧版本忽略新增 trailer，但不具备这一逐次核对保障。
+实现见 `gitSnapshotCoordinator.ts`、`utils/operationBudget.ts`、`worktree/gitExec.ts`；回归见
+`gitSnapshotCoordinator.test.ts`、`gitExec.test.ts`、`gitSnapshotShadow.git-integration.test.ts`、
+`codexFileRewindPlanner.test.ts` 与 maker-core `session-control.test.ts`。
+
 远程发送的端到端耗时按同一 clientId（只记前 8 位）在三端分别记 debug 日志，各端只用本机时钟：
 
 - 被控端 `remote enqueue timing`：enqueue handler 内 `gate`（准入与清除边界）、`restore`、

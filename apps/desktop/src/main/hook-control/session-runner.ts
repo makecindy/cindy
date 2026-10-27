@@ -107,7 +107,8 @@ import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/i
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
-import { readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   getWorkspacePref,
@@ -143,6 +144,7 @@ import {
   type HookSessionRunner,
 } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
+import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
   cancelHookInteraction,
@@ -257,7 +259,24 @@ async function resolveNewSessionConfig(
   }
 
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
-  const defaults = imDefaults;
+  let defaults = imDefaults;
+  const selectedAgent = mergedOverrides.agentKind;
+  const selectedDefaultAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : imDefaults.agentKind;
+  const automatic = usesAutomaticImModel({ ...imDefaults, agentKind: selectedDefaultAgent }) && mergedOverrides.model === null;
+  if (automatic) {
+    const automaticAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : undefined;
+    const remoteDeviceId = workdirRoute?.agentDeviceId ?? imDefaults.agents[selectedDefaultAgent].agentDeviceId;
+    const resolved = remoteDeviceId
+      ? await readImRemoteAutomaticDefaults(imDefaults, {
+          agentDeviceId: remoteDeviceId, agentKind: automaticAgent,
+          providerId: workdirRoute?.providerId ?? imDefaults.agents[selectedDefaultAgent].providerId,
+        })
+      // Workspace sources are paired with their former model. Resolve the inherited
+      // model first, then apply the existing stale-source checks below.
+      : await resolveImAutomaticDefaults(imDefaults, undefined, providers, automaticAgent);
+    if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${ROUTE_RESELECT_HINT}`);
+    defaults = resolved;
+  }
   const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
     ? mergedOverrides.agentKind : defaults.agentKind;
   const defaultRoute = defaults.agents[requestedAgent];
@@ -283,12 +302,13 @@ async function resolveNewSessionConfig(
       getPermissionModes: () => requestedPermissionMode === null ? [] : [requestedPermissionMode],
       log,
     }, { ...mergedOverrides, agentKind: requestedAgent, model: requestedModel });
-    return { ...remote, agentDeviceId, providerId, fingerprint };
+    return { ...remote, agentDeviceId, providerId,
+      fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
   }
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => imDefaults,
+      readDefaults: () => defaults,
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
@@ -362,7 +382,8 @@ async function resolveNewSessionConfig(
       `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
     );
   }
-  return { ...resolved, model: lenient.model, providerId: lenient.providerId, fingerprint };
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId,
+    fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
 }
 
 /**
@@ -442,13 +463,14 @@ export function extractToolResultMediaUrls(toolResultText: string, provider?: st
     xdt_video_urls?: unknown;
     xdt_media_produced?: unknown;
     _xdt_render_image?: unknown;
+    _xdt_forward_media?: unknown;
   };
   try {
     parsed = JSON.parse(toolResultText);
   } catch {
     return [];
   }
-  if (parsed._xdt_render_image === false) return [];
+  if (parsed._xdt_render_image === false || parsed._xdt_forward_media === false) return [];
   const urls: string[] = [];
   if (typeof parsed.xdt_image_url === 'string' && isRenderableImageUrl(parsed.xdt_image_url)) {
     urls.push(parsed.xdt_image_url);

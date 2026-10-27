@@ -42,7 +42,7 @@ export interface StartGoalControllerDeps {
   getDb: () => GoalDrizzleDb;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED)。 */
   broadcastStatus: (update: GoalStatusUpdate) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 

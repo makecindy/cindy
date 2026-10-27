@@ -443,10 +443,10 @@ describe('sendToSession ordering', () => {
     );
     const block = extractSendToSessionSource();
 
-    expect(helperBlock).toContain('onAccepted: async () => {');
-    expect(helperBlock).toContain('await opts.onAccepted?.();');
+    expect(helperBlock).toContain('onAccepted: async (signal) => {');
+    expect(helperBlock).toContain('await opts.onAccepted?.(signal);');
     expect(helperBlock).toContain('await beginTurnChangeSetAtDispatch(session, anchorClientId);');
-    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id);');
+    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id, signal);');
     expect(helperBlock).toContain('const pendingHandoff = await agentHandoffPending.peek(session.id);');
     expect(helperBlock).toContain('prependHandoffToUserMessage(');
     expect(helperBlock).toContain("{ type: 'user', content: message },");
@@ -472,13 +472,13 @@ describe('sendToSession ordering', () => {
     expect(begin).toBeGreaterThan(secondSeal);
     expectOrder(
       helperBlock,
-      'await opts.onAccepted?.();',
+      'await opts.onAccepted?.(signal);',
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
     );
     expectOrder(
       helperBlock,
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
-      'await gitSnapshotCoordinator.onTurnStart(session.id);',
+      'await gitSnapshotCoordinator.onTurnStart(session.id, signal);',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
     expect(block).not.toContain(

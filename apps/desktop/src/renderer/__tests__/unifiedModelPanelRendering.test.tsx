@@ -4741,3 +4741,27 @@ describe('统一面板 · 最近使用记录与陈列', () => {
     );
   });
 });
+
+describe('模态对话框滚动锁下的面板滚轮放行', () => {
+  // 回归(2026-10-22 用户报告:添加伙伴对话框里服务商一多,左侧 rail 任何方式都滚不到,
+  // 右侧列表只能拖滚动条)。根因:Radix 模态 Dialog 用 react-remove-scroll 锁背景滚动,
+  // 其 document 冒泡段 wheel 监听把落在对话框内容(shard)之外的事件一律 preventDefault;
+  // 面板 portal 到 body,不在 shard 内,滚轮全灭。修复 = 面板各滚动面上 stopPropagation,
+  // 事件到不了 document 就不会被拦,原生滚动照常。这里挂 document 级 wheel 监听模拟
+  // react-remove-scroll 的挂载点:修复前这些 wheel 全部到达 document(断言失败),
+  // 修复后一个都不该到达。
+  it('列表、rail 与配置浮层的 wheel 事件不泄露到 document', async () => {
+    renderPanel();
+    const reachedDocument = vi.fn();
+    document.addEventListener('wheel', reachedDocument);
+    try {
+      fireEvent.wheel(screen.getByRole('listbox'), { deltaY: 240 });
+      fireEvent.wheel(document.querySelector('[data-rail-item="all"]')!, { deltaY: 240 });
+      const flyout = await openRowFlyout('Opus 5');
+      fireEvent.wheel(flyout, { deltaY: 120 });
+      expect(reachedDocument).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('wheel', reachedDocument);
+    }
+  });
+});

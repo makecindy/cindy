@@ -49,6 +49,20 @@ const api = () => window.electronAPI.maker.chatServer;
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
+const threadAccessLost = (code: string) => ['NOT_FOUND', 'PERMISSION_DENIED', 'FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER',
+  'CONVERSATION_NOT_FOUND', 'MESSAGE_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'].includes(code);
+
+interface ThreadWindow {
+  revision: string; root: BotGroupMessageView; replies: BotGroupMessageView[];
+  executionFailures: BotGroupExecutionFailureView[]; hasMore: boolean;
+}
+// Disposable warm views only. Durable messages and coverage remain in main's room projection.
+const threadWindows = new Map<string, ThreadWindow>();
+let windowsOwner = getDataOwnerGeneration();
+function windows() {
+  if (!isDataOwnerGenerationCurrent(windowsOwner)) { threadWindows.clear(); windowsOwner = getDataOwnerGeneration(); }
+  return threadWindows;
+}
 
 /** Shares of this thread's replies that the main chat has loaded. */
 export type BotGroupSharedReplies = ReadonlyMap<string, { messageId: string; bySelf: boolean }>;
@@ -213,10 +227,21 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
   }, [shareScope]);
-  const [root, setRoot] = useState<BotGroupMessageView | null>(null);
-  const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>([]);
-  const [replies, setReplies] = useState<BotGroupMessageView[]>([]);
-  const [hasMore, setHasMore] = useState(false);
+  const windowKey = `${group.id}:${rootId}`;
+  const windowOwner = useRef(getDataOwnerGeneration());
+  const [initial] = useState(() => {
+    const cached = windows().get(windowKey);
+    if (cached && cached.revision === group.historyRevision) return cached;
+    windows().delete(windowKey);
+    return undefined;
+  });
+  const revisionRef = useRef(initial?.revision);
+  const historyEpochRef = useRef(0);
+  const latestReadRef = useRef(0);
+  const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
+  const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
+  const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
+  const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const [error, setError] = useState('');
   // Off by default: a reply stays in the thread unless the user asks for both.
   const [alsoSend, setAlsoSend] = useState(false);
@@ -233,6 +258,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const aliveRef = useRef(true);
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
+  const queuedSourcesRef = useRef(new Set<string>());
+  const changedRepliesRef = useRef(new Set<string>());
 
   /** Lowest sequence of the last latest-page read; replies below it live only on opened older pages. */
   const latestFloorRef = useRef(Number.POSITIVE_INFINITY);
@@ -242,6 +269,27 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   /** Whether the reader follows this Thread; undefined until known, or when the server keeps no read state. */
   const [following, setFollowing] = useState<boolean | undefined>(undefined);
   const followKey = `${group.id}:${rootId}`;
+  useEffect(() => {
+    if (!isDataOwnerGenerationCurrent(windowOwner.current)) return;
+    if (!root || !revisionRef.current) { windows().delete(windowKey); return; }
+    const cache = windows();
+    cache.delete(windowKey);
+    cache.set(windowKey, { revision: revisionRef.current, root, replies: replies.slice(-500), executionFailures,
+      hasMore: hasMore || replies.length > 500 });
+    if (cache.size > 20) cache.delete(cache.keys().next().value!);
+  }, [windowKey, root, replies, executionFailures, hasMore]);
+
+  const clearHistory = useCallback((wholeRoom = true) => {
+    historyEpochRef.current++;
+    queuedSourcesRef.current.clear();
+    changedRepliesRef.current.clear();
+    for (const key of windows().keys())
+      if (key === windowKey || (wholeRoom && key.startsWith(`${group.id}:`))) windows().delete(key);
+    repliesRef.current = [];
+    setReplies([]); setRoot(null); setExecutionFailures([]); setHasMore(false);
+    readBeforeRef.current = null; setReadBefore(null); setFollowing(undefined);
+    latestFloorRef.current = Number.POSITIVE_INFINITY;
+  }, [group.id, windowKey]);
 
   /**
    * Reads the latest page, or the page before `before`. `rereadOnly` re-reads an opened page for a
@@ -249,8 +297,16 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
    */
   const read = useCallback(async (before?: number, rereadOnly = false, onAccepted?: () => void) => {
     const owner = getDataOwnerGeneration();
-    const current = () => aliveRef.current && isDataOwnerGenerationCurrent(owner);
+    const epoch = historyEpochRef.current;
+    const latestRead = latestReadRef.current;
+    const current = () => aliveRef.current && isDataOwnerGenerationCurrent(owner) && epoch === historyEpochRef.current;
     const shown = repliesRef.current;
+    // A page can land before React commits its rows. Keep those sources explicit
+    // so the coalesced refresh also validates their execution state.
+    const extraSources = before ? [] : [...queuedSourcesRef.current];
+    if (!before) queuedSourcesRef.current.clear();
+    const changedReplies = before ? [] : [...changedRepliesRef.current];
+    if (!before) changedRepliesRef.current.clear();
     // An older page belongs below the reply it was read from; a latest page that started over
     // meanwhile dropped that reply, and the page would sit under the new one with the gap still in it.
     const anchorId = before ? shown[0]?.id : undefined;
@@ -261,9 +317,22 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       const markRead = !before && stickToBottomRef.current;
       const save = followSave(followKey);
       const followWrites = save.writes;
-      const result = await api().thread({ groupId: group.id, rootId, before, sourceMessageIds: shown.map(message => message.id), markRead });
+      const result = await api().thread({ groupId: group.id, rootId, before,
+        sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
-      if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
+      if (!result.ok) {
+        if (threadAccessLost(result.errorCode)) clearHistory(result.errorCode !== 'MESSAGE_NOT_FOUND');
+        setError(t(chatErrorKey(result.errorCode))); return;
+      }
+      const reset = !!result.historyRevision && !!revisionRef.current && result.historyRevision !== revisionRef.current;
+      if (reset) {
+        clearHistory();
+        revisionRef.current = result.historyRevision;
+        if (before) { refreshRef.current(); return; }
+      } else if (result.historyRevision) revisionRef.current = result.historyRevision;
+      // A later latest-page refresh owns updates to already visible rows and metadata.
+      const stalePage = !!before && latestRead !== latestReadRef.current;
+      if (!before) latestReadRef.current++;
       // A read that overlaps a follow save may carry the old choice; the save's own answer wins.
       if (!before && followWrites === save.writes && !save.saving) {
         save.saved = result.following;
@@ -273,27 +342,62 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
-      setExecutionFailures(result.executionFailures ?? []);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
       const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
-      if (!anchored(repliesRef.current)) return;
+      if (!reset && !anchored(repliesRef.current)) return;
+      const addedSources = new Set(stalePage
+        ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
+      if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
+      else if (addedSources.size) setExecutionFailures(previous => [
+        ...previous.filter(failure => !addedSources.has(failure.sourceMessageId)),
+        ...(result.executionFailures ?? []).filter(failure => addedSources.has(failure.sourceMessageId)),
+      ]);
       onAccepted?.();
-      setReplies(previous => (anchored(previous)
-        ? stabilizeById(previous, gap ? result.replies : mergeBotGroupMessages(previous, result.replies))
-        : previous));
+      setReplies(previous => {
+        if (reset || gap) return result.replies;
+        if (!anchored(previous)) return previous;
+        const incoming = stalePage ? result.replies.filter(reply => !previous.some(old => old.id === reply.id))
+          : mergeBotGroupMessages(result.replies, result.messageUpdates ?? []);
+        return stabilizeById(previous, mergeBotGroupMessages(previous, incoming));
+      });
       if (!before) latestFloorRef.current = floor;
-      if (!rereadOnly && (before || shown.length === 0 || gap)) setHasMore(result.hasMore);
+      if (!rereadOnly && (before || shown.length === 0 || gap || reset)) setHasMore(result.hasMore);
+      if (addedSources.size) {
+        for (const id of addedSources) queuedSourcesRef.current.add(id);
+        refreshRef.current();
+      }
+      // Recheck local reactions after the latest page settles, inside the same
+      // coalesced refresh. Otherwise that refresh can invalidate this recheck.
+      // A durable projection already returns the changed reply in messageUpdates.
+      if (!before && !gap && !reset) {
+        const refreshedIds = new Set([...result.replies, ...(result.messageUpdates ?? [])].map(reply => reply.id));
+        for (const reply of shown) {
+          if (!changedReplies.includes(reply.id) || refreshedIds.has(reply.id)) continue;
+          if (!current()) return;
+          await readRef.current(reply.sequence + 1, true);
+        }
+      }
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
-      if (!before && !gap && result.replies.length > 0) {
+      if (!before && !gap && !reset && result.replies.length > 0) {
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
-          return earlier.ok && current() ? earlier.replies : null;
+          if (!current()) return null;
+          if (!earlier.ok) {
+            if (threadAccessLost(earlier.errorCode)) {
+              clearHistory(earlier.errorCode !== 'MESSAGE_NOT_FOUND'); setError(t(chatErrorKey(earlier.errorCode)));
+            }
+            return null;
+          }
+          if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
+            clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
+          }
+          return earlier.replies;
         });
         if (refreshed && current()) {
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
@@ -301,7 +405,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t]);
+  }, [group.id, rootId, t, clearHistory]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -318,6 +422,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   }, [read]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
+  const groupRevisionRef = useRef(group.historyRevision);
+  useEffect(() => {
+    const previous = groupRevisionRef.current;
+    groupRevisionRef.current = group.historyRevision;
+    if (group.historyRevision && previous !== group.historyRevision && revisionRef.current !== group.historyRevision) {
+      clearHistory(); revisionRef.current = group.historyRevision; refreshRef.current();
+    }
+  }, [group.historyRevision, clearHistory]);
   /** Following is the reader's own switch, off by default: replying or being named never turns it on. */
   const toggleFollowing = useCallback(() => {
     if (following === undefined) return;
@@ -376,9 +488,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   // The root and the latest page come with every refresh; a reply opened through 「加载更早」 sits
   // below that page, so the page holding it is re-read for its new reaction state.
   const onChanged = useCallback((messageId: string) => {
-    refreshRef.current();
     const reply = repliesRef.current.find(candidate => candidate.id === messageId);
-    if (reply && reply.sequence < latestFloorRef.current) void readRef.current(reply.sequence + 1, true);
+    if (reply && reply.sequence < latestFloorRef.current) changedRepliesRef.current.add(messageId);
+    refreshRef.current();
   }, []);
   const onSendStart = useCallback((message: BotGroupOutgoingMessage) => {
     stickToBottomRef.current = true;

@@ -36,6 +36,7 @@ function row(patch: Partial<WatchedSession>): WatchedSession {
     online: true,
     title: 'Task',
     workingDir: null,
+    finalDelivery: true,
     phase: 'running',
     phaseSince: 0,
     lastActivityAt: 0,

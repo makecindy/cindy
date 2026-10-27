@@ -6333,6 +6333,7 @@ function LinkPathChipSpan({
   return (
     <ChatPathChipSpan
       candidate={candidate}
+      explicitLink={!bare}
       chipStyle={
         codeStyled
           ? [baseStyle, styles.markdownInlineCode, underlineDecoration(styles, baseStyle, styles.markdownPathChip)]

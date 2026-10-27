@@ -345,7 +345,9 @@ export interface SessionSendOptions extends SendOptions {
    * Session 在 active/running 守卫通过、turn reservation 建立后调用；
    * hook 完成后才启动 vendor handle。
    */
-  onAccepted?: () => void | Promise<void>;
+  // Reservation cancellation reaches host preparation (for example Git
+  // snapshots); returning from a cancelled hook never authorizes dispatch.
+  onAccepted?: (signal?: AbortSignal) => void | Promise<void>;
   /** Reservation 建立后立刻回调本轮 turn generation；host 必须用它绑定 leftover，不能等 send 返回后再读最新 generation。 */
   onTurnReserved?: (turnGeneration: number) => void;
   /**
@@ -955,7 +957,7 @@ export class Session {
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
-      await onAccepted?.();
+      await onAccepted?.(reservation.abortController.signal);
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;

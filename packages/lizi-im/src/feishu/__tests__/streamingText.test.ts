@@ -103,6 +103,25 @@ describe('feishu streaming text', () => {
     expect(markdownContent(card)).toContain('完整内容仍可在 Cindy 桌面端查看');
   });
 
+  // Regression: an oversized intermediate frame used to bypass the final-card byte cap.
+  // Production entry: append/timer -> patchCardRaw; existing coverage only checked finalize.
+  // Minimal failing input: one multi-byte Markdown frame; unit tier with fake timers/mocks.
+  it('truncates an oversized intermediate card within Feishu request limits', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = await start('ou_owner');
+      const longMarkdown = '| 列一 | 列二 |\n| --- | --- |\n| 很长的内容 | 更多内容 |'.repeat(1000);
+      handle.append(longMarkdown);
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(mocks.patchCardRaw).toHaveBeenCalledTimes(1);
+      const card = mocks.patchCardRaw.mock.calls[0][1];
+      expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+      expect(markdownContent(card)).toContain('完整内容仍可在 Cindy 桌面端查看');
+      expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('delivers a file separately and updates the original card with its receipt', async () => {
     const handle = await start('ou_owner');
     await handle.finalize('[report.txt](xdt-file:///tmp/report.txt)');

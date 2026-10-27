@@ -29,6 +29,8 @@ import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { getMaker } from '../maker-host/index.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
+import { ownerScopedUserDataPath } from '../appSessionState';
+import { SnapshotAttemptStore } from '../git-snapshot/snapshotAttemptStore';
 import type { Session } from '../../renderer/lib/ccAgent.types';
 import type { RewindFilesResult } from '@cindy/maker-core';
 
@@ -535,7 +537,9 @@ function parseNumstat(value: string): number {
 
 async function buildCodexFilePlanForSession(sessionId: string, targetMessageClientId: string, userMessages: readonly CodexRewindUserMessage[], makerSession: { workDir: string; remoteHostId?: string | null }) {
   try {
-    return buildCodexFileRewindPlan({ sessionId, targetMessageClientId, userMessages, repo: await loadCodexFileRewindRepoContext(makerSession, sessionId) });
+    const attempts = new SnapshotAttemptStore(ownerScopedUserDataPath()).read(sessionId);
+    const [repo, snapshotAttempts] = await Promise.all([loadCodexFileRewindRepoContext(makerSession, sessionId), attempts]);
+    return buildCodexFileRewindPlan({ sessionId, targetMessageClientId, userMessages, repo, snapshotAttempts });
   } catch (err) {
     if (err instanceof CodexFileRewindPlanError) {
       if (err.code === 'MESSAGE_NOT_FOUND') throw rewindError('MESSAGE_NOT_FOUND', err.message);
@@ -556,6 +560,7 @@ function toPlannerSavepoint(snapshot: SnapshotEntry): CodexRewindSavepoint {
     ...(snapshot.anchor ? { anchor: snapshot.anchor } : {}),
     ...(snapshot.label ? { label: snapshot.label } : {}),
     ...(snapshot.baselineCommit ? { baselineCommit: snapshot.baselineCommit } : {}),
+    ...(snapshot.attemptId ? { attemptId: snapshot.attemptId } : {}),
   };
 }
 

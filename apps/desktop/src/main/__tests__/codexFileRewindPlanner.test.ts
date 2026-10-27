@@ -61,6 +61,73 @@ function expectPlanError(
 }
 
 describe('buildCodexFileRewindPlan', () => {
+  // #7259 follow-up, unit: the message anchor alone cannot prove retry coverage.
+  // Minimal failure: two durable attempts, only the old attempt completed in Git.
+  it('requires every durable attempt even when a retry never wrote a baseline or gap marker', () => {
+    const repo = {
+      kind: 'local-git' as const, repoRoot: '/repo', currentHead: 'head', currentBranch: 'main',
+      savepointsNewestFirst: [savepoint({
+        commit: 'old', sessionId: 's1', source: 'shadow', kind: 'after-edit',
+        anchor: 'm3', baselineCommit: 'b1', attemptId: 'attempt-1',
+      })],
+    };
+    const snapshotAttempts = [
+      { id: 'attempt-1', anchor: 'm3' }, { id: 'attempt-2', anchor: 'm3' },
+    ];
+    expect(plan({ targetMessageClientId: 'm3', repo, snapshotAttempts })).toMatchObject({
+      mode: 'conversation-only', fallbackReason: 'savepoint-gap',
+    });
+    // A later successful attempt must not erase the middle hole either.
+    snapshotAttempts.push({ id: 'attempt-3', anchor: 'm3' });
+    repo.savepointsNewestFirst.unshift(savepoint({
+      commit: 'new', sessionId: 's1', source: 'shadow', kind: 'after-edit',
+      anchor: 'm3', baselineCommit: 'b3', attemptId: 'attempt-3',
+    }));
+    expect(plan({ targetMessageClientId: 'm3', repo, snapshotAttempts }).mode).toBe('conversation-only');
+    repo.savepointsNewestFirst.push(savepoint({
+      commit: 'middle', sessionId: 's1', source: 'shadow', kind: 'after-edit',
+      anchor: 'm3', baselineCommit: 'b2', attemptId: 'attempt-2',
+    }));
+    expect(plan({ targetMessageClientId: 'm3', repo, snapshotAttempts }).mode).toBe('file-restore');
+    expect(plan({ targetMessageClientId: 'm3', repo, snapshotAttempts: [] }).mode).toBe('conversation-only');
+  });
+
+  it('fails closed on unreadable attempt history but ignores gaps before the target message', () => {
+    expect(plan({ snapshotAttempts: null })).toMatchObject({ mode: 'conversation-only', fallbackReason: 'savepoint-gap' });
+    expect(plan({ snapshotAttempts: [{ id: 'failed', anchor: 'm1' }] }).mode).toBe('file-rewind');
+    expect(plan({ snapshotAttempts: [{ id: 'failed' }] }).mode).toBe('conversation-only');
+  });
+
+  // #7259: a gap commit is best effort and can be absent after timeout/crash.
+  // Unit tier: positive coverage must include all messages, including retries.
+  it.each(['shadow', 'legacy'] as const)('rejects a missing middle or final turn even without a %s gap marker', (source) => {
+    for (const missing of ['m2', 'm3']) {
+      const result = plan({
+        repo: {
+          kind: 'local-git', repoRoot: '/repo', currentHead: 'head', currentBranch: 'main',
+          savepointsNewestFirst: USER_MESSAGES.filter((m) => m.clientId !== missing).map((m) => savepoint({
+            commit: `after-${m.clientId}`, source, sessionId: 's1', kind: 'after-edit',
+            anchor: m.clientId, baselineCommit: `start-${m.clientId}`,
+          })).reverse(),
+        },
+      });
+      expect(result).toMatchObject({ mode: 'conversation-only', fallbackReason: 'savepoint-gap' });
+    }
+  });
+
+  it('does not let an earlier successful retry hide an incomplete start on the same message', () => {
+    const result = plan({
+      targetMessageClientId: 'm3',
+      repo: {
+        kind: 'local-git', repoRoot: '/repo', currentHead: 'head', currentBranch: 'main',
+        savepointsNewestFirst: [
+          savepoint({ commit: 'retry-start', sessionId: 's1', source: 'shadow', kind: 'turn-start', anchor: 'm3' }),
+          savepoint({ commit: 'completed', sessionId: 's1', source: 'shadow', kind: 'after-edit', anchor: 'm3', baselineCommit: 'old-start' }),
+        ],
+      },
+    });
+    expect(result).toMatchObject({ mode: 'conversation-only', fallbackReason: 'savepoint-gap' });
+  });
   it('selects current-session after-edit savepoints from the target message onward', () => {
     const result = plan();
 
@@ -118,6 +185,7 @@ describe('buildCodexFileRewindPlan', () => {
 
   it('does not select savepoints from other branches', () => {
     const result = plan({
+      userMessages: USER_MESSAGES.slice(0, 2),
       repo: {
         kind: 'local-git',
         repoRoot: '/repo',
@@ -220,6 +288,7 @@ describe('buildCodexFileRewindPlan', () => {
 
   it('allows selected root savepoint commits', () => {
     const result = plan({
+      userMessages: USER_MESSAGES.slice(0, 2),
       repo: {
         kind: 'local-git',
         repoRoot: '/repo',
@@ -389,6 +458,7 @@ describe('buildCodexFileRewindPlan', () => {
 
     it('selects shadow savepoints regardless of branch (no branch filter)', () => {
       const result = plan({
+      userMessages: USER_MESSAGES.slice(0, 2),
         repo: {
           kind: 'local-git',
           repoRoot: '/repo',

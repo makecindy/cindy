@@ -156,10 +156,10 @@ export interface BotSessionProjection {
    * Telegram / Feishu group handed to the Bot); see botGroupLane.ts before
    * counting sessions.
    */
-  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread';
+  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread';
+  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   /** Group-lane only: the group whose chat owns this hidden Session. */
   groupId?: string;
   /** Private-chat topic only: the main-chat message the topic was opened on. */

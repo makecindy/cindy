@@ -14,6 +14,9 @@ export interface ChatHistoryState {
   pages: Record<string, string[]>;
   /** Aggregates absent from change bodies (reactions/reply counts) need a page refresh. */
   stalePages?: string[];
+  /** Individually fetched roots outside covered pages; bodies live in messages, as usual. */
+  lookups?: string[];
+  staleLookups?: string[];
   metadataDirty: boolean;
 }
 export interface ChatHistoryStore {
@@ -71,7 +74,8 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     assertCurrent();
     state.stalePages = state.stalePages?.filter(key => state.pages[key]);
     // Keep only covered pages and the snapshot, never every change in the room's history.
-    const retained = new Set([...state.snapshot.messages.map(m => m.id), ...Object.values(state.pages).flat()]);
+    const retained = new Set([...state.snapshot.messages.map(m => m.id), ...Object.values(state.pages).flat(), ...(state.lookups ?? [])]);
+    state.staleLookups = state.staleLookups?.filter(id => state.lookups?.includes(id));
     for (const id of Object.keys(state.messages)) if (!retained.has(id)) delete state.messages[id];
     await input.store.write(room, state);
     assertCurrent(); states.set(room, state);
@@ -105,6 +109,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
         if (!message) return false;
         if (change.type === 'reaction.changed') {
           for (const [key, ids] of Object.entries(state.pages)) if (ids.includes(message.id)) stale(state, key);
+          staleLookup(state, message.id);
         }
         if (message) {
           merge(state, message);
@@ -114,13 +119,16 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
             state.snapshot.messages = state.snapshot.messages.slice(0, 100);
           }
           // A new reply also changes its root's reply count. Refresh only pages containing that root.
-          if (message.threadRootId && ['message.created', 'message.deleted'].includes(change.type))
+          if (message.threadRootId && ['message.created', 'message.deleted'].includes(change.type)) {
             for (const [key, ids] of Object.entries(state.pages)) if (ids.includes(message.threadRootId)) stale(state, key);
+            staleLookup(state, message.threadRootId);
+          }
         }
         if (change.type === 'message.created') {
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
             if (query.has('before')) continue;
+            if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again.
@@ -141,6 +149,11 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
   function stale(state: ChatHistoryState, key: string) {
     state.stalePages ??= [];
     if (!state.stalePages.includes(key)) state.stalePages.push(key);
+  }
+  function staleLookup(state: ChatHistoryState, id: string) {
+    if (!state.lookups?.includes(id)) return;
+    state.staleLookups ??= [];
+    if (!state.staleLookups.includes(id)) state.staleLookups.push(id);
   }
   async function fetchPage<M extends ChatHistoryMessage>(room: string, state: ChatHistoryState, key: string) {
     const messages = await input.api<M[]>(`/conversations/${room}/messages?${key}`);
@@ -231,6 +244,18 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     return undefined;
   }
   return {
+    message: <M extends ChatHistoryMessage>(room: string, id: string): Promise<M> => serial(room, async () => {
+      const state = await ensure(room);
+      if (!state.lookups?.includes(id) || !state.messages[id] || state.staleLookups?.includes(id)) {
+        const message = await input.api<M>(`/conversations/${room}/messages/${encodeURIComponent(id)}`);
+        if (message?.id !== id || !isCursor(message.seq)) throw new Error('CHAT_RESPONSE_INVALID');
+        merge(state, message);
+        state.lookups = [...(state.lookups ?? []).filter(value => value !== id), id].slice(-100);
+        state.staleLookups = state.staleLookups?.filter(value => value !== id);
+        await save(room, state);
+      }
+      return state.messages[id] as M;
+    }),
     snapshot: <S extends ChatHistorySnapshot>(room: string): Promise<S & { cacheGeneration: string }> => serial(room, async () => {
       const state = await ensure(room);
       return { ...state.snapshot, cursor: state.cursor, cacheGeneration: state.generation } as S & { cacheGeneration: string };

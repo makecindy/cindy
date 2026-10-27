@@ -430,6 +430,11 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
+  executionId?: string;
+  startedAt?: number;
+  stopping?: boolean;
+  executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
@@ -835,6 +840,9 @@ export interface ChatServerApi {
    */
   thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[]; markRead?: boolean }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Same room generation as the main timeline; reset before merging older pages. */
+    historyRevision?: string;
+    messageUpdates?: BotGroupMessageView[];
     /** Same authoritative state as the main timeline; root and replies use one projection. */
     executionFailures?: BotGroupExecutionFailureView[];
     readBefore?: number;

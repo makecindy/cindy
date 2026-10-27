@@ -1,8 +1,8 @@
 {
   "title": "群聊",
   "memberSeparator": "、",
-  "memberCount_one": "{{count}} 位伙伴",
-  "memberCount_other": "{{count}} 位伙伴",
+  "memberCount_one": "{{count}} 位成员",
+  "memberCount_other": "{{count}} 位成员",
   "organizer": "负责人",
   "waitingConfirm": "{{name}}在等你确认",
   "loadFailedTitle": "无法加载这个群聊",
@@ -141,6 +141,7 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
   },

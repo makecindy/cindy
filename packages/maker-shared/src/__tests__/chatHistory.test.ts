@@ -24,6 +24,44 @@ function fixture() {
 }
 
 describe('durable chat history', () => {
+  // Unit: unrelated room activity must not evict another topic's downloaded head page.
+  it('invalidates only the latest pages whose filter includes a new message', async () => {
+    const f = fixture(); const cache = f.open();
+    const topic = new URLSearchParams('threadRootId=root&limit=50');
+    const main = new URLSearchParams('limit=100');
+    await cache.page('room', topic); await cache.page('room', main);
+    await cache.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: f.message('11') } }] }, '10');
+    f.api.mockClear();
+    await cache.page('room', topic);
+    expect(f.api).not.toHaveBeenCalled();
+    await cache.page('room', main);
+    expect(f.api).toHaveBeenCalledWith('/conversations/room/messages?limit=100');
+  });
+
+  // Unit: old topic roots need durable single-message coverage and aggregate refreshes,
+  // while edits/tombstones must share the room cursor and survive a process restart.
+  it('retains topic roots across restarts and repairs them from the room change stream', async () => {
+    const f = fixture(); let replies = 0;
+    const original = f.api.getMockImplementation()!;
+    f.api.mockImplementation(async route => route.endsWith('/messages/1')
+      ? { ...f.message('1'), replyCount: replies } : original(route));
+    const cache = f.open();
+    await cache.message('room', '1');
+    const restarted = f.open(); f.api.mockClear();
+    expect(await restarted.message('room', '1')).toMatchObject({ replyCount: 0 });
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/changes?scope=conversation:room&after=10&limit=100']);
+    replies = 1;
+    await restarted.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: { ...f.message('11'), threadRootId: '1' } } }] }, '10');
+    expect(await restarted.message('room', '1')).toMatchObject({ replyCount: 1 });
+    await restarted.receive('room', { cursor: '12', changes: [{ type: 'message.deleted', data: { message: f.message('1', 2, true) } }] }, '10');
+    f.setBatch({ cursor: '12', changes: [] });
+    expect(await f.open().message('room', '1')).toMatchObject({ deleted: true, revision: 2 });
+    restarted.invalidate('room');
+    f.api.mockImplementationOnce(async () => { throw new Error('NOT_MEMBER'); });
+    await expect(restarted.message('room', '1')).rejects.toThrow('NOT_MEMBER');
+    expect(f.disk.has('room')).toBe(false);
+  });
+
   it('retries a concurrent writer conflict without overwriting its newer historical edit', async () => {
     const f = fixture(); const cache = f.open(); await cache.page('room', f.page);
     vi.mocked(f.store.write).mockImplementationOnce(async () => {

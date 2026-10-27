@@ -34,7 +34,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { notificationPreview } from '../notificationPreview.js';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
-import { createChatMessageNotifications } from './chatMessageNotifications.js';
+import { createChatMessageNotifications, selectChatAttentionMessage } from './chatMessageNotifications.js';
 import WebSocket from 'ws';
 import { z } from 'zod';
 import { and, asc, eq, gt } from 'drizzle-orm';
@@ -110,7 +110,7 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   context?: ExecutionContext;
-  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean };
+  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -369,12 +369,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsListRemoval = false;
   let supportsMemberAvatar = false;
   const personalList = createConversationListState();
+  const attentionGroups = new Set<string>();
+  const clearGroupAttention = (roomId: string) => {
+    attentionGroups.delete(roomId);
+    deps.onChatGroupAttention?.(roomId, null, current);
+  };
   const syncPersonalList = async (force = false) => {
     if (supportsListRemoval) await (force ? personalList.sync(api) : personalList.ensureSynced(api));
   };
   personalList.subscribe(row => {
     if (!current()) return;
-    if (row.hidden) { displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); }
+    if (row.hidden) { displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
     deps.onChanged?.({ groupId: row.conversationId, change: 'list', listState: row }, scope);
     for (const [source, target] of upgradedGroups) if (target === row.conversationId)
       deps.onChanged?.({ groupId: source, change: 'list', listState: row }, scope);
@@ -531,14 +536,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Local writes always notify: HTTP can finish before the server handles subscribe,
   // even on an open socket. Nearby realtime echoes join the same bounded window.
   const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
+  // The first snapshot of each connection is a quiet baseline; use server sequences, not device clocks.
+  const notificationBaselines = new Map<string, bigint>();
   const chatNotifications = deps.onChatMessageNotification ? createChatMessageNotifications<Message>({
     current, selfId: () => selfId,
     message: (groupId, messageId) => api<Message>(`/conversations/${groupId}/messages/${messageId}`),
     snapshot: async groupId => {
+      const version = generation(groupId);
+      const connection = snapshotConnection;
       const snapshot = await api<Snapshot>(`/conversations/${groupId}/snapshot`);
       if (personalList.hidden(groupId)) throw new Error('CHAT_HIDDEN');
+      if (current() && generation(groupId) === version && snapshotConnection === connection) publishGroupAttention(snapshot);
       return snapshot;
     },
+    // Replayed group history restores unread above, but is not a new popup. Direct chats keep their existing delivery policy.
+    shouldAlert: (message, snapshot, groupId) => snapshot.room.kind === 'direct'
+      || BigInt(message.seq) > (notificationBaselines.get(groupId) ?? BigInt(message.seq)),
+    revision: groupId => `${snapshotConnection}:${generation(groupId)}:${personalList.hidden(groupId)}`,
     present: async (groupId, message) => {
       const snapshot = await recentSnapshot(groupId);
       const member = snapshot.members.find(member => member.id === message.authorId);
@@ -574,6 +588,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     pendingChanges.set(roomId, setTimeout(() => {
       pendingChanges.delete(roomId);
       if (!current()) return;
+      if (roomId && deps.onChatGroupAttention && rooms.has(roomId)) void refreshGroupAttention(roomId);
       deps.onChanged?.({ groupId: roomId, change: 'messages' }, scope);
       // A restored route may still contain the local ID until the user navigates.
       for (const [sourceId, targetId] of upgradedGroups)
@@ -988,6 +1003,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       try {
         const event = JSON.parse(String(raw));
         if (event.type === 'ready') {
+          notificationBaselines.clear();
           memberJoinedClaims = true;
           claimWakeVersion++;
           idleClaims.clear();
@@ -1001,7 +1017,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           for (const roomId of rooms.keys()) invalidate(roomId);
           ws.send(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' }));
           for (const [roomId, cursor] of rooms) ws.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
-          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) { changed(roomId); autoContinuePlans(roomId); } changed(''); } }).catch(() => ws.close());
+          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) {
+            if (deps.onChatGroupAttention) void refreshGroupAttention(roomId);
+            changed(roomId); autoContinuePlans(roomId);
+          } changed(''); } }).catch(() => ws.close());
         } else if (event.type === 'changes') {
           // Durable UI projections commit before ACK. Serial frames preserve the cursor order.
           if (event.scope.startsWith('conversation:')) {
@@ -1080,6 +1099,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }).catch(() => ws.close());
           } else {
             rooms.delete(roomId);
+            clearGroupAttention(roomId);
             displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
             threads.reset();
@@ -1104,9 +1124,49 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const value = await api<Snapshot>(`/conversations/${roomId}/snapshot`);
     if (value.room.dissolved_at) retirePlanning(roomId);
     // A prior connection or room change makes this answer ineligible for reuse.
-    if (current() && snapshotConnection === connection && generation(roomId) === read)
+    if (current() && snapshotConnection === connection && generation(roomId) === read) {
       snapshots.set(roomId, { value, generation: read, at: Date.now() });
+      publishGroupAttention(value);
+    }
     return value;
+  }
+
+  function publishGroupAttention(s: Snapshot): void {
+    if (!current() || (!deps.onChatGroupAttention && !deps.onChatMessageNotification) || !isGroupRoom(s.room)) return;
+    if (!notificationBaselines.has(s.room.id)) notificationBaselines.set(s.room.id,
+      s.messages.reduce((max, message) => BigInt(message.seq) > max ? BigInt(message.seq) : max, 0n));
+    if (!deps.onChatGroupAttention) return;
+    const unavailable = personalList.hidden(s.room.id) || s.members.some(m => m.id === selfId && m.state !== 'joined');
+    const selected = unavailable ? null : selectChatAttentionMessage(s, selfId);
+    if (!selected) { clearGroupAttention(s.room.id); return; }
+    const view = messageView(selected, s.members, s.members);
+    const preview = notificationPreview(botGroupMessageSummaryText(view) || mediaNames(selected), 240)
+      || t('settings.notifications.chat.message');
+    const context = selected.threadRootId ? `${t('settings.notifications.chat.thread')} · ` : '';
+    attentionGroups.add(s.room.id);
+    deps.onChatGroupAttention(s.room.id, {
+      groupId: s.room.id, name: s.room.name, messageId: selected.id,
+      ...(selected.threadRootId ? { threadRootId: selected.threadRootId } : {}),
+      mentioned: selected.mentions?.includes(selfId) === true,
+      preview: `${context}${notificationPreview(view.authorName)}: ${preview}`,
+      lastMessageAt: Date.parse(selected.createdAt),
+      members: s.members.filter(m => m.state === 'joined').slice(0, 5).map(m => ({
+        name: memberName(m, s.members), avatar: m.groupAvatar ?? m.avatar ?? m.defaultAvatarUrl ?? localBot(m.id)?.avatar ?? '',
+        avatarColor: localBot(m.id)?.avatarColor ?? '',
+      })),
+    }, current);
+  }
+
+  async function refreshGroupAttention(roomId: string): Promise<void> {
+    const version = generation(roomId);
+    const connection = snapshotConnection;
+    try {
+      const value = await (history()?.snapshot<Snapshot>(roomId) ?? recentSnapshot(roomId));
+      if (current() && generation(roomId) === version && snapshotConnection === connection) publishGroupAttention(value);
+    } catch (error) {
+      if (current() && generation(roomId) === version && snapshotConnection === connection
+        && error instanceof ChatResponseError && [403, 404].includes(error.status)) clearGroupAttention(roomId);
+    }
   }
   async function snapshot(roomId: string) {
     const value = await readSnapshot(roomId);
@@ -1374,8 +1434,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * A server without read state, or a failed write, leaves unread as it was. Returns the position
    * before this read, or undefined without read state.
    */
-  async function markThreadRead(roomId: string, root: Message, newestFirst: Message[]): Promise<number | undefined> {
-    const reads = threadReads(await recentSnapshot(roomId));
+  async function markThreadRead(roomId: string, root: Message, newestFirst: Message[], snapshot?: Snapshot): Promise<number | undefined> {
+    const reads = threadReads(snapshot ?? await recentSnapshot(roomId));
     if (!reads) return undefined;
     const before = reads.get(root.id) ?? 0n;
     const newest = newestFirst.reduce((max, m) => BigInt(m.seq) > max ? BigInt(m.seq) : max, BigInt(root.seq));
@@ -1403,8 +1463,66 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       operationId: randomUUID(), threadRootId: rootId, readSeq: read?.read_seq ?? '0', following: next });
     return written.following;
   }
+  async function threadDetail(input: Parameters<ChatServerApi['thread']>[0], attempt = 0): Promise<{
+    root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean; historyRevision?: string;
+    messageUpdates?: BotGroupMessageView[]; executionFailures: BotGroupExecutionFailureView[]; readBefore?: number; following?: boolean;
+  }> {
+    const i = z.object({ groupId: id, rootId: id, before: z.number().int().positive().optional(), sourceMessageIds: z.array(id).optional(),
+      markRead: z.boolean().optional() }).parse(input);
+    i.groupId = await resolveGroup(i.groupId);
+    await ensureRegistered();
+    const cache = history();
+    try {
+      const s = cache ? await cache.snapshot<Snapshot>(i.groupId) : await groupSnapshot(i.groupId);
+      if (!isGroupRoom(s.room)) throw new Error('NOT_A_GROUP');
+      const revision = cache ? (s as Snapshot & { cacheGeneration: string }).cacheGeneration : undefined;
+      subscribe(i.groupId, s.cursor);
+      const query = new URLSearchParams({ threadRootId: i.rootId, limit: '50' });
+      if (i.before) query.set('before', String(i.before));
+      // Root and replies use the same room cursor and durable, account-scoped message map.
+      const membersRead = cache ? Promise.resolve(s.members) : api<Member[]>(`/conversations/${i.groupId}/members`);
+      const rootRead = cache?.message<Message>(i.groupId, i.rootId) ?? api<Message>(`/conversations/${i.groupId}/messages/${i.rootId}`);
+      const pageRead = cache?.page<Message>(i.groupId, query) ?? api<Message[]>(`/conversations/${i.groupId}/messages?${query}`);
+      for (const read of [rootRead, pageRead]) read.catch(() => undefined);
+      const members = await membersRead;
+      const root = await rootRead;
+      const page = await pageRead;
+      const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
+      const projection = await cache?.projection<Message>(i.groupId, i.sourceMessageIds ?? []);
+      const rootViews = await messageViews(i.groupId, [root], members);
+      await decorateThreads(i.groupId, rootViews, [root], page, members, false);
+      const replies = await messageViews(i.groupId, [...page].reverse(), members);
+      const messageUpdates = projection ? await messageViews(i.groupId, projection.messages.filter(m => m.threadRootId === i.rootId), members) : undefined;
+      const retry = () => {
+        if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
+        return threadDetail(input, attempt + 1);
+      };
+      if (revision && cache?.generation(i.groupId) !== revision) return retry();
+      // Reuse the already validated personal reads; writing read state still goes to the server.
+      const following = i.before ? undefined : cache
+        ? s.reads ? s.reads.find(read => read.thread_key === root.id)?.following === true : undefined
+        : await threadFollowing(i.groupId, root.id);
+      const readBefore = i.markRead && !i.before ? await markThreadRead(i.groupId, root, page, cache ? s : undefined) : undefined;
+      if (revision && cache?.generation(i.groupId) !== revision) return retry();
+      return { root: rootViews[0]!, executionFailures, replies, hasMore: page.length === 50,
+        ...(revision ? { historyRevision: revision, messageUpdates } : {}),
+        ...(readBefore !== undefined ? { readBefore } : {}), ...(following !== undefined ? { following } : {}) };
+    } catch (error) {
+      if (error instanceof ChatResponseError && [403, 404].includes(error.status) && error.message !== 'MESSAGE_NOT_FOUND') {
+        // Execution metadata is read outside the history transaction, but its denial
+        // also revokes the warm projection. A missing root only invalidates that topic,
+        // not this room's membership or other cached messages. Preserve the original error.
+        await cache?.clear(i.groupId).catch(() => undefined);
+        displayHistory.forget(i.groupId);
+        threads.reset();
+      }
+      throw error;
+    }
+  }
   async function detail(roomId: string, options?: unknown, summaryOnly = false, attempt = 0): Promise<BotGroupDetail> {
     id.parse(roomId);
+    const attentionGeneration = generation(roomId);
+    const attentionConnection = snapshotConnection;
     const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
       shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional() }).parse(options ?? {});
@@ -1441,14 +1559,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const workspace = workspaces().read(roomId);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
-    // A companion answering in several Threads at once is still one speaker per activity; the one
-    // whose turn runs on this computer is shown, so its Session can be opened.
+    // Keep execution identity across computers and concurrent threads. Only the executing
+    // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
-    for (const e of executions.filter(e => e.status === 'running')) {
-      const speaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: running.get(e.id)?.sessionId ?? null, activity: e.plan_id ? 'step' as const : 'reply' as const };
-      const known = speakers.findIndex(other => other.botId === speaker.botId && other.activity === speaker.activity);
-      if (known < 0) speakers.push(speaker);
-      else if (!speakers[known]!.sessionId && speaker.sessionId) speakers[known] = speaker;
+    for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
+      const run = running.get(e.id);
+      const startedAt = run?.started ?? (e.created_at ? Date.parse(e.created_at) : undefined);
+      const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
+        executionId: e.id, ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
+        executionStatus: e.status as BotGroupSpeaker['executionStatus'],
+        activity: e.plan_id ? 'step' : 'reply' };
+      speakers.push(speaker);
     }
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
     // as the local service showed it. It works on the auxiliary model, not in a lane session.
@@ -1465,6 +1586,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return detail(roomId, options, summaryOnly, attempt + 1);
     }
     const threadShareUpdates = shares?.updates;
+    if (current() && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) publishGroupAttention(s);
     const reads = threadReads(s);
     const unread = reads ? s.messages.filter(m => !m.deleted && m.origin !== 'system' && m.origin !== 'import' && m.authorId !== selfId
       && (!m.threadRootId || m.mentions?.includes(selfId) || s.reads?.some(read => read.thread_key === m.threadRootId && read.following))
@@ -1500,7 +1622,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
-      round: { status: deciding || executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers,
+      round: { status: deciding || executions.some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status)) ? 'running' : 'idle', speakers,
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
           && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
@@ -1746,6 +1868,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
   }
   /** One execution gets one immutable terminal result, regardless of which boundary ends it. */
+  async function cancelExecution(run: Running): Promise<void> {
+    if (!current() || running.get(run.execution.id) !== run) return;
+    if (!run.settlement?.cancelled) {
+      run.settlement = { terminal: { sessionId: run.sessionId, activeInputClientId: run.clientId, outcome: 'done', resultText: '' }, cancelled: true, payload: {}, retryAt: 0 };
+      run.releaseToolAuthority?.();
+      if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+    }
+    // Keep the lane resolvable while the existing cancel receipt is being delivered.
+    // A transport failure retries this receipt, never the model or a completion reply.
+    await deliverSettlement(run);
+  }
   async function settleExecution(run: Running, terminal: BotGroupLaneTerminal, abort = false): Promise<void> {
     if (!current() || running.get(run.execution.id) !== run) return;
     if (!run.settlement) {
@@ -1836,9 +1969,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               // A single-speaker server never chains rounds, so there is nothing to continue.
               ...(singleSpeaker ? {} : { continueDiscussion: run.context?.kind !== 'member.joined' && !run.plan && !isBotGroupNoReplyText(text) }) };
         }
-        if (!current() || running.get(run.execution.id) !== run) return;
-        await updateExecution(run, pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
-        if (run.plan && deps.onStepSettled) {
+        if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
+        await updateExecution(run, pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
+        if (!pending.cancelled && run.plan && deps.onStepSettled) {
           const s = await snapshot(run.execution.conversation_id);
           const step = run.plan.steps[run.execution.plan_step!];
           const latest = (await api<ServerPlan[]>(`/conversations/${s.room.id}/plans?ids=${run.plan.id}`)).find(p => p.id === run.plan!.id);
@@ -1847,6 +1980,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             botName: step.botName, task: step.task, outcome: pending.terminal.outcome === 'error' ? 'failed' : 'done', planDone: latest?.status === 'done' }, scope);
         }
       } catch (error) {
+        if (error instanceof ChatResponseError && error.message === 'STOP_REQUESTED' && !pending.cancelled) {
+          // A remote stop can race the final reply. Retire the lease with cancel,
+          // without publishing that reply or waiting for the server's lease expiry.
+          run.settlement = { terminal: pending.terminal, cancelled: true, payload: {}, retryAt: 0 };
+          run.releaseToolAuthority?.();
+          if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+          return;
+        }
         // Keep the result during transport/temporary service failures. A definitive
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
@@ -1862,7 +2003,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           return;
         }
       } finally { run.delivery = undefined; }
-      if (running.get(run.execution.id) === run) {
+      if (running.get(run.execution.id) === run && run.settlement === pending) {
         run.releaseToolAuthority?.();
         forgetRun(run);
         // Refresh both delivered results and local failures without waiting for an echo.
@@ -2380,9 +2521,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (run.settlement) {
       // Auth/rate-limit waits need lease renewal; ordinary lost-response retries
       // preserve the existing receipt lookup without an intervening heartbeat.
-      if (!run.settlement.payload || run.settlement.keepLease) {
+      if (!run.settlement.cancelled && (!run.settlement.payload || run.settlement.keepLease)) {
         try { await updateExecution(run, 'heartbeat'); }
         catch (error) {
+          if (error instanceof ChatResponseError && error.message === 'STOP_REQUESTED') {
+            await cancelExecution(run);
+            return;
+          }
           if (error instanceof ChatResponseError && !retryableResponse(error)) {
             if (running.get(run.execution.id) === run) {
               run.releaseToolAuthority?.();
@@ -2408,7 +2553,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
           outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT' }, true);
       } else await updateExecution(run, 'heartbeat');
-    } catch {
+    } catch (error) {
+      if (error instanceof ChatResponseError && error.message === 'STOP_REQUESTED') {
+        await cancelExecution(run);
+        return;
+      }
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
       if (!run.settlement && running.get(run.execution.id) === run) {
@@ -2570,29 +2719,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       changed(target); return {};
     }),
     status: async () => ({ enabled: true, connected: current() && connected }),
-    thread: input => result(async () => {
-      const i = z.object({ groupId: id, rootId: id, before: z.number().int().positive().optional(), sourceMessageIds: z.array(id).optional(),
-        markRead: z.boolean().optional() }).parse(input);
-      i.groupId = await groupRoom(i.groupId);
-      // One round trip; awaited in the former order so the same failure is reported first.
-      const membersRead = api<Member[]>(`/conversations/${i.groupId}/members`);
-      const rootRead = api<Message>(`/conversations/${i.groupId}/messages/${i.rootId}`);
-      const pageRead = api<Message[]>(`/conversations/${i.groupId}/messages?threadRootId=${i.rootId}&limit=50${i.before ? `&before=${i.before}` : ''}`);
-      for (const read of [rootRead, pageRead]) read.catch(() => undefined);
-      const members = await membersRead;
-      const root = await rootRead;
-      const page = await pageRead;
-      const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
-      // A share in the main chat can itself be a thread root.
-      const rootViews = await messageViews(i.groupId, [root], members);
-      await decorateThreads(i.groupId, rootViews, [root], page, members, false);
-      // An older page is history being scrolled: it says nothing about the Thread's switches.
-      const following = i.before ? undefined : await threadFollowing(i.groupId, root.id);
-      const readBefore = i.markRead && !i.before ? await markThreadRead(i.groupId, root, page) : undefined;
-      return { root: rootViews[0], executionFailures,
-        replies: await messageViews(i.groupId, page.reverse(), members), hasMore: page.length === 50,
-        ...(readBefore !== undefined ? { readBefore } : {}), ...(following !== undefined ? { following } : {}) };
-    }),
+    thread: input => result(() => threadDetail(input)),
     followThread: input => result(async () => {
       const i = z.object({ groupId: id, rootId: id, following: z.boolean() }).strict().parse(input);
       const room = await groupRoom(i.groupId);
@@ -2880,14 +3007,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     listGroups: () => safe(async () => {
       await ensureRegistered(); await syncPersonalList(); beginUpgrade();
       const groups: BotGroupDetail[] = [];
+      const joinedIds = new Set<string>();
       let after: string | undefined;
       do {
         const page = await api<Array<Room & { state: string; head?: unknown }>>(`/conversations?limit=100${after ? `&after=${after}` : ''}`);
         // Only group rooms belong in the group list.
         const joined = page.filter(r => r.state === 'joined' && isGroupRoom(r) && !personalList.hidden(r.id));
+        for (const room of joined) joinedIds.add(room.id);
         groups.push(...settledValues(await settleBounded(joined, SUMMARY_CONCURRENCY, room => summary(room))));
         after = page.length === 100 ? page.at(-1)!.id : undefined;
       } while (after);
+      if (current()) for (const roomId of attentionGroups) if (!joinedIds.has(roomId)) clearGroupAttention(roomId);
       return { ok: true as const, groups: groups.filter(group => !personalList.hidden(group.id)) };
     }),
     getGroup: (roomId, options) => safe(async () => {
@@ -2977,7 +3107,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !e.plan_id)) {
           await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' });
           const run = running.get(e.id);
-          if (run) { forgetRun(run); if (run.sessionId) await deps.abortLane(run.sessionId); }
+          if (run) await cancelExecution(run);
         }
         changed(room); return { ok: true as const };
       }
@@ -3002,7 +3132,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
         catch (error) { if (refused(error)) continue; throw error; }
         const run = running.get(e.id);
-        if (run) { forgetRun(run); if (run.sessionId) await deps.abortLane(run.sessionId); }
+        if (run) await cancelExecution(run);
       }
       changed(room); return { ok: true as const };
     }),
@@ -3126,6 +3256,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
       chatNotifications?.dispose();
+      for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
       disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();

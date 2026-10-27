@@ -186,6 +186,7 @@ export interface BotGroupChatServiceDeps {
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
   onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
+  onChatGroupAttention?: (groupId: string, input: import('../agent-island/groupChat.js').AgentIslandGroupChatInput | null, current: () => boolean) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('../companion-cloud/runtime.js').CompanionCloudHost;
   now?: () => number;

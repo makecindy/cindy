@@ -113,11 +113,13 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       // rg 偶尔有 `./` 前缀(取决于 cwd 形式),剥掉。
       const clean = normalized.startsWith('./') ? normalized.slice(2) : normalized;
       if (!clean) return;
-      files.push(clean);
+      // 只有第 cap + 1 个文件才证明清单被截断；恰好 cap 个自然结束不算超限。
       if (files.length >= cap) {
         truncated = true;
-        killRg('cap reached');
+        killRg('cap exceeded');
+        return;
       }
+      files.push(clean);
     });
 
     child.on('error', (err) => {
@@ -208,8 +210,11 @@ export async function listAllFilesWalk(args: ListAllFilesWalkArgs): Promise<List
       if (isDir) {
         await walk(childRel);
       } else if (ent.isFile()) {
+        if (files.length >= cap) {
+          truncated = true;
+          return;
+        }
         files.push(childRel);
-        if (files.length >= cap) truncated = true;
       }
     }
   };

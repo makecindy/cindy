@@ -49,7 +49,7 @@ export async function withBotPermissionChange<T>(
   const owner = getCurrentDbClientSnapshot();
   if (!owner) return change();
   const [link] = await owner.client.query<{ botId: string }>(`SELECT bot_id AS botId FROM bot_session_links
-    WHERE session_id = ? AND role IN ('canonical', 'channel', 'group', 'thread') AND archived_at IS NULL`, [sessionId]);
+    WHERE session_id = ? AND role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND archived_at IS NULL`, [sessionId]);
   if (owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed during permission update');
   return link ? withBotPermissionChangeForBot(link.botId, change) : change();
 }
@@ -60,7 +60,7 @@ export async function prepareBotPermissionDispatch(session: Session): Promise<()
   if (!owner) return () => {};
   const [link] = await owner.client.query<{ botId: string }>(`SELECT l.bot_id AS botId FROM bot_session_links l
     JOIN sessions s ON s.id = l.session_id WHERE l.session_id = ?
-    AND l.role IN ('canonical', 'channel', 'group', 'thread') AND l.archived_at IS NULL
+    AND l.role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
     AND s.source = 'bot' AND s.status = 'active'`, [session.id]);
   if (owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before dispatch');
   if (!link) return () => {};

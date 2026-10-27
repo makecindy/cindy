@@ -781,6 +781,7 @@ export function BotSettings({
           <BotRoutines
             embedded
             botId={bot.id}
+            inheritedRoute={displayedModelChain[0]}
             beforeLeaveRef={routineLeaveRef}
             backRef={routineBackRef}
             header={

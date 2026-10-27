@@ -105,6 +105,12 @@ describe("optional primary quote summary", () => {
     { input: [] },
     { input: Array(5).fill(quote) },
     { input: [quote, quote] },
+    {
+      input: [
+        { ...quote, tier: "<=200k" },
+        { ...quote, tier: "<=200k" },
+      ],
+    },
     ...[
       { price: -1 },
       { price: Infinity },
@@ -126,6 +132,17 @@ describe("optional primary quote summary", () => {
     ].map((patch) => ({ output: [quote], input: [{ ...quote, ...patch }] })),
   ])("drops absent or invalid summary only: %j", (summary) => {
     expect(parseModelDisplayPricing({ ...table, summary })).toEqual(table);
+  });
+  it("preserves distinct tiers that share a denominator", () => {
+    const summary = {
+      input: [
+        { ...quote, price: 1, unit: "token", quantity: 1000000, tier: "<=200k" },
+        { ...quote, price: 2, unit: "token", quantity: 1000000, tier: ">200k" },
+      ],
+    };
+    expect(parseModelDisplayPricing({ ...table, summary })?.summary).toEqual(
+      summary,
+    );
   });
   it("allows four distinct denominators and preserves unknown units", () => {
     const summary = {

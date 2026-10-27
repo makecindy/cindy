@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { useIncomingShareComposer } from '@/session/useIncomingShareComposer';
@@ -1065,7 +1066,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 覆盖切回后新发起的预览);代际每次 session 变化都递增,能正确作废这类请求,也能让同一 session 内
   // 新发起的请求作废旧请求。
   const rewindRequestSeqRef = useRef(0);
-  const deviceName = readRouteParam(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteParam(params.deviceName));
   useFocusEffect(useCallback(() => {
     rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId, deviceName, sessionId } });
   }, [deviceId, deviceName, sessionId]));
@@ -3023,7 +3024,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   })();
   const remoteAgentDeviceName = useCallback(
     (agentDeviceId: string) =>
-      remoteAgentCatalogs.find((item) => item.deviceId === agentDeviceId)?.name ?? agentDeviceId,
+      deviceDisplayName(agentDeviceId, undefined, remoteAgentCatalogs),
     [remoteAgentCatalogs],
   );
   const adaptiveWindow = useAdaptiveWindow();
@@ -3165,7 +3166,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       discardSessionComposerAttachmentStateRef.current();
       switchDrawerSessionInPlace(navigation, {
         deviceId: targetDeviceId,
-        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        deviceName: deviceDisplayName(targetDeviceId, targetSession.deviceLinkDeviceName),
         sessionId: targetSession.id,
         ...(focusClientId ? { focusClientId } : {}),
       });

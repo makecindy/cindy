@@ -106,6 +106,20 @@ struct MBModelUsage: Decodable, Equatable {
   let tokens: Double
 }
 
+struct MBActivity: Decodable, Identifiable, Equatable {
+  var id: String { sessionId }
+  let sessionId: String
+  let title: String
+  let logoSvg: String
+  let companion: Bool
+  let attention: Bool
+  let phase: String
+  let preview: String
+  let status: String
+  let startedAtMs: Double?
+  let lastActivityAtMs: Double
+}
+
 struct MBDaily: Decodable, Equatable {
   let money: [Double]
   let paid: Double
@@ -138,6 +152,7 @@ struct MBView: Decodable, Equatable {
   let strings: [String: String]
   let statusTextByMode: [String: String?]
   let attentionCount: Int?
+  let activities: [MBActivity]?
   let remotelyControlled: Bool?
   let remoteControllerNames: [String]?
   let updatedAtMs: Double?
@@ -535,6 +550,10 @@ enum UsageList: String {
   case tasks
 }
 
+enum TaskTab: String, CaseIterable {
+  case unread, ongoing, usage
+}
+
 @MainActor
 final class MenubarStore: ObservableObject {
   @Published var view: MBView?
@@ -544,6 +563,10 @@ final class MenubarStore: ObservableObject {
   @Published var refreshing = false
   @Published var usageRange = 30
   @Published var usageList: UsageList = .models
+  @Published var taskTab: TaskTab = .ongoing
+  @Published var tasksExpanded = false
+  /// Manual non-unread choice survives panel closes; automatic unread selection never overwrites it.
+  private var preferredTaskTab: TaskTab?
   /// Manage list order while the user drags, before main echoes the saved settings back.
   @Published var draftOrder: [String]?
   @Published var mainContentHeight: CGFloat = 0
@@ -580,6 +603,19 @@ final class MenubarStore: ObservableObject {
   }
 
   var locale: String { view?.locale ?? "en" }
+
+  func openTaskTab() {
+    tasksExpanded = false
+    if (view?.attentionCount ?? 0) > 0 { taskTab = .unread }
+    else if let preferredTaskTab { taskTab = preferredTaskTab }
+    else { taskTab = (view?.activities ?? []).contains { $0.phase == "running" || $0.phase == "needs-interaction" } ? .ongoing : .usage }
+  }
+
+  func selectTaskTab(_ tab: TaskTab) {
+    taskTab = tab
+    tasksExpanded = false
+    if tab != .unread { preferredTaskTab = tab }
+  }
 
   func apply(_ next: MBView) {
     Fmt.symbol = next.moneySymbol
@@ -867,6 +903,7 @@ final class StatusController: NSObject, NSWindowDelegate {
     let short = forceShort || (screen.map { $0.visibleFrame.height < Self.shortScreenHeight } ?? false)
     if store.short != short { store.short = short }
     store.page = .main
+    store.openTaskTab()
     store.fillToken += 1
     layoutPanel(for: .main, animated: false)
     let target = panel.frame
@@ -1864,13 +1901,8 @@ struct MainPage: View {
           .padding(.top, measured.isEmpty ? 12 : 4)
       }
 
-      Caption(title: store.s("tasks"), detail: view.taskSummary) {
-        TaskTotal(tasks: view.tasks, tokenUnit: store.s("tokenUnit"), showsTokens: store.narrowWidth >= 350, replayToken: store.fillToken)
-      }
-      .padding(EdgeInsets(top: store.short ? 14 : 18, leading: 20, bottom: 6, trailing: 20))
-
-      TaskList(store: store, tasks: view.tasks, controller: controller)
-        .padding(.horizontal, 10)
+      TaskOverview(store: store, view: view, controller: controller)
+        .padding(.top, store.short ? 12 : 16)
 
       MonthCard(store: store, view: view)
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 12, trailing: 12))
@@ -2356,6 +2388,151 @@ struct CellPressStyle: ButtonStyle {
 }
 
 // MARK: - Tasks
+
+struct TaskOverview: View {
+  @ObservedObject var store: MenubarStore
+  let view: MBView
+  let controller: StatusController
+
+  private var activities: [MBActivity] { view.activities ?? [] }
+  private var ongoing: [MBActivity] { activities.filter { $0.phase == "running" || $0.phase == "needs-interaction" } }
+  private var unread: [MBActivity] { activities.filter(\.attention) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 16) {
+        taskTab(.unread, title: store.s("tabUnread"), count: unread.count)
+        taskTab(.ongoing, title: store.s("tabOngoing"), count: ongoing.count)
+        taskTab(.usage, title: store.s("tabUsage"))
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 20)
+
+      if store.taskTab == .usage {
+        Caption(title: store.s("tasks"), detail: view.taskSummary) {
+          TaskTotal(tasks: view.tasks, tokenUnit: store.s("tokenUnit"), showsTokens: store.narrowWidth >= 350, replayToken: store.fillToken)
+        }
+        .padding(.horizontal, 20)
+        TaskList(store: store, tasks: view.tasks, controller: controller)
+          .padding(.horizontal, 10)
+      } else {
+        let rows = store.taskTab == .unread ? unread : ongoing
+        let limit = store.short ? 2 : 3
+        let shown = store.tasksExpanded ? rows : Array(rows.prefix(limit))
+        VStack(spacing: 0) {
+          if rows.isEmpty {
+            Text(store.s(store.taskTab == .unread ? "noUnread" : "noOngoing"))
+              .font(.system(size: 12))
+              .foregroundStyle(Palette.ink3)
+              .padding(.vertical, 16)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.horizontal, 10)
+          }
+          ForEach(shown) { row in
+            ActivityRow(store: store, activity: row) {
+              controller.emitAndClose(["type": "open-session", "sessionId": row.sessionId])
+            }
+          }
+          if rows.count > limit {
+            MoreRow(label: store.s(store.tasksExpanded ? "collapseTasks" : "allTasks"), value: String(rows.count)) {
+              store.tasksExpanded.toggle()
+            }
+            .padding(.horizontal, 10)
+          }
+        }
+        .padding(.horizontal, 10)
+      }
+    }
+  }
+
+  private func taskTab(_ tab: TaskTab, title: String, count: Int = 0) -> some View {
+    let selected = store.taskTab == tab
+    return Button { store.selectTaskTab(tab) } label: {
+      HStack(spacing: 4) {
+        Text(title)
+          .foregroundStyle(selected ? Palette.ink : Palette.ink3)
+        if count > 0 {
+          Text(String(count))
+            .foregroundStyle(Palette.ink3)
+            .monospacedDigit()
+        }
+      }
+      .font(.system(size: 12, weight: .medium))
+      .lineLimit(1)
+      .fixedSize()
+      .frame(minHeight: 28)
+      .overlay(alignment: .bottomLeading) {
+        Capsule().fill(selected ? Palette.ink2 : .clear).frame(width: 12, height: 1.5)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+}
+
+struct ActivityRow: View {
+  @ObservedObject var store: MenubarStore
+  let activity: MBActivity
+  let action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 10) {
+        if activity.companion {
+          Image(systemName: "bubble.left.and.bubble.right")
+            .font(.system(size: 15))
+            .foregroundStyle(Palette.ink2)
+            .frame(width: 28, height: 28)
+        } else {
+          TaskIcon(svg: activity.logoSvg, running: activity.phase == "running")
+        }
+        VStack(alignment: .leading, spacing: 3) {
+          HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(activity.title)
+              .font(.system(size: 12.5, weight: .semibold))
+              .foregroundStyle(Palette.ink)
+              .lineLimit(1)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            TimelineView(.periodic(from: .now, by: activity.phase == "running" ? 1 : 60)) { context in
+              Text(timeLabel(now: context.date))
+                .font(.system(size: 10.5))
+                .foregroundStyle(Palette.ink3)
+                .monospacedDigit()
+            }
+            .fixedSize()
+          }
+          Text(activity.phase == "needs-interaction" || activity.phase == "error"
+               ? (activity.preview == activity.status ? activity.status : activity.status + " · " + activity.preview)
+               : activity.preview)
+            .font(.system(size: 11.5))
+            .foregroundStyle(Palette.ink2)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+      .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(hovering ? Palette.ink5 : .clear))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help(activity.title + "\n" + activity.status + "\n" + activity.preview)
+  }
+
+  private func timeLabel(now: Date) -> String {
+    if activity.phase == "running", let started = activity.startedAtMs {
+      return Fmt.clock(max(0, now.timeIntervalSince1970 - started / 1000))
+    }
+    let minutes = max(0, Int((now.timeIntervalSince1970 - activity.lastActivityAtMs / 1000) / 60))
+    if minutes < 1 { return store.s("activityNow") }
+    if minutes < 60 { return store.s("activityMinutes", ["n": String(minutes)]) }
+    if minutes < 1440 { return store.s("activityHours", ["n": String(minutes / 60)]) }
+    return store.s("activityDays", ["n": String(minutes / 1440)])
+  }
+}
 
 struct TaskTotal: View {
   let tasks: [MBTask]

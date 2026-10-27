@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { pendingChatMessage } from '@/chat/chatOutbox';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import type { DurableOutboxRecord } from './durableOutbox';
@@ -34,6 +35,7 @@ import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   isBotGroupRuntimeFailureCode,
   resolveBotGroupQuote,
+  BOT_GROUP_MEMBER_LINK_REL,
   botGroupQuoteFromMessage,
   isBotGroupMessageQuotable,
   type BotGroupQuoteView,
@@ -97,7 +99,7 @@ import {
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
 import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
-import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
+import { BotGroupWorkArea } from './BotGroupWorkArea';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { keyboardAvoidingBehaviorForPlatform } from './mobileNativeShellLayout';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
@@ -128,12 +130,13 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { user, accountGeneration } = useAuth();
-  const host = useMemo<RemoteResourceHostTarget>(() => ({ deviceId, deviceName: deviceName || deviceId }), [deviceId, deviceName]);
+  const host = useMemo<RemoteResourceHostTarget>(() => ({ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }), [deviceId, deviceName]);
   const chat = useBotGroupChat(host, groupId, threadRootId);
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
   const [settings, setSettings] = useState(false);
   const [replyTo, setReplyTo] = useState<BotGroupQuoteView | null>(null);
+  const [replyFocusRequest, setReplyFocusRequest] = useState(0);
   const leaveAfterSettings = useRef(false);
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
@@ -377,9 +380,14 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');
   const direct = group?.conversationKind === 'direct';
   const peer = direct ? group.members.find(member => !member.isSelf) : undefined;
-  const memberLine = direct ? '' : group
+  // The header reads the group's size, not a roll call (owner request 2026-10-26); the names stay
+  // in the accessibility label and in group settings. The list row's member links seed the count.
+  const memberNames = direct ? '' : group
     ? botGroupMemberNames(group.members, t('groupChat.memberSeparator'))
     : cachedRow?.item.display.subtitle ? resolveRemoteText(cachedRow.item.display.subtitle, i18n.language) : '';
+  const memberCount = group ? group.members.length
+    : cachedRow?.item.links?.filter((link) => link.rel === BOT_GROUP_MEMBER_LINK_REL).length ?? 0;
+  const memberLine = direct || memberCount === 0 ? '' : t('groupChat.memberCount', { count: memberCount });
   const headerMembers = group ? group.members.map((member) => identityFor(member.botId, member.name)) : [];
 
   const header = <ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
@@ -387,7 +395,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
       working={group?.round.status === 'running'} />}
     title={title}
     subtitle={threadRootId ? t('message.renderer.reply') : memberLine}
-    identityLabel={[title, memberLine].filter(Boolean).join(', ')}
+    identityLabel={[title, memberLine, memberNames].filter(Boolean).join(', ')}
     identityHint={t('groupChat.settings.open')}
     controlsReady={!!group}
     onBack={threadRootId ? () => router.replace(`/companions/groups/${groupId}?messageId=${threadRootId}` as never) : leave}
@@ -453,7 +461,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           highlightId={highlightId} onLocateMessage={locateMessage}
           pending={chat.pending} onPendingAction={(id, action) => { void chat.pendingAction?.(id, action).catch(error => report(error, 'groupChat.composer.sendFailed')); }}
-          onReply={(chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? message => setReplyTo(botGroupQuoteFromMessage(message)) : undefined}
+          onReply={(chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? message => { setReplyTo(botGroupQuoteFromMessage(message)); setReplyFocusRequest(request => request + 1); } : undefined}
           onMessageLayout={(id, y, height) => {
             previewVisibility.setLayout(id, { y, height });
             messagePositions.current.set(id, y);
@@ -483,8 +491,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
         <View style={styles.flex}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
         <MainWindowActionButton density="compact" action={{ label: t('message.quote.remove'), onPress: () => setReplyTo(null), testID: 'botGroup.cancelReply' }} />
       </View> : null}
+      <BotGroupWorkArea group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        onError={message => { if (message) Alert.alert(message); }} />
       <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt}
-        focusKey={replyTo?.messageId}
+        quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
     </KeyboardAvoidingView>;
@@ -564,9 +574,6 @@ export function BotGroupTimeline({
   const mentionLabels = useMemo(() => [allLabel, ...group.members.map((member) => member.name)], [allLabel, group.members]);
   const running = group.round.status === 'running';
   const memberById = new Map(group.members.map((member) => [member.botId, member]));
-  const speakers = running
-    ? group.round.speakers.filter((speaker) => memberById.has(speaker.botId))
-    : [];
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
   return <>
     {group.hasMoreBefore && loadOlder ? <MainWindowActionButton action={{ label: t('groupChat.server.loadOlder'), busy: loadingOlder, onPress: loadOlder, testID: 'botGroup.loadOlder' }} /> : group.hasMoreBefore ? <Text style={styles.olderNote} testID="botGroup.olderOnComputer">{t('groupChat.timeline.olderOnComputer')}</Text> : null}
@@ -618,12 +625,6 @@ export function BotGroupTimeline({
         onRetry={() => onPlanAction('retry', openPlan.id)}
         onEnd={() => onPlanAction('dismiss', openPlan.id)} />
     </View> : null}
-    {speakers.map((speaker) => {
-      const member = memberById.get(speaker.botId)!;
-      return <BotGroupSpeakerRow key={`${speaker.botId}:${speaker.activity}`} deviceId={deviceId} online={online}
-        identity={identityFor(member.botId, member.name)} sessionId={speaker.sessionId} activity={speaker.activity}
-        onError={onInteractionError} />;
-    })}
   </>;
 }
 

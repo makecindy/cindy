@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
   useEffect,
@@ -7646,7 +7647,7 @@ export function ChatInput({
             ? t('newChat.chatInput.agentRelocation.titleOther', { device: target.name })
             : deviceLinkDeviceId
               ? t('newChat.chatInput.agentRelocation.titleOther', {
-                  device: deviceLinkDeviceName || deviceLinkDeviceId,
+                  device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
           description: t('newChat.chatInput.agentRelocation.description'),

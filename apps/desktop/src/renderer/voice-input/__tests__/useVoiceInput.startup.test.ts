@@ -188,7 +188,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
     });
-    expect(h.api.prewarm).toHaveBeenCalledOnce();
+    expect(h.api.prewarm).not.toHaveBeenCalled();
     // Opening even an authorized device can switch Bluetooth headphones to call audio.
     expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
     expect(mocks.startEngine).not.toHaveBeenCalled();
@@ -202,6 +202,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
   it('opens the microphone only after the composer hold threshold', async () => {
     const h = mount();
     h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.api.prewarm.mockClear();
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => h.result.current.state,
       prepare: () => h.result.current.prepare(),
@@ -212,6 +213,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
     });
+    expect(h.api.prewarm).not.toHaveBeenCalled();
     expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
     expect(mocks.startEngine).not.toHaveBeenCalled();
     expect(h.api.start).not.toHaveBeenCalled();
@@ -220,6 +222,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
       h.connection.resolve({ ok: true, runId: 'held-composer' });
       await vi.advanceTimersByTimeAsync(1);
     });
+    expect(h.api.prewarm).toHaveBeenCalledOnce();
     expect(mocks.startEngine).toHaveBeenCalledOnce();
     expect(mocks.engines[0].keepAlive).toBe(false);
     expect(h.result.current.state).toBe('listening');

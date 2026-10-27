@@ -488,7 +488,7 @@ export interface MakerSendTransactionDeps {
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   readPiUserEntry?(sessionId: string, clientId: string): Promise<string | undefined>;
-  beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchDirectUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
@@ -591,6 +591,7 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -641,7 +642,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
-  onPersisted?: () => void | Promise<void>;
+  onPersisted?: (signal?: AbortSignal) => void | Promise<void>;
   onPersistFailed?: () => void;
   expectedClearBoundaryMs?: number | null;
   expectedInputGeneration?: number;
@@ -680,7 +681,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
       ? { onPersisting: persist.onPersisting as () => void }
       : {}),
     ...(typeof persist.onPersisted === 'function'
-      ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
+      ? { onPersisted: persist.onPersisted as (signal?: AbortSignal) => void | Promise<void> }
       : {}),
     ...(typeof persist.onPersistFailed === 'function'
       ? { onPersistFailed: persist.onPersistFailed as () => void }
@@ -1593,6 +1594,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
         'bot-thread': botThreadNote,
+        'task-delivery': allowsEnvironmentNotes ? await deps.readTaskDeliveryNote?.(sessionId) ?? null : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
         'ui-language': uiLanguageNote,
@@ -1612,6 +1614,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withCindyMakeNote;
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
+      }
+      if (plannedNotes['task-delivery']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['task-delivery']);
       }
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
@@ -1788,10 +1793,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let userPromptPreviewSessionId: string | null = null;
       let userPromptPreviewClientId: string | null = null;
       try {
-        if (directPreDispatchHook) {
-          await directPreDispatchHook(sessionId);
-          directPreDispatchHookStarted = true;
-        }
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
         // boundary: Codex sends a structured Skill item, Pi validates the live
@@ -1918,7 +1919,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               }
             : {}),
           onAccepted: persistUserMessage
-            ? async () => {
+            ? async (signal) => {
                 persistUserMessage.onPersisting?.();
                 if (!persistUserMessage.botTaskCoordination) {
                   deps.previewUserPrompt?.(sess, persistUserMessage.content, {
@@ -1997,9 +1998,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 await rewindPersistedUserMessageAfterClearIfStale();
                 // onPersisted 里可能挂着排队 orca 消息的 accepted 副作用(置 running /
                 // autoBridgePending), 必须 await 完再放行 turn(同直发路径语义)。
-                await persistUserMessage.onPersisted?.();
+                await persistUserMessage.onPersisted?.(signal);
               }
-            : undefined,
+            : directPreDispatchHook ? async (signal) => {
+                await directPreDispatchHook(sessionId, signal);
+                directPreDispatchHookStarted = true;
+              } : undefined,
           onDispatching: () => {
             if (resolveScheduledIntent) assertScheduledModes();
             if (persistUserMessage?.shouldBroadcast && !persistUserMessage.shouldBroadcast()) {

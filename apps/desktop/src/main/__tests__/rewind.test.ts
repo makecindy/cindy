@@ -24,6 +24,8 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
+const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
+vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
 // ── mock(必须在延迟 import 前 hoist) ─────────────────────────────────────
 
@@ -179,6 +181,7 @@ const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
 beforeEach(async () => {
+  attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   selectQueue.length = 0;
@@ -1524,6 +1527,28 @@ describe('commitRewindAtMessage', () => {
     if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
     expect(txCall.args).toMatchObject({ sdkSessionId: 'restore-thread-id' });
     expect(result.id).toBe('sess-1');
+  });
+
+  // #7259 follow-up, unit production commit entry: the old completion must not
+  // produce a file operation when the same message has an unrecorded retry.
+  it('Codex commit keeps files when the durable journal contains a retry without a baseline', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([{
+      commit: 'sc1', sessionId: 'sess-1', kind: 'after-edit', source: 'cindy', parentCount: 1,
+      anchor: 'client-id', baselineCommit: 'base1', attemptId: 'old', label: 'old completed turn', time: '2026-10-26',
+    }]);
+    attemptJournal.read.mockResolvedValueOnce([{ id: 'old', anchor: 'client-id' }, { id: 'retry', anchor: 'client-id' }]);
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
+    selectQueue.push([], [], [makeSessionRow({ agentKind: 'codex' })]);
+    await commitRewindAtMessage('sess-1', 'client-id');
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(executeCodexFileRewindPlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'conversation-only', fallbackReason: 'savepoint-gap' }),
+      'sess-1', expect.anything(),
+    );
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
   });
 
   it('Codex commit: allowFileRestore=false skips file restore even if savepoints exist', async () => {

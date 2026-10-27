@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -172,7 +173,7 @@ function DeviceDetailScreenContent() {
     search?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
-  const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.name) ?? readRouteString(params.deviceName));
   // 从首页「查看全部 N 条对话」进来时带 workingDir + 项目名 → 仅显示该项目的会话(项目作用域)。
   const projectWorkingDir = readRouteString(params.workingDir);
   const routeProjectName = readRouteString(params.projectName);

@@ -2532,7 +2532,7 @@ export class GoalController {
       // 由 turnsUsed 派生,'first' 可能被 busy 重试 / 暂停后重发,放这里会重复落库。
       // 这里只负责把完整 directive(含裁决约定)发给模型。
       if (this.deps.beforeDispatchUserTurn) {
-        await this.deps.beforeDispatchUserTurn(sessionId);
+        await this.deps.beforeDispatchUserTurn(sessionId, dispatchAbortController.signal);
         baselineStarted = true;
       }
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),

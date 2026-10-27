@@ -350,6 +350,11 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     } finally { olderPending.current = false; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (action === 'stop') {
+      const operationId = (await import('expo-crypto')).randomUUID();
+      try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }
+      return { effects: [] };
+    }
     if (action === 'dissolve' || action === 'leave' || action === 'hide') {
       const operationId = (await import('expo-crypto')).randomUUID();
       if (action === 'hide') {

@@ -1453,13 +1453,17 @@ export class PluginMarketService {
   /** 未登录只读公开插件详情；安装仍必须走 owner 门禁。 */
   private async detailPublicCatalogWithoutOwner(pluginId: string): Promise<PluginMarketDetail> {
     const catalog = await this.api.listAll();
-    const summary = catalog.plugins.find(
+    const requested = catalog.plugins.find(
       (plugin) => plugin.id === pluginId && plugin.scope === 'public',
+    );
+    const plugin = await this.api.detail(pluginId);
+    // Plugin Server resolves canonical/historical IDs into the active regional view.
+    const summary = requested ?? catalog.plugins.find(
+      (item) => item.id === plugin.id && item.scope === 'public',
     );
     if (!summary) {
       throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
     }
-    const plugin = await this.api.detail(pluginId);
     assertDetailMatchesSummary(summary, plugin);
     if (plugin.scope !== 'public') {
       throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
@@ -1508,16 +1512,19 @@ export class PluginMarketService {
     }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
-      // 绑定的依据,服务端返回的 id/ghostId/scope 与请求不一致时必须拒,防止把
-      // A 的详情内容(含权限清单)呈现给请求 B 的 Renderer。
+      // 绑定的依据。编号解析归服务端，返回的区域投影仍须与目录身份及发布完全一致。
       const listed = await this.api.listAll();
       requireSameMarketOwner(owner);
       this.rememberCurrentOrganization(listed.currentOrganization);
       const catalog = visiblePluginsForOwner(owner, listed.plugins);
-      const summary = catalog.find((candidate) => candidate.id === pluginId);
-      if (!summary) throwListedPluginUnavailable(listed.organizationAccessError);
+      const requested = catalog.find((candidate) => candidate.id === pluginId);
+      if (!requested && listed.organizationAccessError) {
+        throwListedPluginUnavailable(listed.organizationAccessError);
+      }
       const plugin = await this.api.detail(pluginId);
       requireSameMarketOwner(owner);
+      const summary = requested ?? catalog.find((candidate) => candidate.id === plugin.id);
+      if (!summary) throwListedPluginUnavailable(listed.organizationAccessError);
       assertDetailMatchesSummary(summary, plugin);
       requirePluginVisibleForOwner(owner, plugin);
       const compatible = validateNormalizedGhostManifest(plugin.currentRelease.manifest);

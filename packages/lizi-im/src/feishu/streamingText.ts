@@ -216,7 +216,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const log = getLog();
     this.inFlight = (async () => {
       try {
-        await patchCardRaw(this.messageId, buildMarkdownCardV2(text));
+        await patchCardRaw(
+          this.messageId,
+          fitCardToLimit(text, buildMarkdownCardV2(text), buildMarkdownCardV2),
+        );
         this.flushed = this.buffer;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

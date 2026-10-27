@@ -2841,13 +2841,14 @@ export function createTurnRunner(
       xdt_video_urls?: unknown;
       xdt_media_produced?: unknown;
       _xdt_render_image?: unknown;
+      _xdt_forward_media?: unknown;
     };
     try {
       parsed = JSON.parse(toolResultText);
     } catch {
       return [];
     }
-    if (parsed._xdt_render_image === false) return [];
+    if (parsed._xdt_render_image === false || parsed._xdt_forward_media === false) return [];
     // 双协议:历史 xdt-image + 当前 cindy-media
     // art/mivo/codex 生成图的地址形态;只认老协议会让 IM 端"画了图看不到")。
     const isManagedImageUrl = (u: string): boolean =>

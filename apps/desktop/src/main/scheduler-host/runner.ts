@@ -272,7 +272,7 @@ export interface MakerScheduleRunnerDeps {
   notifier: Notifier;
   logger: Logger;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** Saved quota waits deduplicate by schedule even when each fire creates a new task. */
   findUsageLimitWait?: (scheduleId: string) => Promise<string | null>;
@@ -1328,7 +1328,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     let reconciledEffort = resolvedSelection
       ? (resolvedSelection.effort ?? undefined)
-      : this.reconcileEffortForModel(effectiveAgentKind, model, schedule.effort, schedule.id);
+      : this.reconcileEffortForModel(effectiveAgentKind, model, schedule.effort || heartbeatEffort, schedule.id);
     // 隐式改道后的来源级 reconcile(PR #744 review 第二十七轮):上面的 clamp 用的是
     // merged capability,分辨不出来源差异 —— 改道后的落地拷贝 effort 支持可能更窄、
     // 可能不支持 Fast,原样透传会被上游拒。按 (verdict.providerId, model) 的拷贝重查:
@@ -1664,9 +1664,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       } catch (err) {
         // setEffort 失败时是否跳过落库,取决于它是不是本次「唯一生效通道」:
         //  · 复用会话:createSession 忽略 opts,setEffort 是唯一通道;
-        //  · 冷 resume / fresh 但 follow-effort:createSession 收到的是 reconciledEffort(基于
-        //    schedule.effort,follow 时为空 → undefined),真正要落的 runtimeReconciledEffort 是沿用
-        //    并 clamp 后的值,与 createSession 拿到的不同 → 也只能靠 setEffort 落地。
+        //  · 冷 resume / fresh 的后续路由校准与初始化档位不同:只能靠 setEffort 应用新档。
+        //    follow-effort 已在 createSession 沿用并 clamp，初始化已应用的同档无需再次成功。
         // 这两种情况失败 = 没生效,必须跳过落库让下次 fire 重试;否则 DB 记了没生效的档、下次判定
         // "已同步"不再重试(PR #479 review「Skip persisting followed effort when fresh sync fails」)。
         // 仅当 fresh 且要落的档 == createSession 已应用的档时,setEffort 只是幂等兜底,失败可照常落库。
@@ -2047,7 +2046,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
         },
         planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,
-        onAccepted: async () => {
+        onAccepted: async (signal) => {
           // createSession 之后到真正 dispatch 之间仍会 await 模型切换、baseline
           // 等准备工作。复用 desktop session 时不能在这些准备阶段把用户正在跑的
           // turn 误标成 headless；只在本轮 send 真正跨过接受边界后 acquire。
@@ -2088,7 +2087,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
           }
           if (this.deps.beforeDispatchUserTurn) {
-            await this.deps.beforeDispatchUserTurn(session.id);
+            await this.deps.beforeDispatchUserTurn(session.id, signal);
             baselineStarted = true;
           }
           if (ctx.canDispatch && !ctx.canDispatch()) {

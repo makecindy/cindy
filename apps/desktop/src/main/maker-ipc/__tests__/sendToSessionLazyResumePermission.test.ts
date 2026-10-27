@@ -1,4 +1,4 @@
-import { isShadowedCompanionCanonical } from '../botSessionInputGuard.js';
+import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
 /**
@@ -23,6 +23,7 @@ import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
+import { createWireNoteMemory } from '../wireNoteMemory.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -180,6 +181,7 @@ function botTaskDispatchHarness(
     isCindyMakeWorktreePath: () => false,
     app: { getPath: () => '/fixture' },
     agentHandoffPending: { peek: asyncNoop },
+    wireNoteMemory: createWireNoteMemory(),
     shouldPrependMobileClientPromptNote: () => false,
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,
@@ -210,7 +212,7 @@ function botTaskDispatchHarness(
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
     botSessionLinks: {},
-    isShadowedCompanionCanonical: () => false,
+    isShadowedCompanionSession: () => false,
     isCompanionShadowed: () => false,
     SHADOWED_COMPANION_INPUT_MESSAGE: 'shadowed',
     and: noop,
@@ -284,16 +286,16 @@ it('advances an accepted send_to_session with a dispatcher without touching huma
 // this existing guard fixture); assert the route used to send, not call strings.
 describe('companion internal delivery after automation', () => {
   // #6895: rejected input must not bootstrap the old primary or consume its restore.
-  it.each(['already-shadowed', 'shadowed-while-waiting'] as const)('preserves automation state when %s', async (timing) => {
+  it.each(['canonical', 'routine'].flatMap(role => ['already-shadowed', 'shadowed-while-waiting'].map(timing => ({ role, timing }))))('preserves $role automation state when $timing', async ({ role, timing }) => {
     let shadowed = timing === 'already-shadowed';
     let baseline: string | null = 'saved-pi-route';
     const restore = vi.fn(async () => { baseline = null; });
     const reconcile = vi.fn(async () => undefined);
     const dbChain = { from: () => dbChain, where: () => dbChain,
-      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+      limit: async () => [{ role, botId: 'companion' }] };
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {}, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
       scheduledModelScope: { restore }, reconcileBotModelRoute: reconcile,
       waitForSendToSessionLock: async () => { shadowed = true; },
     });
@@ -308,16 +310,16 @@ describe('companion internal delivery after automation', () => {
 
   // #6895: hand-over may finish while restore awaits, before a turn exists.
   // Exercise both consumers of the post-restore routing decision, without timers.
-  it.each(['live', 'queued'] as const)('rejects %s delivery when demoted during restoration', async (path) => {
+  it.each(['canonical', 'routine'].flatMap(role => ['live', 'queued'].map(path => ({ role, path }))))('rejects $role $path delivery when demoted during restoration', async ({ role, path }) => {
     let shadowed = false;
     const dbChain = { from: () => dbChain, where: () => dbChain,
-      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+      limit: async () => [{ role, botId: 'companion' }] };
     const enqueue = vi.fn(async () => undefined);
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {
       child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' },
     }, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
       scheduledModelScope: { restore: async () => { shadowed = true; } },
       inputCoordinator: { ensureQueueRestored: async () => undefined, shouldQueueNewTurn: () => path === 'queued' },
       enqueueSendToSessionMessage: enqueue,
@@ -338,7 +340,7 @@ describe('companion internal delivery after automation', () => {
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
       path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-        isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+        isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
         createDbMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))

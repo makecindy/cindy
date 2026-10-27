@@ -143,6 +143,50 @@ describeMigrationReplay('migration replay', () => {
       ]);
     } finally { cleanup(); }
   });
+  it('rolls back migration 131 on failure and safely retries from schema 130', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      const tempDrizzle = createTempDrizzleDir();
+      try {
+        copyFileSync(
+          path.join(drizzleDir(), '0131_amused_puff_adder.sql'),
+          path.join(tempDrizzle.dir, '0131_amused_puff_adder.sql'),
+        );
+        db.exec(`
+          CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          INSERT INTO migration_meta (key, value) VALUES ('schema_version', '130');
+          CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+          INSERT INTO migration_history VALUES (130, '0130_parallel_devos.sql', 'fixture-hash', 1);
+          CREATE TABLE sessions (id TEXT PRIMARY KEY);
+          INSERT INTO sessions (id) VALUES ('existing-session');
+          CREATE TRIGGER fail_schema_version_131
+          BEFORE UPDATE ON migration_meta
+          WHEN NEW.key = 'schema_version' AND NEW.value = '131'
+          BEGIN
+            SELECT RAISE(ABORT, 'injected schema version failure');
+          END;
+        `);
+
+        expect(() => runMigrationReplay(db, { drizzleDir: tempDrizzle.dir })).toThrow(
+          'injected schema version failure',
+        );
+        expect(columnNames(db, 'sessions')).not.toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('130');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(0);
+
+        db.exec('DROP TRIGGER fail_schema_version_131');
+        const retry = runMigrationReplay(db, { drizzleDir: tempDrizzle.dir });
+
+        expect(retry.applied.map((migration) => migration.seq)).toEqual([131]);
+        expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('131');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(1);
+        expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'existing-session' }]);
+      } finally {
+        tempDrizzle.cleanup();
+      }
+    } finally { cleanup(); }
+  });
   it('adds nullable sessions.hidden_at to a populated database without touching existing tasks', () => {
     const { db, cleanup } = createTempDb();
     try {
