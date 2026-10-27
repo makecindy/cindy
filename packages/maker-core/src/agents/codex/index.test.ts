@@ -16392,6 +16392,46 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(String((notices[0].data as { message?: string }).message)).toContain(String(MAX_AUTO_REVIEW_ACTION_TEXT_CHARS));
   });
 
+  it('Auto MCP reports a freshness block with Cindy’s own reason', async () => {
+    // The review runs while the user keeps typing: the intent moves under the
+    // in-flight review, so the decision is replaced by Cindy’s deterministic
+    // freshness block. That reason is fixed copy without user data, so it may
+    // reach the diagnostic/UI channel — but only when it is marked as a policy
+    // reason. Unmarked, the notice falls back to a generic "blocked" line and
+    // the user never learns why.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const review = vi.fn<AutoReviewDelegate>(async () => {
+      await gate;
+      return { verdict: 'allow' };
+    });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'freshness-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'freshness', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const events: AgentEvent[] = [];
+    const collect = (async () => { for await (const event of handle.events()) events.push(event); })();
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    const elicitation = handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'freshness-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call',
+        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { action: 'run' } } },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    // A new user message is a new request: the in-flight review no longer
+    // describes what the user asked for.
+    await handle.send({ type: 'user', content: 'Actually, do something else.' });
+    release?.();
+    const result = await elicitation;
+    expect(result.action).toBe('decline');
+    await handle.close();
+    await collect;
+    const notices = events.filter((event) => event.type === 'error'
+      && String((event.data as { message?: string }).message).includes('[MCP_APPROVAL_AUTO_BLOCKED]'));
+    expect(notices).toHaveLength(1);
+    expect(String((notices[0].data as { message?: string }).message)).toContain('User instructions changed');
+  });
+
   it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'ambiguous-with-params', 'other-turn', 'other-server', 'ghost-call'] as const)(
     'uses the same MCP approval evidence for policy and display: %s', async (source) => {
       const policy = vi.fn((context: { serverName: string; toolName?: string }) =>
