@@ -196,6 +196,18 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
   });
 
+  it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const promise = runner.fire(baseSchedule({ source: 'bot', recurring }), createFireContext());
+    await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());
+    const sent = JSON.stringify(vi.mocked(h.session.send).mock.calls[0][0]);
+    expect(sent.includes('[Routine checkpoint]')).toBe(recurring);
+    expect(sent).toContain('check the PR status');
+    h.emit({ type: 'done', data: { result: '' } });
+    await promise;
+  });
+
   it('passes successful precheck output only to model input, keeping stored instructions intact', async () => {
     mocks.executePreRunHook.mockResolvedValue({
       decision: 'pass',
@@ -562,18 +574,6 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
     },
   );
-
-  it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
-    const h = createSessionHarness(acceptingSend());
-    const { runner } = createRunnerHarness(h.session, { silenced: true });
-    const promise = runner.fire(baseSchedule({ source: 'bot', recurring }), createFireContext());
-    await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());
-    const sent = JSON.stringify(vi.mocked(h.session.send).mock.calls[0][0]);
-    expect(sent.includes('[Routine checkpoint]')).toBe(recurring);
-    expect(sent).toContain('check the PR status');
-    h.emit({ type: 'done', data: { result: '' } });
-    await promise;
-  });
 
   it('does not broadcast or notify into a new owner after persisting the final report', async () => {
     const h = createSessionHarness(acceptingSend());
