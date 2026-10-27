@@ -56,7 +56,12 @@ describe('direct Chat Server client', () => {
     request.mockClear();
     expect((await client.load(id(1), undefined, id(20))).messages).toEqual(first.messages);
     expect(first.messages.map(m => m.id)).toEqual([id(21), id(20)]);
-    expect(request.mock.calls.every(([path]) => path.includes('/execution-failures?'))).toBe(true);
+    // Live work still refreshes on reopen; only durable messages come from cache.
+    // #6930 CI exposed this merge mismatch with the execution-state refresh.
+    expect(request.mock.calls.map(([path]) => path)).toEqual([
+      `/conversations/${id(1)}/executions`,
+      `/conversations/${id(1)}/execution-failures?sourceIds=${id(21)},${id(20)}`,
+    ]);
   });
   // #6907: existing fixtures never pair a human's group name A with account ownerName B (unit tier).
   it('keeps owner labels scoped to each group and follows refreshed names without changing identities', () => {
