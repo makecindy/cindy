@@ -955,13 +955,14 @@ export function compactRichAnswer(source: string): string {
 export function richMediaSource(node: RichNode): string | null {
   const src = richString(node, "src").trim();
   if (!src || /[\r\n]/.test(src)) return null;
+  const allowed = /^(https?|file|xdt-(?:file|image|video|audio)|cindy-(?:remote-)?media):\/\//i.exec(src);
   if (
     /^[a-zA-Z][\w+.-]*:/.test(src) &&
     !/^[a-zA-Z]:[\\/]/.test(src) &&
-    !/^(https?:\/\/|file:\/\/|xdt-(?:file|image|video|audio):\/\/|cindy-(?:remote-)?media:\/\/)/.test(
-      src,
-    )
+    !allowed
   )
     return null;
-  return src;
+  return allowed
+    ? allowed[1].toLowerCase() + src.slice(allowed[1].length)
+    : src;
 }

@@ -5,13 +5,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { WechatBotMcpHostDeps } from './types.js';
-import { sendFileWithImagePreview, type PrepareOutboundImage } from './outboundImage.js';
 
 const MAX_MESSAGE_CHARS = 30_000;
 const MAX_DISPLAY_NAME_CHARS = 180;
 
 type WechatMcpDeps = WechatBotMcpHostDeps & {
-  prepareOutboundImage?: PrepareOutboundImage;
   getPeerId: () => Promise<string | null> | string | null;
   workingDir?: string;
 };
@@ -21,8 +19,9 @@ type WechatMcpDeps = WechatBotMcpHostDeps & {
  *
  * The host resolves the receiver from the current WeChat session or the most
  * recent peer seen by the active binding. The model never supplies an
- * arbitrary peer id. File sends are additionally confined to the session
- * working directory after resolving symlinks.
+ * arbitrary peer id. Images follow the chat rule: any local image Cindy can show
+ * in its own chat may be sent. Other files stay confined to the session working
+ * directory after resolving symlinks.
  */
 export function createWechatMcpServer(deps: WechatMcpDeps): McpServer {
   const server = new McpServer({ name: 'cindy_wechat', version: '1.0.0' });
@@ -45,7 +44,7 @@ export function createWechatMcpServer(deps: WechatMcpDeps): McpServer {
               {
                 name: 'send_file_to_user',
                 description:
-                  '向当前个人微信联系人发送当前工作目录内不超过 5 MB 的图片或文件。参数：{ absPath: 绝对路径, displayName?: 展示文件名 }。',
+                  '向当前个人微信联系人发送不超过 5 MB 的图片（本机任意路径）或文件（须在当前工作目录内）。参数：{ absPath: 绝对路径, displayName?: 展示文件名 }。',
               },
             ],
           }),
@@ -122,11 +121,11 @@ async function sendFileToUser(deps: WechatMcpDeps, args: Record<string, unknown>
   }
 
   try {
-    const sent = await sendFileWithImagePreview(safePath, parsed.data.displayName, deps.prepareOutboundImage,
-      (file, name) => deps.sendFile(peerId, file, name));
+    const sent = await deps.sendFile(peerId, safePath, parsed.data.displayName);
     if (sent.ok) {
       return result({
-        ...sent,
+        ok: true,
+        messageId: sent.messageId,
         sent: {
           displayName: parsed.data.displayName ?? path.basename(safePath),
         },
@@ -154,14 +153,37 @@ async function resolveFileWithinWorkingDir(
   candidate: string,
   workingDir: string | undefined,
 ): Promise<string> {
-  if (!workingDir) throw new WechatFilePathError('WORKING_DIR_UNAVAILABLE');
   if (!path.isAbsolute(candidate)) throw new WechatFilePathError('PATH_MUST_BE_ABSOLUTE');
-  const [root, file] = await Promise.all([fs.realpath(workingDir), fs.realpath(candidate)]);
+  // Same rule as the chat and channel replies: a regular image file may come from any local path.
+  const real = await fs.realpath(candidate);
+  if (await isRegularImageFile(real)) return real;
+  if (!workingDir) throw new WechatFilePathError('WORKING_DIR_UNAVAILABLE');
+  const [root, file] = [await fs.realpath(workingDir), real];
   const relative = path.relative(root, file);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new WechatFilePathError('PATH_OUT_OF_BOUNDS');
   }
   return file;
+}
+
+/** PNG / JPEG / GIF / WebP by content, not by name, so a renamed document is not treated as an image. */
+async function isRegularImageFile(file: string): Promise<boolean> {
+  const handle = await fs.open(file, 'r');
+  try {
+    if (!(await handle.stat()).isFile()) return false;
+    const head = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    const bytes = head.subarray(0, bytesRead);
+    const starts = (sig: number[], at = 0) => sig.every((b, i) => bytes[at + i] === b);
+    return (
+      starts([0x89, 0x50, 0x4e, 0x47]) ||
+      starts([0xff, 0xd8, 0xff]) ||
+      starts([0x47, 0x49, 0x46, 0x38]) ||
+      (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8))
+    );
+  } finally {
+    await handle.close();
+  }
 }
 
 class WechatFilePathError extends Error {

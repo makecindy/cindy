@@ -1,16 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createLiziMcpProviders } from '../providers.js';
-import type { CreateLiziMcpProvidersOptions } from '../providers.js';
 import { runWithLiziMcpSessionContext } from '../session-context.js';
 import type { FeishuBotMcpHostDeps } from '../types.js';
 
-function setup(getOwnerOpenId: FeishuBotMcpHostDeps['getOwnerOpenId'] = async () => 'ou_owner',
-  prepareOutboundImage?: CreateLiziMcpProvidersOptions['prepareOutboundImage']) {
+function setup(getOwnerOpenId: FeishuBotMcpHostDeps['getOwnerOpenId'] = async () => 'ou_owner') {
   const sendMessage = vi.fn(async () => ({ ok: true, messageId: 'om_notification' }));
   const sendFile = vi.fn(async () => ({ ok: true, messageId: 'om_file' }));
   const provider = createLiziMcpProviders({
     feishuBot: { getOwnerOpenId, sendFile, sendMessage },
-    prepareOutboundImage,
   }).find((candidate) => candidate.name === 'cindy_feishu_bot')!;
   const config = provider.toClaudeSdkConfig({ agentKind: 'codex', workingDir: '' }) as {
     instance: { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> };
@@ -25,19 +22,6 @@ function setup(getOwnerOpenId: FeishuBotMcpHostDeps['getOwnerOpenId'] = async ()
 }
 
 describe('Feishu notification session attribution', () => {
-  // Unit: media must be pinned to the invoking task, not the shared bridge's
-  // empty factory context. Prior routing tests did not exercise image preparation.
-  it('prepares sent images using each live caller on the shared bridge', async () => {
-    const prepare = vi.fn(async (path: string) => ({ path, url: `cindy-media://blobs/${'a'.repeat(64)}.png` }));
-    const { callFile } = setup(undefined, prepare);
-    await Promise.all(['image-task-a', 'image-task-b'].map((sessionId) => runWithLiziMcpSessionContext(
-      { agentKind: 'codex', workingDir: '/tmp/task', sessionId }, callFile,
-    )));
-    for (const sessionId of ['image-task-a', 'image-task-b']) {
-      expect(prepare).toHaveBeenCalledWith('/tmp/report.txt', expect.objectContaining({ sessionId }));
-    }
-  });
-
   // #6439: worker DB owner lookup is asynchronous. The real MCP handler must
   // pass a resolved recipient to both send paths, never a Promise (unit tier).
   it('awaits the owner before sending a file', async () => {

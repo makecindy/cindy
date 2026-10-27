@@ -30,15 +30,12 @@ import { createBrowserMcpServer } from './browser/index.js';
 import { createComputerMcpServer } from './computer/index.js';
 import { createAndroidMcpServer } from './android/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
-import type { PreparedOutboundImage } from './outboundImage.js';
 
 export interface CreateLiziMcpProvidersOptions {
   /**
    * Optional allow-list. Omit to enable every MCP whose deps were supplied.
    */
   enabled?: readonly LiziMcpId[];
-  /** Optional host image snapshot for outbound tools; resolve the caller per invocation. */
-  prepareOutboundImage?: (path: string, context: LiziMcpSessionContext) => Promise<PreparedOutboundImage>;
   android?: AndroidMcpDeps;
   /** Browser automation tools. Host injects the neutral runtime implementation. */
   browser?: BrowserMcpDeps;
@@ -255,9 +252,6 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_feishu_bot',
         instance: createFeishuBotMcpServer({
-          prepareOutboundImage: opts.prepareOutboundImage
-            ? (path) => opts.prepareOutboundImage!(path, resolveLiziMcpSessionContext(ctx))
-            : undefined,
           // 每个 host dep 都带上当前 tool-call 的 session:宿主据此选出这一轮真正要
           // 出站的 bot(个人设置页那份,或触发本轮的伙伴自有连接)。
           getChatId: async () => {
@@ -297,9 +291,6 @@ export function createLiziMcpProviders(
         name: 'cindy_wechat',
         instance: createWechatMcpServer({
           ...opts.wechatBot!,
-          prepareOutboundImage: opts.prepareOutboundImage
-            ? (path) => opts.prepareOutboundImage!(path, resolveLiziMcpSessionContext(ctx))
-            : undefined,
           getPeerId: async () => {
             const current = resolveLiziMcpSessionContext(ctx);
             return (

@@ -159,6 +159,8 @@ export function isPathWithin(root: string, target: string): boolean {
 export interface TaskImageMaterializeDeps {
   /** Returns a stable managed URL. Validates scope and image bytes before importing. */
   importImage(source: string): Promise<string>;
+  /** Diagnostics only; a failed image still keeps its original reference. */
+  onFailure?(source: string, error: unknown): void;
 }
 
 export async function materializeTaskImageMarkdown(text: string, deps: TaskImageMaterializeDeps) {
@@ -169,8 +171,9 @@ export async function materializeTaskImageMarkdown(text: string, deps: TaskImage
     if (!source || replacements.has(ref.url) || failures.includes(ref.url)) continue;
     try {
       replacements.set(ref.url, await deps.importImage(source));
-    } catch {
+    } catch (error) {
       failures.push(ref.url);
+      deps.onFailure?.(source, error);
     }
   }
   return { text: rewriteTaskImageReferences(text, replacements), replacements, failures };

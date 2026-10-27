@@ -211,6 +211,24 @@ describe('durable chat history', () => {
     expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/conversations/room/messages?limit=100&before=5']);
   });
 
+  // Unit: snapshot() must expose refreshed reactions after reaction.changed; the wire body has no aggregates.
+  // Message 9 has no page coverage, so the page regression above misses the stale second snapshot and absent refetch.
+  it('refreshes snapshot-only reaction aggregates on the next snapshot read', async () => {
+    const f = fixture(); let reactions: unknown[] = [];
+    const original = f.api.getMockImplementation()!;
+    f.api.mockImplementation(async route => route.endsWith('/snapshot')
+      ? { room: { id: 'room' }, cursor: '10', messages: [{ ...f.message('9'), reactions }] }
+      : original(route));
+    const cache = f.open(); await cache.snapshot('room');
+    await cache.receive('room', { cursor: '11', changes: [{ type: 'reaction.changed', entityId: '9', data: { message: f.message('9') } }] }, '10');
+    reactions = [{ emoji: 'like', count: 2 }]; f.api.mockClear();
+    expect(await cache.snapshot('room')).toMatchObject({ messages: [{ id: '9', reactions }] });
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual([
+      '/changes?scope=conversation:room&after=11&limit=100',
+      '/conversations/room/snapshot',
+    ]);
+  });
+
   it('does not advance a durable cursor when saving an event fails, and replays it on restart', async () => {
     const f = fixture(); const cache = f.open();
     await cache.page('room', f.page);

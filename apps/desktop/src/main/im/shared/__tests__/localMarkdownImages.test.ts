@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { materializeLocalMarkdownImages } from '../localMarkdownImages';
+import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from '../localMarkdownImages';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const tempRoots: string[] = [];
@@ -130,5 +130,29 @@ describe('materializeLocalMarkdownImages', () => {
     ).toEqual({ absPaths: [], text: '图片' });
     expect(realpath).toHaveBeenCalledWith(alias);
     expect(deps.stat).not.toHaveBeenCalled();
+  });
+});
+
+describe('materializeLocalMarkdownImageRefs', () => {
+  it('keeps imported images in place for card channels and captions the rest', async () => {
+    // Feishu / Telegram / Discord cards previously dropped local image paths entirely.
+    const materialize = vi.fn(async () => '前文\n![预览](cindy-media://blobs/a.png)\n![失败](/tmp/gone.png)\n后文');
+    expect(
+      await materializeLocalMarkdownImageRefs(
+        { text: '前文\n![预览](/tmp/a.png)\n![失败](/tmp/gone.png)\n后文', sessionId: 's' },
+        { materialize },
+      ),
+    ).toBe('前文\n![预览](cindy-media://blobs/a.png)\n失败\n后文\n\n有 1 张图片未能作为附件发送。');
+    expect(materialize).toHaveBeenCalledWith('s', '前文\n![预览](/tmp/a.png)\n![失败](/tmp/gone.png)\n后文');
+  });
+
+  it('drops image titles so card uploaders receive a bare managed URL', async () => {
+    const materialize = vi.fn(async () => '![预览](cindy-media://blobs/a.png "预览图")');
+    expect(
+      await materializeLocalMarkdownImageRefs(
+        { text: '![预览](/tmp/a.png "预览图")', sessionId: 's' },
+        { materialize },
+      ),
+    ).toBe('![预览](cindy-media://blobs/a.png)');
   });
 });

@@ -4277,10 +4277,8 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
     return <BotModelChainEditor value={routes} onChange={(next) => { change(next); setRoutes(next); }} />;
   }
   const view = render(<Editor />);
-  const details = view.container.querySelector('details')!;
-  details.open = true;
-  fireEvent(details, new Event('toggle'));
-  fireEvent.click(details.querySelector('button[aria-haspopup="listbox"]')!);
+  const fallbacks = view.getByTestId('bot-model-fallbacks');
+  fireEvent.click(fallbacks.querySelector('button[aria-haspopup="listbox"]')!);
   await screen.findByRole('listbox');
   const flyout = await openRowFlyout('GPT-5.6');
   const cc = flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement;

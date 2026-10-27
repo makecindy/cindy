@@ -13,7 +13,7 @@ import {
   type TelegramToolScope,
   type TelegramToolTransport,
 } from '../../im/shared/channelToolScope';
-import { createTelegramBotMcpServer, TELEGRAM_DOWNLOAD_SUBDIR, type TelegramBotMcpDeps } from '../telegramBotMcpServer';
+import { createTelegramBotMcpServer, TELEGRAM_DOWNLOAD_SUBDIR } from '../telegramBotMcpServer';
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -105,13 +105,12 @@ function ownerDmScope(t: FakeTransport): TelegramToolScope {
 async function withServer(
   scope: TelegramToolScope | null,
   run: (call: (name: string, args?: Record<string, unknown>) => Promise<Record<string, unknown>>) => Promise<void>,
-  options: { workingDir?: string; contextInstanceId?: string; prepareOutboundImage?: TelegramBotMcpDeps['prepareOutboundImage'] } = {},
+  options: { workingDir?: string; contextInstanceId?: string } = {},
 ) {
   const release = scope
     ? beginChannelToolScope({ sessionId: 's-1', sessionInstanceId: 'i-1', scope })
     : null;
   const server = createTelegramBotMcpServer({
-    prepareOutboundImage: options.prepareOutboundImage,
     getSessionContext: () => ({
       agentKind: 'claude-code',
       workingDir: options.workingDir ?? '/tmp/task',
@@ -140,28 +139,6 @@ afterEach(() => {
 });
 
 describe('cindy_telegram_bot scope gate', () => {
-  // Unit: the real send_media handler must expose local sent photos in chat;
-  // existing media tests covered only transport and file permission behavior.
-  it('returns a local photo preview while URL and file-id sends retain their existing behavior', async () => {
-    const t = fakeTransport();
-    const source = path.join(os.tmpdir(), 'photo.png');
-    const stored = path.join(os.tmpdir(), 'stored.png');
-    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
-    const prepareOutboundImage = vi.fn(async () => ({ path: stored, url }));
-    await withServer(ownerDmScope(t), async (call) => {
-      expect(await call('send_media', { kind: 'photo', path: source, caption: 'design' })).toMatchObject({
-        ok: true, xdt_image_urls: [url], _xdt_forward_media: false,
-      });
-      expect(t.sendMedia).toHaveBeenCalledExactlyOnceWith('123', { kind: 'photo', absPath: stored, caption: 'design' });
-      for (const input of [{ url: 'https://example.test/photo.png' }, { file_id: 'photo-id' }]) {
-        const sent = await call('send_media', { kind: 'photo', ...input });
-        expect(sent.ok).toBe(true);
-        expect(sent.xdt_image_urls).toBeUndefined();
-      }
-      expect(prepareOutboundImage).toHaveBeenCalledExactlyOnceWith(source);
-    }, { prepareOutboundImage });
-  });
-
   it('fails closed without an active scope, and when the session instance changed', async () => {
     await withServer(null, async (call) => {
       const r = await call('send_text', { text: 'hi' });

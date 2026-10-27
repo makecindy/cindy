@@ -10628,7 +10628,9 @@
       "suggestion2": "2. {{service}} 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
       "dismiss": "무시",
       "createOwnApp": "내 App 만들기 ↗"
-    }
+    },
+    "outboundAttachmentsIncomplete": "⚠️ 첨부 파일 {{count}}개를 보내지 못했습니다: {{names}}",
+    "unnamedAttachment": "이름 없는 첨부 파일"
   },
   "markdown": {},
   "diffPanel": {

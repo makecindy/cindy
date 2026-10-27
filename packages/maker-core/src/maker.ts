@@ -156,7 +156,7 @@ export interface MakerDeps {
   visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /**
    * 可选: Pi / Codex 工具循环疑似命中时的辅助模型复核入口。Claude Code 在 agent 内
-   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省 = 疑似即中断。
+   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省放行疑似,保留最终上限。
    */
   toolLoopReviewer?: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer;
 }

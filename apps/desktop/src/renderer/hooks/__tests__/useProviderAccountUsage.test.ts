@@ -83,6 +83,23 @@ it.each([
   expect(hook.result.current.result).toEqual({ status: 'unavailable', error: 'auth' });
 });
 
+it('supports the official Zhipu Anthropic upstream with a trailing slash and fetches usage', async () => {
+  const zhipuProvider = {
+    ...provider,
+    id: 'custom-zhipu',
+    routing: { 'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic/' } },
+  } as ProviderView;
+  fetchUsage.mockResolvedValueOnce(ready);
+  const hook = renderHook(() => useProviderAccountUsage(zhipuProvider, 'claude-code'));
+  await act(async () => {});
+  expect(hook.result.current.supported).toBe(true);
+  expect(fetchUsage).toHaveBeenCalledWith({
+    providerId: 'custom-zhipu',
+    forceRefresh: false,
+    agent: 'claude-code',
+  });
+});
+
 it('discards a pending result after the query becomes unsupported', async () => {
   let resolvePending!: (result: ProviderAccountUsageResult) => void;
   fetchUsage.mockImplementationOnce(

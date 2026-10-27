@@ -152,7 +152,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
@@ -463,14 +463,13 @@ export function extractToolResultMediaUrls(toolResultText: string, provider?: st
     xdt_video_urls?: unknown;
     xdt_media_produced?: unknown;
     _xdt_render_image?: unknown;
-    _xdt_forward_media?: unknown;
   };
   try {
     parsed = JSON.parse(toolResultText);
   } catch {
     return [];
   }
-  if (parsed._xdt_render_image === false || parsed._xdt_forward_media === false) return [];
+  if (parsed._xdt_render_image === false) return [];
   const urls: string[] = [];
   if (typeof parsed.xdt_image_url === 'string' && isRenderableImageUrl(parsed.xdt_image_url)) {
     urls.push(parsed.xdt_image_url);
@@ -567,6 +566,16 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   };
 }
 
+/** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
+function formatHookIncompleteNotice(skippedNames: string[]): string {
+  const locale = getResolvedMainLocale();
+  const separator = locale === 'en' || locale === 'ko' ? ', ' : '、';
+  const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
+  return t('imBot.outboundAttachmentsIncomplete', locale)
+    .replace('{{count}}', String(skippedNames.length))
+    .replace('{{names}}', names.join(separator));
+}
+
 /**
  * 收口时的出站附件收集(run() 与 watchContinuation 共用)。
  *
@@ -594,7 +603,7 @@ async function collectOutboundForFinalText(
   // once so a temporary source changing cannot split the body from its attachment.
   const scanText = stripInternalWebCitations(texts.wholeTurn);
   const materialized = canReadLocal
-    ? await materializeTaskImageTextResult(sessionId, scanText)
+    ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
   const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
@@ -610,6 +619,7 @@ async function collectOutboundForFinalText(
       allowedFileRoots,
       provider,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
+      formatIncompleteNotice: formatHookIncompleteNotice,
       log,
     });
     if (collected.skipped > 0) {
