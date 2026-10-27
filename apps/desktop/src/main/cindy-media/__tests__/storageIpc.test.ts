@@ -26,6 +26,7 @@ vi.mock('electron', () => ({
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
 const blobStore = await import('../blobStore');
+const { scanCache, evictCacheBlobs } = await import('../recycler');
 const { createStorageIpcHandlers } = await import('../storageIpc');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
@@ -68,7 +69,10 @@ afterEach(() => {
 
 const OLD_MS = 100 * 60 * 60 * 1000;
 
-it('clears only remote cache candidates, preserving attachments, shared bytes and other integrations', async () => {
+// PR #7442: shared remote-media refs were excluded from both cleanup paths (unit).
+// One blob with remote + other cache refs must lose only its remote index, free no
+// shared bytes, and remain reclaimable later. Existing assertions checked blobs only.
+it('clears remote cache indexes while preserving attachments, shared bytes and other integrations', async () => {
   const remote = await seedBlob('remote', { isCache: true });
   const other = await seedBlob('other', { isCache: true });
   const shared = await seedBlob('shared', { isCache: true });
@@ -85,7 +89,8 @@ it('clears only remote cache candidates, preserving attachments, shared bytes an
   const clearRemoteMediaMemory = vi.fn();
   const handlers = makeHandlers({ clearRemoteMediaMemory });
   const scan = await handlers.scan({ scope: 'remote-media', draftUrls: [live.url] });
-  expect(scan.cache.evictable.map((entry) => entry.hash)).toEqual([remote.hash]);
+  expect(scan.cache.evictable.map((entry) => entry.hash)).toEqual([remote.hash, shared.hash]);
+  expect(scan.cache.evictable.find(entry => entry.hash === shared.hash)?.bytes).toBe(0);
   expect(scan.zeroRef.hashes).toEqual([]);
   const result = await handlers.cleanup({
     scope: 'remote-media', draftUrls: [live.url],
@@ -96,7 +101,16 @@ it('clears only remote cache candidates, preserving attachments, shared bytes an
   expect(result.freedBytes).toBe(remote.bytes);
   expect(await ledger.getBlobInfo(remote.hash, db)).toBeNull();
   for (const row of [other, shared, pinned, live]) expect(await ledger.getBlobInfo(row.hash, db)).not.toBeNull();
+  expect(await ledger.getIntegrationCacheHash(`remote-media:${shared.hash}`, db)).toBeNull();
+  expect(await ledger.getIntegrationCacheHash(`other:${shared.hash}`, db)).toBe(shared.hash);
+  expect(fs.readFileSync(blobStore.resolveHashRef(shared.hash, shared.ext).absPath).toString()).toBe('shared');
+  for (const row of [pinned, live])
+    expect(await ledger.getIntegrationCacheHash(`remote-media:${row.hash}`, db)).toBe(row.hash);
   expect(clearRemoteMediaMemory).toHaveBeenCalledTimes(2);
+  expect((await handlers.scan({ scope: 'remote-media', draftUrls: [live.url] })).cache.evictable).toEqual([]);
+  expect((await scanCache({ live: new Set([live.hash]), limitBytes: 0 }, db)).evictable.map(row => row.hash))
+    .toContain(shared.hash);
+  expect((await evictCacheBlobs({ hashes: [shared.hash], live: new Set() }, db)).deleted).toBe(1);
 });
 
 async function seedBlob(

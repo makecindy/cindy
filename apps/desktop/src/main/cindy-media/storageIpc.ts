@@ -28,7 +28,7 @@ import * as legacyDeadDirs from './legacyDeadDirs';
 import type { FixedDirectoryStats } from './fixedDirectory';
 import type { LiveHashSources } from './recycler';
 import { getDbClient } from '../localDb/client/current';
-import { captureRemoteMediaOwner, invalidateRemoteMediaPersistentWrites, REMOTE_MEDIA_INTEGRATION } from '../device-link/remoteMediaPersistentCache';
+import { beginRemoteMediaCacheCleanup, captureRemoteMediaOwner, REMOTE_MEDIA_INTEGRATION } from '../device-link/remoteMediaPersistentCache';
 
 const log = createLogger('cindy-media-storage-ipc');
 
@@ -296,19 +296,24 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
         if (params.scope === 'remote-media') {
           const assertCurrent = captureRemoteMediaOwner();
           const db = deps.db ?? getDbClient().drizzle;
-          invalidateRemoteMediaPersistentWrites();
-          deps.clearRemoteMediaMemory?.();
-          const live = await collectLive(deps, params.draftUrls ?? []);
-          assertCurrent();
-          const cacheEvicted = await recycler.evictCacheBlobs({
-            hashes: params.evictCacheHashes ?? [], live,
-            integration: REMOTE_MEDIA_INTEGRATION, assertStillValid: assertCurrent,
-          }, db);
-          assertCurrent();
-          deps.clearRemoteMediaMemory?.();
-          return { zeroRef: { deleted: 0, freedBytes: 0, skipped: 0 }, cacheEvicted,
-            deadDirs: { removed: [], skipped: [], freedBytes: 0 }, tmpFilesRemoved: 0,
-            freedBytes: cacheEvicted.freedBytes };
+          const finishCleanup = beginRemoteMediaCacheCleanup();
+          try {
+            deps.clearRemoteMediaMemory?.();
+            const live = await collectLive(deps, params.draftUrls ?? []);
+            assertCurrent();
+            const cacheEvicted = await recycler.evictCacheBlobs({
+              hashes: params.evictCacheHashes ?? [], live,
+              integration: REMOTE_MEDIA_INTEGRATION, assertStillValid: assertCurrent,
+            }, db);
+            assertCurrent();
+            return { zeroRef: { deleted: 0, freedBytes: 0, skipped: 0 }, cacheEvicted,
+              deadDirs: { removed: [], skipped: [], freedBytes: 0 }, tmpFilesRemoved: 0,
+              freedBytes: cacheEvicted.freedBytes };
+          } finally {
+            // Release this cleanup's fence and invalidate old projections even on failure.
+            finishCleanup();
+            deps.clearRemoteMediaMemory?.();
+          }
         }
         // 执行时重新取证:扫描→确认之间用户可能又粘了图/发了排队消息。
         const live = await collectLive(deps, params.draftUrls ?? []);
