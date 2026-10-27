@@ -2456,11 +2456,7 @@ export async function remoteUnsubscribe(
   topics = sharedTaskTopics(deviceId, topics);
   assertNotStandby();
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  try {
-    return await client.invoke(deviceId, { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics }] });
-  } finally {
-    closeLegacyBackgroundLinkIfIdle(deviceId);
-  }
+  return client.invoke(deviceId, { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics }] });
 }
 
 // ─── 手机推送(notify 帧,经 relay 下发 APNs)───────────────────────────────────

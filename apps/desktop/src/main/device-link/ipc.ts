@@ -71,6 +71,7 @@ import {
   openRemoteLink,
   closeRemoteLink,
   closeLegacyBackgroundLinkIfIdle,
+  retainForegroundLink,
   remoteInvoke,
   providerShareHostInvoke,
   remoteSubscribe,
@@ -178,6 +179,7 @@ export interface DeviceLinkIpcDeps {
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   onSubscriptionRefsChanged?(deviceId: string): void;
+  retainLinkDuringUnsubscribe?(deviceId: string): () => void;
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
@@ -250,6 +252,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
     onSubscriptionRefsChanged: closeLegacyBackgroundLinkIfIdle,
+    retainLinkDuringUnsubscribe: retainForegroundLink,
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
@@ -1064,8 +1067,16 @@ export async function handleUnsubscribe(
   if (topicList.length === 0) {
     throwIpcError('INVALID_PARAMS', 'topics is required');
   }
+  const releaseLinkHold = deps.retainLinkDuringUnsubscribe?.(deviceId);
+  const refsSettled = (): void => {
+    releaseLinkHold?.();
+    deps.onSubscriptionRefsChanged?.(deviceId);
+  };
   const toUnsub = recordUnsubscribe(windowId, deviceId, topicList);
-  if (toUnsub.length === 0) return { ok: true }; // 仍有其它窗口持有,不向 relay 发 unsubscribe
+  if (toUnsub.length === 0) {
+    refsSettled();
+    return { ok: true };
+  }
   let result: InvokeResultPayload;
   try {
     result = await deps.unsubscribe(deviceId, toUnsub);
@@ -1073,11 +1084,13 @@ export async function handleUnsubscribe(
     // 链路仍在但单帧丢失(INVOKE_TIMEOUT)，或发送前被本地背压拒绝(BACKPRESSURE)时，
     // 恢复引用等待重试；链路断开等其它异常不恢复(见 isRetryableUnsubscribeError)。
     if (isRetryableUnsubscribeError(err)) recordSubscribe(windowId, deviceId, toUnsub);
+    refsSettled();
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常):ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED / IPC_ERROR 都是终态 ——
   // 被控端要么已清掉本控制端订阅表(撤销 / 关被控),要么根本不支持该 channel,远端无存活订阅可重试。
   // **不恢复**引用(恢复会留下永不释放的 phantom ref → 阻断别窗口真实退订 → 被控端持续推送),直接按码抛。
+  refsSettled();
   return unwrapSubscribeResult(result);
 }
 
@@ -1909,11 +1922,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
         if (topics.length > 0) {
+          const releaseLinkHold = deps.retainLinkDuringUnsubscribe?.(deviceId);
+          const refsSettled = (): void => {
+            releaseLinkHold?.();
+            deps.onSubscriptionRefsChanged?.(deviceId);
+          };
           void retryUnsubscribeAfterWindowGone(
             diagnostics.forWindow(deps, windowId).unsubscribe,
             deviceId,
             topics,
-          );
+          ).then(refsSettled, refsSettled);
         }
       }
     });

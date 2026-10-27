@@ -63,6 +63,8 @@ vi.mock('./index', () => ({
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
+  closeLegacyBackgroundLinkIfIdle: vi.fn(),
+  retainForegroundLink: vi.fn(() => () => {}),
   remoteInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
   remoteUnsubscribe: vi.fn(),
@@ -99,6 +101,8 @@ vi.mock('../device-link/index', () => ({
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
+  closeLegacyBackgroundLinkIfIdle: vi.fn(),
+  retainForegroundLink: vi.fn(() => () => {}),
   remoteInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
   remoteUnsubscribe: vi.fn(),
@@ -1592,6 +1596,28 @@ describe('device-link controller handlers', () => {
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 2)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledWith('dev-2', ['sessions']);
   });
+
+  it.each(['INVOKE_TIMEOUT', 'BACKPRESSURE'] as const)(
+    'keeps a legacy link open until a retryable %s unsubscribe restores its session ref', async (code) => {
+      refcountTesting.reset();
+      const closeLink = vi.fn();
+      const deps = makeDeps({
+        unsubscribe: vi.fn()
+          .mockRejectedValueOnce(new DeviceLinkError(code, 'retry'))
+          .mockResolvedValue({ ok: true, result: { ok: true } }),
+        retainLinkDuringUnsubscribe: (deviceId) => () => {
+          if (refcountTesting.refCount(deviceId, 'session:s1') === 0) closeLink();
+        },
+      });
+      await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+      await expect(handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1)).rejects.toThrow();
+      expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(1);
+      expect(closeLink).not.toHaveBeenCalled();
+      await expect(handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1)).resolves.toEqual({ ok: true });
+      expect(closeLink).toHaveBeenCalledOnce();
+      refcountTesting.reset();
+    },
+  );
 });
 
 describe('[New-D] retryUnsubscribeAfterWindowGone — 窗口销毁后退订有限重试', () => {
