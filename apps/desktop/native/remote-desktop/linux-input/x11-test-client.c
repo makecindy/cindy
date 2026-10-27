@@ -186,6 +186,45 @@ int main(int argc, char **argv) {
   };
   assert(typed_count == (int)(sizeof(expected) / sizeof(expected[0])));
   assert(!memcmp(typed, expected, sizeof(expected)));
+
+  // A remote Shift must survive separate text batches and later key chords.
+  // Previously text preflight treated our own Shift as a local modifier.
+  KeyCode remote_shift = XKeysymToKeycode(display, XK_Shift_L);
+  assert(remote_shift);
+  typed_count = 0;
+  send_batch("[{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":true}]\n");
+  assert(held(remote_shift));
+  send_batch("[{\"kind\":\"text\",\"text\":\"A\"}]\n");
+  assert(held(remote_shift));
+  send_batch("[{\"kind\":\"text\",\"text\":\"B\"}]\n");
+  assert(held(remote_shift));
+  send_batch("[{\"kind\":\"key\",\"code\":\"KeyA\",\"down\":true},"
+             "{\"kind\":\"key\",\"code\":\"KeyA\",\"down\":false},"
+             "{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":false}]\n");
+  assert(!held(remote_shift));
+  assert(typed_count == 3 && typed[0] == XK_A && typed[1] == XK_B && typed[2] == XK_A);
+
+  // Locked Num/Caps are common local settings. Text must respect them without
+  // toggling them, including while the remote user holds Shift.
+  unsigned int caps_mask = XkbKeysymToModifiers(display, XK_Caps_Lock);
+  unsigned int num_mask = XkbKeysymToModifiers(display, XK_Num_Lock);
+  assert(caps_mask && num_mask && !(caps_mask & num_mask));
+  for (int mode = 1; mode <= 3; mode++) {
+    unsigned int locks = (mode & 1 ? caps_mask : 0) | (mode & 2 ? num_mask : 0);
+    assert(XkbLockModifiers(display, XkbUseCoreKbd, caps_mask | num_mask, locks));
+    XSync(display, False); receive();
+    typed_count = 0;
+    send_batch("[{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":true}]\n");
+    send_batch("[{\"kind\":\"text\",\"text\":\"aA1!\"}]\n");
+    send_batch("[{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":false}]\n");
+    static const KeySym locked_expected[] = {XK_a, XK_A, XK_1, XK_exclam};
+    assert(typed_count == 4 && !memcmp(typed, locked_expected, sizeof(locked_expected)));
+    XkbStateRec state;
+    assert(XkbGetState(display, XkbUseCoreKbd, &state) == Success);
+    assert((state.locked_mods & (caps_mask | num_mask)) == locks);
+  }
+  assert(XkbLockModifiers(display, XkbUseCoreKbd, caps_mask | num_mask, 0));
+  XSync(display, False); receive();
   int after_width;
   KeySym *after = XGetKeyboardMapping(display, (KeyCode)min, max - min + 1, &after_width);
   assert(after && width == after_width &&
@@ -244,6 +283,21 @@ int main(int argc, char **argv) {
   assert(held(shift) && presses == previous_presses);
   pointer(200, 100, 0);
   assert(XTestFakeKeyEvent(display, shift, False, CurrentTime));
+  XSync(display, False); receive();
+
+  // A second, locally held Shift is still protected when we own the first.
+  KeyCode right_shift = XKeysymToKeycode(display, XK_Shift_R);
+  assert(right_shift && right_shift != shift);
+  start(argv[1], false);
+  send_batch("[{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":true}]\n");
+  assert(XTestFakeKeyEvent(display, right_shift, True, CurrentTime));
+  XSync(display, False); receive();
+  previous_presses = presses;
+  const char *owned_and_local = "[{\"kind\":\"text\",\"text\":\"A\"}]\n";
+  assert(write(input, owned_and_local, strlen(owned_and_local)) == (ssize_t)strlen(owned_and_local));
+  finish(2);
+  assert(!held(shift) && held(right_shift) && presses == previous_presses);
+  assert(XTestFakeKeyEvent(display, right_shift, False, CurrentTime));
   XSync(display, False); receive();
 
   names->names->keys[b] = names->names->keys[a];

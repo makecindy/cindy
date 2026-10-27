@@ -174,7 +174,7 @@ void backend_release(void) {
 // Text is deliberately limited to the current group at level none/Shift.
 // A private map snapshot avoids Xlib's stale cached lookup after runtime changes.
 struct text_context {
-  unsigned int group;
+  unsigned int group, locked_mods;
   char held[32];
   bool modifier[256];
   KeyCode shift;
@@ -182,25 +182,38 @@ struct text_context {
 static bool text_context(struct text_context *ctx) {
   memset(ctx, 0, sizeof(*ctx));
   XkbStateRec state;
-  if (XkbGetState(display, XkbUseCoreKbd, &state) != Success ||
-      state.mods || state.base_mods || state.latched_mods || state.locked_mods)
-    return false; // Includes Caps/NumLock: never guess or toggle user state.
+  if (XkbGetState(display, XkbUseCoreKbd, &state) != Success || state.latched_mods)
+    return false;
+  // Preserve the user's lock state and translate against it. Other locked
+  // modifiers may change shortcut semantics, so keep rejecting those.
+  unsigned int locks = XkbKeysymToModifiers(display, XK_Caps_Lock) |
+                       XkbKeysymToModifiers(display, XK_Num_Lock);
+  if (state.locked_mods & ~locks) return false;
+  ctx->locked_mods = state.locked_mods;
   ctx->group = state.group;
   XQueryKeymap(display, ctx->held);
+  // Preflight against the state after our keys are temporarily released.
+  for (int c = 0; c < 256; c++)
+    if (keys[c]) ctx->held[c / 8] &= ~(1u << (c % 8));
   XModifierKeymap *mods = XGetModifierMapping(display);
   if (!mods) return false;
   bool ok = true;
+  unsigned int owned_mods = 0;
   for (int i = 0; i < 8 * mods->max_keypermod; i++) {
     KeyCode c = mods->modifiermap[i];
     if (!c) continue;
     ctx->modifier[c] = true;
     // Check physical state too, not just the effective modifier mask. Never
     // release or borrow a modifier already held by the local user.
-    if (ctx->held[c / 8] & (1u << (c % 8))) ok = false;
+    if (keys[c]) {
+      owned_mods |= 1u << (i / mods->max_keypermod);
+      ctx->held[c / 8] &= ~(1u << (c % 8));
+    } else if (ctx->held[c / 8] & (1u << (c % 8))) ok = false;
     if (i < mods->max_keypermod && !ctx->shift) ctx->shift = c;
   }
   XFreeModifiermap(mods);
-  return ok && !failed;
+  return ok && !(state.mods & ~(owned_mods | ctx->locked_mods)) &&
+         !(state.base_mods & ~owned_mods) && !failed;
 }
 static KeySym text_symbol(uint32_t c) {
   if (c == '\n' || c == '\r') return XK_Return;
@@ -217,7 +230,8 @@ static bool text_key(uint32_t c, const struct text_context *ctx,
       unsigned int consumed;
       KeySym sym;
       if (XkbTranslateKeyCode(keymap, (KeyCode)k,
-          XkbBuildCoreState(level ? ShiftMask : 0, ctx->group), &consumed, &sym) &&
+          XkbBuildCoreState(ctx->locked_mods | (level ? ShiftMask : 0), ctx->group),
+          &consumed, &sym) &&
           (sym == wanted || (c != '\n' && c != '\r' && c != '\t' &&
                              xkb_keysym_to_utf32(sym) == c))) {
         *code = (KeyCode)k;
@@ -251,7 +265,14 @@ bool backend_text(const char *text) {
   // Repeat full preflight at execution time, before releasing or injecting
   // anything. Unsupported characters therefore cannot partially type a string.
   if (!backend_text_available(text)) return false;
-  backend_release();
+  // Suspend our keys while typing, then restore them so a held Shift continues
+  // to apply to subsequent shortcuts. Mouse buttons remain untouched.
+  bool suspended[256];
+  memcpy(suspended, keys, sizeof(suspended));
+  for (int c = 0; c < 256; c++) if (suspended[c]) {
+    if (!XTestFakeKeyEvent(display, c, False, CurrentTime)) return false;
+    keys[c] = false;
+  }
   if (!backend_sync()) return false;
   const unsigned char *p = (const unsigned char *)text;
   while (*p && !stopping) {
@@ -265,7 +286,18 @@ bool backend_text(const char *text) {
     if (shift && !text_edge(ctx.shift, false)) return false;
     if (!backend_sync()) return false;
   }
-  return !failed && !stopping;
+  if (failed || stopping) return false;
+  for (int c = 0; c < 256; c++) if (suspended[c]) {
+    // Do not claim a key another user pressed while text was being injected.
+    if (pressed((KeyCode)c)) {
+      for (int code = 0; code < 256; code++)
+        if (held_keys[code] == c) held_keys[code] = 0;
+      continue;
+    }
+    if (!XTestFakeKeyEvent(display, c, True, CurrentTime)) return false;
+    keys[c] = true;
+  }
+  return backend_sync();
 }
 void backend_close(void) {
   if (!display) return;
