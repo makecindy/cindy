@@ -7,10 +7,15 @@ version = '0.1.0'
 android {
   namespace 'app.cindy.notifications'
   defaultConfig { versionCode 1; versionName '0.1.0' }
+  testOptions { unitTests.includeAndroidResources = true }
 }
 dependencies {
   implementation expoModule.getExpoDependency('expo-notifications')
   implementation 'androidx.core:core:1.15.0'
   implementation 'com.squareup.okhttp3:okhttp:4.12.0'
   implementation 'com.google.firebase:firebase-messaging:25.0.1'
+  testImplementation 'androidx.lifecycle:lifecycle-process:2.9.3'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.robolectric:robolectric:4.16.1'
+  testImplementation 'io.mockk:mockk:1.14.9'
 }

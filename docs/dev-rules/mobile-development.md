@@ -468,6 +468,15 @@ JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。�
 FCM data 消息与显式开启的前台服务都通过同一通知入口，按账号／消息去重。预览关闭时本机再次去除内容与
 发送者头像。群通知使用 MessagingStyle；伙伴回复有发送者时也使用 Person。普通任务仍沿用原通知。
 
+从收件箱构造的 `RemoteMessage` 只有 data；Expo 的 `NotificationsHandler` 在前台刻意跳过
+`RemoteNotificationContent.isDataOnly`。可见 `chat-message` 经 `ChatMessagingDelegate` 包为
+`ChatNotificationContent`，委托原内容全部字段并实现独立 Parcel 往返，保留原 trigger、频道和点击数据，
+使现有 JS 当前群／话题抑制规则真正运行；不伪造 FCM notification 字段，不把普通静默数据改成提醒。
+原生集成回归入口为 Android 生成工程的 `:cindy-chat-notifications:testReleaseUnitTest`，
+`ChatDeliveryTest` 穿过真实 Expo receiver／handler，覆盖前台、后台、预览、去重、收件人和点击数据的
+Parcel 往返；使用 Robolectric 的 SDK/JVM 初始化，属于原生 integration，不能用 JS mock 单测替代，
+首次需下载测试 SDK。它不等同卓易通设备送达验收，不能由缺少 `constructed` 计数推断系统未展示。
+
 后台连接声明 `specialUse` 前台服务，持续显示运行通知和停止按钮；没有开机启动、隐藏重启或凭证落盘。
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。

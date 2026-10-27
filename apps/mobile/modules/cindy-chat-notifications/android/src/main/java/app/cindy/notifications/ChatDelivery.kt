@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Parcel
+import android.os.Parcelable
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -17,6 +19,10 @@ import expo.modules.notifications.service.delegates.FirebaseMessagingDelegate
 import expo.modules.notifications.service.interfaces.PresentationDelegate
 import expo.modules.notifications.notifications.model.Notification
 import expo.modules.notifications.notifications.model.NotificationBehaviorRecord
+import expo.modules.notifications.notifications.model.NotificationRequest
+import expo.modules.notifications.notifications.model.RemoteNotificationContent
+import expo.modules.notifications.notifications.model.triggers.FirebaseNotificationTrigger
+import expo.modules.notifications.notifications.interfaces.INotificationContent
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -51,7 +57,33 @@ object ChatDelivery {
       display["body"] = body.toString(); display["message"] = ""
     }
     ChatDiagnostics.count("dispatched")
-    FirebaseMessagingDelegate(context).onMessageReceived(RemoteMessage.Builder("cindy").setData(display).build())
+    ChatMessagingDelegate(context).onMessageReceived(RemoteMessage.Builder("cindy").setData(display).build())
+  }
+}
+
+/** These authenticated inbox/FCM chat payloads are visible notifications, not silent data tasks.
+ * Expo intentionally skips RemoteNotificationContent.isDataOnly in its foreground handler.
+ * Keep every content field and the original trigger/response, but classify visible chat content
+ * separately so the existing JS reading/privacy policy runs instead of being bypassed by Expo.
+ */
+internal class ChatMessagingDelegate(context: Context) : FirebaseMessagingDelegate(context) {
+  override fun createNotificationRequest(identifier: String, content: INotificationContent,
+    notificationTrigger: FirebaseNotificationTrigger): NotificationRequest {
+    val visible = if (content is RemoteNotificationContent && content.isDataOnly
+      && content.body?.optString("category") == "chat-message") ChatNotificationContent(content) else content
+    return super.createNotificationRequest(identifier, visible, notificationTrigger)
+  }
+}
+
+/** No new persistence: this content crosses Expo's existing notification/response Parcel boundary. */
+internal class ChatNotificationContent(private val source: RemoteNotificationContent) : INotificationContent by source {
+  override fun writeToParcel(destination: Parcel, flags: Int) { destination.writeParcelable(source, flags) }
+  companion object {
+    @JvmField val CREATOR: Parcelable.Creator<ChatNotificationContent> = object : Parcelable.Creator<ChatNotificationContent> {
+      override fun createFromParcel(source: Parcel) = ChatNotificationContent(
+        requireNotNull(source.readParcelable<RemoteNotificationContent>(RemoteNotificationContent::class.java.classLoader)))
+      override fun newArray(size: Int): Array<ChatNotificationContent?> = arrayOfNulls(size)
+    }
   }
 }
 
