@@ -197,6 +197,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
     const h = mount();
     h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
     h.mute.resolve({ ok: true });
+    h.api.prewarm.mockClear();
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => h.result.current.getState(),
       prepare: () => h.result.current.prepare(),
@@ -213,12 +214,15 @@ describe('local voice capture independent of startup checks and cloud', () => {
       expect(h.result.current.state).toBe('idle');
       expect(h.api.start).not.toHaveBeenCalled();
       expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
+      expect(h.api.prewarm).not.toHaveBeenCalled();
 
       gesture.press({ x: 0, y: 0 });
       await act(async () => { await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1); });
+      expect(h.api.prewarm).not.toHaveBeenCalled();
       expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
       expect(mocks.startEngine).not.toHaveBeenCalled();
       await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(h.api.prewarm).toHaveBeenCalledOnce();
       expect(mocks.startEngine).toHaveBeenCalledOnce();
       expect(mocks.engines[0].keepAlive).toBe(false);
       expect(h.result.current.state).toBe('listening');
