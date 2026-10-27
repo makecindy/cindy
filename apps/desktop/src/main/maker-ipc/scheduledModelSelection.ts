@@ -3,6 +3,7 @@ import { connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel
 import { resolveCompatibleSessionRuntimeEffort } from './sessionRuntimeControl';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { throwIpcError } from '../utils/ipcValidate';
+import { isIpcError } from '../../shared/ipc-errors';
 
 /** A saved automation choice, applied only while its target's send lock is held. */
 export interface ScheduledModelSelection {
@@ -33,6 +34,9 @@ export function createScheduledModelScope(deps: {
   createId: () => string;
   ownerEpoch?: () => string;
   prepareBaseline?: (sessionId: string) => Promise<void>;
+  /** Caller holds the send lock; true means the saved companion route was
+   * applied and the exact failed baseline was retired without restoring it. */
+  recoverUnavailableBaseline?: (sessionId: string, expectedBaseline: string) => Promise<boolean>;
 }) {
   const assertOwner = (owner: string | undefined) => {
     if (owner !== deps.ownerEpoch?.()) throw new Error('Account changed during scheduled model selection');
@@ -79,8 +83,19 @@ export function createScheduledModelScope(deps: {
       // A permanent save owns the next selection, including across restart.
       // Keep its old baseline for retries until reconciliation accepts the save.
       if (baseline.pendingBotProfileVersion) return;
-      // Keep the saved choice on failure so the next input retries before dispatch.
-      await deps.apply(sessionId, baseline);
+      try {
+        await deps.apply(sessionId, baseline);
+      } catch (error) {
+        assertOwner(owner);
+        // Only catalog/route validation marks a selection unavailable. Network,
+        // permission and runtime-switch failures must retain the saved choice.
+        if (isIpcError(error) && error.code === 'MODEL_SELECTION_UNAVAILABLE' &&
+          await deps.recoverUnavailableBaseline?.(sessionId, row!.baseline!)) {
+          assertOwner(owner);
+          return;
+        }
+        throw error;
+      }
       assertOwner(owner);
       const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline);
       assertOwner(owner);

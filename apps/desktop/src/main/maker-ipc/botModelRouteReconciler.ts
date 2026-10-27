@@ -23,6 +23,10 @@ interface BotRouteState {
   next?: RuntimeRoute;
 }
 
+interface RouteApplyOptions {
+  preserveScheduledBaseline: boolean;
+}
+
 function configuredRoute(
   state: BotRouteState,
   previous: string | undefined,
@@ -68,7 +72,7 @@ export function createBotModelRouteApplier(deps: {
   hasPendingSwitch(sessionId: string): boolean;
   onApplied(sessionId: string): Promise<void>;
 }) {
-  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void> => {
+  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<void> => {
     await deps.stage(sessionId, route, current);
     if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.
@@ -76,7 +80,7 @@ export function createBotModelRouteApplier(deps: {
     if (deps.hasPendingSwitch(sessionId) || getSessionRuntimeControlSnapshot(sessionId).pending) {
       throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
     }
-    await deps.onApplied(sessionId);
+    if (!options?.preserveScheduledBaseline) await deps.onApplied(sessionId);
   };
 }
 
@@ -88,7 +92,7 @@ export function createBotModelRouteReconciler(deps: {
   ownerEpoch(): string;
   withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
-  apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
+  apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<void>;
   /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
 }) {
@@ -176,6 +180,49 @@ export function createBotModelRouteReconciler(deps: {
   };
   return Object.assign(reconcile, {
     invalidate,
+    /** Called under the send lock only after the frozen route is unavailable.
+     * Resolve the real saved profile (including routine/location choices), never
+     * the session row that may still contain the automation's temporary route. */
+    async recoverUnavailableBaseline(sessionId: string, expectedBaseline: string): Promise<boolean> {
+      const epoch = syncOwner();
+      const revision = revisions.get(sessionId) ?? 0;
+      const assertCurrent = () => {
+        if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+        if ((revisions.get(sessionId) ?? 0) !== revision) {
+          throw new ScheduledModelSelectionBusyError('Companion profile changed during baseline recovery');
+        }
+      };
+      const state = await deps.read(sessionId, 'apply');
+      assertCurrent();
+      if (!state) return false;
+      const baseline = parseScheduledModelBaseline(state.scheduledModelBaseline);
+      if (state.scheduledModelBaseline !== expectedBaseline || !baseline || baseline.pendingBotProfileVersion) {
+        throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery');
+      }
+      const route = configuredRoute(state, '');
+      if (!route || !deps.onSelectionAccepted) return false;
+      const key = JSON.stringify(state.chain);
+      // Even an equal route must pass validation and the runtime switch boundary.
+      // Unconditional onApplied cleanup would race a newer durable recovery record.
+      await deps.apply(sessionId, route, state.current, { preserveScheduledBaseline: true });
+      assertCurrent();
+      const latest = await deps.read(sessionId, 'apply');
+      assertCurrent();
+      if (!latest || latest.scheduledModelBaseline !== expectedBaseline || JSON.stringify(latest.chain) !== key) {
+        throw new ScheduledModelSelectionBusyError('Companion selection changed during baseline recovery');
+      }
+      if (latest.current.agentKind !== route.agentKind || latest.current.model !== route.model ||
+        (route.providerId !== null && latest.current.providerId !== route.providerId) ||
+        (latest.current.agentDeviceId ?? null) !== (route.agentDeviceId ?? null)) {
+        throw new ScheduledModelSelectionBusyError('Saved companion route did not become ready');
+      }
+      if (await deps.onSelectionAccepted(sessionId, expectedBaseline) === false) {
+        throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery cleanup');
+      }
+      assertCurrent();
+      configured.set(sessionId, key);
+      return true;
+    },
     /** Explicit saves invalidate fallback even before the first send. A newer
      * save during an in-flight switch is reread before this promise settles. */
     profileChanged(sessionId: string): Promise<void> {

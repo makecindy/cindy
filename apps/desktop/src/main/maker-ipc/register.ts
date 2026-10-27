@@ -8595,6 +8595,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     agent: AgentKind,
     model: string,
     providerId: string | null,
+    unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<ProviderView[]> {
     let views: ProviderView[] = [];
     const checked = await checkDeviceRoute(
@@ -8612,6 +8613,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const rejection = checked === 'unreachable' && isProviderShareAgentDeviceId(deviceId)
       ? 'REMOTE_AGENT_SHARE_UNAVAILABLE'
       : checked;
+    // Restoration can recover a removed source/model from the saved companion
+    // profile. Preserve transient offline/paused errors and their retry behavior.
+    if (unavailableCode && (rejection === 'not-offered' || rejection === 'REMOTE_AGENT_SHARE_REMOVED')) {
+      throwIpcError(unavailableCode, 'the saved model is no longer offered by its execution computer');
+    }
     log.warn('remote agent selection rejected', { agent, model, providerId, rejection });
     if (rejection.startsWith('REMOTE_AGENT_SHARE_')) {
       // 分享来的供应商：给出分享专属原因(device-link 控制端同样降级为 PRECONDITION_FAILED)。
@@ -8739,6 +8745,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     model: string,
     providerId: string | null,
     remoteHostId?: string | null,
+    unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<string | undefined> {
     if (agent === 'codex' && remoteHostId) {
       assertSshCodexModel(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders), model, providerId);
@@ -8747,7 +8754,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const verdict = await verdictForModelRoute(agent, model, providerId);
     if (verdict.kind === 'reject') {
       throwIpcError(
-        'INVALID_PARAMS',
+        verdict.reason === 'payment-required' ? 'INVALID_PARAMS' : unavailableCode ?? 'INVALID_PARAMS',
         describeModelRouteRejection(verdict.reason, model, providerId),
       );
     }
@@ -11376,9 +11383,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
     resolveSelection: createScheduledModelSelectionResolver({
-      readRemoteProviders: readUsableAgentDeviceProviders,
+      readRemoteProviders: (deviceId, agent, model, providerId) =>
+        readUsableAgentDeviceProviders(deviceId, agent, model, providerId, 'MODEL_SELECTION_UNAVAILABLE'),
       resolveLocalSelection: async (route) => {
-        const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId);
+        const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId, undefined, 'MODEL_SELECTION_UNAVAILABLE');
         return resolveScheduledModelSelectionLive({ ...route,
           providerId: reroute && shouldApplyExclusiveProviderRerouteLive(route.providerId)
             ? reroute : route.providerId,
@@ -11476,6 +11484,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isBusy: (sessionId) => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning() ||
       isUserPendingAgentSwitchIntent(agentSwitchPending.get(sessionId)),
     apply: async (sessionId, profile) => { await applyScheduledProfile(sessionId, profile); },
+    recoverUnavailableBaseline: (sessionId, expectedBaseline) =>
+      reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
   });
   const updateScheduledPreference = async (
     sessionId: string, patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] } | null,
