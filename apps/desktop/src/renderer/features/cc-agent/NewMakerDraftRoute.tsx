@@ -52,6 +52,7 @@ import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
+import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
@@ -193,6 +194,7 @@ import {
   isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  shouldPrefillDefaultNewTaskWorkingDir,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -736,6 +738,7 @@ export function NewMakerDraftRoute() {
     [location.state],
   );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const handledGenericDefaultLocationRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
   // Writable picker evidence is Main-owned and bound to the actual local task id.
@@ -2533,22 +2536,46 @@ export function NewMakerDraftRoute() {
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
+    const currentDraft = getDraft();
+    const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
+    const defaultDir =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
+      dialogueTargetRequest.deviceId === null
+        ? getDefaultNewTaskWorkingDir(dataOwnerId)
+        : null;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
-      !isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())
+      !sameDevice
     ) {
       patchCollab({ enabled: false });
       applyDraftTarget({
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
-        workingDir: null,
+        workingDir: defaultDir,
       });
+    } else if (
+      defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
+    ) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
     }
     navigate(`${location.pathname}${location.search}${location.hash}`, {
       replace: true,
       state: consumeNewMakerDialogueTargetRequest(location.state),
     });
-  }, [applyDraftTarget, dialogueTargetRequest, location, navigate]);
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location, navigate]);
+
+  // The sidebar's generic action has no target request when its source is not a task.
+  // Apply the local default once for that navigation; later manual "Dialogue" selections win.
+  useLayoutEffect(() => {
+    if (!dataOwnerId || dialogueTargetRequest) return;
+    const token = `${dataOwnerId}:${location.key}`;
+    if (handledGenericDefaultLocationRef.current === token) return;
+    handledGenericDefaultLocationRef.current = token;
+    const defaultDir = getDefaultNewTaskWorkingDir(dataOwnerId);
+    if (defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, getDraft())) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
+    }
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location.key, location.state]);
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。
