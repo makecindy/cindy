@@ -801,3 +801,12 @@ describe('mobileHome', () => {
     expect(revoked.emptyCopy).toContain('「MacBook」');
   });
 });
+
+// #7402, unit: real home grouping; old fixtures cover global-only extraction.
+it('keeps a dual-pinned task in both the global section and its own project', () => {
+  const both = session('both', { pinnedAt: '2026-10-27T00:00:00Z', projectPinnedAt: '2026-10-27T01:00:00Z' });
+  const globalOnly = session('global', { pinnedAt: '2026-10-27T00:00:00Z' });
+  const home = buildMobileHomePresentation({ sessions: [both, globalOnly] });
+  expect(home.pinned.map(i => i.session.id)).toEqual(['both', 'global']);
+  expect(home.projects.flatMap(p => p.sessions.map(i => i.session.id))).toEqual(['both']);
+});

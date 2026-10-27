@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Alert } from 'react-native';
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { loadSharedSessionScheduleIndex, resetScheduleIndexThrottleForTesting } from '@/session/scheduleIndex';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
@@ -188,4 +189,27 @@ describe('task list mark-read', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('host', 'notification:clear-session-attention', ['task', 'explicit'], { preSend: expect.any(Function) });
     expect(Alert.alert).toHaveBeenCalledExactlyOnceWith('devices.list.alert.actionFailed', 'schedule unavailable');
   });
+});
+
+// #7402, unit: use the real metadata writer/store/queue. Mark-read tests never
+// write pin fields; one globally pinned task distinguishes field rollback.
+it('writes and rolls back project pins independently of the global pin', async () => {
+  const row = { ...task, status: 'active', workspaceKind: 'project', workingDir: '/repo',
+    title: 'Task', pinnedAt: '2026-01-01T00:00:00Z', projectPinnedAt: null } as RemoteSession;
+  remoteSessionStore.setDeviceSessions('old-shard', 'Computer', [row]);
+  vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _device, _status, mutate) => mutate());
+  mocks.invoke.mockImplementation(async (_device: string, _channel: string, args: unknown[]) =>
+    ({ ...row, ...(args[1] as object) }));
+  mount('host');
+  const at = '2026-10-27T00:00:00Z';
+  await act(async () => { await actions.patchSession(row, { projectPinnedAt: at }); });
+  expect(remoteSessionStore.getSessions().find(s => s.id === row.id))
+    .toMatchObject({ projectPinnedAt: at, pinnedAt: row.pinnedAt });
+  const pinned = remoteSessionStore.getSessions().find(s => s.id === row.id)!;
+  mocks.invoke.mockRejectedValue(new Error('PERMISSION_DENIED'));
+  await act(async () => {
+    await expect(actions.patchSession(pinned, { projectPinnedAt: null })).rejects.toThrow('PERMISSION_DENIED');
+  });
+  expect(remoteSessionStore.getSessions().find(s => s.id === row.id))
+    .toMatchObject({ projectPinnedAt: at, pinnedAt: row.pinnedAt });
 });

@@ -25,6 +25,7 @@ import {
   swipeActionPatch,
   writeGuardFields,
   type SessionSwipeAction,
+  type SessionOptionAction,
 } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
@@ -115,7 +116,7 @@ export function useSessionListActions(options?: {
         // 只有确认后才取代全部元数据写，并真正移除详情/清理消息。
         write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
       }
-      if (patch.status !== undefined || patch.pinnedAt !== undefined) await updateList(applyOptimistic);
+      if (patch.status !== undefined || patch.pinnedAt !== undefined || patch.projectPinnedAt !== undefined) await updateList(applyOptimistic);
       else applyOptimistic();
       if (!applied) return;
       const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
@@ -165,7 +166,7 @@ export function useSessionListActions(options?: {
             remoteSessionStore.requestReseed(shardId);
           };
           // 置顶失败回滚同样会让行移位。
-          if (fields.includes('pinnedAt') && animateListChange) animateListChange(rollback);
+          if ((fields.includes('pinnedAt') || fields.includes('projectPinnedAt')) && animateListChange) animateListChange(rollback);
           else rollback();
         }
       } else {
@@ -192,7 +193,12 @@ export function useSessionListActions(options?: {
     });
   }, [invoke, patchSession, preferredRpcDeviceId, swipeRegistry, t]);
 
-  const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionSwipeAction) => {
+  const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionOptionAction) => {
+    if (action === 'pin-project' || action === 'unpin-project') {
+      void patchSession(session, { projectPinnedAt: action === 'pin-project' ? new Date().toISOString() : null })
+        .catch((err: unknown) => Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err)));
+      return;
+    }
     if (action === 'delete') {
       const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()
         || t('devices.list.untitled');
@@ -208,9 +214,9 @@ export function useSessionListActions(options?: {
       return;
     }
     runSwipeAction(session, action);
-  }, [runSwipeAction, t]);
+  }, [patchSession, runSwipeAction, t]);
 
-  const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
+  const handleSessionSheetAction = useCallback((action: SessionOptionAction) => {
     const session = actionSheetSession;
     setActionSheetSession(null);
     if (!session) return;

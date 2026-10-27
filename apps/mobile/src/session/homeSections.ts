@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n';
-import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
+import { compareSessionListStrings, sortProjectPinnedSessions } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
@@ -211,7 +211,7 @@ export function buildMixedHomeRows(
     if (project.kind === 'cindy-make' && options.groupCindyMake !== false) {
       return [{ key: project.key, kind: 'cindy-make', project: withSortedProjectSessions(project, options) }];
     }
-    return sortSessionItems(project.sessions, options).map((item) => ({
+    return sortSessionItems(project.sessions.filter(item => !item.session.pinnedAt), options).map((item) => ({
       item,
       key: `project:${project.key}:${item.automationGroup?.key ?? item.session.id}`,
       kind: 'session' as const,
@@ -247,7 +247,10 @@ function withSortedProjectSessions(
   project: MobileHomeProjectGroup,
   options: HomeSectionOptions,
 ): MobileHomeProjectGroup {
-  const sessions = sortSessionItems(project.sessions, options);
+  const ordinarySorted = sortSessionItems(project.sessions, options);
+  const byId = new Map(ordinarySorted.map(item => [item.session.id, item]));
+  const sessions = sortProjectPinnedSessions(ordinarySorted.map(item => item.session))
+    .map(session => byId.get(session.id)!);
   return {
     ...project,
     latestActivityAt: latestActivityAt(sessions) || project.latestActivityAt,

@@ -10018,6 +10018,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             )}
             onToggleExtraDirBrowser={toggleExtraDirBrowser}
             onTogglePinned={() => patchSessionMeta({ pinnedAt: currentSession.pinnedAt ? null : new Date().toISOString() })}
+            onToggleProjectPinned={() => patchSessionMeta({ projectPinnedAt: currentSession.projectPinnedAt ? null : new Date().toISOString() })}
             session={currentSession}
             visible={settingsOpen}
           />

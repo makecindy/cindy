@@ -87,6 +87,22 @@ function message(sessionId: string, id: string, role: RemoteMessage['role'], con
 }
 
 describe('sessionList', () => {
+  it('keeps dual pins in both sections and orders project pins before ordinary tasks', () => {
+    const sessions = [
+      session('ordinary', { updatedAt: '2026-01-03T00:00:00Z' }),
+      session('older-pin', { projectPinnedAt: '2026-01-01T00:00:00Z' }),
+      session('dual-pin', { pinnedAt: '2026-01-01T00:00:00Z', projectPinnedAt: '2026-01-02T00:00:00Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, Date.now());
+    expect(sections.map(section => [section.key, section.data.map(item => item.session.id)])).toEqual([
+      ['pinned', ['dual-pin']],
+      ['project:/repo/app', ['dual-pin', 'older-pin', 'ordinary']],
+    ]);
+    const history = buildRemoteSessionSections(sessions, Date.now(), { projectPins: false });
+    expect(history.find(section => section.key === 'project:/repo/app')?.data.map(item => item.session.id))
+      .toEqual(['ordinary', 'older-pin']);
+  });
+
   it('groups pinned, dialogue, and project sessions without duplicating pinned rows', () => {
     const sections = buildRemoteSessionSections([
       session('project-old', { updatedAt: '2026-01-01T00:01:00.000Z' }),
@@ -976,6 +992,18 @@ describe('sessionList', () => {
 });
 
 describe('getRemoteSessionPreviewCollapse', () => {
+  // #7402, unit: real project preview; pins do not consume ordinary slots.
+  it('shows two project pins plus the ordinary preview budget', () => {
+    const now = Date.parse('2026-10-27T00:00:00Z');
+    const items = Array.from({ length: 8 }, (_, index) => toRemoteSessionListItem(
+      session(String(index), { updatedAt: '2026-01-01T00:00:00Z',
+        projectPinnedAt: index < 2 ? '2026-10-26T00:00:00Z' : null }), now,
+    ));
+    const view = getRemoteSessionPreviewCollapse(items, { limit: 5, nowMs: now, projectScope: true });
+    expect(view.visibleItems.map(i => i.session.id)).toEqual(['0', '1', '2', '3', '4', '5', '6']);
+    expect(view.hiddenCount).toBe(1);
+  });
+
   const nowMs = Date.parse('2026-01-10T12:00:00.000Z');
   // 超出 24h 豁免窗口的旧活动时间与窗口内的近期活动时间。
   const staleIso = '2026-01-05T00:00:00.000Z';

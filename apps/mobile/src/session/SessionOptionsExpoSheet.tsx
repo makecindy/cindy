@@ -21,12 +21,12 @@ import { NativeTagSwatch, NativeTaskTagsExpanded } from './TaskTagsNative';
 import { TAG_SWATCH, taskTagsPageTitle, useTaskTagsNativePage } from './taskTagsNativePage';
 import { SessionActionSheet } from './SessionActionSheet';
 import type { RemoteSession } from './types';
-import { buildSessionActionMenu, type SessionSwipeAction } from './swipeRowRegistry';
+import { buildSessionActionMenu, type SessionOptionAction } from './swipeRowRegistry';
 import { useTheme, iconSize } from '@/theme';
 
 type SessionOptionsProps = {
   session?: RemoteSession | null;
-  onAction(action: SessionSwipeAction): void;
+  onAction(action: SessionOptionAction): void;
   onClose(): void;
   onClosed?(): void;
   pinnedAt: string | null | undefined;
@@ -139,7 +139,7 @@ function SessionOptionsExpoSheet({
   useEffect(() => {
     if (!visible) setTagsExpanded(false);
   }, [visible]);
-  const menu = buildSessionActionMenu(pinnedAt, status);
+  const menu = buildSessionActionMenu(pinnedAt, status, session);
   const regular = menu.filter(
     (item) => !item.destructive && item.action !== 'archive' && item.action !== 'restore',
   );

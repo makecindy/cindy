@@ -212,3 +212,11 @@ describe('sessionMenu ai rename failure text', () => {
     expect(aiRenameFailureText(new Error('boom'))).toBe('自动起名失败，请重试。');
   });
 });
+
+// #7402, unit: detail-sheet model must expose an independent project action.
+it('distinguishes global and project pin actions without enabling writes for read-only tasks', () => {
+  const actions = buildSessionMenuActions({ archived: false, pinned: true, canProjectPin: true,
+    projectPinned: false, busy: false, writeDisabled: true });
+  expect(actions.find(a => a.id === 'pin')?.label).toBe('取消全局置顶');
+  expect(actions.find(a => a.id === 'projectPin')).toMatchObject({ label: '在项目内置顶', disabled: true });
+});

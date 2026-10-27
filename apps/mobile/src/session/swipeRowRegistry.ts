@@ -5,6 +5,7 @@
  *    「置顶态 → 动作与文案」「选项菜单模型」「动作 → RPC 补丁」的确定性映射,
  *    补丁生成直接转发共享层 mobileSessionBulkPatch,不自己拼字段。
  */
+import type { RemoteSession } from './types';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import {
@@ -14,6 +15,11 @@ import {
 
 /** swipe / 选项菜单可触发的全部动作。rename 无补丁形态(走重命名弹窗),单独排除。 */
 export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename';
+export type SessionOptionAction = SessionSwipeAction | 'pin-project' | 'unpin-project';
+
+export function canPinInProject(session: RemoteSession | null | undefined): boolean {
+  return !!session && session.projectPinnedAt !== undefined && session.workspaceKind !== 'dialogue' && !!session.workingDir;
+}
 
 export interface SwipeRowRegistry {
   /**
@@ -265,7 +271,7 @@ export function createPendingWriteTracker(): PendingWriteTracker {
  * patch-meta 可写的全部元数据字段(与被控端 REMOTE_EDITABLE_META 同集)。
  * 消费方:writeGuardFields 的移行写(delete/archive)全字段取代。
  */
-export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt'] as const;
+export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt', 'projectPinnedAt'] as const;
 
 /**
  * 写序登记字段:delete / archive 都是**移行**写——行从列表消失后,同会话 pending 的
@@ -322,7 +328,7 @@ export function pinToggleAction(
 }
 
 export interface SessionActionMenuItem {
-  action: SessionSwipeAction;
+  action: SessionOptionAction;
   label: string;
   /** 删除项标红 + 触发系统 Alert 二次确认。 */
   destructive?: boolean;
@@ -341,12 +347,20 @@ export function statusToggleAction(
 export function buildSessionActionMenu(
   pinnedAt: string | null | undefined,
   status?: string | null,
+  session?: RemoteSession | null,
 ): SessionActionMenuItem[] {
   const pinToggle = pinToggleAction(pinnedAt);
   const statusToggle = statusToggleAction(status);
+  const canProjectPin = canPinInProject(session) && status !== 'archived';
+  const projectActions: SessionActionMenuItem[] = canProjectPin ? [{
+    action: session?.projectPinnedAt ? 'unpin-project' : 'pin-project',
+    label: i18n.t(session?.projectPinnedAt ? 'session.menu.unpinInProject' : 'session.menu.pinInProject'),
+  }] : [];
   return [
     { action: 'rename', label: i18n.t('session.menu.renameAction') },
-    { action: pinToggle.action, label: pinToggle.label },
+    { action: pinToggle.action, label: canProjectPin
+      ? i18n.t(pinnedAt ? 'session.menu.unpinGlobally' : 'session.menu.pinGlobally') : pinToggle.label },
+    ...projectActions,
     { action: statusToggle.action, label: statusToggle.label },
     { action: 'delete', label: i18n.t('session.menu.deleteConversation'), destructive: true },
   ];
