@@ -72,18 +72,27 @@ afterEach(async () => {
 
 describe('projectGitBootstrap', () => {
   // Windows strips trailing spaces in ordinary directory names; this identity fixture is POSIX-only.
-  it.skipIf(process.platform === 'win32')('initializes only the exact whitespace-suffixed project', async () => {
-    const parent = await makeTempDir();
-    const plain = path.join(parent, 'project');
-    const exact = path.join(parent, 'project ');
-    await fs.mkdir(plain);
-    await fs.mkdir(exact);
-    const request = { workingDir: exact, workspaceKind: 'project', autoSnapshotEnabled: true };
-    expect(await ensureProjectGitInitialized(request)).toMatchObject({ status: 'initialized', repoRoot: exact });
-    expect(await isGitRepo(plain)).toBe(false);
-    expect(await isGitRepo(exact)).toBe(true);
-    expect(await ensureProjectGitInitialized(request)).toMatchObject({ status: 'already-git', repoRoot: exact });
-  });
+  it.skipIf(process.platform === 'win32')(
+    'initializes only the exact whitespace-suffixed project',
+    async () => {
+      const parent = await makeTempDir();
+      const plain = path.join(parent, 'project');
+      const exact = path.join(parent, 'project ');
+      await fs.mkdir(plain);
+      await fs.mkdir(exact);
+      const request = { workingDir: exact, workspaceKind: 'project', autoSnapshotEnabled: true };
+      expect(await ensureProjectGitInitialized(request)).toMatchObject({
+        status: 'initialized',
+        repoRoot: exact,
+      });
+      expect(await isGitRepo(plain)).toBe(false);
+      expect(await isGitRepo(exact)).toBe(true);
+      expect(await ensureProjectGitInitialized(request)).toMatchObject({
+        status: 'already-git',
+        repoRoot: exact,
+      });
+    },
+  );
   it('only considers local project workspaces bootstrap candidates', () => {
     const workingDir = path.resolve('project');
     expect(
@@ -227,6 +236,74 @@ describe('projectGitBootstrap', () => {
 
     expect(result).toMatchObject({ status: 'skipped', reason: 'non-empty-project' });
     expect(await isGitRepo(dir)).toBe(false);
+  });
+
+  it('creates the first savepoint for a non-empty project only after explicit consent', async () => {
+    const dir = await makeTempDir();
+    await fs.writeFile(path.join(dir, 'index.html'), '<!doctype html>\n<html></html>\n');
+    const confirmNonEmptyProject = vi.fn(async () => true);
+
+    const result = await ensureProjectGitInitialized({
+      workingDir: dir,
+      workspaceKind: 'project',
+      autoInitProjectGit: true,
+      confirmNonEmptyProject,
+    });
+
+    expect(confirmNonEmptyProject).toHaveBeenCalledOnce();
+    expect(confirmNonEmptyProject).toHaveBeenCalledWith(dir);
+    expect(result.status).toBe('initialized');
+    expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(await headChangedFiles(dir)).toEqual(['index.html']);
+    expect(await fs.readFile(path.join(dir, 'index.html'), 'utf8')).toBe(
+      '<!doctype html>\n<html></html>\n',
+    );
+    expect(
+      await ensureProjectGitInitialized({
+        workingDir: dir,
+        workspaceKind: 'project',
+        autoInitProjectGit: true,
+        confirmNonEmptyProject,
+      }),
+    ).toMatchObject({ status: 'already-git' });
+    expect(confirmNonEmptyProject).toHaveBeenCalledOnce();
+  });
+
+  it('creates a recovery point even without a configured Git identity', async () => {
+    const dir = await makeTempDir();
+    await fs.writeFile(path.join(dir, 'index.html'), 'original\n');
+    vi.stubEnv('GIT_AUTHOR_NAME', undefined);
+    vi.stubEnv('GIT_AUTHOR_EMAIL', undefined);
+    vi.stubEnv('GIT_COMMITTER_NAME', undefined);
+    vi.stubEnv('GIT_COMMITTER_EMAIL', undefined);
+
+    const result = await ensureProjectGitInitialized({
+      workingDir: dir,
+      workspaceKind: 'project',
+      autoInitProjectGit: true,
+      confirmNonEmptyProject: async () => true,
+    });
+
+    expect(result.status).toBe('initialized');
+    expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(await headChangedFiles(dir)).toEqual(['index.html']);
+  });
+
+  it('does not initialize a non-empty project when consent is declined', async () => {
+    const dir = await makeTempDir();
+    await fs.writeFile(path.join(dir, 'index.html'), 'original\n');
+    const confirmNonEmptyProject = vi.fn(async () => false);
+
+    const result = await ensureProjectGitInitialized({
+      workingDir: dir,
+      workspaceKind: 'project',
+      autoInitProjectGit: true,
+      confirmNonEmptyProject,
+    });
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'non-empty-project' });
+    expect(await isGitRepo(dir)).toBe(false);
+    expect(await fs.readFile(path.join(dir, 'index.html'), 'utf8')).toBe('original\n');
   });
 
   it('does not reinitialize folders that are already Git repositories', async () => {
