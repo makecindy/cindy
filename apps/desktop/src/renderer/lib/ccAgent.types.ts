@@ -367,6 +367,8 @@ export interface Session {
   runtimeBaseline?: SessionRuntimeProfileProjection;
   runtimeEffective?: SessionRuntimeProfileProjection;
   runtimePending?: SessionRuntimePendingProjection | null;
+  /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
+  runtimeBaselineRecoveryPending?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。

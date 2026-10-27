@@ -56,6 +56,7 @@ export function projectSessionRuntimeControl(
     runtimeBaseline: baseline,
     runtimeEffective: effective,
     runtimePending: control.pending,
+    runtimeBaselineRecoveryPending: false,
   };
 }
 

@@ -226,7 +226,7 @@ import {
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
-import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -6751,7 +6751,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       projectSessionRuntimeControl(sessionId, baseline) as Record<string, unknown>,
     );
   };
-  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelSelection) => {
+  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline) => {
     const baseline: ScheduledModelSelection = {
       agentKind: saved.agentKind, model: saved.model, providerId: saved.providerId,
       effort: saved.effort, fastMode: saved.fastMode,
@@ -6766,6 +6766,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       runtimeBaseline: baseline,
       runtimeEffective: baseline,
       runtimePending: null,
+      runtimeBaselineRecoveryPending: !saved.pendingBotProfileVersion,
     };
   };
   setSessionRuntimeProjector((session) => {

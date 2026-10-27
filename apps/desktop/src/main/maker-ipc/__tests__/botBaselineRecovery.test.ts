@@ -5,6 +5,7 @@ import { createIpcError } from '../../../shared/ipc-errors';
 import { checkDeviceRoute } from '../../remote-agent/controller/deviceRouteCheck';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -143,9 +144,10 @@ describe('automatic companion baseline recovery', () => {
 // preferences. Ordinary picker and cross-device IPC error codes stay unchanged.
 const register = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 function registeredFunction(name: string, deps: Record<string, unknown>) {
-  let declaration: ts.FunctionDeclaration | undefined;
+  let declaration: ts.FunctionDeclaration | ts.ArrowFunction | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
+    if (ts.isVariableDeclaration(node) && node.name.getText(register) === name && node.initializer && ts.isArrowFunction(node.initializer)) declaration = node.initializer;
     ts.forEachChild(node, visit);
   };
   visit(register);
@@ -153,6 +155,18 @@ function registeredFunction(name: string, deps: Record<string, unknown>) {
   const js = ts.transpileModule('return (' + declaration.getText(register) + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(deps), js)(...Object.values(deps));
 }
+it('offers legacy baseline recovery on reads/pushes and explicitly revokes it after cleanup', () => {
+  const project = registeredFunction('projectScheduledPreferences', {
+    projectSessionRuntimeControl, makerToDbAgentKind: (kind: string) => kind,
+  });
+  const baseline = { agentKind: 'pi' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
+  const legacy = project('projection-test', baseline);
+  expect(legacy.runtimeBaselineRecoveryPending).toBe(true);
+  expect(legacy.runtimeEffective).toEqual(baseline); // Does not assert a different/available source.
+  expect(project('projection-test', { ...baseline, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
+  const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', { ...baseline, providerId: 'saved' }) };
+  expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
+});
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };
   it.each(['explicit-source-unavailable', 'explicit-source-disabled', 'model-retired', 'payment-required'])('%s retains ordinary semantics and marks only recoverable restoration failures', async (reason) => {
