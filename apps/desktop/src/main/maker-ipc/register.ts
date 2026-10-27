@@ -15493,12 +15493,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     await assertTaskActionCurrent();
+    // 崩溃恢复暂停的解挂(#7209):Bot 私聊投递是外部 Bot 的合法新输入,必须能推进
+    // 被恢复暂停卡住的队列。否则该会话跨重启永久假忙——队列不出队 →
+    // shouldQueueNewTurn 恒为真 → 后续所有投递都被判 busy,日志持续打
+    // 「send_to_session queued while target busy」(#7209 实测 126 次)。
+    //
+    // 放行范围只有 Bot 私聊车道:该 clientId 由 Bot 私聊投递链路生成(发送方已过
+    // 授权校验),外部无法伪造;其它来源(scheduler / orca / 插件派活等)仍按
+    // 「自动来源不代表用户表态」不放行,不得借此把用户恢复出来的草稿自动发出去。
+    // 只放行崩溃恢复这一种暂停:「重启伙伴」的排队请求保留但不自动重放,外部投递
+    // 不得放行它(docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。
+    const resumeCrashRestoredPausedQueue = params.clientId.startsWith('bot-dm:');
     if (params.authorizationGuard) {
       await commitBotAuthorizationInput(params.authorizationGuard, () => {
-        inputCoordinator.enqueue(params.targetSessionId, queued);
+        inputCoordinator.enqueue(params.targetSessionId, queued, {
+          resumeCrashRestoredPausedQueue,
+        });
       });
     } else {
-      inputCoordinator.enqueue(params.targetSessionId, queued);
+      inputCoordinator.enqueue(params.targetSessionId, queued, {
+        resumeCrashRestoredPausedQueue,
+      });
     }
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
