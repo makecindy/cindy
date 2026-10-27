@@ -60,6 +60,7 @@
 | 伙伴     | 发现伙伴、伙伴间消息                                       | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
 | 伙伴     | 资料、能力、待办、后台任务                                 | 有   | 无               |
+| 伙伴     | 显式重新接受已保存模型，恢复旧版遗留的自动模型记录 | 有（`update_teammate_profile` 显式提交完整 `modelChain`，即使值未变） | 无（远程设置 IPC 可按版本接受，不等于跨电脑 Agent 工具） |
 | 伙伴     | 发现与选择 Codex Apps 连接器（继承默认保留，显式 MCP 白名单可收窄） | 有（能力工具） | 无（SSH Codex 不提供） |
 | 伙伴     | 按已证实归属搜索跨渠道聊天、按最近活动列出旧任务           | 有   | 有（历史查询，两端需支持筛选参数） |
 | 伙伴     | 查看自己的本机 IM 连接分配与状态                         | 有   | 无               |
@@ -155,3 +156,7 @@ Host 不因当前输入缺少主人标记再追加行动同意判定。只认运
 当前调用的委托、权限撤销和延迟交付检查继续保留；不恢复过期授权，不自动重发。
 实现见 `maker-ipc/taskActionAuthorization.ts`、`taskActionHost.ts` 与
 `mcp-integrations/codexHttpBridge.ts`；回归见各自授权及 HTTP 桥接测试。
+
+伙伴例行任务（2026-10-26）：桌面与 `routine_save` 共用每条规则的 `modelOverride`，可选引擎、来源、型号、执行位置、推理强度与 Fast；null 恢复跟随伙伴，省略保留选择。执行记录返回独立 `sessionId`。内置跟进／每天查待办也可选模型，指令与触发条件仍由宿主维护。`sessionMode`（`persistent` 复用同一任务／`fresh` 每次触发新建任务）同样经桌面与 `routine_save` 设置，省略保留原值。跨电脑桌面设置通过 `routines.saveWithModel` 与 `routines.saveWithSessionMode` 能力声明协商；手机仍按现有合同不提供例行任务管理。
+
+执行任务的模型可用 `cindy_helper` 的 cindy 类 `report_task_delivery` 报告本轮是否新交付最终结果；只限当前任务执行者，子 Agent 不可代报。三个 Harness 共用此入口；它不结束任务或授予操作权限。跟进通知门控见 `cindy-bots-runtime.md` §6.3。

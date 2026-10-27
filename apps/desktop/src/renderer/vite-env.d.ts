@@ -1665,6 +1665,7 @@ interface ElectronAPI {
   pluginMarket: {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
@@ -2120,6 +2121,8 @@ interface ElectronAPI {
   };
 
   agentIsland: {
+    setCompanionChats: (snapshot: import('../shared/agentIsland').AgentIslandCompanionChatsInput) => Promise<{ ok: true }>;
+    onCompanionChatRead: (cb: (chat: import('../shared/agentIsland').AgentIslandCompanionChatRead, stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     setVisibleSession: (sessionId: string | string[] | null) => Promise<{ ok: true }>;
     setEnabled: (enabled: boolean) => Promise<{ ok: true }>;
     consumeEntryAlert: (sessionId: string, islandEntryId: string) => Promise<{ ok: true; consumed: boolean }>;
@@ -2300,6 +2303,7 @@ interface ElectronAPI {
 
   // ── Discord Bot (Settings → IM Bot tab) ──
   discordBot: {
+    reconnect: () => Promise<{ status: DiscordBotTransportStatus; ownerUserId: string | null }>;
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
@@ -3069,7 +3073,8 @@ interface ElectronAPI {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' },
+        | { type: 'plugin'; pluginId: string }
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
 
@@ -3090,7 +3095,8 @@ interface ElectronAPI {
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' }
+    | { type: 'plugin'; pluginId: string }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
     | null
   >;
 
@@ -4000,8 +4006,10 @@ interface ElectronAPI {
   }>;
   /** 用户主动重启,让 beta 通道切换在下次冷启动前生效。 */
   relaunchForChannelChange: () => Promise<void>;
-  /** 用户确认后重启，下一次启动只更新所确认的受管 Harness（Pi 由内核管理单独处理）。 */
-  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex') => Promise<{ accepted: true }>;
+  /** 下载并校验指定版本；完成前不重启、不切换当前引擎。 */
+  prepareHarnessUpdate: (kind: 'claude-code' | 'codex', version: string) => Promise<{ ready: true }>;
+  /** 已准备的目标只消费缓存；省略版本保留旧入口的指定引擎修复（Pi 单独管理）。 */
+  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex', preparedVersion?: string) => Promise<{ accepted: true }>;
   /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
   probeBetaChannel: () => Promise<{ available: boolean }>;
   onUpdateChannelSettings: (
@@ -4416,7 +4424,7 @@ interface ElectronAPI {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
-  worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncResult>;
+  worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -4789,7 +4797,7 @@ interface ElectronAPI {
       | {
           ready: false;
           error: {
-            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED';
+            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
             message: string;
           };
         }
@@ -5567,6 +5575,8 @@ interface ElectronAPI {
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
+    chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
+    botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (
@@ -5739,6 +5749,13 @@ interface ElectronAPI {
     testProviderConnection: (
       input: import('../shared/providerConnectionTest').ProviderConnectionTestRequest,
     ) => Promise<import('../shared/providerConnectionTest').ProviderConnectionTestResult>;
+    /** 供应商账户余额查询（API Key 计费连接的余额卡，查询型结构化结果，快照不含密钥材料）。 */
+    fetchProviderAccountUsage: (input: {
+      providerId: string;
+      forceRefresh?: boolean;
+    }) => Promise<
+      import('../shared/providerAccountUsage').ProviderAccountUsageResult
+    >;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     detectProvider?: (input: ({ requestId: string; cancel: true } | {
       requestId: string; agent: 'claude-code' | 'codex' | 'pi'; baseUrl: string;
@@ -5948,6 +5965,11 @@ interface ElectronAPI {
      */
     getModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+    ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
+    setModelCompaction: (
+      target: import('../shared/modelContextLimit').ModelContextLimitTarget,
+      pct: number | null,
+      owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
     /** 任务窗口档位表的权威边界（与 device-link 的 maker:get-context-window-bounds 同一 handler）。 */
     getSessionContextWindowBounds: (

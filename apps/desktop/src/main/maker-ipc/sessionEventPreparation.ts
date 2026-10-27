@@ -1,6 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
-import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
+import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -38,6 +38,7 @@ import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-erro
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  type SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
@@ -64,6 +65,7 @@ interface DismissedInteraction {
 }
 
 export interface PrepareSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn'>;
@@ -118,7 +120,7 @@ export interface PrepareSessionEventDeps {
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
     'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'getAcceptedInputProvenance' | 'isActiveTaskCoordination'
-  > | null;
+  > & Partial<Pick<AgentInputCoordinator, 'isActiveInputOwnerAuthored'>> | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
     doneAt: number,
@@ -181,6 +183,10 @@ export function prepareSessionEvent(
         text: t('settings.piPackages.failure.runtimeRetirementFailed'),
       },
     };
+  }
+  if (event.turnScope !== 'background'
+    && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
+    revealScheduledOutput(event.turnOrigin);
   }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
@@ -350,6 +356,11 @@ export function prepareSessionEvent(
         clearPending: typeof event.turnAttemptToken === 'number',
       });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
+      if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
+        deps.sessionListActivityTracker.start(session.id, event.sessionTurnGeneration === undefined
+          ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`);
+      }
       if (!wasInTurn && event.source === 'claude-code') {
         const startedProductTurn = deps.productTurnWallClockTracker.start(session.id);
         if (startedProductTurn) deps.productTurnUsageTargetTracker.clear(session.id);

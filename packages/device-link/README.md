@@ -1,15 +1,15 @@
 # @cindy/device-link — 远程控制协议与契约
 
-同账号跨设备远程控制的**传输/协议层**。当前消费者是 desktop(`apps/desktop`),既可作控制端也可作被控端。
+同账号跨设备远程控制的**传输/协议层**。当前消费者是 desktop(`apps/desktop`)与 mobile(`apps/mobile`);desktop 既可作控制端也可作被控端,mobile 是纯控制端。
 
-> **为什么有这份文档**:未来的**手机版 App = 纯控制端**(本地无 AI agent / 无会话 / 无 DB),完全经本协议连到桌面端 Cindy 驱动。手机版照着这份契约实现自己的客户端即可 —— 不需要本地 maker。本文件是「远程控制面」的 single source of truth;具体值以源码为准(见各节引用),改协议先读本文件的「兼容性」一节。
+> **为什么有这份文档**:**手机版 App = 纯控制端**(本地无 AI agent / 无会话 / 无 DB),完全经本协议连到桌面端 Cindy 驱动。手机版照着这份契约实现自己的客户端即可 —— 不需要本地 maker。本文件是「远程控制面」的 single source of truth;具体值以源码为准(见各节引用),改协议先读本文件的「兼容性」一节。
 
 本包**严格 host 无关**:WebSocket 实现、token、设备信息全部由 host 注入(见 `DeviceLinkClientOptions`,`src/client.ts`),不依赖 Electron / 渲染层。手机端注入自己的 WS + token 即可复用同一个 `DeviceLinkClient`,或用任意语言按本协议另写客户端。
 
 ## 角色与拓扑
 
 ```
-控制端(desktop / 未来手机) ─┐                        ┌─ 被控端(desktop,开了「允许被控」)
+控制端(desktop / mobile) ───┐                        ┌─ 被控端(desktop,开了「允许被控」)
                             ├─ server relay(哑中继)─┤
             另一控制端 ──────┘   apps/server/device-link └─ 另一被控端
 ```
@@ -20,7 +20,7 @@
 
 ## 连接生命周期(连接层帧)
 
-`src/client.ts` 的 `DeviceLinkClient` 状态机:`connect → hello 握手 → online`,断线指数退避重连(1s→30s),online 后每 20s `ping`,连续 2 周期无 `pong` 判僵死重连。
+`src/client.ts` 的 `DeviceLinkClient` 状态机:`connect → hello 握手 → online`,断线指数退避重连(1s→30s),online 后每 20s `ping`;默认至少连续 4 个心跳周期没有任何有效入站帧才判僵死重连(不只检查 `pong`)。
 
 | 帧 `kind` | 方向 | 说明 |
 |---|---|---|

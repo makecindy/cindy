@@ -13,12 +13,13 @@ const h = vi.hoisted(() => ({
   language: "en", focused: true,
   t: (key: string) => key, metadataVerified: true,
   resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '',
-  markRead: vi.fn(),
+  markRead: vi.fn(), forget: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
   auth: { user: { id: 'owner' }, accountGeneration: 1 },
   link: { openLink: vi.fn(), invoke: vi.fn(), connectionEpoch: 1, status: 'online', onRemoteResourceChanged: vi.fn(() => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
 }));
+vi.mock('@/session/useCachedCompanionSession', () => ({ useCachedCompanionSession: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t, i18n: { language: h.language } }) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
@@ -35,7 +36,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: String }));
 vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: h.get }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead, forgetRemoteResource: h.forget }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: h.store }));
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
@@ -126,17 +127,21 @@ describe('companion task visibility refresh', () => {
     expect(h.router.setParams).toHaveBeenCalledWith({ sessionId: 'task-2' });
     expect(h.markRead).not.toHaveBeenCalled();
   });
-  it.each([Object.assign(new Error('gone'), { code: 'NOT_FOUND' }), new Error('[NOT_FOUND] resource missing')])('leaves the cached task when the host rejects the resource', async (error) => {
+  // Persisted notification identities must not reopen a task after an explicit access rejection (unit).
+  it.each([Object.assign(new Error('gone'), { code: 'NOT_FOUND' }), new Error('[NOT_FOUND] resource missing'),
+    Object.assign(new Error('revoked'), { code: 'ACCESS_REVOKED' }), new Error('[PERMISSION_DENIED] resource revoked')])('leaves the cached task when the host rejects the resource', async (error) => {
     h.get.mockRejectedValue(error);
     await render();
     expect(h.router.replace).toHaveBeenCalledWith({ pathname: '/resources/[collectionId]/[resourceId]', params: {
       collectionId: 'teammates', resourceId: 'bot-1', resourceKind: 'bot', deviceId: 'mac', deviceName: 'My Mac',
     } });
+    expect(h.forget).toHaveBeenCalledWith('owner', 'bot-1');
   });
   it('retains recovery for a transient connection failure', async () => {
     h.get.mockRejectedValue(new Error('NOT_CONNECTED'));
     await render();
     expect(h.router.replace).not.toHaveBeenCalled();
+    expect(h.forget).not.toHaveBeenCalled();
   });
   it('ignores a visibility rejection belonging to the previous account', async () => {
     let reject!: (error: Error) => void;

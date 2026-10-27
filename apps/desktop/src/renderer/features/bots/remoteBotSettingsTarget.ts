@@ -355,9 +355,14 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
           ...(sentencePlayback !== undefined ? { sentencePlayback } : {}),
         }),
     },
+    routineModels: input.ops.has('routines.saveWithModel'),
+    routineSessionModes: input.ops.has('routines.saveWithSessionMode'),
     routines: {
       list: (id) => invokeBotSettings(deviceId, 'routines.list', id),
-      save: (id, routine, routineId) => invokeBotSettings(deviceId, 'routines.save', id, { input: routine, ...(routineId ? { id: routineId } : {}) }),
+      save: (id, routine, routineId) => invokeBotSettings(deviceId,
+        input.ops.has('routines.saveWithSessionMode') ? 'routines.saveWithSessionMode'
+          : input.ops.has('routines.saveWithModel') ? 'routines.saveWithModel' : 'routines.save',
+        id, { input: routine, ...(routineId ? { id: routineId } : {}) }),
       async remove(id, routineId) {
         await invokeBotSettings(deviceId, 'routines.remove', id, { id: routineId });
       },

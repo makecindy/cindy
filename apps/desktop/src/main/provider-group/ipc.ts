@@ -24,6 +24,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { broadcast, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { isProviderManagementRequest } from '../../shared/providerManagement.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { captureProviderShareGroupRecovery } from '../device-link/providerShareGuest.js';
 import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -41,6 +42,7 @@ import {
 } from './runtime.js';
 import { listProviderGroups, readProviderGroup, writeProviderGroup } from './store.js';
 import { invokeProviderManagement } from './managementClient.js';
+import { recoverProviderGroupViewShares } from './remoteClient.js';
 import { captureProviderManagementScope } from './managementScope.js';
 import { groupFastPolicyPending, syncGroupFastPolicy } from './fastPolicyRuntime.js';
 import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.js';
@@ -377,12 +379,15 @@ export function registerProviderGroupIpc(options: { reshare?: ProviderGroupIpcRe
     const command = parseProviderGroupCommand(raw);
     if (command.action === 'remote-manage') {
       const assertOwner = captureProviderManagementScope(deps.ownerKey);
+      const recoverShares = captureProviderShareGroupRecovery();
       const result = await invokeProviderManagement(remoteInvoke, command.deviceId, command.request, remoteBackgroundInvoke);
       assertOwner();
       if (command.request.action !== 'manage-group' || command.request.command.action === 'candidates') return result;
+      const remoteView = parseProviderGroupRemoteView(result, command.request.command.providerId);
+      recoverProviderGroupViewShares(remoteView, recoverShares);
       // 管理读取与保存后的组视图也按查看端直连能力投影，不能把组所在电脑看到的可用误当成本机可达。
       const view = await markMembersUnreachableHere(
-        parseProviderGroupRemoteView(result, command.request.command.providerId),
+        remoteView,
         deps.directory,
         deps.localDeviceId(),
       );

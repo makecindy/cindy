@@ -110,16 +110,80 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)");
       if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133]);
+      expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
+      expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+      expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
       expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
       expect(tableExists(db, 'plugin_usage_events')).toBe(true);
+      expect(columnNames(db, 'plugin_usage_events')).toContain('entry_kind');
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
       expect(tableExists(db, 'orca_remote_opens')).toBe(true);
       if (shape !== 'missing') {
         expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
         expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
+      }
+    } finally { cleanup(); }
+  });
+  it('keeps existing tool usage when upgrading the invocation ledger', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)');
+      db.exec(readFileSync(path.join(drizzleDir(), '0128_demonic_odin.sql'), 'utf-8'));
+      db.prepare('INSERT INTO plugin_usage_subjects (id,source_kind,ghost_id,display_name,recording_started_at) VALUES (?,?,?,?,?)')
+        .run('subject', 'manual', 'plugin', 'Plugin', 100);
+      db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')
+        .run('legacy-tool', 'subject', 0, 100, 'run');
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 131 });
+      expect(db.prepare('SELECT call_id,subject_id,occurred_at,entry_kind FROM plugin_usage_events').all()).toEqual([
+        { call_id: 'legacy-tool', subject_id: 'subject', occurred_at: 100, entry_kind: 'tool' },
+      ]);
+    } finally { cleanup(); }
+  });
+  it('rolls back migration 131 on failure and safely retries from schema 130', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      const tempDrizzle = createTempDrizzleDir();
+      try {
+        copyFileSync(
+          path.join(drizzleDir(), '0131_amused_puff_adder.sql'),
+          path.join(tempDrizzle.dir, '0131_amused_puff_adder.sql'),
+        );
+        db.exec(`
+          CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          INSERT INTO migration_meta (key, value) VALUES ('schema_version', '130');
+          CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+          INSERT INTO migration_history VALUES (130, '0130_parallel_devos.sql', 'fixture-hash', 1);
+          CREATE TABLE sessions (id TEXT PRIMARY KEY);
+          INSERT INTO sessions (id) VALUES ('existing-session');
+          CREATE TRIGGER fail_schema_version_131
+          BEFORE UPDATE ON migration_meta
+          WHEN NEW.key = 'schema_version' AND NEW.value = '131'
+          BEGIN
+            SELECT RAISE(ABORT, 'injected schema version failure');
+          END;
+        `);
+
+        expect(() => runMigrationReplay(db, { drizzleDir: tempDrizzle.dir })).toThrow(
+          'injected schema version failure',
+        );
+        expect(columnNames(db, 'sessions')).not.toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('130');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(0);
+
+        db.exec('DROP TRIGGER fail_schema_version_131');
+        const retry = runMigrationReplay(db, { drizzleDir: tempDrizzle.dir });
+
+        expect(retry.applied.map((migration) => migration.seq)).toEqual([131]);
+        expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('131');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(1);
+        expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'existing-session' }]);
+      } finally {
+        tempDrizzle.cleanup();
       }
     } finally { cleanup(); }
   });

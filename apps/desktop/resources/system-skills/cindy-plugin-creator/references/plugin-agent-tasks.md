@@ -220,6 +220,19 @@ const r = await cindy.agent.requestSchedule({
 - 所有插件的两种发送入口共用 40 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
 - 目标只包含本机可见、可用的项目、普通任务或有唯一 canonical 对话的活跃伙伴；不提供 Mobile/device-link 透传。投递仍受当前插件启用、批准、账号和目标权限约束；插件内容不构成新真人授权。
 
+调用统计由 Host 统一确认，不提供插件自报次数或定义计次规则的接口。独立的 `tasks.send` / `targets.send`
+在输入被 Host 接受时记录一次；空任务创建、读取、附件处理、同键重试不额外计数。接受表示已派发或入队，
+不是 Agent 完成工作；接受后取消不撤销已发生的记录。独立的 Host→插件工具派发继续按原规则记录。
+
+`tasks.capabilities().invocationContext === true` 时，两种 send 均可附加 `invocationId`，
+用于关联同一次工具调用内的宿主输入：将当前 `tool-call` 消息的 `callId` 原样转传。
+Host 只接受同账号、同安装/批准及运行代次、尚未过期且已确认的身份，关联最长 10 分钟；
+它不替代任何能力声明或执行授权。不传时视为独立输入，不按时间接近猜父子；存量插件无需更新也能调用，
+但无法自动合并未关联的工具与输入。重试必须保留原关联及其它参数；错误或过期身份返回 `INVALID_INVOCATION`，
+不要换键重发。关联不是插件生成的业务 ID，也不是设置计数增量的接口。
+
+上述统计不覆盖插件自绘界面或自带原生程序的纯本地行为，也不要求插件迁移交互或重新授权。
+
 原有 `cindy.tasks` 的归属限制不变。先调用 `capabilities()` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
 `models`、`create`、`get`、`setModel`、`list`、`send`、`getRun`、`listRuns`、`readMessages`、`cancel`、`setHidden`。
 可对自有任务调用 `startTeam({taskId})` 启用 Orca 主任务，并用 `getTeam({taskId})` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。

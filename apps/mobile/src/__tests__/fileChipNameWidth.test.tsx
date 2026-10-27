@@ -129,7 +129,7 @@ async function renderServerGroup(align: 'left' | 'right', name: string) {
   root = createRoot(host);
   await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
     messageId: 'message-1', align, attachments: [attachment],
-    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(),
+    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(async () => attachment),
   })));
   return host.querySelector('[data-testid^="message.filePreviewButton"]')!;
 }

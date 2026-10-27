@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   stub: (_name: string) => () => null,
   room: { status: 'ready', messages: [] as unknown[], before: null, loadingOlder: false, reload: vi.fn(), loadOlder: vi.fn(), media: vi.fn() },
-  strips: [] as Array<{ messageId: string; align: string; names: string[]; resolve: unknown }>,
+  strips: [] as Array<{ messageId: string; align: string; names: string[]; resolve: unknown; previewServerImages: boolean }>,
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -51,7 +51,7 @@ vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammat
 vi.mock('@/session/BotGroupMessageAttachments', async () => {
   const { createElement: el } = await import('react');
   return { BotGroupMessageAttachments: (props: any) => {
-    h.strips.push({ messageId: props.messageId, align: props.align, names: props.attachments.map((a: any) => a.name), resolve: props.resolveServerMedia });
+    h.strips.push({ messageId: props.messageId, align: props.align, names: props.attachments.map((a: any) => a.name), resolve: props.resolveServerMedia, previewServerImages: props.previewServerImages });
     return el('div', { 'data-kind': 'strip', 'data-message': props.messageId });
   } };
 });
@@ -89,6 +89,8 @@ it('shows the owner\'s and the companion\'s attachments under their messages, in
   ]);
   // Each strip fetches its addresses from the room hook.
   expect(h.strips.every(strip => strip.resolve === h.room.media)).toBe(true);
+  // cloud-companions.md §3.1: signed private URLs are acquired only on an explicit tap.
+  expect(h.strips.every(strip => strip.previewServerImages === false)).toBe(true);
   expect(container.querySelectorAll('[data-testid="cloudCompanion.message.user"]')).toHaveLength(2);
   expect(container.querySelectorAll('[data-testid="cloudCompanion.message.companion"]')).toHaveLength(3);
   // Captions are the attachments' names, not text repeated beside them; an attachment-only message has no empty bubble.

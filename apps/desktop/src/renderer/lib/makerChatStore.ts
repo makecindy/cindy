@@ -2304,7 +2304,6 @@ export function invalidateLiveIngressForDataOwnerBoundary(): void {
   pendingTextDeltaBatches.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
-  pendingMessageCreatedPatches.clear();
   remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
 }
@@ -3302,11 +3301,10 @@ const HIGH_FREQUENCY_NOTIFY_INTERVAL_MS = 32;
 const TYPING_PRIORITY_NOTIFY_INTERVAL_MS = 250;
 const HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK = 8;
 const pendingDeferredStateNotifications = new Set<string>();
-const pendingMessageCreatedPatches = new Map<string, string>();
 let deferredStateNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 
 function hasDeferredStateWork(): boolean {
-  return pendingDeferredStateNotifications.size > 0 || pendingMessageCreatedPatches.size > 0;
+  return pendingDeferredStateNotifications.size > 0;
 }
 
 function clearDeferredStateNotificationTimer(): void {
@@ -3331,18 +3329,12 @@ function emitStateNotifications(sessionId: string): void {
   });
 }
 
-function flushPendingMessageCreatedPatch(sessionId: string): void {
-  const updatedAt = pendingMessageCreatedPatches.get(sessionId);
-  if (!updatedAt) return;
-  pendingMessageCreatedPatches.delete(sessionId);
-  emitPatch(sessionId, { updatedAt });
-}
-
 function flushDeferredStateNotifications(): void {
   deferredStateNotificationTimer = null;
-  const sessionIds = [
-    ...new Set([...pendingDeferredStateNotifications, ...pendingMessageCreatedPatches.keys()]),
-  ].slice(0, HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK);
+  const sessionIds = [...pendingDeferredStateNotifications].slice(
+    0,
+    HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK,
+  );
   let stateChanged = false;
   for (const sessionId of sessionIds) {
     if (pendingDeferredStateNotifications.delete(sessionId)) {
@@ -3355,7 +3347,6 @@ function flushDeferredStateNotifications(): void {
       cb();
     });
   }
-  for (const sessionId of sessionIds) flushPendingMessageCreatedPatch(sessionId);
   if (hasDeferredStateWork()) scheduleDeferredStateNotifications();
 }
 
@@ -3364,16 +3355,8 @@ function queueDeferredStateNotification(sessionId: string): void {
   scheduleDeferredStateNotifications();
 }
 
-function queueMessageCreatedPatch(sessionId: string, updatedAt: string): void {
-  pendingMessageCreatedPatches.set(sessionId, updatedAt);
-  // patch 也进入同一个 FIFO session 集合。否则 Map-only 的 no-op DB echo 会永远排在
-  // 持续活跃的前 8 个 state session 之后，slice 上限会让 sidebar patch 饥饿。
-  queueDeferredStateNotification(sessionId);
-}
-
 function discardDeferredStateWork(sessionId: string): void {
   pendingDeferredStateNotifications.delete(sessionId);
-  pendingMessageCreatedPatches.delete(sessionId);
   if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
 }
 
@@ -4535,9 +4518,6 @@ function setState(
   globalListeners.forEach((cb) => {
     cb();
   });
-  // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
-  flushPendingMessageCreatedPatch(sessionId);
-  if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
 }
 
 /**
@@ -6825,7 +6805,7 @@ export function handleStreamEvent(
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
@@ -6849,7 +6829,9 @@ export function handleStreamEvent(
                     askUserReply,
                     askUserAnswers: answers,
                   }
-                : { ...m, askUserStatus: 'expired' as const }
+                : m.askUserStatus === 'pending'
+                  ? { ...m, askUserStatus: 'expired' as const }
+                  : m
               : m,
           ),
         };
@@ -9007,10 +8989,6 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       },
       { deferNotification },
     );
-    // sidebar 排序时间轴 — 让接管路径下新消息也能 bump session 顺序。
-    const updatedAt = new Date().toISOString();
-    if (deferNotification) queueMessageCreatedPatch(sessionId, updatedAt);
-    else emitPatch(sessionId, { updatedAt });
   }
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
@@ -9901,7 +9879,6 @@ function __teardownGlobalListeners(): void {
   remoteMessageRepairTimers.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
-  pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
   _deferredTurnErrorPersist.clear();
   _liveErrorEpoch.clear();
@@ -14406,8 +14383,7 @@ function prewarmSession(
 function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
-  // 侧栏时间轴读 sessions.updatedAt,乐观更新同步 bump 让 sidebar 立即跳到"刚发过"
-  // (main 侧 touchUserSendInDb 也会写 updatedAt,广播回来的 patch 值一致、幂等)。
+  // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
   emitPatch(
     sessionId,
     wasFirst
@@ -15672,13 +15648,14 @@ function steerMessage(
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
-    // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
-    // main 拉一次 projection 自愈: 若镜像 stale (漏收 emit), 下一次点击就能恢复。
+    // 明确未受理：立即反馈，返回 false 让输入框恢复草稿；projection 刷新只修镜像，
+    // 不替用户重发。此时尚未创建消息或处理附件，不涉及已派发后的 ACK 边界。
     log.warn('steerMessage rejected: steering marker present in mirror', {
       sessionId,
       steeringQueueClientIds: current.steeringQueueClientIds,
       queueAbortPending: current.queueAbortPending,
     });
+    toast.warning(i18n.t('newChat.chatInput.steerNotSent'));
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }

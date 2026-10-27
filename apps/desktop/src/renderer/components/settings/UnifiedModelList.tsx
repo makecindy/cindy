@@ -88,6 +88,7 @@ import {
   resolveModelIconKind,
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { modelCompactionTarget } from '../../../shared/modelContextLimit';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -175,10 +176,7 @@ export interface UnionModelRow {
  * 否则并集出现两行、各自被误标单端。
  */
 function canonicalModelKey(provider: ProviderView, agent: AgentKind, id: string): string {
-  for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-    if (id.startsWith(prefix)) return id.slice(prefix.length);
-  }
-  return id;
+  return modelCompactionTarget(provider, agent, id).modelId;
 }
 
 /** 构建并集(导出供单测):行序 = 第一个 agent 的目录序,后续 agent 独占模型追加其后;

@@ -29,15 +29,15 @@ describe("Gemini 4 Argon catalog entry", () => {
     });
   });
 
-  it("uses the published Gateway transport without inventing model availability", () => {
+  it("keeps the native Gemini protocol without inventing model availability", () => {
     expect(
       registry?.models.some((m) => m.modelRef === "google/gemini-4-argon"),
     ).toBe(false);
     for (const id of ["google/gemini-4-argon", "gemini-4-argon"])
       expect(resolveModelNativeApi(registry, "xd", id), id).toBe(
-        "openai-responses",
+        "google-generative-ai",
       );
-    // The Server's Argon compatibility rule is narrower than the Gemini family.
+    // Argon follows the verified Gemini family protocol, just like Flash.
     expect(resolveModelNativeApi(registry, "xd", "google/gemini-3.8-flash")).toBe(
       "google-generative-ai",
     );

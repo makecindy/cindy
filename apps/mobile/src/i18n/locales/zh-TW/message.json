@@ -69,6 +69,7 @@
     "copyStateCopied": "已複製",
     "copyStateFailed": "複製失敗",
     "copyStateCopy": "複製",
+    "copyCode": "複製程式碼",
     "thinkingHidden": "思考內容已隱藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",

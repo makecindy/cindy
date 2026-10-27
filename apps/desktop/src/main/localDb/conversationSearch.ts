@@ -15,7 +15,7 @@ import type {
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
+import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
@@ -335,9 +335,9 @@ function applyWorkingDirFilter(
   workingDirs: string[] | null,
 ): SessionRow[] {
   if (workingDirs == null) return rows;
-  const allowed = new Set(workingDirs);
+  const allowed = new Set(workingDirs.map((dir) => normalizeWorkingDirForComparison(dir)));
   return rows.filter((row) => {
-    const key = normalizeWorkingDirForGrouping(row.workingDir);
+    const key = normalizeWorkingDirForComparison(row.workingDir);
     return key != null && allowed.has(key);
   });
 }

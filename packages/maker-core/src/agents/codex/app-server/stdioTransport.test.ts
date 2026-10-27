@@ -235,7 +235,9 @@ describe('production stdio initialization recovery', () => {
         if (rpc.method) requests[index].push(rpc.method);
         queueMicrotask(() => {
           if (index === 2 && scenario === 'recover') {
-            if (rpc.id != null) readers[index].emit('line', JSON.stringify({ id: rpc.id, result: {} }));
+            if (rpc.id != null) readers[index].emit('line', JSON.stringify({ id: rpc.id,
+              result: rpc.method === 'initialize' ? { userAgent: 'codex/0.0.0', codexHome: '/x' } : {},
+            }));
           } else if (rpc.method === 'initialize') {
             child.stderr.emit('data', 'Error: failed to initialize sqlite state runtime under /x: failed to initialize state runtime at ');
             child.emit('exit', 1, null);

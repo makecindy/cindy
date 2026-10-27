@@ -1,6 +1,6 @@
 import { youtubeVideo } from '../richAnswer';
 import { describe, expect, it } from 'vitest';
-import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, type RichPalette } from '../richAnswer';
+import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, richMediaSource, type RichPalette } from '../richAnswer';
 // Tier 1: actual stream reducer. Regression targets are partial transport, edits,
 // replay and preservation of user input; no DOM/source-string contracts.
 const line = (seq: number, op: Record<string, unknown>) => JSON.stringify({ seq, ...op }) + '\n';
@@ -55,6 +55,19 @@ describe('streaming answer documents', () => {
     expect(doc.roots).toEqual(['text']);
     expect(doc.nodes.get('text')?.props.text).toBe('Readable');
     expect(doc.issues).toBe(1);
+  });
+  it('commits later operations after a malformed or skipped sequence instead of orphaning them', () => {
+    // Real-world regression (session 3c876950): one unescaped quote in a props.text
+    // used to reject every following line via the strict +1 gate, dropping 9 of 13 ops.
+    const heading = (seq: number, id: string) => line(seq, { op: 'create', id, kind: 'heading', props: { text: id } });
+    const malformed = '{"seq":3,"op":"create","id":"bad","kind":"markdown","props":{"text":"记了"注入"缺陷"}}\n';
+    const doc = new RichAnswerStream().update(heading(1, 'a') + heading(2, 'b') + malformed + heading(4, 'c') + heading(5, 'd'));
+    expect(doc.roots).toEqual(['a', 'b', 'c', 'd']);
+    expect(doc.nodes.has('bad')).toBe(false);
+    expect(doc.issues).toBe(2); // the malformed line itself + the skipped sequence 3
+    const skipped = new RichAnswerStream().update(heading(1, 'a') + heading(3, 'c') + heading(4, 'd'));
+    expect(skipped.roots).toEqual(['a', 'c', 'd']);
+    expect(skipped.issues).toBe(1);
   });
 });
 it('restores persisted controls without overwriting input entered during a slow load', async () => {
@@ -201,6 +214,18 @@ it("keeps small-valued axes distinguishable and dense dates on the same coordina
     richLinePlot([{ label: "a", value: 24000 }], 300, { includeZero: true })
       .min,
   ).toBeLessThanOrEqual(0);
+});
+
+// Unit: RFC 3986 schemes are case-insensitive. Existing media coverage missed
+// case normalization; only the scheme may change, and unsafe schemes stay denied.
+it.each([
+  ['HTTPS://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview', 'https://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview'],
+  ['CINDY-MEDIA://blobs/AbC123.PNG?Token=Aa%2Bb#Preview', 'cindy-media://blobs/AbC123.PNG?Token=Aa%2Bb#Preview'],
+])('normalizes only the allowed scheme in %s', (src, expected) => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBe(expected);
+});
+it.each(['JaVaScRiPt:alert(1)', 'DaTa:text/html;base64,PHNjcmlwdD4='])('rejects unsafe media scheme %s', src => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBeNull();
 });
 
 // Unit: the reported YouTube watch URL used to reach the file player. Existing

@@ -1,3 +1,4 @@
+import type { GhostPipeHarnessEvent } from '@cindy/plugin-protocol';
 /**
  * subscriptionGateway.ts — 订阅槽①网关(旁听 did- + 拦截 will-,2026-07-12 开闸)。
  * ---------------------------------------------------------------------------
@@ -25,6 +26,8 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import { eq } from 'drizzle-orm';
 
 import {
+  hasGhostHarnessPermission,
+  ghostInstallApprovalToken,
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
   GHOST_HOOK_FUSE_THRESHOLD,
   GHOST_HOOK_REWRITE_MAX_CHARS,
@@ -202,6 +205,32 @@ export class GhostSubscriptionGateway {
     }
   }
 
+  private readonly harnessDeliveryGuards = new WeakMap<GhostPipeEventPush, () => boolean>();
+
+  /** Reuse the bounded, non-blocking transport without widening legacy subscribe permissions. */
+  publishHarness(event: Omit<GhostPipeHarnessEvent, 'seq' | 'ts'>, isCurrent: () => boolean,
+    allowed: (ghost: InstalledGhost) => boolean = () => true): void {
+    for (const ghost of this.deps.listGhosts()) {
+      if (!hasGhostHarnessPermission(ghost, 'events', event.topic) || !allowed(ghost)) continue;
+      const ghostId = installedGhostStoragePart(ghost);
+      const revision = ghostInstallApprovalToken(ghost.approval);
+      this.enqueue(ghost, seq => {
+        const contentPermission = event.topic === 'message' ? 'messages' : 'tool-content';
+        const withContent = event.data.content !== undefined && hasGhostHarnessPermission(ghost, 'read', contentPermission);
+        const data = { ...event.data };
+        if (!withContent) { delete data.content; delete data.truncated; }
+        const payload: GhostPipeHarnessEvent = { ...event, data, seq, ts: this.deps.now() };
+        this.harnessDeliveryGuards.set(payload, () => {
+          const current = this.deps.listGhosts().find(item => installedGhostStoragePart(item) === ghostId);
+          return isCurrent() && !!current && allowed(current) && ghostInstallApprovalToken(current.approval) === revision
+            && hasGhostHarnessPermission(current, 'events', event.topic)
+            && (!withContent || hasGhostHarnessPermission(current, 'read', contentPermission));
+        });
+        return payload;
+      });
+    }
+  }
+
   private entry(ghostId: string): SubEntry {
     let e = this.entries.get(ghostId);
     if (!e) {
@@ -225,6 +254,10 @@ export class GhostSubscriptionGateway {
     name: GhostDidEventName,
     data: GhostDidEventData,
   ): void {
+    this.enqueue(ghost, seq => ({ type: 'event', name, topic, seq, ts: this.deps.now(), data }));
+  }
+
+  private enqueue(ghost: InstalledGhost, createEvent: (seq: number) => GhostPipeEventPush): void {
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
     const ownerScope = this.captureOwnerScope();
@@ -236,14 +269,7 @@ export class GhostSubscriptionGateway {
       this.invalidateOwner(ghostId, e);
     }
     e.ownerScope = ownerScope;
-    const evt: GhostPipeEventPush = {
-      type: 'event',
-      name,
-      topic,
-      seq: ++e.seq,
-      ts: this.deps.now(),
-      data,
-    };
+    const evt = createEvent(++e.seq);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
@@ -265,7 +291,10 @@ export class GhostSubscriptionGateway {
       this.invalidateOwner(ghostId, e);
       return false;
     }
-    const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;
+    // Discard stale capabilities/instances at delivery time, including wake-buffered events.
+    const guard = this.harnessDeliveryGuards.get(evt);
+    if (guard && !guard()) { e.pendingDropped += 1 + ('dropped' in evt ? evt.dropped ?? 0 : 0); return true; }
+    const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped + ('dropped' in evt ? evt.dropped ?? 0 : 0) } : evt;
     try {
       this.deps.sendToGhost(ghostId, payload);
       e.pendingDropped = 0;
@@ -282,8 +311,8 @@ export class GhostSubscriptionGateway {
     ownerScope: unknown,
   ): void {
     if (e.buffer.length >= GHOST_SUB_QUEUE_MAX) {
-      e.buffer.shift();
-      e.pendingDropped += 1;
+      const discarded = e.buffer.shift();
+      e.pendingDropped += 1 + (discarded && 'dropped' in discarded ? discarded.dropped ?? 0 : 0);
     }
     e.buffer.push(evt);
     this.kickWake(ghost, e, ownerScope);
@@ -316,6 +345,11 @@ export class GhostSubscriptionGateway {
       })
       .finally(() => {
         e.waking = false;
+        // Events queued between flush's callback and this microtask must not wait
+        // for another event to wake them up (the queued event may be terminal).
+        const id = installedGhostStoragePart(ghost);
+        if (this.entries.get(id) === e && this.ownerScopeUsable(ownerScope)
+          && e.buffer.length > 0 && this.deps.isRunning(id)) this.flush(id, e, ownerScope);
       });
   }
 

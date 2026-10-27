@@ -11,6 +11,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 interface ActivePiProxySession {
   token: string;
+  controller: AbortController;
   resolveProviderId: () => string | null;
   scope: 'session' | 'subagent-route';
 }
@@ -45,15 +46,18 @@ export function registerPiProxySession(
     throw new Error('Pi proxy session registration requires an id and token');
   const registration = {
     token,
+    controller: new AbortController(),
     resolveProviderId,
     scope: options.scope === 'subagent-route' ? 'subagent-route' as const : 'session' as const,
   };
   const registrations = activeSessions.get(sessionId) ?? new Map();
+  registrations.get(token)?.controller.abort();
   registrations.set(token, registration);
   activeSessions.set(sessionId, registrations);
   return () => {
     const current = activeSessions.get(sessionId);
     if (current?.get(token) !== registration) return;
+    registration.controller.abort();
     current.delete(token);
     if (current.size === 0) activeSessions.delete(sessionId);
   };
@@ -61,6 +65,11 @@ export function registerPiProxySession(
 
 export function authenticatePiProxySession(sessionId: string, candidate: string | null): boolean {
   return findPiProxySession(sessionId, candidate) !== null;
+}
+
+/** Lifetime of the exact authenticated runtime, including separately scoped children. */
+export function getPiProxySessionSignal(sessionId: string, candidate: string | null): AbortSignal | null {
+  return findPiProxySession(sessionId, candidate)?.controller.signal ?? null;
 }
 
 /**
@@ -83,5 +92,8 @@ export function isPiProxySubagentRoute(
 
 /** Test isolation only. */
 export function resetPiProxySessionsForTest(): void {
+  for (const registrations of activeSessions.values()) {
+    for (const registration of registrations.values()) registration.controller.abort();
+  }
   activeSessions.clear();
 }

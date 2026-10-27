@@ -69,6 +69,7 @@
     "copyStateCopied": "コピーしました",
     "copyStateFailed": "コピー失敗",
     "copyStateCopy": "コピー",
+    "copyCode": "コードをコピー",
     "thinkingHidden": "思考内容は非表示",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",

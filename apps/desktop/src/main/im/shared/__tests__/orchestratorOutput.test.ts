@@ -96,12 +96,12 @@ describe('background output route recovery', () => {
     expect(channelTurnSourceFor({ kind: 'scheduler', scheduleId: 's' }, false)).toBeUndefined();
   });
 
-  it('marks a harness wake-up on wired output synchronously, without a cold route lookup', () => {
+  it.each([true, false])('marks a harness wake-up synchronously without a cold lookup (relay: %s)', (relay) => {
     mocks.limit.mockResolvedValue([{ ...nativeRow, source: 'telegram', imBotContextId: 'bot', imUserId: 'native-user' }]);
     // Not awaited: the wake-up's first event fans out right after this call returns.
-    void publishProviderInitiatedTurn(session);
+    void publishProviderInitiatedTurn(session, relay);
     expect(mocks.note).toHaveBeenCalledTimes(6);
-    expect(mocks.note).toHaveBeenCalledWith(session, 'provider-wake');
+    expect(mocks.note).toHaveBeenCalledWith(session, relay ? 'provider-wake' : 'provider-wake-local');
     expect(mocks.limit).not.toHaveBeenCalled();
     expect(mocks.attach).not.toHaveBeenCalled();
   });

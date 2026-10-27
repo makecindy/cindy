@@ -182,6 +182,9 @@ Desktop 与 Mobile 使用同一写法。
 该分享为前提。Desktop 复用控制端的已收到列表与分享读取通道，并通过既有
 `maker:provider-share:received-catalogs` 核对任务所在电脑也已加载且未暂停该分享；跨区域连接的启用
 标记保存在各电脑本地，不能仅凭控制端名单认定被控端可用，也不自动替被控端开启跨区连接。
+同账号供应商组是已加入分享的另一条有效来源：任务所在电脑从组所在电脑的 `view` / `pick` 回包或
+`manage-group` 组视图确认分享引用后，可自行向另一区域的官方分享服务核验已有授权并恢复连接，无需再次申请；不从 Renderer
+自报的分享 ID 或收藏恢复联网资格。名单仍由服务端裁决，暂停、撤销与账号切换照常生效。
 本区和跨区名单独立可用：返回名单里已加载且有效的分享立即参与候选筛选；仍有区域尚未就绪时，
 控制端继续有上限地退避查询，补上稍后加载的分享，不让单一区域故障阻塞另一区域。
 查询失败或旧主机不支持时不新增分享候选，当前 / 待切换位置仍保留。模型选择和执行仍由任务所在电脑校验；
@@ -221,6 +224,14 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
   2026-10-22（用户裁决）：右栏同时只读显示那台电脑上该账号的剩余额度，与本机详情复用同一张额度卡；
   仅订阅类连接读到数据时显示，不提供重置或打开用量网页等管理操作，也不受分享的「允许查看剩余额度」开关控制。
   供应商组只在成员里分别显示，不在顶层合并或代取某一台的额度。
+  同账号电脑上的 Codex 额度经已有 `maker:usage:codex-rate-limits` 实时读取，按电脑与供应商账号共享缓存和在途请求。
+  详情、模型选择器左栏和模型行打开且页面可见时约每 60 秒复查，关闭或隐藏后停止；换账号丢弃旧结果。
+  详情与左栏取账号通用额度，模型行按模型选择额度桶；ChatGPT 网页额度仍读原有 WHAM 槽。
+  旧电脑不支持实时通道或读取失败时回退原快照，回退也失败时保留已有数据；「数据更新于」保留数据实际读取的时间。
+  快照通道成功返回空账号时清除已有额度（例如远端退出账号），不把明确清空当成读取失败。
+  分享来源仍按 §7.5 的独立授权读取。实现见
+  [useRemoteDeviceUsage.ts](../../apps/desktop/src/renderer/hooks/useRemoteDeviceUsage.ts)，回归见
+  [useDeviceProviderSubscriptionCard.test.ts](../../apps/desktop/src/renderer/components/settings/__tests__/useDeviceProviderSubscriptionCard.test.ts)。
   实现见 [OwnRemoteProviders.tsx](../../apps/desktop/src/renderer/components/settings/OwnRemoteProviders.tsx)，
   回归见 [OwnRemoteProviders.test.tsx](../../apps/desktop/src/renderer/components/settings/__tests__/OwnRemoteProviders.test.tsx)。
 - **分享给我的供应商**单独一组「分享给我的供应商」，没有分享时整组不显示：每条用分享者头像标明来自谁，
@@ -384,6 +395,12 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
   区域公钥验签后，才把申请交给分享者；分享者看到的身份与同区域一样经过核实。
 - **专用凭证**：分享建立后，分享者区域的服务为受邀者签发只限这个分享的凭证，只能用于远程 Agent，
   不能访问分享者区域的其他服务或能力。
+- **同账号换电脑**：另一台电脑使用已建供应商组时，组中获准使用的跨区分享必须可正常连接。
+  本机没有区域标记时，以同账号组的有效回包触发核验，复用既有身份名片与分享连接凭证，不重新申请。
+  标记仍只保存区域；加载期间或查询失败不得误报「分享已移除」，已加载区域的分享仍可独立使用。
+  实现与回归见 `providerShareGuest.ts`、`providerShareCrossRegion.ts`、`provider-group/remoteClient.ts`、
+  `provider-group/ipc.ts`、`device-link/__tests__/providerShareCrossRegion.test.ts`
+  与 `provider-group/__tests__/ipc.test.ts`（2026-10-26）。
 - **合规开关**：跨区会让用户内容跨境流动，并让一方用户通过分享使用另一区域的模型。跨区分享须经
   公司合规确认后，由服务端开关开启；开关关闭时跨区链接提示暂不支持，同区域分享不受影响。
 - **网络**：跨区连接质量不能保证时，需要服务端评估区域间转发；客户端对跨区连接的断线与重试沿用
@@ -417,9 +434,16 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
    实现：Claude Code 用 SDK `tools` 白名单，Codex 按功能清单关闭白名单之外的功能，Pi 只放行 Cindy
    扩展注册的工具（`packages/maker-core/src/agents/{shared/device-hosted,codex/device-hosted-guest,pi/cindy-bridge-source}.ts`）；
    受邀者电脑上的 WebFetch 见 `apps/desktop/src/main/remote-agent/executor/webFetch.ts`。
+   **重建同样保持隔离**（2026-10-27）：Codex 原生 `thread/fork` 会重新加载进程默认配置，不能
+   假定它继承源线程的覆盖项。回退／编辑重发必须和正常启动、恢复一样带上任务的执行环境、远程 MCP
+   路由与完整能力隔离配置。受邀者复制历史的一次性 fork 不接入任何本机 MCP 或连接器，不能检查
+   功能清单时拒绝创建子线程，用后关闭独立进程；子线程正式恢复时再接入受邀者工具。
+   回归：`packages/maker-core/src/agents/codex/__tests__/device-hosted-guest{,.native}.test.ts`，
+   覆盖回退后续发、历史复制与功能检查失败；真实 Codex 0.159.2 验证本机默认能力不会重新进入受邀者线程。
 6. **受邀者隐私**：申请前明确告知对话与文件内容会经过分享者的电脑，并保存在实际运行任务的那台电脑上
    （有供应商组时可能是分享者安排的其他电脑）。运行中疑似工具循环时，与分享者自己的任务一样，由运行任务
-   那台电脑的辅助模型复核：最近十余次工具调用的脱敏摘要会发给那台电脑设置的辅助模型（可能不是分享的
+   那台电脑的辅助模型复核：用户目标与最新要求、主模型已有的公开行动说明，以及最近十余次工具调用的
+   脱敏摘要会发给那台电脑设置的辅助模型（可能不是分享的
    供应商，也不计入受邀者用量；2026-10-13 用户裁决）；分享被删除或受邀者退出后，分享者电脑清理该受邀者的 Agent
    会话记录与镜像文件，并请接过它任务的组内电脑清理（[供应商组](provider-groups.md) §4）。
 7. **受邀者自己的权限**：受邀者电脑上的文件与命令操作仍由受邀者自己的任务权限档把关，分享不放宽

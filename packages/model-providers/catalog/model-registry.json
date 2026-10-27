@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-24T03:51:23.033Z",
+  "updatedAt": "2026-10-27T07:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3314,16 +3314,6 @@
     }
   ],
   "nativeApiRules": [
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "google/gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
     {
       "providerId": "xd",
       "modelIdPrefix": "google/gemini-",

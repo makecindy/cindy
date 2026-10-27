@@ -43,7 +43,11 @@ const visibleGroups = (groups: readonly BotGroupSummary[]) => groups.filter(grou
 let inFlight: Promise<void> | null = null;
 let refreshQueued = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let readFailures = 0;
 let syncUsers = 0;
+let hydratedOwner = '';
+let listReadVersion = 0;
 /** Pushes within this window collapse into one list read. */
 const PUSH_REFRESH_DELAY_MS = 300;
 let unsubscribePush: (() => void) | null = null;
@@ -70,6 +74,8 @@ function ensureOwner(): void {
   inFlight = null;
   refreshQueued = false;
   cancelPushRefresh();
+  cancelRetryRefresh();
+  readFailures = 0;
   snapshot = EMPTY_SNAPSHOT;
   personalList.clear();
 }
@@ -77,6 +83,24 @@ function ensureOwner(): void {
 function cancelPushRefresh(): void {
   if (pushTimer !== null) clearTimeout(pushTimer);
   pushTimer = null;
+}
+
+function cancelRetryRefresh(): void {
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+/** A failed final push must recover even when the room has no more activity. */
+function scheduleRetryRefresh(): void {
+  if (syncUsers === 0 || retryTimer !== null) return;
+  const requestOwner = owner;
+  const requestGeneration = generation;
+  const delay = Math.min(30000, 1000 * 2 ** Math.min(readFailures++, 5));
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (syncUsers === 0 || requestGeneration !== generation || !isDataOwnerGenerationCurrent(requestOwner)) return;
+    refreshBotGroups();
+  }, delay);
 }
 
 /** A push changed something: read the list once the burst has settled. */
@@ -93,15 +117,35 @@ function applySnapshot(next: BotGroupListSnapshot): void {
   emit();
 }
 
+function persistList(): void {
+  if (!owner.dataOwnerId) return;
+  void botGroupApi()?.chatDisplayCache?.({ action: 'write', key: 'groups', owner, value: snapshot.groups }).catch(() => undefined);
+}
+
+function restoreList(): void {
+  const key = JSON.stringify(owner);
+  if (!owner.dataOwnerId || hydratedOwner === key) return;
+  hydratedOwner = key;
+  const requestOwner = owner;
+  const version = listReadVersion;
+  void botGroupApi()?.chatDisplayCache?.({ action: 'read', key: 'groups', owner }).then(value => {
+    if (!isDataOwnerGenerationCurrent(requestOwner) || listReadVersion !== version || !Array.isArray(value)) return;
+    if (!value.every(row => row && typeof row.id === 'string' && typeof row.name === 'string' && Array.isArray(row.members))) return;
+    applySnapshot({ groups: visibleGroups(value as BotGroupSummary[]), loaded: false });
+  }).catch(() => undefined);
+}
+
 /** Re-read the list from main; concurrent calls collapse into one follow-up. */
 export function refreshBotGroups(): void {
   ensureOwner();
   const api = botGroupApi();
   if (!api) return;
+  restoreList();
   if (inFlight) {
     refreshQueued = true;
     return;
   }
+  cancelRetryRefresh();
   const requestOwner = owner;
   const requestGeneration = generation;
   const isCurrent = () =>
@@ -111,13 +155,19 @@ export function refreshBotGroups(): void {
       // Every change kind re-reads the list, including 'plan' (open-plan status in the row).
       const result = await api.listBotGroups();
       if (!isCurrent()) return;
+      if (result.ok) { readFailures = 0; listReadVersion++; }
+      else scheduleRetryRefresh();
       if (result.ok) seedBotGroupReadState(visibleGroups(result.groups));
       // An unchanged list keeps its snapshot: subscribers (sidebar, Dock badge) do not re-render.
       if (result.ok && snapshot.loaded && JSON.stringify(visibleGroups(result.groups)) === JSON.stringify(snapshot.groups)) return;
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
       applySnapshot(result.ok ? { groups: visibleGroups(result.groups), loaded: true } : { ...snapshot, loaded: true });
+      if (result.ok) persistList();
     } catch {
-      if (isCurrent()) applySnapshot({ ...snapshot, loaded: true });
+      if (isCurrent()) {
+        scheduleRetryRefresh();
+        applySnapshot({ ...snapshot, loaded: true });
+      }
     }
   })();
   inFlight = request;
@@ -145,9 +195,11 @@ export function startBotGroupSync(): () => void {
         ensureOwner();
         if (payload.change === 'list' && payload.listState && (personalList.get(payload.groupId)?.revision ?? 0) < payload.listState.revision) {
           personalList.set(payload.groupId, payload.listState);
+          listReadVersion++;
           const groups = visibleGroups(snapshot.groups);
           seedBotGroupReadState(groups);
           applySnapshot({ ...snapshot, groups });
+          persistList();
         }
         schedulePushRefresh();
       });
@@ -160,6 +212,8 @@ export function startBotGroupSync(): () => void {
       unsubscribePush?.();
       unsubscribePush = null;
       cancelPushRefresh();
+      cancelRetryRefresh();
+      readFailures = 0;
     }
   };
 }
@@ -238,6 +292,7 @@ async function settlePlanMutation(
 
 /** Test-only reset of the module state. */
 export function resetBotGroupStoreForTests(): void {
+  hydratedOwner = ''; listReadVersion++;
   unsubscribePush?.();
   unsubscribePush = null;
   syncUsers = 0;
@@ -245,6 +300,8 @@ export function resetBotGroupStoreForTests(): void {
   inFlight = null;
   refreshQueued = false;
   cancelPushRefresh();
+  cancelRetryRefresh();
+  readFailures = 0;
   owner = getDataOwnerGeneration();
   snapshot = EMPTY_SNAPSHOT;
   listeners.clear();

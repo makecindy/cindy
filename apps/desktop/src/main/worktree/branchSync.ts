@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { gitExec, GitExecError } from './gitExec';
-import { boundedNetworkGitOpts } from './freshBase';
 import type {
   BranchSyncRequest,
   BranchSyncResult,
@@ -168,7 +167,13 @@ async function syncBranchOnce(req: BranchSyncRequest): Promise<BranchSyncResult>
   try {
     await gitExec(
       [
+        // Small fetches otherwise use unpack-objects, which can receive one
+        // large blob without reporting any bytes. index-pack reports throughput
+        // while reading, so the inactivity budget also works for that case.
+        '-c',
+        'fetch.unpackLimit=1',
         'fetch',
+        '--progress',
         '--no-tags',
         '--recurse-submodules=no',
         '--',
@@ -177,8 +182,8 @@ async function syncBranchOnce(req: BranchSyncRequest): Promise<BranchSyncResult>
       ],
       req.baseRepo,
       {
-        ...boundedNetworkGitOpts(30_000),
-        extraEnv: { ...boundedNetworkGitOpts(30_000).extraEnv, LC_ALL: 'C' },
+        idleTimeoutMs: 60_000,
+        extraEnv: { GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' },
       },
     );
   } catch (error) {

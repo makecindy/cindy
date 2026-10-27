@@ -19,10 +19,12 @@ export function LocalDbFatalScreen({
   code,
   message,
   onBackToLogin,
+  onRetry,
 }: {
   code?: string;
   message?: string;
   onBackToLogin?: () => void;
+  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const { status, progress } = useUpdateStatus();
@@ -32,6 +34,10 @@ export function LocalDbFatalScreen({
   const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
+    if (view === 'retry-local-db') {
+      onRetry?.();
+      return;
+    }
     if (view === 'init-failed' || view === 'corrupt') {
       // 重新走一遍 ensureReady；与应用更新无关（corrupt 也可能因关闭占用库的其它实例而恢复）。
       window.location.reload();
@@ -51,26 +57,32 @@ export function LocalDbFatalScreen({
   };
 
   const title =
-    view === 'corrupt'
-      ? t('localDbFatal.corrupt.title')
-      : view === 'init-failed'
-        ? t('localDbFatal.initFailed.title')
-        : view === 'no-update'
-        ? t('localDbFatal.noUpdate.title')
-        : t('localDbFatal.updateReady.title');
+    view === 'retry-local-db'
+      ? t('localDbFatal.schemaLease.title')
+      : view === 'corrupt'
+        ? t('localDbFatal.corrupt.title')
+        : view === 'init-failed'
+          ? t('localDbFatal.initFailed.title')
+          : view === 'no-update'
+            ? t('localDbFatal.noUpdate.title')
+            : t('localDbFatal.updateReady.title');
   const description =
-    view === 'corrupt'
-      ? t('localDbFatal.corrupt.description')
-      : view === 'init-failed'
-        ? t('localDbFatal.initFailed.description')
-        : view === 'install-update'
-      ? t('localDbFatal.updateReady.description')
-      : view === 'preparing-update'
-        ? t('localDbFatal.preparing.description')
-        : t('localDbFatal.noUpdate.description');
+    view === 'retry-local-db'
+      ? (message ?? t('localDbFatal.schemaLease.lock-unreadable'))
+      : view === 'corrupt'
+        ? t('localDbFatal.corrupt.description')
+        : view === 'init-failed'
+          ? t('localDbFatal.initFailed.description')
+          : view === 'install-update'
+            ? t('localDbFatal.updateReady.description')
+            : view === 'preparing-update'
+              ? t('localDbFatal.preparing.description')
+              : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'init-failed' || view === 'corrupt'
-      ? t('localDbFatal.initFailed.retry')
+    view === 'retry-local-db'
+      ? t('localDbFatal.schemaLease.retry')
+      : view === 'init-failed' || view === 'corrupt'
+        ? t('localDbFatal.initFailed.retry')
       : view === 'install-update'
         ? t('localDbFatal.updateReady.confirm')
         : t('localDbFatal.noUpdate.checkUpdate');

@@ -182,7 +182,9 @@ export class RichAnswerStream {
         throw Error("sequence");
       const seq = Number(op.seq);
       if (seq <= this.seq) return;
-      if (seq !== this.seq + 1) throw Error("gap");
+      // A malformed or absent line leaves a numbering gap: committed content stays,
+      // the missing operations are reported, and later lines still apply.
+      this.issues += Math.min(seq - this.seq - 1, MAX_NODES);
       this.seq = seq;
       if (op.version !== undefined && op.version !== 1) throw Error("version");
       if (typeof op.id !== "string" || !ID.test(op.id)) throw Error("id");
@@ -953,13 +955,14 @@ export function compactRichAnswer(source: string): string {
 export function richMediaSource(node: RichNode): string | null {
   const src = richString(node, "src").trim();
   if (!src || /[\r\n]/.test(src)) return null;
+  const allowed = /^(https?|file|xdt-(?:file|image|video|audio)|cindy-(?:remote-)?media):\/\//i.exec(src);
   if (
     /^[a-zA-Z][\w+.-]*:/.test(src) &&
     !/^[a-zA-Z]:[\\/]/.test(src) &&
-    !/^(https?:\/\/|file:\/\/|xdt-(?:file|image|video|audio):\/\/|cindy-(?:remote-)?media:\/\/)/.test(
-      src,
-    )
+    !allowed
   )
     return null;
-  return src;
+  return allowed
+    ? allowed[1].toLowerCase() + src.slice(allowed[1].length)
+    : src;
 }

@@ -235,7 +235,7 @@ describe('model source second line', () => {
     expect(screen.getByText(quotaText('1小时 39%'))).toBeTruthy();
     expect(screen.getByText('claude · Pro')).toBeTruthy();
     expect(screen.getAllByText('account-a · Plus')).toHaveLength(2);
-    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'account-a');
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'account-a', { live: true, web: true });
     expect(reads.codex.mock.calls.some(([enabled]) => enabled)).toBe(false);
     expect(reads.web.mock.calls.some(([, vendor]) => vendor === 'codex')).toBe(false);
     expect(reads.claude.mock.calls.some(([enabled]) => enabled)).toBe(false);

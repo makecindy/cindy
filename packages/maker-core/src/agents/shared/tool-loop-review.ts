@@ -1,6 +1,7 @@
 import type { Logger } from '../../interfaces/logger.js';
 import type { AgentKind } from '../../types/common.js';
-import type { ToolLoopEvidence, ToolLoopGuard, ToolLoopGuardVerdict } from './loop-guard.js';
+import { captureEvidence, type ToolLoopEvidence, type ToolLoopGuard, type ToolLoopGuardVerdict } from './loop-guard.js';
+import type { AutoReviewUserIntent } from './auto-review-decision.js';
 
 export type HardToolLoopVerdict = Extract<ToolLoopGuardVerdict, { kind: 'hard' }>;
 
@@ -8,6 +9,10 @@ export interface ToolLoopReviewRequest {
   sessionId: string;
   agentKind: AgentKind;
   model: string;
+  /** 已有的用户原话及最近补充要求；沿用宿主的有界上下文，不另调模型摘要。 */
+  userIntent?: AutoReviewUserIntent;
+  /** 当前检测 scope 最近一次调用前的公开说明，不包含私有 thinking。 */
+  assistantExplanation?: string;
   verdict: Pick<HardToolLoopVerdict, 'reason' | 'count' | 'toolName'>;
   /**
    * 最近的普通调用(旧→新)。均为未脱敏原文,input 保留原结构;发送前必须在未转义的
@@ -16,17 +21,17 @@ export interface ToolLoopReviewRequest {
   evidence: readonly ToolLoopEvidence[];
 }
 
-/** continue = 在等外部进度,放行;stop = 确实在空转。 */
+/** continue = 有合理继续理由或证据不足;stop = 明确在无进展地空转。 */
 export type ToolLoopReviewDecision = 'continue' | 'stop';
 
-/** Host 注入的复核入口(辅助模型)。抛错、超时都按 stop 处理。 */
+/** Host 注入的复核入口(辅助模型)。抛错、超时不构成死循环证据。 */
 export type ToolLoopReviewer = (
   request: ToolLoopReviewRequest,
   opts: { signal: AbortSignal },
 ) => Promise<ToolLoopReviewDecision>;
 
 const REVIEW_TIMEOUT_MS = 20_000;
-/** 每个 turn 最多复核几次;用完后疑似判定直接中断。 */
+/** 每个 turn 最多复核几次;用完后放行疑似判定,保留 guard 的最终上限。 */
 const MAX_REVIEWS_PER_TURN = 3;
 /** 复核放行后,接下来多少次普通结果不再报疑似。 */
 const REVIEW_GRACE_RESULTS = 20;
@@ -40,8 +45,8 @@ export interface ToolLoopMonitorOptions {
   reviewer?: ToolLoopReviewer;
   /** 缺省为本 monitor 独占;传入同一对象即共享每 turn 的复核上限。 */
   reviewBudget?: ToolLoopReviewBudget;
-  context: () => { sessionId: string; agentKind: AgentKind; model: string };
-  /** 复核判定 stop(含失败/超时)时调用;调用方自行确认 turn 仍然有效再中断。 */
+  context: () => Pick<ToolLoopReviewRequest, 'sessionId' | 'agentKind' | 'model' | 'userIntent'>;
+  /** 复核明确判定 stop 时调用;调用方自行确认 turn 仍然有效再中断。 */
   onReviewedStop: (verdict: HardToolLoopVerdict) => void;
   logger: Logger;
 }
@@ -49,17 +54,19 @@ export interface ToolLoopMonitorOptions {
 /**
  * ToolLoopGuard 外加辅助模型复核。
  *
- * onToolResult 只返回需要立即中断的判定:最终上限、没有复核入口、或本 turn 复核
- * 次数用完。其余疑似判定转入后台复核并返回 ok,Agent 继续运行;复核中再出现的
+ * onToolResult 只在最终上限时返回立即中断的判定。没有复核入口或次数用完时放行疑似。
+ * 其余疑似判定转入后台复核并返回 ok,Agent 继续运行;复核中再出现的
  * 疑似判定不重复发起,也不因次数上限提前中断,等进行中的复核给出结论;若新的普通结果已
- * 不再疑似(模式被打破),进行中的复核作废。复核 continue → guard 暂缓疑似判定;stop/失败/超时 →
- * onReviewedStop。dispose / resetTurn 会作废进行中的复核,其结果被丢弃。
+ * 不再疑似(模式被打破),进行中的复核作废。continue/失败/超时 → guard 暂缓疑似判定;
+ * 只有明确 stop 才调用 onReviewedStop。用户目标改变、dispose / resetTurn 会使旧结论作废。
  */
 export class ToolLoopMonitor {
   private review: AbortController | null = null;
   /** 进行中复核所针对的调用集合;新结果的调用不在其中即视为模式已被替换。 */
   private reviewedPattern: ReadonlySet<string> | null = null;
   private readonly budget: ToolLoopReviewBudget;
+  private assistantExplanation = '';
+  private explanationBeforeTool = false;
 
   constructor(
     private readonly guard: ToolLoopGuard,
@@ -70,6 +77,16 @@ export class ToolLoopMonitor {
 
   onToolUse(toolUseId: string, toolName: unknown, input: unknown): void {
     this.guard.onToolUse(toolUseId, toolName, input);
+    this.explanationBeforeTool = true;
+  }
+
+  /** 复用公开 text 事件：增量拼接，final 全文校准；工具后新说明替换旧说明。 */
+  onAssistantText(text: string, isFinal = false): void {
+    if (!text && !isFinal) return;
+    if (this.explanationBeforeTool || isFinal) this.assistantExplanation = '';
+    this.explanationBeforeTool = false;
+    // 多保留一个字符作为截断信号，发送前复用证据截断器丢弃残缺凭证。
+    this.assistantExplanation = (this.assistantExplanation + text).slice(0, 4_001);
   }
 
   onToolResult(
@@ -86,12 +103,15 @@ export class ToolLoopMonitor {
       this.cancelReview();
     }
     if (verdict.kind !== 'hard') return verdict;
-    if (verdict.final || !this.opts.reviewer) {
+    if (verdict.final) {
       this.cancelReview();
       return verdict;
     }
     if (this.review) return { kind: 'ok' };
-    if (this.budget.used >= MAX_REVIEWS_PER_TURN) return verdict;
+    if (!this.opts.reviewer || this.budget.used >= MAX_REVIEWS_PER_TURN) {
+      this.guard.acceptCurrentPattern(REVIEW_GRACE_RESULTS);
+      return { kind: 'ok' };
+    }
     this.startReview(verdict, this.opts.reviewer);
     return { kind: 'ok' };
   }
@@ -100,6 +120,8 @@ export class ToolLoopMonitor {
     this.cancelReview();
     this.budget.used = 0;
     this.guard.resetTurn();
+    this.assistantExplanation = '';
+    this.explanationBeforeTool = false;
   }
 
   dispose(): void {
@@ -119,6 +141,7 @@ export class ToolLoopMonitor {
     this.budget.used += 1;
     const request: ToolLoopReviewRequest = {
       ...this.opts.context(),
+      assistantExplanation: captureEvidence(this.assistantExplanation),
       verdict: { reason: verdict.reason, count: verdict.count, toolName: verdict.toolName },
       evidence: this.guard.recentEvidence(),
     };
@@ -127,9 +150,9 @@ export class ToolLoopMonitor {
       timer = setTimeout(() => resolve('timeout'), REVIEW_TIMEOUT_MS);
     });
     void Promise.race([
-      reviewer(request, { signal: controller.signal }).catch((error: unknown) => {
+      (async () => reviewer(request, { signal: controller.signal }))().catch((error: unknown) => {
         this.opts.logger.warn('tool loop review failed', { error: String(error) });
-        return 'stop' as const;
+        return 'unavailable' as const;
       }),
       timeout,
     ]).then((outcome) => {
@@ -139,6 +162,7 @@ export class ToolLoopMonitor {
       this.review = null;
       this.reviewedPattern = null;
       controller.abort();
+      if (request.userIntent !== this.opts.context().userIntent) return;
       // 结论到达时统一校验一次:仍有在途调用不属于被复核模式(已换做法、结果未到),
       // 结论不适用于它,直接丢弃。此时流式调用的参数已补齐,不会误判。
       if (pattern && this.guard.hasPendingCallOutside(pattern)) {
@@ -147,7 +171,7 @@ export class ToolLoopMonitor {
         });
         return;
       }
-      const decision: ToolLoopReviewDecision = outcome === 'continue' ? 'continue' : 'stop';
+      const decision: ToolLoopReviewDecision = outcome === 'stop' ? 'stop' : 'continue';
       this.opts.logger.info('tool loop review settled', {
         decision,
         timedOut: outcome === 'timeout',

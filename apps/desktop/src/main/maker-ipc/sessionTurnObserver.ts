@@ -1,5 +1,5 @@
 import type { Session } from '@cindy/maker-core';
-import { publishChannelTurn, publishProviderInitiatedTurn } from './channelTurnSignal';
+import { createChannelTurnObserver } from './channelTurnSignal';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { createLogger } from '../logger.js';
@@ -27,12 +27,16 @@ export interface InstallSessionTurnObserverDeps {
 
 export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session) {
   let assertPermissionDispatch: (() => void) | undefined;
+  const channelTurn = createChannelTurnObserver(session);
   session.setTurnLifecycleObserver({
-    onDispatching: () => assertPermissionDispatch?.(),
+    onDispatching: () => {
+      assertPermissionDispatch?.();
+      channelTurn.onDispatching();
+    },
     beforeProviderStart: async (turnGeneration) => {
       assertPermissionDispatch = undefined;
       if (session.remoteHostId) {
-        await publishChannelTurn(session, 'starting');
+        await channelTurn.beforeProviderStart();
         return;
       }
       assertPermissionDispatch = await prepareBotPermissionDispatch(session);
@@ -97,10 +101,10 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         session.id,
         deps.providerTurnLeaseId(session.instanceId, turnGeneration),
       );
-      await publishChannelTurn(session, 'starting');
+      await channelTurn.beforeProviderStart();
     },
     onUndispatched: async (turnGeneration) => {
-      await publishChannelTurn(session, 'undispatched');
+      await channelTurn.onUndispatched();
       if (session.remoteHostId) return;
       await deps.sessionTurnLeaseTracker.markTurnEnded(
         session.id,
@@ -110,7 +114,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
     onProviderInitiatedTurn: () => {
       // Harness wake-ups (Claude Code background task notifications) skip beforeProviderStart.
       // IM relay decides synchronously inside this call, before the first event fans out.
-      void publishProviderInitiatedTurn(session);
+      channelTurn.onProviderInitiatedTurn();
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
       if (session.remoteHostId) return;

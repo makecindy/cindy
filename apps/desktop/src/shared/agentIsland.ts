@@ -43,6 +43,8 @@ export interface AgentIslandCompanionSnapshot {
  * Renderer-facing session snapshot for the macOS Agent Island overlay.
  */
 export interface AgentIslandSessionSnapshot {
+  /** Group-message UI only; never a maker task or a remotely relayed activity. */
+  groupChat?: { avatars: AgentIslandCompanionSnapshot[]; mentionLabel?: string };
   /** Opaque identity of the completed card, issued by its owning process. */
   completionToken?: string;
   /** This completion preserves older unread state without requesting a new alert. */
@@ -801,6 +803,52 @@ export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
 export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = 'agent-island:select-sound-file';
 /** renderer(主窗)→ main:按侧栏「任务范围」筛过的远程设备任务活动。 */
 export const AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL = 'agent-island:set-remote-sessions';
+// Local main-window presentation only; never exposed through device-link.
+export const AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL = 'agent-island:set-companion-chats';
+export const AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL = 'agent-island:read-companion-chat';
+
+export interface AgentIslandCompanionChatInput {
+  sessionId: string;
+  botId: string;
+  deviceId: string | null;
+  companion: AgentIslandRemoteCompanionInput;
+  visible: boolean;
+  unread: boolean;
+  lastMessageAt: number;
+  preview: string;
+}
+
+export interface AgentIslandCompanionChatsInput {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+  chats: AgentIslandCompanionChatInput[];
+}
+
+export interface AgentIslandCompanionChatRead extends AgentIslandCompanionChatInput {
+  readThroughAt: number;
+}
+
+export function parseAgentIslandCompanionChats(raw: unknown): AgentIslandCompanionChatInput[] | null {
+  if (!Array.isArray(raw) || raw.length > AGENT_ISLAND_REMOTE_SESSIONS_MAX) return null;
+  const chats: AgentIslandCompanionChatInput[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null;
+    const row = item as Record<string, unknown>;
+    const sessionId = readBoundedString(row.sessionId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const botId = readBoundedString(row.botId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const deviceId = row.deviceId === null ? null : readBoundedString(row.deviceId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const companion = readRemoteCompanion(row.companion);
+    if (!sessionId || !botId || !companion || (row.deviceId !== null && !deviceId)
+      || typeof row.visible !== 'boolean' || typeof row.unread !== 'boolean'
+      || typeof row.lastMessageAt !== 'number' || !Number.isFinite(row.lastMessageAt) || row.lastMessageAt < 0
+      || seen.has(sessionId)) return null;
+    seen.add(sessionId);
+    chats.push({ sessionId, botId, deviceId, companion, visible: row.visible, unread: row.unread,
+      lastMessageAt: row.lastMessageAt, preview: readBoundedString(row.preview, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '' });
+  }
+  return chats;
+}
 
 /**
  * 远程设备(device-link「我控制它」)任务的活动镜像,供本机灵动岛与桌面通知使用。

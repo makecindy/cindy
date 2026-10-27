@@ -79,7 +79,7 @@ export function dueEventType(row: WatchedSession, now: number): AutonomyEventTyp
     case 'finished':
       // 自动化运行的任务有自己的结果通知，「做完」不再叫醒伙伴；卡住 / 等你 / 出错照常。
       // 伙伴主任务的一轮回复做完不是「任务做完」：否则别的伙伴每回一句话都会叫醒总调度。
-      return row.source === 'routine' || row.canonicalOfBotId ? null : 'finished';
+      return row.source === 'routine' || row.canonicalOfBotId || !row.finalDelivery ? null : 'finished';
     default:
       return null;
   }

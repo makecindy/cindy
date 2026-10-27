@@ -259,6 +259,24 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     };
   }
 
+  it('writes model-scoped compaction without replacing the inherited policy of other models or providers', async () => {
+    const agent = new PiAgent(buildDeps({
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9', piAutoCompactThresholdPct: 85 },
+      capabilityAdditions: { availableModels: [
+        { id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null },
+        { id: 'other', displayName: 'Other', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      ] },
+      resolveModelCompactionPct: (source, model) => source === 'xd' && model === 'm' ? 75 : null,
+    }));
+    const handle = await agent.startSession({ sessionId: 'compaction-policy', workingDir: cwd, model: 'm', providerId: 'xd' });
+    try {
+      const home = knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!;
+      const settings = JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8'));
+      expect(settings.compaction.modelOverrides['cindy/m'].reserveTokens).toBe(50_000);
+      expect(settings.compaction.modelOverrides['cindy/other'].reserveTokens).toBe(30_000);
+    } finally { await handle.close(); }
+  });
+
   function approvedInput(
     workingDir: string,
     revision: string,

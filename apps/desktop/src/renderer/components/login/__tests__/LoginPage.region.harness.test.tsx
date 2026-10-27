@@ -43,7 +43,7 @@ vi.mock('react-i18next', () => ({
       params ? [key, ...Object.values(params)].join('#') : (CONSENT_TEXT[key] ?? key),
   }),
 }));
-// 构建区域 = global(LEGAL_LINKS 亦随之解析为 protocol.xd.com 系)
+// 构建区域 = global(LEGAL_LINKS 亦随之解析为 cindy.app 系)
 vi.mock('../../../../shared/brandRegion', () => ({
   CURRENT_CINDY_REGION: 'global',
   CURRENT_APP_ID: 'com.xd.cindy',
@@ -53,8 +53,8 @@ vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => 
 
 import { LoginPage } from '../LoginPage';
 
-const GLOBAL_TERMS_URL = 'https://protocol.xd.com/cindy/agreement-1.0.html';
-const GLOBAL_PRIVACY_URL = 'https://protocol.xd.com/cindy/privacy.html';
+const GLOBAL_TERMS_URL = 'https://cindy.app/terms';
+const GLOBAL_PRIVACY_URL = 'https://cindy.app/privacy';
 
 async function globalIdentifierState(scenario = 'providers:global-social'): Promise<AuthFlowState> {
   const client = new CindyAuthClient({
@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe('Global 构建变体:登录改版四件事同样生效', () => {
-  it('确实处于 Global 变体(不挂区域徽标 + 邮箱 identifier + 协议链接走 protocol.xd.com)', async () => {
+  it('确实处于 Global 变体(不挂区域徽标 + 邮箱 identifier + 协议链接走 cindy.app)', async () => {
     mount(await globalIdentifierState());
     // global 构建不挂徽标(#554 起的产品叙事硬规则,DESIGN.md §16.3:不得回退);
     // cn / dev 才标注。徽标的三档区域映射本身由 LoginPage.regionPill.test 覆盖,

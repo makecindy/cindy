@@ -1,3 +1,4 @@
+import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -82,6 +83,8 @@ interface GhostPluginDetailViewProps {
   remote?: boolean;
   remoteFileUpdate?: boolean;
   ghost: InstalledGhost | null;
+  /** Only a verified server-market association can offer public sharing. */
+  sharePluginId?: string;
   detail: GhostPluginDetail;
   marketItem?: PluginMarketItem | null;
   panelStatus: string | null;
@@ -129,6 +132,7 @@ export function GhostPluginDetailView({
   remoteFileUpdate = false,
   remoteConfiguration,
   ghost,
+  sharePluginId,
   detail,
   panelStatus,
   enabledOverride,
@@ -196,6 +200,7 @@ export function GhostPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
+        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : undefined}
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader

@@ -254,11 +254,11 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     const h = createSessionHarness(acceptingSend());
     Object.assign(h.session, { stablePermissionModeState: { mode, generation: 0 } });
     const { runner, maker } = createRunnerHarness(h.session);
-    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'low', workDir: '/repo/project' } as never);
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: mode, planModeEnabled: true });
     const fire = runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), createFireContext());
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: mode, planMode: true, id: 'bot-session' }));
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: mode, planMode: true, effort: 'low', id: 'bot-session' }));
     expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ permissionMode: null }), expect.anything());
     expect(h.session.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ planMode: true }));
     expect(mocks.createMessage.mock.calls[0][1].content).not.toBe('review pending PRs');
@@ -583,13 +583,28 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     expect(notifiedRun(notifier).resultText).toBe('final summary');
   });
 
+  it.each([
+    ...['cancelled', 'failed', 'interrupted', 'aborted'].map(status => ({ source: 'pi' as const, data: { status }, status })),
+    { source: 'codex' as const, data: { cancelled: true }, status: 'cancelled' },
+  ])('does not record $source $status as success when the scheduler signal is still live', async ({ source, data, status }) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const ctx = createFireContext();
+    const fire = runner.fire(baseSchedule(), ctx);
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'done', source, data: { ...data, result: '' } });
+    await expect(fire).rejects.toThrow(`Scheduled turn ended with status: ${status}`);
+    expect(ctx.signal.aborted).toBe(false);
+    expect(notifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: `Scheduled turn ended with status: ${status}` });
+  });
+
   it('continuation task stopped after done 收到 provider cancellation 后立即收口', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner, notifier } = createRunnerHarness(h.session);
 
     const firePromise = runner.fire(baseSchedule(), createFireContext());
     let resolved = false;
-    void firePromise.then(() => { resolved = true; });
+    void firePromise.then(() => { resolved = true; }, () => { resolved = true; });
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
 
     h.emit(taskUpdate('bg-task-1', 'running'));
@@ -600,8 +615,8 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     expect(resolved).toBe(false);
 
     h.setContinuationState(3, 'cancelled', true);
-    await firePromise;
-    expect(notifiedRun(notifier).resultText).toBe('等待后台任务');
+    await expect(firePromise).rejects.toThrow('Scheduled turn continuation was cancelled');
+    expect(notifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: 'Scheduled turn continuation was cancelled' });
   });
 
   it('host 消费父 done 前 continuation 已 active，仍等待第二个 done', async () => {

@@ -268,7 +268,8 @@ function normalizeWorkingDirForGrouping(raw: string | null | undefined): string 
     if (/^[A-Za-z]:\/$/.test(out)) break;
     out = out.slice(0, -1);
   }
-  return collapseWorktreeDirForGrouping(out);
+  const collapsed = collapseWorktreeDirForGrouping(out);
+  return isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 function stripWindowsLongPathPrefix(value: string): string {

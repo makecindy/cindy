@@ -371,9 +371,11 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(source).not.toContain('scrollEnabled={!textSelectionActive}');
 
     // e2e 流程与新交互对齐:长按正文文字 → 系统选择菜单 → Copy。
+    // 精确匹配系统菜单项,避免代码块新增的 Copy Code 按钮抢先命中,让这条
+    // 原生选择回归重新退化成验证整块复制。
     expect(flowSource).toContain('id: "message.markdownBody"');
-    expect(flowSource).toContain('visible: "Copy"');
-    expect(flowSource).toContain('- tapOn: "Copy"');
+    expect(flowSource).toContain('text: "^Copy$"');
+    expect(flowSource).toContain('- tapOn:\n    text: "^Copy$"');
     expect(flowSource).not.toContain('message.textSelectionModal');
     expect(flowSource).not.toContain('message.selectableMarkdownBody');
   });

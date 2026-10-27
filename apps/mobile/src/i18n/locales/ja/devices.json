@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 台を開けます",
       "filterMetaWithUnavailable": "{{available}} 台を開けます · {{unavailable}} 台は対応が必要です",
       "showUnavailableReason": "デバイスを展開すると利用できない理由を確認できます",
-      "emptyCopy": "コンピューターで同じアカウントにログインし、設定のリモートコントロールで「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
+      "emptyCopy": "コンピューターで同じアカウントにログインし、「設定 → リモート接続」で「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
       "emptyTitle": "表示できるコンピューターはまだありません",
       "hideUnavailableA11y": "利用できないコンピューターを非表示",
       "showUnavailableA11y": "利用できないコンピューターを表示",

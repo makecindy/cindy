@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 臺可進入",
       "filterMetaWithUnavailable": "{{available}} 臺可進入 · {{unavailable}} 臺需處理",
       "showUnavailableReason": "展開裝置可查看無法使用的原因",
-      "emptyCopy": "在電腦端登入同一帳號，並在設定的遠端控制中開啟「允許同帳號裝置控制本機」。",
+      "emptyCopy": "在電腦端登入同一帳號，並在「設定 → 遠端連線」中開啟「允許同帳號裝置控制本機」。",
       "emptyTitle": "還沒有可顯示的電腦",
       "hideUnavailableA11y": "隱藏無法使用的電腦",
       "showUnavailableA11y": "顯示無法使用的電腦",

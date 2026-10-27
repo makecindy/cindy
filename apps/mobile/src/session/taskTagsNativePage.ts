@@ -8,6 +8,7 @@ export const TAG_SWATCH = { row: 22, picker: 28 } as const;
 export function useTaskTagsNativePage() {
   const [page, setPage] = useState<TaskTagsPage | null>(null);
   const [backDisabled, setBackDisabled] = useState(false);
+  const [sorting, setSorting] = useState(false);
   const backRef = useRef<() => void>(() => {});
   const onPageChange = useCallback(
     (next: TaskTagsPage | null, back: () => void, blocked = false) => {
@@ -18,7 +19,7 @@ export function useTaskTagsNativePage() {
     [],
   );
   const back = useCallback(() => backRef.current(), []);
-  return { page, back, backDisabled, onPageChange };
+  return { page, back, backDisabled, onPageChange, sorting, onSortingChange: setSorting };
 }
 
 export function taskTagsPageTitle(page: TaskTagsPage, t: (key: string) => string) {

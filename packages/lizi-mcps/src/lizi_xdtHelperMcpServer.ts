@@ -1,3 +1,4 @@
+import { registerTaskDeliveryTool, type TaskDeliveryCallbacks } from './xdt-helper/report_task_delivery.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
@@ -122,14 +123,14 @@ export type {
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
 
 const D_LIST_TOOLS =
-  `探索当前任务获准使用的 ${BRAND_NAME} 辅助能力。` +
-  '不传 category 先取得可用类目（含每类的用途与作用范围：本机 / 可跨电脑）；只在确有需要时查看一个类目，再用 call_tool 执行。';
+  `探索当前任务获准的 ${BRAND_NAME} 能力：登录、验证码、二维码交接查 auth；` +
+  '其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
   '调用 list_tools 为当前任务返回的一个具体工具。不要猜工具名，也不要把它当成通用命令入口。';
 
 const LIST_TOOLS_INPUT = {
-  category: z.string().optional().describe('list_tools 上一步返回的类目；不传则先取类目概览。'),
+  category: z.string().optional().describe('要查看的类目；不传则取当前任务的可用类目概览。'),
 };
 const CALL_TOOL_INPUT = {
   name: z.string().describe('工具名,从 list_tools 获取(如 get_capabilities)'),
@@ -146,8 +147,8 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  cindy: `${BRAND_NAME} 能力说明与当前任务信息；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
-  auth: '供应商授权登录（Grok 设备码）。本机。',
+  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
+  auth: '本机窗口的账号、密码、验证码、二维码交给主人填写或扫码（request_input_handoff）；Grok 设备码授权。',
   control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改仅本机。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
@@ -284,7 +285,7 @@ function registerListToolsEntry(
                 tools: tools.map((t) => ({
                   name: t.name,
                   description: t.description,
-                  ...(t.category === 'bots' || t.category === 'skills' ? {
+                  ...(t.category === 'bots' || t.category === 'skills' || t.category === 'auth' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),
                 })),
@@ -770,6 +771,8 @@ export interface XdtHelperMcpDeps {
     context: import('./types.js').LiziMcpSessionContext,
     query: import('./xdt-helper/get_capabilities.js').RuntimeCapabilityQuery,
   ) => Promise<unknown>;
+  /** 产品帮助文档(设置页帮助助手同一份),供 get_capabilities scope=help 读取;不注入则该 scope 返回 HELP_UNAVAILABLE。 */
+  productHelpDocs?: readonly import('./xdt-helper/get_capabilities.js').ProductHelpDoc[];
   /**
    * 历史聊天数据查询的回调集合(读本地 SQLite 的 sessions / messages 表)。host
    * 注入后, history 类工具(list_workdirs / list_sessions / get_chat_history /
@@ -833,6 +836,7 @@ export interface XdtHelperMcpDeps {
    * set_current_session_title 会被注册; 不注入则不出现在 list_tools 里。
    */
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
+  taskDelivery?: TaskDeliveryCallbacks;
   askUserQuestionAsync?: AskUserQuestionAsyncCallback;
   /**
    * 批量 session 标题更新回调。host 注入后, control 类工具 rename_sessions 会被注册。
@@ -897,7 +901,7 @@ export function createXdtHelperMcpServer(
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry, deps.runtimeCapabilities
     ? (query) => deps.runtimeCapabilities!(resolveLiziMcpSessionContext(sessionCtx), query)
-    : undefined);
+    : undefined, deps.productHelpDocs);
   if (deps.appUpdate) {
     registerAppUpdateTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -917,6 +921,9 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       execute: deps.sessionTags,
     });
+  if (deps.taskDelivery) {
+    registerTaskDeliveryTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.taskDelivery);
+  }
   if (deps.setCurrentSessionTitle) {
     registerSetCurrentSessionTitleTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),

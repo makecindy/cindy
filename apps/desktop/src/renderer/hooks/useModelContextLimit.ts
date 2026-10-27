@@ -21,7 +21,7 @@ export function useModelContextLimit(target: ModelContextLimitTarget | null) {
   const generation = useRef(0);
 
   const run = useCallback(
-    async (write?: { limit: number | null }) => {
+    async (write?: { limit: number | null } | { compactionPct: number | null }) => {
       const request = ++generation.current;
       if (!stableTarget) {
         setState({ ...EMPTY, key, loading: false, error: false });
@@ -33,7 +33,9 @@ export function useModelContextLimit(target: ModelContextLimitTarget | null) {
       setState((prev) => ({ ...prev, loading: true, error: false }));
       try {
         let view = write
-          ? await window.electronAPI.maker.setModelContextLimit(stableTarget, write.limit, stamp)
+          ? 'compactionPct' in write
+            ? await window.electronAPI.maker.setModelCompaction(stableTarget, write.compactionPct, stamp)
+            : await window.electronAPI.maker.setModelContextLimit(stableTarget, write.limit, stamp)
           : await window.electronAPI.maker.getModelContextLimit(stableTarget);
         if (write && stableTarget.agent === 'codex' && current()) {
           view = await window.electronAPI.maker.getModelContextLimit(stableTarget);
@@ -70,5 +72,6 @@ export function useModelContextLimit(target: ModelContextLimitTarget | null) {
 
   const setLimit = useCallback((limit: number | null) => run({ limit }), [run]);
   const reset = useCallback(() => run({ limit: null }), [run]);
-  return { ...(state.key === key ? state : { ...EMPTY, loading: true, error: false }), setLimit, reset };
+  const setCompaction = useCallback((compactionPct: number | null) => run({ compactionPct }), [run]);
+  return { ...(state.key === key ? state : { ...EMPTY, loading: true, error: false }), setLimit, reset, setCompaction };
 }

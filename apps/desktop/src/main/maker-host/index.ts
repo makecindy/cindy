@@ -7,6 +7,7 @@ import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
+import { ensureCodexCliLauncher } from '../agent-binaries/codex-cli-launcher.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
@@ -120,6 +121,7 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
+  captureLocalWorkerReport,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
@@ -203,7 +205,7 @@ import {
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
-import { readModelContextLimit } from './model-context-limit-store.js';
+import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
@@ -1012,6 +1014,7 @@ export function getMaker(): Maker {
         'getMaker: Codex binary not provisioned (bootstrap must run agent-binaries.prepare("codex") before getMaker)',
       );
     }
+    ensureCodexCliLauncher(codexPath);
     // bundled ripgrep 检查与上面 claude/codex 二进制同层:真正的启动期 fail-fast
     // 在 splash check-environment(Phase 2.5,缺 rg 时 splash 进失败态可重试);
     // 这里是防御性断言 —— 走到本函数说明 bootstrap 已完成环境检查,缺 rg 即顺序
@@ -1296,6 +1299,7 @@ export function getMaker(): Maker {
         };
       },
       dispatchInterAgentMessage,
+      captureLocalWorkerReport,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
@@ -1448,6 +1452,10 @@ export function getMaker(): Maker {
         const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
         return source ? readModelContextLimit('claude-code', source, modelId)
           ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
+      },
+      resolveModelCompactionPct: (providerId, modelId) => {
+        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
+        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
       },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
@@ -1794,6 +1802,10 @@ export function getMaker(): Maker {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
         return source ? readModelContextLimit('codex', source, modelId) : null;
       },
+      resolveModelCompactionPct: (providerId, modelId) => {
+        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
+        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, modelId);
+      },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
@@ -2107,6 +2119,7 @@ export function getMaker(): Maker {
               modelId,
               contextWindow,
               modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
+              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
               resolveContextWindow: (nativeModelId) => {
                 return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
                   ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
@@ -2213,6 +2226,7 @@ export function getMaker(): Maker {
         sessionInstanceId,
         mcpCallerKind,
         mcpCallerAttested,
+        nativeHarnessHook,
         workingDir,
         memoryScopeKey,
         remoteHostId,
@@ -2229,6 +2243,7 @@ export function getMaker(): Maker {
           sessionId,
           mcpCallerKind,
           mcpCallerAttested,
+          ...(nativeHarnessHook ? { nativeHarnessHook } : {}),
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           ...(memoryScopeKey ? { memoryScopeKey } : {}),

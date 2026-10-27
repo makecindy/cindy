@@ -15,6 +15,7 @@ export type LocalDbFatalView =
   | 'install-update'
   | 'preparing-update'
   | 'no-update'
+  | 'retry-local-db'
   | 'init-failed'
   | 'corrupt';
 
@@ -24,6 +25,7 @@ export function resolveLocalDbFatalView(
   status: UpdateStatusValue | undefined,
   code?: string,
 ): LocalDbFatalView {
+  if (code === 'DB_SCHEMA_LOCKED') return 'retry-local-db';
   // 错误码是第一决策维度：只有 MIGRATE_FAILED（或未知码，保持旧行为）才走更新链路。
   if (code === 'DB_CORRUPT_NO_BACKUP') return 'corrupt';
   if (code === 'DB_INIT_FAILED') return 'init-failed';

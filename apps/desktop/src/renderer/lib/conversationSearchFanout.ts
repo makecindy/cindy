@@ -29,7 +29,7 @@ import {
   normalizeProjectKey,
   projectKeyComparisonKey,
 } from '../../shared/projectKeys';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir';
+import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 
 export interface ConversationSearchDevice {
@@ -510,7 +510,7 @@ function normalizeWorkingDirSet(value: string[] | null | undefined): Set<string>
   if (value == null || !Array.isArray(value)) return null;
   const out = new Set<string>();
   for (const item of value) {
-    const normalized = normalizeWorkingDirForGrouping(item);
+    const normalized = normalizeWorkingDirForComparison(item);
     if (normalized) out.add(normalized);
   }
   return out.size > 0 ? out : null;
@@ -521,7 +521,7 @@ function matchesWorkingDirSet(
   allowed: Set<string> | null,
 ): boolean {
   if (allowed == null) return true;
-  const key = normalizeWorkingDirForGrouping(workingDir);
+  const key = normalizeWorkingDirForComparison(workingDir);
   return key != null && allowed.has(key);
 }
 

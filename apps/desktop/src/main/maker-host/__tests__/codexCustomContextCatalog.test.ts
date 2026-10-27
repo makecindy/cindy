@@ -39,6 +39,21 @@ async function createFixtureBinary(
 }
 
 describe('Codex custom context model catalog', () => {
+  it('writes separate compaction thresholds per model and keeps the legacy ratio for unedited models', async () => {
+    const { root, binaryPath } = await createFixtureBinary({ models: [
+      { slug: 'gpt-a', context_window: 400_000, max_context_window: 1_000_000 },
+      { slug: 'gpt-b', context_window: 200_000, max_context_window: 1_000_000 },
+    ] });
+    const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
+      modelId: 'gpt-a', contextWindow: 400_000,
+      resolveContextWindow: () => 200_000,
+      resolveCompactionPct: id => id === 'gpt-a' ? 75 : null,
+    });
+    expect(JSON.parse(await fs.readFile(result.catalogPath, 'utf8')).models).toMatchObject([
+      { slug: 'gpt-a', context_window: 400_000, auto_compact_token_limit: 300_000 },
+      { slug: 'gpt-b', context_window: 200_000, auto_compact_token_limit: 180_000 },
+    ]);
+  });
   // Unit: a guest's native Codex children used the unfiltered binary catalog.
   // One granted model must keep native metadata while the ungranted sibling
   // disappears from the actual model_catalog_json passed to app-server.

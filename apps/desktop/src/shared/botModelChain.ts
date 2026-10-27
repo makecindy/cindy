@@ -121,7 +121,7 @@ export function botProfileModelSelectionChanged(previous: Record<string, unknown
   // shape the settings save uses, so adding mirror fields is not a model edit.
   previous = normalizeBotProfileModelChain(previous);
   next = normalizeBotProfileModelChain(next);
-  return ['modelChainOverride', 'modelOverride', 'modelChain', 'harness', 'model', 'providerId', 'effort', 'fastMode']
+  return ['modelChainOverride', 'modelOverride', 'modelChain', 'harness', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode']
     .some((key) => JSON.stringify(previous[key] ?? null) !== JSON.stringify(next[key] ?? null));
 }
 

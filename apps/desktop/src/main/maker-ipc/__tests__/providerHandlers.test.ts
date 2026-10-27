@@ -132,6 +132,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     getModelCatalog: () => BUNDLED_CATALOG,
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
+    accountUsage: vi.fn(async (): Promise<import('../../../shared/providerAccountUsage.js').ProviderAccountUsageResult> => ({ status: 'unsupported' })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
     rediscoverModels: vi.fn(async () => null),
     refreshBuiltinModels: vi.fn(async () => {}),
@@ -167,6 +168,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     writeModelPriceOverride: vi.fn(() => {}),
     clearModelPriceOverride: vi.fn(() => {}),
     stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
+    stageClearProviderModelCompaction: vi.fn(() => () => true),
     broadcastPricingChanged: vi.fn(() => {}),
     ...over,
   };
@@ -2624,6 +2626,7 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect(deps.stageClearProviderDisableOverrides).toHaveBeenCalledWith('custom:xai');
     expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('custom:xai');
+    expect(deps.stageClearProviderModelCompaction).toHaveBeenCalledWith('custom:xai');
     expect(await listCustomProviders()).toEqual([]);
   });
 
@@ -3346,6 +3349,46 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.name).toBe('Second edit');
   });
 
+  // PR #7460 P1: the old delete transaction cleaned prices/disable flags only.
+  // Unit: delete + recreate must not revive a saved percentage; failed deletion
+  // must preserve it. Existing deletion tests never supplied compaction state.
+  it.each(['success', 'oauth-failed', 'cleanup-failed', 'restore-failed'] as const)(
+    'cleans model compaction inside the provider deletion transaction (%s)', async (outcome) => {
+      mountDb();
+      const harness = new IpcHarness();
+      let pct: number | null = 65;
+      const deps = makeDeps({
+        stageClearProviderModelCompaction: vi.fn(() => {
+          if (outcome === 'cleanup-failed') throw new Error('compaction cleanup failed');
+          const previous = pct;
+          pct = null;
+          return () => {
+            if (outcome === 'restore-failed') return false;
+            pct = previous;
+            return true;
+          };
+        }),
+        removeOAuthCredentials: vi.fn(() => outcome === 'success' ? () => true : null),
+      });
+      registerProviderHandlers(harness, deps);
+      await createCustomProvider(validConfig);
+      const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, validConfig.id);
+      if (outcome === 'success') {
+        await expect(deletion).resolves.toEqual({ ok: true });
+        expect(await getCustomProvider(validConfig.id)).toBeNull();
+        await createCustomProvider(validConfig);
+        expect(pct).toBeNull();
+      } else {
+        const message = outcome === 'cleanup-failed' ? 'compaction cleanup failed'
+          : outcome === 'restore-failed' ? 'could not be restored' : 'failed to remove existing OAuth';
+        await expect(deletion).rejects.toThrow(message);
+        expect(await getCustomProvider(validConfig.id)).not.toBeNull();
+        expect(pct).toBe(outcome === 'restore-failed' ? null : 65);
+        if (outcome === 'cleanup-failed') expect(deps.removeOAuthCredentials).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3414,6 +3457,7 @@ describe('provider:custom:* CRUD handlers', () => {
       const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id).catch(error => error);
       await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
       const writes = [deps.stageClearProviderDisableOverrides, deps.stageClearProviderModelPriceOverrides,
+        deps.stageClearProviderModelCompaction,
         deps.removeOAuthCredentials, deps.removeCustomProviderKey, deps.removeCustomProviderHeaders];
       for (const write of writes) expect(write).not.toHaveBeenCalled();
       if (outcome === 'switch-account') owner.generation++;
@@ -4592,6 +4636,29 @@ describe('model context limit IPC', () => {
   const primary = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-6' };
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+
+  it('saves model compaction for all aliases with owner and range validation', async () => {
+    const harness = new IpcHarness();
+    const writeModelCompaction = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: vi.fn(), writeModelCompaction,
+      readModelCompaction: () => ({ pct: 90, isCustomized: false }),
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, target)).resolves.toMatchObject({
+      compaction: { pct: 90, isCustomized: false },
+    });
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
+    expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
+    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
+    }
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+  });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
     const harness = new IpcHarness();

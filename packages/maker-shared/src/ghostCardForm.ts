@@ -27,11 +27,7 @@ export function parseMailAttachmentItems(value: string): MailAttachmentItem[] | 
       ...(typeof i.previewUrl === 'string' && /^cindy-media:\/\/blobs\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(i.previewUrl) ? { previewUrl: i.previewUrl } : {}) }));
   } catch { return null; }
 }
-/** Presentation only: body images keep their MIME parts and preview URLs, but
- * do not also appear as attachments. Removing the reference reveals them again. */
-export function visibleMailAttachments(values: Record<string, string>, field = 'attachmentItems'): MailAttachmentItem[] {
-  const files = parseMailAttachmentItems(values[field]) || [];
-  if (!files.some(file => file.contentId)) return files;
+function usedMailImageCids(values: Record<string, string>): Set<string> {
   const used = new Set<string>();
   const walk = (node: DefaultTreeAdapterTypes.Node) => {
     if ('tagName' in node) {
@@ -44,6 +40,14 @@ export function visibleMailAttachments(values: Record<string, string>, field = '
     if ('childNodes' in node) for (const child of node.childNodes) walk(child);
   };
   for (const name of ['bodyHtml', 'quoteHtml']) if (values[name]) walk(parse(values[name]));
+  return used;
+}
+/** Presentation only: body images keep their MIME parts and preview URLs, but
+ * do not also appear as attachments. Removing the reference reveals them again. */
+export function visibleMailAttachments(values: Record<string, string>, field = 'attachmentItems'): MailAttachmentItem[] {
+  const files = parseMailAttachmentItems(values[field]) || [];
+  if (!files.some(file => file.contentId)) return files;
+  const used = usedMailImageCids(values);
   return files.filter(file => !file.contentId || !used.has(file.contentId.replace(/^<|>$/g, '')));
 }
 /** Remove the MIME part and its visible CID image together, preserving the rest
@@ -64,7 +68,7 @@ export function removeMailAttachment(values: Record<string, string>, field: stri
 export function canInsertMailImage(values: Record<string, string>, file: MailAttachmentItem): boolean {
   if (typeof values.bodyHtml !== 'string' || !/^image\/(png|jpeg|gif|webp)$/i.test(file.mimeType || '')) return false;
   const cid = file.contentId?.replace(/^<|>$/g, '');
-  return !cid || !(values.bodyHtml + (values.quoteHtml || '')).includes('cid:' + cid);
+  return !cid || !usedMailImageCids(values).has(cid);
 }
 /** Reuse an existing MIME part. Only its CID/disposition changes; its bytes
  * remain at the provider. Preview URLs are never written into the HTML. */

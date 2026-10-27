@@ -47,7 +47,7 @@ interface Started {
   /** 这台上是否正在运行一轮(写进状态)。 */
   running: boolean;
   /** 这台上的 Agent 事件流意外结束(进程退出等)。 */
-  end(): void;
+  end(error?: Error): void;
 }
 
 function fakeAgentHost(name: string, started: Started[], options: {
@@ -62,6 +62,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   failStart?: boolean;
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
+  onSend?: (record: Started) => void | Promise<void>;
   /** 转分享的同意(本机是分享者)。 */
   reshare?: Parameters<typeof createRemoteAgentHost>[0]['reshare'];
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
@@ -78,6 +79,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       const queue: AgentEvent[] = [];
       let wake: (() => void) | null = null;
       let ended = false;
+      let endError: Error | undefined;
       const record: Started = {
         input,
         sends: [],
@@ -87,8 +89,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
           wake?.();
           wake = null;
         },
-        end() {
+        end(error) {
           ended = true;
+          endError = error;
           wake?.();
           wake = null;
         },
@@ -100,6 +103,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
         model: input.options.model,
         async send(message) {
           record.sends.push(message);
+          await options.onSend?.(record);
         },
         async steer() {},
         async abort() {},
@@ -110,6 +114,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
             next: async () => {
               if (options.endImmediately) return { value: undefined as unknown as AgentEvent, done: true };
               while (queue.length === 0 && !ended) await new Promise<void>((resolve) => { wake = resolve; });
+              if (queue.length === 0 && endError) throw endError;
               if (queue.length === 0) return { value: undefined as unknown as AgentEvent, done: true };
               return { value: queue.shift()!, done: false };
             },
@@ -205,11 +210,12 @@ function setup(options: {
   miniCapable?: boolean;
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
-  mini?: { failStart?: boolean; endImmediately?: boolean;
+  mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
-  owner?: { failStart?: boolean; prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
+  owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
@@ -880,6 +886,220 @@ describe('provider group relay: starting, load and cleanup', () => {
 });
 
 describe('provider group "switch to another computer" for shared users', () => {
+  // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
+  // Existing cases emitted a terminal event independently of send(), missing the
+  // quota RPC rejection that could overtake the switch offer and lose recovery.
+  // Cover local/relayed execution and both native-event orders; one failure must
+  // produce one offer/error before rejecting send, then one send on the new host.
+  it.each(['local', 'member'] as const)('settles quota replies through one switch offer on %s', async placement => {
+    for (const eventFirst of [true, false]) {
+      const onSend = (record: Started) => {
+        if (eventFirst) record.emit(USAGE_LIMIT_ERROR);
+        throw new Error('You have hit your usage limit');
+      };
+      const env = setup({
+        plans: [
+          placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+          { kind: 'member', ...MEMBER_STUDIO },
+          { kind: 'member', ...MEMBER_STUDIO },
+        ],
+        ...(placement === 'local' ? { owner: { onSend } } : { mini: { onSend } }),
+      });
+      const first = await openAsGuest(env, GUEST_A, openPayload(`${SESSION}-${eventFirst}`, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, { throwOnStartFailure: true }]))
+          .rejects.toThrow('usage limit');
+        const token = switchTokenIn(first.stream);
+        expect(token).toBeDefined();
+        const errors = () => first.stream.filter(item => item.t === 'event' && item.event.type === 'error');
+        expect(errors()).toHaveLength(1);
+        expect(first.stream.findIndex(item => item.t === 'state' && item.state.providerGroupSwitch === token))
+          .toBeLessThan(first.stream.findIndex(item => item.t === 'event' && item.event.type === 'error'));
+
+        // A late or repeated SDK terminal must not offer another switch or resume.
+        record.emit(USAGE_LIMIT_ERROR);
+        record.emit({ type: 'status', source: 'claude-code', data: { status: 'quota-tail-flushed' } });
+        await waitFor(() => first.stream.some(item => item.t === 'event'
+          && (item.event.data as { status?: string })?.status === 'quota-tail-flushed'));
+        expect(errors()).toHaveLength(1);
+        expect(first.stream.filter(item => item.t === 'state' && item.state.providerGroupSwitch)).toHaveLength(1);
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(1);
+        await first.client.close('close', 'navigation');
+
+        const next = await openAsGuest(env, GUEST_A, openPayload(`${SESSION}-${eventFirst}`, {
+          acceptsGroupSwitch: true, groupSwitchToken: token,
+        }));
+        try {
+          await next.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]);
+          expect(env.memberStarted.studio[0].sends).toHaveLength(1);
+          expect(record.sends).toHaveLength(1);
+        } finally {
+          await next.client.close('close', 'navigation');
+        }
+      } finally {
+        await first.client.close('close', 'navigation');
+        for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+      }
+    }
+  });
+
+  it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
+    const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]))
+        .rejects.toThrow('request timed out');
+      expect(switchTokenIn(first.stream)).toBeUndefined();
+      expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+    } finally {
+      await first.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  it('ignores an obsolete quota rejection after the user stops and sends again', async () => {
+    let entered!: () => void;
+    const sending = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const response = new Promise<void>(resolve => { release = resolve; });
+    const env = setup({ mini: { onSend: async record => {
+      if (record.sends.length > 1) return;
+      entered();
+      await response;
+      throw new Error('You have hit your usage limit');
+    } } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const obsolete = first.client.call('send', [{ type: 'user', content: 'old attempt' }, {}]).catch(error => error);
+    try {
+      await sending;
+      await first.client.call('abort', []);
+      await first.client.call('send', [{ type: 'user', content: 'new attempt' }, { groupNewRound: true }]);
+      release();
+      expect(await obsolete).toMatchObject({ message: expect.stringContaining('usage limit') });
+      expect(env.memberStarted.mini[0].sends).toHaveLength(2);
+      expect(switchTokenIn(first.stream)).toBeUndefined();
+      expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await first.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // A delayed group decision used to let the RPC rejection overtake its terminal
+  // event. Keep it pending while another controller completes a send on the same
+  // member: the failure's scope is one run, without resetting any shared link.
+  it('holds a quota rejection behind its switch decision without blocking another controller', async () => {
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      mini: { onSend: record => {
+        if (record !== failing) return;
+        record.emit(USAGE_LIMIT_ERROR);
+        throw new Error('You have hit your usage limit');
+      } },
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const failing = env.memberStarted.mini[0];
+    const other = await openAsGuest(env, GUEST_B, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    let release!: () => void;
+    const decision = new Promise<void>(resolve => { release = resolve; });
+    env.relay.plan.mockImplementationOnce(async () => {
+      await decision;
+      return { kind: 'member', ...MEMBER_STUDIO };
+    });
+    let rejected = false;
+    const send = first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]).catch(error => {
+      rejected = true;
+      return error;
+    });
+    try {
+      await waitFor(() => env.relay.plan.mock.calls.length === 3);
+      await other.client.call('send', [{ type: 'user', content: 'unrelated task' }, {}]);
+      expect(env.memberStarted.mini[1].sends).toHaveLength(1);
+      expect(other.isClosed()).toBe(false);
+      expect(switchTokenIn(other.stream)).toBeUndefined();
+      expect(rejected).toBe(false);
+      release();
+      expect(await send).toMatchObject({ message: expect.stringContaining('usage limit') });
+      expect(switchTokenIn(first.stream)).toBeDefined();
+      expect(first.stream.filter(item => item.t === 'event' && item.event.type === 'error')).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.all([first.client.close('close', 'navigation'), other.client.close('close', 'navigation')]);
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // Review r4386499053: an SDK stream/legacy member can end after rejecting send,
+  // before the next-member decision completes. Only passive shutdown must wait;
+  // otherwise closing invalidates the pending offer before it reaches the guest.
+  it.each([
+    ['local', 'end'], ['local', 'error'], ['local', 'explicit'],
+    ['member', 'end'], ['member', 'error'], ['member', 'explicit'],
+  ] as const)('settles pending quota recovery on %s shutdown (%s)', async (placement, endKind) => {
+    let rejectQuota = placement === 'member';
+    const env = setup({
+      plans: [
+        placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_MINI },
+      ],
+      owner: { onSend: () => { throw new Error('You have hit your usage limit'); } },
+      // Model an older member returning a quota rejection without a native error.
+      intercept: async (_device, request, forward) => {
+        if (rejectQuota && request.op === 'call' && request.method === 'send') {
+          rejectQuota = false;
+          throw new Error('You have hit your usage limit');
+        }
+        return forward();
+      },
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+    const other = await openAsGuest(env, GUEST_B, openPayload(SESSION));
+    const memberEnded = placement === 'member'
+      ? vi.spyOn(env.relay.connect(MEMBER_MINI.agentDeviceId).poller, 'unregister')
+      : null;
+    let release!: () => void;
+    const decision = new Promise<void>(resolve => { release = resolve; });
+    env.relay.plan.mockImplementationOnce(async () => {
+      await decision;
+      return { kind: 'member', ...MEMBER_STUDIO };
+    });
+    const send = first.client.call('send', [{ content: 'finish the task' }, {}]).catch(error => error);
+    try {
+      await waitFor(() => env.relay.plan.mock.calls.length === 3);
+      if (endKind === 'explicit') {
+        await first.client.close('close', 'navigation');
+        expect(first.isClosed()).toBe(true);
+        release();
+        await send;
+        expect(switchTokenIn(first.stream)).toBeUndefined();
+        expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+        return;
+      }
+      record.end(endKind === 'error' ? new Error('agent stream ended unexpectedly') : undefined);
+      if (memberEnded) await waitFor(() => memberEnded.mock.calls.length > 0);
+      // Another full round trip lets the passive end propagate while plan waits.
+      await other.client.call('send', [{ content: 'unrelated task' }, {}]);
+      expect(first.isClosed()).toBe(false);
+      expect(other.isClosed()).toBe(false);
+      release();
+      expect(await send).toMatchObject({ message: expect.stringContaining('usage limit') });
+      await waitFor(() => first.isClosed());
+      expect(switchTokenIn(first.stream)).toBeDefined();
+      expect(first.stream.filter(item => item.t === 'event' && item.event.type === 'error')).toHaveLength(1);
+      expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.all([first.client.close('close', 'navigation'), other.client.close('close', 'navigation')]);
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
   it('sends the switch token before the error, and the reopened task avoids the failed computer', async () => {
     const env = setup({
       plans: [

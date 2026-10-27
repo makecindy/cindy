@@ -609,6 +609,8 @@ The usage heatmap, daily-token bars and their separate interaction indicators fo
 Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):
 [Light/Dark before and after](assets/menubar-icon-refinement.png).
 
+- Remote control uses the same active-controller set as the in-app connection indicator. Its menu-bar dot uses a brighter orange (`#FF9F0A`, owner correction, 2026-10-25). The 5pt dot sits near the icon's upper-left corner, centered at (4.5pt, 4.5pt), with a 0.75pt transparent rim, without widening the 18pt icon or moving the unread count. Release builds light it only for active controllers and clear it when the last one leaves; development builds temporarily keep it visible for visual tuning. The number uses 13pt regular monospaced digits with a thin space after the icon. The native menu item and its settings preview use the same artwork (owner request, 2026-10-25).
+- When the remote-control dot is visible, the main panel explains it directly below the wordmark: a neutral computer symbol with the same orange dot, “Remote control active”, and the active devices' names, joined by middle dots (owner request, 2026-10-26). Names update on connection, disconnection and rename even while usage collection is pending; two visible lines keep the strip compact, with the full list available on hover and to accessibility. The entire row opens Settings → Remote control through the existing main-window navigation, with a quiet chevron and hover fill. This status strip stays above the scrolling quota content, shares the panel's warm neutrals and translucent backdrop, and ends with the existing inset hairline. Development preview without a real controller keeps the generic explanation rather than inventing a device name, including on the sign-in panel. Both appearances and all five languages share this layout.
 - A native status item (`NSStatusItem`) and panel rendered by the Swift helper in `apps/desktop/native/menubar/`, not an HTML window. Main builds every sentence and value; the helper renders, animates and formats only times that tick while the panel is open. Available on macOS 14+ and toggled in Settings → Window behavior (default on).
 - The panel uses the system popover material (`NSVisualEffectView`, `.popover`) with a 0.5pt hairline edge, so it follows the desktop wallpaper and Light/Dark automatically. Over the material it lays a warm tint (Light `#F8F7F3` at 50%, Dark `#1A1918` at 54%; owner corrections, 2026-10-16: 72%/74% was noticeably more solid than the plain material, 22%/26% let busy wallpapers wash out gray text and made the tiles read as pasted-on boxes) and a faint Heart Orange glow in the top-left corner, so the panel reads in Cindy's warm neutrals instead of the cool system gray (owner-approved B2 direction, 2026-10-16). Because the panel is translucent, every neutral — text, outlines, hairlines, tiles, the glass wells, the liquid and neutral ring arcs — is Cindy's warm black `#26221C` (Light) or warm white `#F2EFE9` (Dark) at an opacity, never a fixed gray, so its contrast tracks whatever shows through instead of drifting (owner decision, 2026-10-16): primary text 92% / 94%, secondary 60% / 62%, tertiary 42% / 42%, outlines 14% / 13%, hairlines 8% / 7%, faint fills and ring tracks 5% / 5%; tiles are white 45% / warm white 5%; wells white 70%→50% / warm white 7%→2.5%. Solid colors are reserved for state (warning, error), brand (logo red), Agent/harness identity (including the Codex blue and Claude orange detail rings, kept by owner decision 2026-10-16) and the primary pill fill (`#1F1E1C` / `#F2EFE9`), which must read at full contrast. Native SwiftUI controls (segmented `Picker`, `Toggle`, Swift Charts) are used as-is; their system geometry is not restyled to Web tokens. A segmented control is used only where its labels fit in every language (see below).
 - The menu bar icon uses a fixed Light/Dark image pair with template tinting disabled (owner-approved hair and earring refinement, 2026-10-18). Its silhouette stays flat and 100% opaque: pure black in Light, pure white in Dark. Four irregular, tapered hair strands add gray detail over that silhouette (`#BDBDBD` in Light / `#686868` in Dark, at 58%, 48%, 36% and 52%); these are tonal overlays, not transparent cutouts or whole-character shading. The `>` earring cutout is larger and shifted slightly left. The native status button's effective appearance selects the image, since the wallpaper can make the menu bar differ from the app; the settings preview uses the same pair. These fixed grays belong only to this native brand asset. Provider/harness logos remain template images (monochrome, tinted by the system). Brand red (logo red `#F70121`) appears only in the Cindy wordmark, a fixed Light/Dark image pair, and in the logo's `>` mark that leads the footer "Open Cindy" pill (owner request, 2026-10-16); it is never used for state.
@@ -620,6 +622,8 @@ Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actu
 - Size and density (owner request, 2026-10-12: lighter on small laptops, verified in every language): every page is 320–368pt wide by tube count, with a 20pt panel radius and 14pt tile radius. The panel never takes more than 86% of the screen's visible height; longer content scrolls between the fixed header and footer. When the visible height is under 1000pt (13–14" laptops at default scaling), the panel opens in a short layout: 82pt tubes instead of 104pt, 160pt rings instead of 188pt, and two task rows instead of three.
 - The usage page (owner-approved redesign, 2026-10-12) shares the panel width and slides in like a detail page instead of widening into a dashboard. Top to bottom it shows: back, title and a 7/30/90-day switch; one total with two caption lines (period, scope and value basis; daily average, paid and tokens); a 100pt stacked chart labeled only with its first day and Today, where hovering a day swaps the total for that day's amount and harness split; a thin harness bar with share and amount per harness; the top five models or today's tasks; and the value note. There is no amount/tokens switch and no scope switch: the scope follows Settings, and the caption names it.
 - Every row must fit in the longest supported language. A segmented control is used only where all its labels fit on one row in every language. The four menu bar text options are a two-column chip grid. Other controls fall back instead of overflowing: the usage-scope picker moves under its title. Screenshots for review cover English, Simplified and Traditional Chinese, Japanese and Korean, in Light and Dark.
+- Keep the main panel's original order: model quota first, tasks second, then the usage chart (owner correction, 2026-10-26). The task section uses three quiet text tabs: Unread, In progress and Today's usage. These are deliberately frameless, with no filled segment track; ink emphasis and a short underline identify selection. Each keeps a 28pt hit height and native keyboard/selected accessibility. Opening with attention selects Unread; otherwise it restores the last manually selected non-unread tab for this helper lifetime. Before any manual choice, prefer In progress when work exists, otherwise Today's usage. Updates never switch an already-open panel, including when the last unread item clears. Opening or switching tabs never acknowledges messages.
+- Unread and In progress reuse the island's full candidate projection before current-card clipping, including remote tasks and restored companion chats. Unread counts the exact attention candidates; In progress includes running and waiting-for-input tasks. Preserve the island's candidate order: waiting items come first in In progress, then the latest user/scheduler prompt; agent output and tool progress never reorder running rows (owner correction, 2026-10-27). Rows show identity, a single-line message/status preview with tail truncation, and time; no full-content hover tooltip (owner correction, 2026-10-27). Privacy mode masks both identity and preview. Clicking uses the island's existing device-aware navigation and read acknowledgement. Two rows on short screens, otherwise three, with an in-place All tasks / Collapse action; usage keeps its existing money ranking and usage-page link.
 
 ### Desktop chat and operation authorization (DS-9, 2026-09-11)
 
@@ -630,6 +634,10 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 **Android in-app update card (owner-approved HTML direction, registered 2026-10-16, #6199):** `AndroidUpdateSheet` is one content-height Material bottom sheet for discovery, install permission, download and install. Its paired actions are pills (secondary `surfaceChip` left, primary `cta` right). The only bare-text control is the centered browser-download fallback ("改用浏览器下载" / "Download in Browser Instead") shown under the pills while a decision is pending: frameless, `footnote` 13/18 medium in `textSecondary`, full-width 44pt hit height, pressed opacity 0.72. It is a secondary escape route rather than a commit action, so it stays out of the pill pair; this is not a general exemption for other sheet actions. In short windows the details region scrolls while the actions stay pinned. Floating compatibility presentations round all four container corners. The Light/Dark HTML previews are not Android device screenshots.
 
 **Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
+
+### Desktop chat threads
+
+Group and private threads share the same panel chrome, root message row and reply divider. The complete root message belongs to the replies’ scroll container; it has no independent height limit or scrollbar. Keep the header and reply composer visible outside that scrolling content. Private threads retain the ordinary task runtime for progress, approvals and stopping.
 
 ### Desktop group progress strip
 
@@ -670,10 +678,13 @@ all states use semantic colors in both Light and Dark.
 Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
 the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
 disabled unless strictly newer), check again, and the last successful check time. A later failed
-online check keeps that last version in the menu but disables Update: restart re-checks the
-manifest and cannot install from a stale result. There is no upstream source, restore or
-release-notes entry. Updating keeps the existing confirm → busy warning → restart flow; the
-download happens in the normal startup Splash, not in the row.
+online check keeps that last version in the menu but disables Update. There is no upstream
+source, restore or release-notes entry. Updating first prepares the selected version in the
+shared background cache, showing download status in the row, then follows the existing
+confirm → busy warning → restart flow. Startup installs only a complete cache matching the
+current manifest; if that target has changed or the cache is unavailable, it keeps a usable
+old runtime and retries in the background. First-install and repair downloads retain their
+existing startup fallback.
 
 
 ### User-attached long images
@@ -1179,7 +1190,8 @@ Known but deliberately-deferred cleanups are tracked in the decision log's backl
 
 Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc. **Not** ordinary single-line editors in Settings — there Enter must not submit.
 
-- **Enter = submit**, **Shift+Enter = newline**.
+- By default, **Enter = submit**, **Shift+Enter = newline**. The desktop chat composer also supports the existing **Cmd/Ctrl+Enter = submit** preference; when enabled, **Enter = newline**.
+- Composer list continuation follows newline intent: Enter in that preference, as well as Shift/Alt+Enter, continues a list or exits an empty item. Send shortcuts and IME confirmation must not edit lists; fenced code keeps native newline behavior. The shared key handler is `handleComposerListEnter` in `apps/desktop/src/renderer/components/new-chat/ComposerListNodes.ts`, covered by `apps/desktop/src/renderer/lib/__tests__/composerListContinuationEditor.test.ts`.
 - **Enter during IME composition must not submit** — check `event.nativeEvent.isComposing` (a CJK user confirming a candidate must not accidentally send).
 - Centralize this logic in code; do not re-implement it per field and let behavior drift (per "code-first determinism" in `docs/dev-rules/maker-core-and-agent-behavior.md`).
 
@@ -1409,7 +1421,12 @@ HTML 不提供复制文件、在文件列表中定位或选择应用。无侧边
 4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
    或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
    限(前者作者已声明,后者词法本就要求带分隔符)。
-5. **无法判定时的点亮门槛按形态分级。** 适用于任何存在「无法判定」中间态的链路:移动端
+5. **自动识别路径的点亮门槛按形态分级。** 显式 Markdown 文件链接（`[查看报告](路径)`）
+   在桌面和手机聊天中保留点击入口，不因尚未验证、文件缺失或断线退化为普通文字；点击时
+   通过原有文件访问通道打开或说明失败，保留复制目标的操作，不绕过权限、不猜搬迁位置。
+   已解析文件仍沿用原有预览与文件菜单。没有文件访问上下文或不允许特权链接的内容面不因此
+   获得文件访问能力。以下形态门槛仅适用于正文自动识别路径和行内 code。
+   适用于任何存在「无法判定」中间态的链路:移动端
    全部会话、以及桌面的**远程会话**(两者的 `fs:stat` 都会回 `unknown`)。桌面**本机**
    会话不适用 —— 那边走真实存在性检查,解析不到一律纯文本,没有中间态。
 
@@ -1523,12 +1540,13 @@ PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点�
 | ----------------------- | ------------------------------------------- | -------------------------------------- | ------------------------------------------- |
 | 桌面聊天正文            | 外链 / anchor / 本地图片 URL                | ✅                                     | ✅ `MARKDOWN_LINK_CLASS`                    |
 | 桌面聊天正文            | 已解析本地文件(chip / 散文 label)           | ✅                                     | ✅                                          |
-| 桌面聊天正文            | 未解析路径、行内 code                       | ❌                                     | ❌                                          |
+| 桌面聊天正文            | 未解析的显式文件链接                         | ✅（点击重验，失败提示）                 | ✅                                          |
+| 桌面聊天正文            | 未解析的自动识别路径、行内 code              | ❌                                     | ❌                                          |
 | 桌面聊天正文            | **远程**会话里 stat 回 `unknown` 的引用     | 仅非歧义形状                           | 由 `isAmbiguousPathShape` 门槛裁决          |
 | 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick | **与 `interactive` 同源**                   |
 | 桌面用户气泡            | URL / 图片路径                              | ✅                                     | ✅（改前只有 hover 下划线）                 |
 | 手机聊天正文            | 外链 / 图片 chip / 会话 chip                | 取决于 handler 是否注入                | **与 handler 同源**(`clickableInlineStyle`) |
-| 手机聊天正文            | 路径 chip                                   | 取决于远端 verdict                     | 由 `ChatPathChipSpan.lit` 单点裁决          |
+| 手机聊天正文            | 路径 chip                                   | 显式链接保留，其余取决于远端 verdict    | 由 `ChatPathChipSpan.lit` 单点裁决          |
 | 手机文件阅读器          | http(s)                                     | ✅                                     | ✅                                          |
 | 手机文件阅读器          | 会话 chip / 图片 chip / 本地路径 / mailto   | ❌（无 bridge、只放行 http(s)）        | ❌                                          |
 
@@ -1629,19 +1647,16 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 > 数组;两端都要有。(第 10 轮重构只做对了桌面那一半,第 11 轮 review 实捉;这类 bug 的形状
 > 是「依赖数组漏了触发源」,没有类型保护,故两端各有源码级守卫。)
 
-> **不变量 B:点亮门槛(规则 5)对所有候选来源同口径。** 与候选门槛(规则 4)的来源豁免
-> **无关** —— 两者是两道独立的门,显式 markdown 链接只豁免前者。
+> **不变量 B（2026-10-27 更新）:显式链接保留作者声明的点击入口，自动识别引用仍需验证。**
 
-作者写下 `[配置](package.json)` 只声明了「我想让它可点」,并不能让远端在链路断时知道它是否
-存在;点亮了却点不开正是规则 1 要防的反例。判据在两端各只有一份、且**逐字同形**:桌面
-`markdownTarget.isAmbiguousPathShape`、移动 `chatPathCandidate.isAmbiguousChatPathShape`;
-所有入口都调它,**不得按来源硬写 `true` / `false`**(移动端曾对链接入口恒 `false`,与桌面
-不对称,review 实捉)。
+`[配置](package.json)` 的下划线表示可以尝试打开，不承诺文件仍然存在。文件移动、删除或
+暂时不可达时，点击后给出可理解的反馈。正文路径与行内 code 仍按原有形态门槛判断，避免
+把 `array.map` 等普通文本变成假链接。两端以来源标记区分，不放宽路径分类或文件访问权限。
 
 | 候选来源           | 桌面入口                      | 移动入口                          | 走门槛?                                    |
 | ------------------ | ----------------------------- | --------------------------------- | ------------------------------------------ |
 | 行内 code          | `classifyInlineCodeTarget`    | `classifyInlineCodePathCandidate` | ✅                                         |
-| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | ✅                                         |
+| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | 不以存在性决定可点；实际访问仍校验          |
 | 正文裸写路径       | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上    | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
 | 尾斜杠目录         | 回看 `originalHref` → 非歧义  | 同左                              | ✅                                         |
 | `file://` 绝对路径 | 单列为非歧义                  | 同左                              | ✅                                         |

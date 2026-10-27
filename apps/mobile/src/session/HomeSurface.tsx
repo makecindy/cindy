@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { TaskTagDots } from '@/session/TaskTags';
@@ -2381,7 +2382,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       pathname: '/sessions/[sessionId]',
       params: {
         deviceId,
-        deviceName: session.deviceLinkDeviceName ?? deviceId,
+        deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
         sessionId: session.id,
         ...(focusClientId ? { focusClientId } : {}),
       },
@@ -2397,7 +2398,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const openNewSession = useCallback((project?: MobileHomeProjectGroup, suggestion?: RemoteTaskSuggestionId, explicitDeviceId?: string, origin?: ComposerMorphOrigin) => {
     const { primaryDevice, newSessionDeviceOptions, selectedDeviceId } = newSessionTargetRef.current;
     const deviceId = project?.deviceId ?? explicitDeviceId ?? primaryDevice?.deviceId;
-    const deviceName = project?.deviceName ?? newSessionDeviceOptions.find((device) => device.deviceId === deviceId)?.name ?? primaryDevice?.label ?? deviceId ?? '';
+    const deviceName = deviceDisplayName(deviceId ?? '', project?.deviceName ?? newSessionDeviceOptions.find((device) => device.deviceId === deviceId)?.name ?? primaryDevice?.label);
     if (!deviceId) {
       setError(t('devices.list.error.noDevice'));
       return;
@@ -2730,7 +2731,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       pathname: '/devices/[deviceId]',
       params: {
         deviceId,
-        name: session.deviceLinkDeviceName ?? deviceId,
+        name: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
         automationGroupKey: group.baseKey,
         automationName: group.title,
         ...(workingDir ? { automationWorkingDir: workingDir } : {}),

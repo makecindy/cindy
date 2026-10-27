@@ -40,6 +40,7 @@ import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory
 import { useRecentModels, type RecentModelItem } from '@/state/recentModels';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
@@ -1393,6 +1394,9 @@ export function UnifiedModelPanel({
           )}
           // Body height is independent of filtered results; min-h-0 still permits
           // the popover's viewport constraint to shrink this scroll area.
+          // onWheel:模态对话框(添加伙伴 / 伙伴设置等)里 react-remove-scroll 在
+          // document 拦浮层滚轮,不放行的话列表只能靠拖滚动条(原理见 helper 注释)。
+          onWheel={stopWheelPropagation}
           onScroll={() => {
             // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
             // 程序化对齐不取消在途的选中行定位。

@@ -1,7 +1,8 @@
 /**
  * DESIGN.md §4 Dialog & Modal「Closing affordance」:模态弹窗点遮罩/窗口外部一律不关闭,
  * 只能用自身按钮或 Esc 关闭。Radix Dialog 默认点外部即关闭,所以每个 `Dialog.Content`
- * 都必须无条件 `preventDefault` 外部指针事件。AlertDialog 本身不响应外部点击,不在此列。
+ * 都必须无条件 `preventDefault` 外部指针事件；规范明确的侧边抽屉例外除外。
+ * AlertDialog 本身不响应外部点击,不在此列。
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
@@ -11,8 +12,12 @@ import { describe, expect, it } from 'vitest';
 
 const RENDERER_ROOT = resolve(__dirname, '..');
 
-// 已登记例外:点遮罩先弹二次确认,而不是直接关闭(DESIGN.md「Cindy Make preflight exception」)。
-const EXEMPT_FILES = new Set(['components/cindy-make/CindyMakePreflightDialog.tsx']);
+const EXEMPT_FILES = new Set([
+  // 点遮罩先弹二次确认(DESIGN.md「Cindy Make preflight exception」)。
+  'components/cindy-make/CindyMakePreflightDialog.tsx',
+  // DESIGN.md §4 的侧边抽屉例外；真实点击和保存保护由 botSettingsDrawer.test.tsx 覆盖。
+  'features/bots/BotSettingsDrawer.tsx',
+]);
 
 const OUTSIDE_HANDLERS = ['onPointerDownOutside', 'onInteractOutside'];
 
@@ -114,7 +119,7 @@ function rendererLabel(path: string): string {
 }
 
 describe('dialog scrim dismissal', () => {
-  it('every Radix Dialog.Content ignores clicks outside the dialog', () => {
+  it('every non-exempt Radix Dialog.Content ignores clicks outside the dialog', () => {
     const offenders = rendererComponentFiles(RENDERER_ROOT)
       .filter((path) => !EXEMPT_FILES.has(rendererLabel(path)))
       .flatMap((path) => unguardedDialogContents(rendererLabel(path), readFileSync(path, 'utf8')));

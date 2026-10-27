@@ -21,6 +21,7 @@ import {
   accessibilityElement,
   accessibilityHidden,
   disabled,
+  environment,
   opacity,
   scrollDisabled,
   contentShape,
@@ -62,6 +63,7 @@ export function ComposerSheet({
   nativeContent,
   contentScrolls,
   nativeList,
+  nativeEditMode,
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
@@ -73,6 +75,9 @@ export function ComposerSheet({
   // UIKit disables the medium detent in compact-height landscape. Never bind
   // selection to an unavailable detent, including after rotating an open sheet.
   const landscape = width > height;
+  const editModeModifiers = nativeEditMode === undefined
+    ? []
+    : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
   return (
     <Host
       colorScheme={mode}
@@ -156,7 +161,7 @@ export function ComposerSheet({
                   {nativeRoot.header}
                   <Form
                     testID={testID ? `${testID}.list` : undefined}
-                    modifiers={[containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                    modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
                   >
                     {nativeRoot.content}
                   </Form>
@@ -171,7 +176,7 @@ export function ComposerSheet({
                     {nativeHeader}
                     <Form
                       testID={testID}
-                      modifiers={[containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                      modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
                     >
                       {children}
                     </Form>
@@ -180,6 +185,7 @@ export function ComposerSheet({
               </ZStack>
             ) : nativeContent && nativeList ? (
               <List testID={testID} modifiers={[
+                ...editModeModifiers,
                 containerRelativeFrame({ axes: 'horizontal' }),
                 listStyle("plain"),
                 scrollContentBackground("hidden"),
@@ -189,6 +195,7 @@ export function ComposerSheet({
               </List>
             ) : nativeContent ? (
               <Form testID={testID} modifiers={[
+                ...editModeModifiers,
                 containerRelativeFrame({ axes: 'horizontal' }),
                 scrollContentBackground("hidden"),
                 ...(aboveContent ? [padding({ top: -12 })] : []),

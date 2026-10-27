@@ -37,9 +37,11 @@ import {
   focusMainWindow,
   openMainWindowBillingTopUp,
   openMainWindowSession,
+  openMainWindowRemoteControlSettings,
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { getActiveControllers } from '../device-link/dispatch.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
@@ -85,6 +87,7 @@ import {
   type MenubarSubscriptionInput,
 } from './snapshot.js';
 import { buildMenubarUiStrings, createMenubarTranslate } from './strings.js';
+import { buildMenubarActivities } from './activity.js';
 
 const log = createLogger('menubar');
 
@@ -190,6 +193,26 @@ export class MenubarService {
     if (this.started) this.scheduleRebuild(0);
   }
 
+  /** Remote activity updates the icon immediately, independently of usage collection. */
+  refreshControlState(): void {
+    if (!this.started || !this.lastView || this.lastView.gate) return;
+    const control = this.controlState();
+    if (
+      this.lastView.remotelyControlled === control.remotelyControlled
+      && JSON.stringify(this.lastView.remoteControllerNames) === JSON.stringify(control.remoteControllerNames)
+    ) return;
+    this.lastView = { ...this.lastView, ...control };
+    this.host.publish(this.lastView);
+  }
+
+  private controlState(gate?: MenubarGate): Pick<MenubarView, 'remotelyControlled' | 'remoteControllerNames'> {
+    const controllers = gate ? [] : getActiveControllers();
+    return {
+      remotelyControlled: controllers.length > 0,
+      remoteControllerNames: controllers.map(controller => controller.name),
+    };
+  }
+
   /** Opens the panel under the status item. */
   openPanel(): void {
     if (!this.started) return;
@@ -231,6 +254,7 @@ export class MenubarService {
     const island = getAgentIslandService();
     if (island) {
       this.disposers.push(
+        island.subscribeTaskOverview(() => this.publishTaskOverview()),
         island.subscribeSessionActivity(({ previous, current }) => {
           const wasRunning = previous ? isSessionActivityRunning(previous) : false;
           const isRunning = current ? isSessionActivityRunning(current) : false;
@@ -454,6 +478,8 @@ export class MenubarService {
       ...(gate ? { gate } : {}),
     };
     const view = buildMenubarView(input);
+    Object.assign(view, this.taskOverview(gate));
+    Object.assign(view, this.controlState(gate));
     this.lastView = view;
     this.host.publish(view);
     if (gate) {
@@ -462,6 +488,24 @@ export class MenubarService {
       return;
     }
     this.updateLowAlert(isLowOnEverything(input), input);
+  }
+
+  /** Unread changes must not wait for quota/history/network reads to finish. */
+  private taskOverview(gate?: MenubarGate): Pick<MenubarView, 'activities' | 'attentionCount'> {
+    const locale = getResolvedMainLocale();
+    const activities = gate ? [] : buildMenubarActivities(
+      getAgentIslandService()?.getTaskOverview() ?? [], this.settings.privacy,
+      createMenubarTranslate(locale, key => rawMainString(key, locale)),
+    );
+    return { activities, attentionCount: activities.filter(row => row.attention).length };
+  }
+
+  private publishTaskOverview(): void {
+    if (!this.started || !this.lastView || this.lastView.gate || isAppSessionBoundaryPending() || !hasDataOwner()) return;
+    const overview = this.taskOverview();
+    if (JSON.stringify(this.lastView.activities) === JSON.stringify(overview.activities)) return;
+    this.lastView = { ...this.lastView, ...overview };
+    this.host.publish(this.lastView);
   }
 
   // ── Low alert ──────────────────────────────────────────────────────────────
@@ -627,13 +671,20 @@ export class MenubarService {
         this.showMainWindow();
         return;
       case 'open-session':
-        openMainWindowSession(message.sessionId);
+        if (this.lastView?.activities?.some(row => row.sessionId === message.sessionId)) {
+          getAgentIslandService()?.openTaskOverviewSession(message.sessionId);
+        } else {
+          openMainWindowSession(message.sessionId);
+        }
         return;
       case 'detail-action':
         void this.runDetailAction(message.sourceId);
         return;
       case 'open-provider-settings':
         openMainWindowVoiceSettings('providers');
+        return;
+      case 'open-remote-control-settings':
+        openMainWindowRemoteControlSettings();
         return;
       case 'settings':
         this.applySettingsPatch(message.patch);
@@ -731,6 +782,10 @@ export function setMenubarEnabled(enabled: boolean): MenubarState {
 
 export function refreshMenubarLocalization(): void {
   service?.refreshLocalization();
+}
+
+export function refreshMenubarControlState(): void {
+  service?.refreshControlState();
 }
 
 export function stopMenubarService(): void {

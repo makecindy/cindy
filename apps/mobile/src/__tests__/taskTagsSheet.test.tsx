@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   sheet: null as any,
+  sortingChanged: null as null | ((sorting: boolean) => void),
   pageChange: null as null | ((page: string | null, back: () => void, backDisabled?: boolean) => void),
 }));
 
@@ -24,7 +25,9 @@ vi.mock('@/theme', () => ({
   spacing: {},
 }));
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
-vi.mock('@/session/TaskTagsNative', () => ({ NativeTaskTagsExpanded: () => null }));
+vi.mock('@/session/TaskTagsNative', () => ({
+  NativeTaskTagsExpanded: ({ onSortingChange }: any) => { h.sortingChanged = onSortingChange; return null; },
+}));
 vi.mock('@/session/ComposerSheet', () => ({
   ComposerSheet: (props: any) => {
     h.sheet = props;
@@ -32,9 +35,9 @@ vi.mock('@/session/ComposerSheet', () => ({
   },
 }));
 vi.mock('@/session/TaskTags', () => ({
-  TaskTagsPanel: ({ onPageChange }: any) => {
+  TaskTagsPanel: ({ onPageChange, renderExpanded }: any) => {
     h.pageChange = onPageChange;
-    return null;
+    return renderExpanded?.({});
   },
 }));
 
@@ -89,4 +92,17 @@ it('passes a saving editor page down so the back arrow is disabled', async () =>
   // The list can always close the sheet, even while a request is in flight.
   await act(async () => h.pageChange!('list', () => {}, true));
   expect(h.sheet.backDisabled).toBe(false);
+});
+
+
+it('sets edit mode on the containing sheet when native tag sorting changes', async () => {
+  await act(async () => root.render(
+    <TaskTagsSheet session={{ id: 's', canonicalDeviceId: 'host' } as any}
+      visible onClose={() => {}} onClosed={() => {}} />,
+  ));
+  expect(h.sheet.nativeEditMode).toBe(false);
+  await act(async () => h.sortingChanged!(true));
+  expect(h.sheet.nativeEditMode).toBe(true);
+  await act(async () => h.sortingChanged!(false));
+  expect(h.sheet.nativeEditMode).toBe(false);
 });

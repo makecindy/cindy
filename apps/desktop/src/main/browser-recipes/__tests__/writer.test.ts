@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
 
 const { writeUserRecipe, resetSiteRecipe } = await import('../writer.js');
 const { loadUserBrowserRecipes } = await import('../loader.js');
+const { browserExperienceStore } = await import('../experience.js');
 
 let dir: string;
 beforeEach(async () => {
@@ -28,6 +29,21 @@ async function readBack(_site: string) {
 }
 
 describe('writeUserRecipe / resetSiteRecipe', () => {
+  // New local experience persistence, unit: a fresh host sees repetition without
+  // storing script/input values, and the existing site reset removes it too.
+  it('persists bounded structural observations across host instances and resets with the site', async () => {
+    const first = browserExperienceStore(dir);
+    const input = { site: 'experience.test', actions: ['navigate', 'extract'] as ['navigate', 'extract'] };
+    await first.record(input);
+    const second = browserExperienceStore(dir);
+    expect(await second.record(input)).toMatchObject({ ...input, observations: 2 });
+    expect(await second.list(input.site)).toHaveLength(1);
+    const raw = JSON.parse(await fs.readFile(path.join(dir, input.site, 'experience.json'), 'utf8'));
+    expect(Object.keys(raw[0]).sort()).toEqual(['actions', 'observations', 'site', 'updatedAt']);
+    await expect(second.record({ ...input, site: '../escape' })).rejects.toBeTruthy();
+    await resetSiteRecipe(input.site, dir);
+    expect(await second.list(input.site)).toEqual([]);
+  });
   it('writes a recipe that reads back as a valid L2 entry', async () => {
     const res = await writeUserRecipe(
       { site: 'x.com', recipe: { id: 'x-search', steps: [{ action: 'navigate', url: 'https://x.com/' }] } },

@@ -335,7 +335,7 @@ describe('provider rail weekly remaining bars', () => {
         el.getAttribute('data-weekly-remaining'),
       ),
     ).toEqual(['75', '30']);
-    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai');
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai', { live: true, web: false });
     expect(reads.remoteClaude).toHaveBeenCalledWith('device-1', 'anthropic');
     expect(reads.remoteXai).toHaveBeenCalledWith('device-1', 'xai');
     for (const read of [reads.codex, reads.claude, reads.xai])

@@ -4,6 +4,7 @@ import {
   BRANCH_SYNC_ERROR_PREFIX,
   type BranchSyncStatus,
   type BranchSyncResult,
+  type BranchSyncReply,
 } from '../../shared/worktreeBranchSync';
 import { extractIpcError } from '@/utils/ipcError';
 import { toast } from '@/lib/toast';
@@ -29,11 +30,16 @@ export function useBranchSync(
   }>({ key });
   const request = useRef(0);
   const busy = useRef(false);
+  const continuation = useRef<{ key: string; operationId: string } | undefined>(undefined);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const doneTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const invoke = useCallback(
-    (sync: boolean) => {
-      const req = { baseRepo: baseRepo!, branch };
+    (sync: boolean, operationId?: string) => {
+      const req = {
+        baseRepo: baseRepo!,
+        branch,
+        ...(sync ? { waitForResult: true, ...(operationId ? { operationId } : {}) } : {}),
+      };
       if (deviceId)
         return window.electronAPI.deviceLink.invoke(
           deviceId,
@@ -85,6 +91,7 @@ export function useBranchSync(
   }, [baseRepo, invoke, key, deviceId]);
   useEffect(() => {
     busy.current = false;
+    continuation.current = undefined;
     setSnapshot({ key });
     void refresh();
     return () => {
@@ -105,8 +112,17 @@ export function useBranchSync(
     const id = ++request.current;
     setSnapshot((old) => ({ ...old, key, busy: true, error: undefined, result: undefined }));
     try {
-      const result = (await invoke(true)) as BranchSyncResult;
+      let reply = (await invoke(true,
+        continuation.current?.key === key ? continuation.current.operationId : undefined,
+      )) as BranchSyncReply;
+      while ('pending' in reply) {
+        if (currentKey.current !== key || id !== request.current) return;
+        continuation.current = { key, operationId: reply.operationId };
+        reply = (await invoke(true, reply.operationId)) as BranchSyncReply;
+      }
+      const result = reply;
       if (currentKey.current !== key || id !== request.current) return;
+      continuation.current = undefined;
       if (result.status.blocked) toast.warning(blockedHint(result.status));
       setSnapshot({
         key,
@@ -122,6 +138,10 @@ export function useBranchSync(
       if (currentKey.current !== key || id !== request.current) return;
       const message =
         extractIpcError(error)?.message ?? (error instanceof Error ? error.message : String(error));
+      // Host-classified failures are terminal (including expired handles).
+      // Transport errors leave the operation unknown: an explicit click resumes
+      // the same handle instead of starting another mutation.
+      if (message.startsWith(BRANCH_SYNC_ERROR_PREFIX)) continuation.current = undefined;
       setSnapshot((old) => ({ ...old, busy: false, error: message }));
       toast.error(
         t('newChat.branchSync.failed', {

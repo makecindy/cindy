@@ -1,9 +1,78 @@
 {
-  "localAgent": {"title":"Local App Connections","empty":"No connected apps","description":"Authorized local apps can use Cindy models and agent capabilities. Cindy keeps supplier credentials.","revoke":"Revoke Connection","failed":"Could not read app connections.","connectTitle":"Connect a Local App","connectMessage":"Allow “{{app}}” to use Cindy?","connectDetail":"This app can list models and providers, create its own executions, and supply tools. Native execution can read and write files and run commands with your system user permissions; the working directory does not restrict access. Provider credentials stay in Cindy. Revoke individual connections in Settings → Remote Connections → Local App Connections.","cancel":"Cancel","allow":"Allow Connection","revokeMessage":"Revoke all local app connections?","revokeDetail":"All local app connections will stop working and their running tasks will stop. Apps can request a new connection when needed.","clientIdentity":"App-reported ID: {{id}}\nVersion: {{version}}\nThe requesting app supplies its name and ID; Cindy has not verified its publisher.","revokeOneMessage":"Revoke this connection for “{{app}}”?","revokeOneDetail":"Tasks running through this connection will stop. Other app connections will keep working. The app can request a new connection when needed.","revokeConnection":"Revoke connection for “{{app}}”","clientId":"App ID: {{id}}","operationFailed":"Could not confirm the local app operation. Check its current state before continuing.","invalidConnection":"The app connection ID is invalid.","revokeFailed":"Could not confirm the revocation. Check the current connection state.","loading":"Loading app connections…","revoking":"Revoking connection…","authorizationRequired":"This operation requires valid local app authorization.","pairExpired":"The connection request expired or was cancelled. Request a new connection from the app.","busy":"A local app execution is still running or the execution limit is reached. End unused executions first.","limitReached":"The local app connection limit is reached. Revoke unused connections in Settings.","invalidWorkspace":"The app must specify an existing absolute working directory on this computer.","sessionExists":"This execution ID is already in use by this app connection.","executionUnavailable":"The requested execution or tool call is unavailable. Messages and tool operations were not replayed.","selectionUnavailable":"The selected model, provider, or reasoning effort is unavailable. Select an available option in the app.","requestNotReplayed":"This request was not repeated. Check the original operation result in the app.","storageUnavailable":"Could not read or save local app connection data. Existing authorization records were retained.","stopUnconfirmed":"Further messages to this execution are blocked, but the process has not been confirmed stopped.","interactionUnavailable":"The engine requires an interaction that this app cannot receive.","interrupted":"This send was interrupted.","toolTimeout":"The app tool timed out. It was not automatically retried.","connectResult":"Return to the requesting app for the connection result. Authorization is decided in the Cindy confirmation window.","invalidRequest":"The app request is invalid or the operation is unsupported.","hostInUse":"Another Cindy instance manages local app connections for this profile. View the connections in that instance.","developerConnection":"Development Connection","copyCode":"Copy Connection Code","codeCopied":"Connection code copied","codeCopyFailed":"Could not copy the connection code","developerState":{"ready":"For temporary connections from apps on this computer. Approval in this Cindy is still required. Copy a new code after restarting.","starting":"Preparing connection…","owner-unavailable":"Sign in or enter local mode first","host-in-use":"Another Cindy manages connections for this data folder","failed":"The local connection could not start","stopped":"The local connection has stopped"}},
-  "attachmentAccessConfirmation": {
-    "title": "Confirm Attachment Access",
-    "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
-    "button": "Use Original File"
+  "providerAccountUsage": {
+    "openDashboard": "Open DeepSeek usage dashboard",
+    "deepSeek": {
+      "balanceLine": "Balance {{total}} (topped up {{toppedUp}} / granted {{granted}})",
+      "chipBalance": "Balance {{balance}}",
+      "unavailable": "This DeepSeek account is currently not available for spending. Open the usage dashboard to check the account."
+    },
+    "zhipuCodingPlan": {
+      "usage": "View Zhipu plan usage",
+      "noPlan": "This key has no GLM Coding Plan subscription (likely a pay-as-you-go account). Check the website."
+    },
+    "error": {
+      "no-credentials": "No API key is available for this provider. Edit the provider and add the key.",
+      "auth": "The provider rejected this API key. Check or replace the key, then retry.",
+      "rate-limited": "The provider is limiting balance queries. Retry later.",
+      "network": "Cindy cannot reach the provider. Check the network and retry.",
+      "server": "The provider cannot return the balance right now. Retry later.",
+      "invalid-response": "The provider returned unreadable balance data. Retry later.",
+      "throttled": "The balance was just refreshed. Retry a bit later.",
+      "unknown": "Cindy cannot load the provider balance. Retry later."
+    }
+  },
+  "localAgent": {
+    "title": "Local App Connections",
+    "empty": "No connected apps",
+    "description": "Authorized local apps can use Cindy models and agent capabilities. Cindy keeps supplier credentials.",
+    "revoke": "Revoke Connection",
+    "failed": "Could not read app connections.",
+    "connectTitle": "Connect a Local App",
+    "connectMessage": "Allow “{{app}}” to use Cindy?",
+    "connectDetail": "This app can list models and providers, create its own executions, and supply tools. Native execution can read and write files and run commands with your system user permissions; the working directory does not restrict access. Provider credentials stay in Cindy. Revoke individual connections in Settings → Remote Connections → Local App Connections.",
+    "cancel": "Cancel",
+    "allow": "Allow Connection",
+    "revokeMessage": "Revoke all local app connections?",
+    "revokeDetail": "All local app connections will stop working and their running tasks will stop. Apps can request a new connection when needed.",
+    "clientIdentity": "App-reported ID: {{id}}\nVersion: {{version}}\nThe requesting app supplies its name and ID; Cindy has not verified its publisher.",
+    "revokeOneMessage": "Revoke this connection for “{{app}}”?",
+    "revokeOneDetail": "Tasks running through this connection will stop. Other app connections will keep working. The app can request a new connection when needed.",
+    "revokeConnection": "Revoke connection for “{{app}}”",
+    "clientId": "App ID: {{id}}",
+    "operationFailed": "Could not confirm the local app operation. Check its current state before continuing.",
+    "invalidConnection": "The app connection ID is invalid.",
+    "revokeFailed": "Could not confirm the revocation. Check the current connection state.",
+    "loading": "Loading app connections…",
+    "revoking": "Revoking connection…",
+    "authorizationRequired": "This operation requires valid local app authorization.",
+    "pairExpired": "The connection request expired or was cancelled. Request a new connection from the app.",
+    "busy": "A local app execution is still running or the execution limit is reached. End unused executions first.",
+    "limitReached": "The local app connection limit is reached. Revoke unused connections in Settings.",
+    "invalidWorkspace": "The app must specify an existing absolute working directory on this computer.",
+    "sessionExists": "This execution ID is already in use by this app connection.",
+    "executionUnavailable": "The requested execution or tool call is unavailable. Messages and tool operations were not replayed.",
+    "selectionUnavailable": "The selected model, provider, or reasoning effort is unavailable. Select an available option in the app.",
+    "requestNotReplayed": "This request was not repeated. Check the original operation result in the app.",
+    "storageUnavailable": "Could not read or save local app connection data. Existing authorization records were retained.",
+    "stopUnconfirmed": "Further messages to this execution are blocked, but the process has not been confirmed stopped.",
+    "interactionUnavailable": "The engine requires an interaction that this app cannot receive.",
+    "interrupted": "This send was interrupted.",
+    "toolTimeout": "The app tool timed out. It was not automatically retried.",
+    "connectResult": "Return to the requesting app for the connection result. Authorization is decided in the Cindy confirmation window.",
+    "invalidRequest": "The app request is invalid or the operation is unsupported.",
+    "hostInUse": "Another Cindy instance manages local app connections for this profile. View the connections in that instance.",
+    "developerConnection": "Development Connection",
+    "copyCode": "Copy Connection Code",
+    "codeCopied": "Connection code copied",
+    "codeCopyFailed": "Could not copy the connection code",
+    "developerState": {
+      "ready": "For temporary connections from apps on this computer. Approval in this Cindy is still required. Copy a new code after restarting.",
+      "starting": "Preparing connection…",
+      "owner-unavailable": "Sign in or enter local mode first",
+      "host-in-use": "Another Cindy manages connections for this data folder",
+      "failed": "The local connection could not start",
+      "stopped": "The local connection has stopped"
+    }
   },
   "mailReader": {
     "showExternalImages": "Show External Images",
@@ -991,7 +1060,6 @@
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
     "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
@@ -1038,7 +1106,8 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
-    "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed"
+    "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
   },
   "providerError": {
     "AUTH_INVALID": "Authentication failed for this interface. Check the address, key, and authentication method.",
@@ -1063,6 +1132,15 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "schemaLease": {
+      "title": "Local data cannot be opened yet",
+      "retry": "Reopen Local Data",
+      "writer-active": "Another Cindy instance is maintaining the local data. Reopen it after maintenance finishes.",
+      "readers-active": "Other Cindy instances are using this local data. Close those instances before reopening it.",
+      "lock-corrupt": "The local data maintenance lock is damaged, so Cindy cannot confirm whether it is still in use. Restart your computer, then reopen Cindy. If this continues, contact support. Do not delete database files.",
+      "lock-unreadable": "The local data maintenance lock could not be read or saved. Check access to the data directory, then reopen it after access is restored. Contact support if this continues.",
+      "recovery-busy": "Another Cindy instance is checking the local data maintenance lock. Reopen the local data shortly."
+    },
     "databaseCleanup": {
       "interruptedTitle": "Database Cleanup Was Interrupted",
       "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
@@ -1354,10 +1432,29 @@
       "tasks": "Tasks",
       "tokenUnit": "tokens",
       "noTasksToday": "No tasks yet today",
+      "tabUnread": "Unread",
+      "tabOngoing": "In progress",
+      "tabUsage": "Today’s usage",
+      "noUnread": "All caught up",
+      "noOngoing": "No tasks in progress",
+      "allTasks": "All tasks",
+      "collapseTasks": "Collapse",
+      "activityRunning": "Running",
+      "activityWaiting": "Needs your input",
+      "activityCompleted": "Completed",
+      "activityError": "Needs attention",
+      "privateCompanion": "Companion message",
+      "untitledTask": "Untitled task",
+      "activityNow": "Just now",
+      "activityMinutes": "{{n}}m ago",
+      "activityHours": "{{n}}h ago",
+      "activityDays": "{{n}}d ago",
       "moreTasks_one": "{{n}} more task",
       "moreTasks_other": "{{n}} more tasks",
       "running": "Running",
       "openApp": "Open Cindy",
+      "remoteControlTitle": "Remote control active",
+      "remoteControlBody": "Other devices are accessing Cindy on this computer.",
       "gateTitle": "Sign in to see what's left",
       "gateBody": "Sign in to Cindy, or choose Skip Sign-In, and this panel shows your subscription quota and today's usage.",
       "settings": "Manage",
@@ -1410,6 +1507,11 @@
     }
   },
   "settings": {
+    "imConnection": {
+      "reconnect": "Reconnect",
+      "savedNote": "Your saved binding is retained. You can retry the connection.",
+      "failed": "Bot connection failed"
+    },
     "title": "Settings",
     "search": {
       "ariaLabel": "Search settings",
@@ -3305,16 +3407,16 @@
           "placeholder": "Choose a template…"
         },
         "test": {
+          "button": "Test connection",
+          "testing": "Testing…",
+          "ok": "Connected ({{ms}} ms)",
+          "needFields": "Fill in the base URL and at least one model ID first",
+          "unsupportedProtocol": "This model protocol is not supported by connection testing",
           "inconclusive": "Connection could not be confirmed. Check the address or network before retrying; the previous request may have run.",
           "exhausted": "All candidate interfaces were tried. No working connection was found.",
           "costHint": "Testing sends short generation requests and may incur a small charge.",
           "details": "View attempts",
-          "button": "Test connection",
-          "testing": "Testing…",
-          "stop": "Stop test",
-          "ok": "Connected ({{ms}} ms)",
-          "needFields": "Fill in the base URL and at least one model ID first",
-          "unsupportedProtocol": "This model protocol is not supported by connection testing"
+          "stop": "Stop test"
         },
         "fetch": {
           "button": "Fetch model list",
@@ -3512,6 +3614,12 @@
           "contextLimitHint": "Applies to all available engines for this model. Edit in whole K (1 K = 1,000 tokens); untouched values retain their precision. Saved changes apply to subsequent runs without interrupting a response. Actual capacity remains subject to the model service’s limits.",
           "contextLimitLocalMillionHint": "Native 256K (262,144 tokens), with optional expansion to 1M (1,000,000). If the service is running, restart it under Manage Service to apply changes; if stopped, they apply on next use. Longer inputs need more memory and take longer to process.",
           "contextLimitAria": "Context limit (thousands of tokens)",
+          "compaction": {
+            "title": "Automatic Compaction",
+            "hint": "Compact context at the selected usage percentage. Lower values compact earlier; engine limits still apply.",
+            "default": "{{pct}}% (Default)",
+            "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
+          },
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
@@ -3553,12 +3661,12 @@
           },
           "effortMixed": "Effort differs by engine. A selection applies to engines that support that level.",
           "protocol": {
-            "automatic": "Automatic",
             "reference": "Native API",
             "compatibility": "Compatibility mode",
             "compatibilityHint": "Compatibility mode may be unstable or behave unexpectedly. Recommended for experienced users.",
             "matching": "Native support",
-            "unknown": "Protocol unconfirmed"
+            "unknown": "Protocol unconfirmed",
+            "automatic": "Automatic"
           },
           "lifecycle": {
             "alpha": "Early access",
@@ -3905,13 +4013,13 @@
         "modelCount": "{{count}} models configured",
         "modelsAutomatic": "Model details are imported automatically. Adjust individual models in the model list.",
         "manualModel": "Model IDs (if discovery is unavailable)",
+        "modelTypeAutomatic": "Detect Automatically",
+        "manualModelTypeHint": "Use the same ID to update its type. Automatic detection restores the catalog type.",
+        "mediaOnlyTestHint": "This connection has only non-chat models. Fetch the model list to check catalog access; model execution is not tested here.",
         "manualAdd": "Add a model manually",
         "manualId": "Model ID",
         "saveProvider": "Save provider",
-        "removeModel": "Remove model",
-        "modelTypeAutomatic": "Detect Automatically",
-        "manualModelTypeHint": "Use the same ID to update its type. Automatic detection restores the catalog type.",
-        "mediaOnlyTestHint": "This connection has only non-chat models. Fetch the model list to check catalog access; model execution is not tested here."
+        "removeModel": "Remove model"
       },
       "byok": {
         "managed": "Managed by your organization",
@@ -3921,17 +4029,6 @@
         "unavailable": "Temporarily unavailable"
       },
       "claudeAccountRetired": "Cindy no longer supports signing in to your subscription through this legacy Claude connection. Your Claude account and subscription are unaffected. Use “Sign in with Claude Code” to connect.",
-      "detection": {
-        "keyRequired": "Enter your API key to continue.",
-        "authRejected": "Authentication failed. Check the URL and API key; we’ll retry when you update them.",
-        "hint": "Enter the URL and API key to identify the provider. Protocol settings remain available when editing the saved connection.",
-        "pending": "Identifying provider…",
-        "matched": "Identified as {{name}}",
-        "ambiguous": "Multiple configurations match. Continue with custom settings or choose a provider.",
-        "custom": "Continue with custom settings. You can fetch models or add them manually.",
-        "configure": "Configure provider",
-        "keepCustom": "Continue with custom settings"
-      },
       "speechSetup": {
         "title": "Speech",
         "add": "Add speech models",
@@ -3950,6 +4047,17 @@
         "saveFailed": "Could not add models. Reopen this page and try again.",
         "manualSource": "Manual",
         "manualHint": "Enter the speech model ID provided by your supplier."
+      },
+      "detection": {
+        "keyRequired": "Enter your API key to continue.",
+        "authRejected": "Authentication failed. Check the URL and API key; we’ll retry when you update them.",
+        "hint": "Enter the URL and API key to identify the provider. Protocol settings remain available when editing the saved connection.",
+        "pending": "Identifying provider…",
+        "matched": "Identified as {{name}}",
+        "ambiguous": "Multiple configurations match. Continue with custom settings or choose a provider.",
+        "custom": "Continue with custom settings. You can fetch models or add them manually.",
+        "configure": "Configure provider",
+        "keepCustom": "Continue with custom settings"
       }
     },
     "experimental": {
@@ -4031,7 +4139,12 @@
         "connectingNote": "Bot credentials are saved. Establishing the connection now.",
         "reconnectingNote": "Bot credentials are saved. Restoring the connection now.",
         "conflictNote": "Bot credentials are saved, but this App ID is currently in use on another device.",
-        "errorNote": "Bot credentials are saved, but the connection failed. Select reconnect to try again.",
+        "errorNote": "The bot is still bound, but could not connect.",
+        "errorHeading": "{{service}} bot connection failed",
+        "reconnect": "Reconnect Bot",
+        "networkErrorNote": "The IM service is unreachable. Check your network connection.",
+        "timeoutErrorNote": "The connection timed out. Reconnect without unbinding the bot.",
+        "credentialsErrorNote": "The App ID or App Secret is incorrect. Check the configuration.",
         "idleNote": "Bot credentials are saved, but the bot is not connected. Select reconnect to try again."
       },
       "appIdLabel": "App ID",
@@ -5686,6 +5799,10 @@
         "agentUnsupportedOnChannelModeHint": "After switching Agent, send /new; if permission issues persist, send /permission.",
         "permissionModeUnsupportedOnChannelHint": "The current Agent cannot run on this channel in this permission mode, so messages cannot be processed. Send /permission to choose a supported mode.",
         "modelLabel": "Model Configuration",
+        "automatic": "Automatic · Uses an available recommended model",
+        "fixed": "Model pinned",
+        "useAutomatic": "Use automatic selection",
+        "automaticUnavailable": "No model is available. Connect or enable a model in model settings.",
         "loading": "Loading new conversation configuration…",
         "loadFailed": "Failed to load new conversation configuration",
         "saveFailed": "Failed to save new conversation configuration",
@@ -6830,6 +6947,18 @@
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
         "residentDetail": "Uses a small amount of memory while idle; the process stops immediately when it is disabled or uninstalled.",
+        "harnessRead": "Read AI runtime information: {{name}}",
+        "harnessReadDetail": "Reads declared capabilities, usage, or context statistics. Excludes messages, tool arguments, results, and fixed instructions.",
+        "harnessMessages": "Read Messages in Linked Tasks",
+        "harnessMessagesDetail": "Reads user messages, AI replies, and saved history in approved tasks. Content may be sensitive. Excludes fixed instructions and hidden reasoning.",
+        "harnessToolContent": "Read Tool Arguments and Results",
+        "harnessToolContentDetail": "Reads tool arguments and results in approved tasks, which may contain file contents, commands, or sensitive information.",
+        "harnessEvents": "Observe AI runtime events: {{name}}",
+        "harnessEventsDetail": "Receives declared runtime events. Message and tool content require separate approval. Events may have gaps and are not a complete history.",
+        "harnessHooks": "Block AI operations: {{name}}",
+        "harnessHooksDetail": "May block at a supported pre-execution or permission boundary. Cannot approve on your behalf or rewrite arguments. After at most 1.5 seconds, normal permission handling continues.",
+        "harnessActions": "Control AI runtime: {{name}}",
+        "harnessActionsDetail": "Only connected, separately approved operations can be called.",
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
         "subscribeActivityDetail": "Sees only the timing: when thinking starts and ends, and when the AI is waiting for your approval or your answer. It never sees the reasoning text, the action awaiting approval, the command or file involved, the plan, the question, or your answer — and it cannot approve anything on your behalf.",
@@ -8177,8 +8306,8 @@
       "coverage": "Daily tracking since {{date}}",
       "col": {
         "task": "Session",
-        "model": "Model",
-        "provider": "Provider",
+        "model": "Current Model",
+        "provider": "Current Provider",
         "tokens": "Total tokens",
         "context": "Context used",
         "lastActive": "Last active"
@@ -8876,7 +9005,6 @@
         "task": "Task runtime",
         "service": "Accounts and models"
       },
-      "sessionDetail": "Task: {{title}}",
       "services": {
         "audio": "Audio Service",
         "network": "Network Service",
@@ -8897,7 +9025,8 @@
       "terminateConfirmTitle": "Stop {{name}} process?",
       "terminateConfirmDescription": "This force-stops the Agent process. Every task using this process will be interrupted; send another message in an affected task to start an Agent again.",
       "terminated": "Stopped the {{name}} process",
-      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
+      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample.",
+      "sessionDetail": "Task: {{title}}"
     }
   },
   "update": {
@@ -9492,6 +9621,8 @@
         "viewProcess": "Show work",
         "hideProcess": "Hide work",
         "stop": "Stop",
+        "stopping": "Stopping…",
+        "queued": "Waiting to start…",
         "stopMine": "Stop Mine",
         "stopAll": "Stop All",
         "stopAllHint": "Includes other people’s requests"
@@ -9501,8 +9632,8 @@
         "speaking": "{{name}} is replying…",
         "planning": "{{name}} is splitting the work…"
       },
-      "memberCount_one": "{{count}} teammate",
-      "memberCount_other": "{{count}} teammates",
+      "memberCount_one": "{{count}} member",
+      "memberCount_other": "{{count}} members",
       "nameLabel": "Group Name",
       "waitingConfirm": "{{name}} is waiting for your go-ahead",
       "loadFailedTitle": "Couldn’t Load This Group Chat",
@@ -10548,7 +10679,9 @@
       "suggestion2": "2. Create your own dedicated App on the {{service}} Open Platform so you and your colleague each have your own.",
       "dismiss": "Dismiss",
       "createOwnApp": "Create my App ↗"
-    }
+    },
+    "outboundAttachmentsIncomplete": "⚠️ Attachment delivery incomplete: {{count}} not sent ({{names}}).",
+    "unnamedAttachment": "Untitled attachment"
   },
   "markdown": {},
   "diffPanel": {
@@ -11262,6 +11395,7 @@
       },
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
+      "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "modelSwitchContextGuard": {
@@ -11744,8 +11878,6 @@
     "errorBanner": {
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
-      "attachmentAccessDeniedTitle": "Cindy cannot read the source attachment; the message was not sent.",
-      "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
@@ -11815,7 +11947,9 @@
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
       "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
       "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task.",
-      "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again."
+      "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again.",
+      "attachmentAccessDeniedTitle": "Cindy cannot read the source attachment; the message was not sent.",
+      "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
@@ -11917,7 +12051,6 @@
       "modelLoading": "Loading 3D model…",
       "modelLoadFailed": "Failed to load 3D model",
       "videoCopied": "Video copied",
-      "videoMissing": "Video missing",
       "copyVideo": "Copy video",
       "revealVideo": "Reveal video in folder",
       "videoUnavailable": "Video unavailable",
@@ -12295,6 +12428,7 @@
       "copy": "Copy",
       "blockCopied": "Copied",
       "duplicateFiles": "Found {{count}} files with the same name, please use an absolute path",
+      "fileUnavailable": "Can't find or access the file. It may have been moved or deleted.",
       "copyFile": "Copy",
       "copyFilePath": "Copy path",
       "copyLocation": "Copy Location",
@@ -12485,7 +12619,6 @@
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
-      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
@@ -12513,7 +12646,8 @@
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
       "REMOTE_AGENT_TOTAL_LIMIT": "The provider computer has reached its total remote session limit. Ask the owner to release unused sessions or raise the limit in Remote & sharing.",
-      "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context."
+      "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context.",
+      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
     },
     "generatedFiles": {
       "title": "Files created this message",
@@ -12675,6 +12809,30 @@
     }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"This session could not be found. It may have been deleted.","denied":"This account or computer cannot access this session.","failed":"Could not load this session.","back":"Back to Sessions","retry":"Reload Session"},
+    "contextRingPanel": {
+      "title": "Context",
+      "meaning": "What AI can refer to this turn: conversation, instructions and tool results.",
+      "used": "Used",
+      "available": "Plenty of room",
+      "elevated": "Filling up",
+      "nearLimit": "Near the limit",
+      "unknown": "No data yet",
+      "continueHint": "Keep going. No adjustment needed yet.",
+      "unknownHint": "Current usage appears when the model reports it.",
+      "tokens": "{{used}} / {{total}} tokens",
+      "compact": "Compact context",
+      "compactHelp": "Summarize earlier content to free space. Some details may be omitted.",
+      "adjust": "Adjust window",
+      "taskScope": "This Session",
+      "modelSettings": "Model Defaults",
+      "modelSettingsHint": "Change this model’s default window and limit. This also affects other sessions.",
+      "remoteModelSettings": "For lasting changes, edit model settings on the computer running this session.",
+      "costHint": "A larger window holds more content and may cost more.",
+      "technical": "Technical details",
+      "auto": "Automatic compaction",
+      "autoHelp": "Codex automatically compacts context near its compaction threshold."
+    },
     "contextWindowBudget": {
       "menuTitle": "Task context window",
       "triggerLabel": "Task context window, currently {{window}}",
@@ -15514,19 +15672,6 @@
         "dirUnavailable": "The folder on {{device}} is temporarily unavailable. Check the connection or network drive, then try again. The Worker wasn't created."
       }
     },
-    "editWorker": {
-      "title": "Edit worker",
-      "submit": "Save",
-      "closeAria": "Close edit worker dialog",
-      "labelLabel": "Label",
-      "labelHint": "The label uniquely identifies this worker inside the team. Use letters, numbers, hyphens and underscores only; after saving, the Lead and other references locate the worker by the new label.",
-      "labelHintAria": "About worker label",
-      "labelPlaceholder": "Worker label (leave empty to keep)",
-      "labelInvalid": "Label may only contain letters, numbers, hyphens and underscores",
-      "duplicateLabel": "Label {{label}} is already used by another worker in this team",
-      "saveFailed": "Failed to save. Please try again.",
-      "labelLocked": "This worker's label is referenced by an active plugin team plan and can't be changed until the plan finishes. Change the role name, or release the worker first."
-    },
     "rolePill": {
       "unread": "Unread update",
       "worker": "Worker",
@@ -15535,7 +15680,6 @@
       "workerCountSummary_other": "{{totalCount}} workers · {{activeCount}} running",
       "statusAria": "status {{status}}",
       "archiveWorkerAria": "Archive worker {{name}}",
-      "editWorkerAria": "Edit worker {{name}}",
       "createWorker": "Create new worker",
       "hardLimitHint": "Hard limit reached: {{count}}. Archive an existing worker to create another one.",
       "hardLimitSettingsHint": "Hard limit reached: {{count}}. Click to adjust in collaboration settings.",
@@ -15554,7 +15698,8 @@
       "executionDevice": "Runs on {{device}}",
       "deviceUnreachable": "Status unavailable",
       "unknownDevice": "Another computer",
-      "archiveRemoteWorkerConfirmDesc": "Removes it from this collaboration and stops the current round on {{device}}. The task, history and files on {{device}} are kept and marked “Collaboration ended”, so you can keep viewing them there."
+      "archiveRemoteWorkerConfirmDesc": "Removes it from this collaboration and stops the current round on {{device}}. The task, history and files on {{device}} are kept and marked “Collaboration ended”, so you can keep viewing them there.",
+      "editWorkerAria": "Edit worker {{name}}"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
@@ -15585,6 +15730,19 @@
       "detachedHead": "Detached HEAD · {{sha}}",
       "directDetached": "Changes will be made directly in {{project}} at {{branch}}",
       "loadFailed": "Could not read the project directory."
+    },
+    "editWorker": {
+      "title": "Edit worker",
+      "submit": "Save",
+      "closeAria": "Close edit worker dialog",
+      "labelLabel": "Label",
+      "labelHint": "The label uniquely identifies this worker inside the team. Use letters, numbers, hyphens and underscores only; after saving, the Lead and other references locate the worker by the new label.",
+      "labelHintAria": "About worker label",
+      "labelPlaceholder": "Worker label (leave empty to keep)",
+      "labelInvalid": "Label may only contain letters, numbers, hyphens and underscores",
+      "duplicateLabel": "Label {{label}} is already used by another worker in this team",
+      "saveFailed": "Failed to save. Please try again.",
+      "labelLocked": "This worker's label is referenced by an active plugin team plan and can't be changed until the plan finishes. Change the role name, or release the worker first."
     }
   },
   "splitGroup": {
@@ -16254,6 +16412,7 @@
     "save": "Save Routine",
     "deleteConfirm": "Delete this routine and cancel its pending runs?",
     "keep": "Keep Routine",
+    "openTask": "Open Session",
     "history": "Run History",
     "noRuns": "This routine has not run yet.",
     "field": "Field",
@@ -16285,6 +16444,10 @@
       "not-equals": "Does Not Equal"
     },
     "quiet": "Stay quiet when checks find nothing",
+    "sessionMode": "Run session",
+    "sessionModePersistent": "Persistent session (keep context)",
+    "sessionModeFresh": "New session each trigger (isolate context)",
+    "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
     "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
     "checkCommand": "Pre-run check command",
     "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
@@ -17381,11 +17544,40 @@
     "taskId": "Task ID:",
     "contextReferences": "Context references:"
   },
+  "sharing": {
+    "includeAttribution": "Include my name and avatar",
+    "recipientHint": "Open the link or scan the image to view the plugin. Continue in Cindy on a computer.",
+    "linkLabel": "Share link",
+    "imageLabel": "Share image",
+    "title": "Share",
+    "close": "Close",
+    "loading": "Preparing sharing material…",
+    "notConfigured": "Sharing is not available yet",
+    "unavailable": "This plugin is no longer publicly available to share",
+    "loadFailed": "Could not load sharing material. Reload to try again.",
+    "retry": "Reload Material",
+    "imageAlt": "Share image for {{name}}",
+    "copyLink": "Copy Link",
+    "copyImage": "Copy Image",
+    "saveImage": "Save Image",
+    "linkCopied": "Link copied",
+    "imageCopied": "Image copied",
+    "imageSaved": "Image saved",
+    "copyLinkFailed": "Could not copy the link",
+    "copyImageFailed": "Could not copy the image. Try copying it again.",
+    "saveImageFailed": "Could not save the image. Try saving it again.",
+    "previewFailed": "Could not display the image preview. You can still copy the link."
+  },
   "subscriptionFastPolicy": {
     "label": "Allow Fast",
     "providerHint": "When off, this subscription account uses standard speed for your own and shared tasks, including Ultrafast.",
     "groupHint": "When off, all tasks routed through this group use standard speed, including Ultrafast.",
     "pending": "Some computers have not confirmed the setting. Keep them connected and update group computers that do not support this setting.",
     "saveFailed": "The setting may be saved, but some running tasks have not confirmed standard speed. Check the connection and retry."
+  },
+  "attachmentAccessConfirmation": {
+    "title": "Confirm Attachment Access",
+    "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
+    "button": "Use Original File"
   }
 }

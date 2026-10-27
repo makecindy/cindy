@@ -19,7 +19,7 @@ type VoiceRun = {
 export function useAskCardVoice(input: {
   deviceId?: string;
   getText: () => string;
-  setText: (value: string) => void;
+  setText: (value: string, selection?: MobileVoiceSelection) => void;
   getSelection: () => MobileVoiceSelection;
 }): {
   listening: boolean;
@@ -124,6 +124,9 @@ export function useAskCardVoice(input: {
     runReadyRef.current = ready;
     const abort = new AbortController();
     startAbortRef.current = abort;
+    // Opening permissions/dismissing the keyboard can move native selection.
+    // Dictation belongs to the caret the user had when they pressed the mic.
+    const selection = { ...inputRef.current.getSelection() };
     void (async () => {
       try {
         const { startAskCardDictation } = await import('@/session/askCardVoiceStart');
@@ -135,8 +138,8 @@ export function useAskCardVoice(input: {
           refreshAccessToken: () => currentAuth.refreshAccessToken(),
           apiFetch: currentAuth.apiFetch,
           getText: () => inputRef.current.getText(),
-          setText: (value) => { if (!abort.signal.aborted) inputRef.current.setText(value); },
-          getSelection: () => inputRef.current.getSelection(),
+          setText: (value, nextSelection) => { if (!abort.signal.aborted) inputRef.current.setText(value, nextSelection); },
+          getSelection: () => selection,
           onListening: () => {
             if (abort.signal.aborted) return;
             startingRef.current = false;

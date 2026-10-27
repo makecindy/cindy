@@ -1694,6 +1694,35 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  // The share contract delegates regional ID resolution to Plugin Server.
+  // Existing detail cases use only IDs already in the catalog. One historical
+  // ID returning a listed public projection must open it, never install (unit).
+  it.each(['cloud', 'signed-out', 'local'] as const)(
+    'uses the server-resolved regional plugin ID for %s detail navigation',
+    async (mode) => {
+      runtime.session = { mode, dataOwnerId: mode === 'signed-out' ? null : 'user-1', generation: 2 };
+      const item = summary();
+      const canonicalId = `c${'z'.repeat(24)}`;
+      const h = harness([item]);
+      h.api.detail.mockResolvedValueOnce(detail(item));
+
+      await expect(h.service.detail(canonicalId)).resolves.toMatchObject({
+        pluginId: item.id, scope: 'public',
+      });
+      expect(h.api.detail).toHaveBeenCalledWith(canonicalId);
+      expect(h.api.download).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still rejects a different catalog item returned for an already known plugin ID', async () => {
+    const first = summary();
+    const other = summary({ id: `c${'z'.repeat(24)}`, ghostId: 'cindy-other' });
+    const h = harness([first, other]);
+    h.api.detail.mockResolvedValueOnce(detail(other));
+    await expect(h.service.detail(first.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+  });
+
   it('keeps signed-out detail blocked while the account boundary is pending', async () => {
     runtime.boundaryPending = true;
     runtime.session = {

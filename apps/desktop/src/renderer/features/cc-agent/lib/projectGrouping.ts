@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * projectGrouping — CC Agent Sidebar 分组算法（纯函数）
  * ---------------------------------------------------------------------------
@@ -10,10 +11,8 @@
  *                    组内 sessions 先按 status (active 在 archived 之上) 再按 sortTime desc
  *
  * 时间轴：
- *   - 排序唯一字段是 `sortTime = userSendAt ?? updatedAt`
- *     · userSendAt = "用户最近一次按下发送" 的瞬间，由 sendMessage 入口同步 bump，
- *       不会被 model/effort/title 等字段类改动污染
- *     · 老数据 / 未发过消息的草稿 userSendAt 可能为 null —— 回落到 updatedAt 兜底
+ *   - 排序时间为 `lastActivityAt ?? userSendAt ?? updatedAt`，按接活与交还结果推进。
+ *     老数据无活动时间时保留原有回退；字段修改和流式输出不推进新时钟。
  *
  * 草稿识别（归未分类）：
  *   - workingDir 缺失 OR
@@ -93,7 +92,7 @@ export interface ProjectNode {
   segments: number;
   /** 该 Project 下所有 session，已按 status 然后 sortTime desc 排序 */
   sessions: Session[];
-  /** 组内任意 session 的最大 sortTime（userSendAt ?? updatedAt），用于 Project 间排序 */
+  /** 组内任意 session 的最大活动时间，用于 Project 间排序 */
   latestActivityAt: string;
   /** 来自本地持久项目目录；即使当前视图没有匹配会话也应保留项目节点。 */
   isPersistentLocal?: boolean;
@@ -382,16 +381,12 @@ const toMs = (iso: string | null | undefined): number => {
 };
 
 /**
- * 排序时间轴：以 userSendAt（用户最近一次按下发送）为主键。
- * - userSendAt 存在时只认它 —— agent 回复 / /clear 等只 bump
- *   updatedAt 的路径不再重排列表，会话顺序稳定跟随"用户上次发送"。
- * - userSendAt == null 时回落到 updatedAt：兼容 touchUserSendInDb 失败的 scheduler fire
- *   与从未发送过的草稿会话，避免这类会话因取 0 沉到列表最底。
+ * 排序与显示时间共用换手时钟；没有新字段的存量任务保留原有回退。
  */
 const sortTimeMs = (s: Session): number =>
-  s.userSendAt != null ? toMs(s.userSendAt) : toMs(s.updatedAt);
+  toMs(getSessionListActivityAt(s));
 
-const sortTimeIso = (s: Session): string => s.userSendAt ?? s.updatedAt;
+const sortTimeIso = (s: Session): string => getSessionListActivityAt(s);
 
 export const compareSessionsBySortTimeDesc = (a: Session, b: Session): number =>
   sortTimeMs(b) - sortTimeMs(a);
@@ -451,7 +446,7 @@ export function pinnedSessionIdsInDisplayOrder(sessions: readonly Session[]): st
  * 排序合约：
  *   - pinned          按 status → pinnedAt desc
  *   - dialogues       按 status → sortTime desc
- *   - unclassified    按 status → sortTime desc (sortTime = userSendAt ?? updatedAt)
+ *   - unclassified    按 status → sortTime desc (sortTime = lastActivityAt ?? userSendAt ?? updatedAt)
  *   - projects        按 latestActivityAt desc；组内 sessions 按 status → sortTime desc
  *
  * 草稿判定：workingDir 缺失 OR

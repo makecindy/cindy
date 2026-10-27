@@ -289,6 +289,31 @@ describe('feishu group inbound gate', () => {
     expect(mocks.openThread).not.toHaveBeenCalled();
   });
 
+  // A private quote used to bypass parent resolution altogether.
+  it('delivers private reply context without changing the direct lane', async () => {
+    mocks.resolveReplyMessage.mockResolvedValueOnce({ replyContext: { author: 'Alice', text: 'quoted text' } });
+    await connect();
+    const events = collectEvents();
+    const incoming = groupMessage({ parentId: 'om_parent', text: 'explain this' });
+    incoming.message.chat_type = 'p2p';
+    await mocks.eventHandlers['im.message.receive_v1']!(incoming);
+    expect(events[0]).toMatchObject({ senderId: OWNER, replyContext: { text: 'quoted text' } });
+    expect(mocks.resolveReplyMessage).toHaveBeenCalledWith('om_parent', 'oc_chat1');
+  });
+
+  it('fetches directly received merged forwards instead of silently dropping them', async () => {
+    mocks.resolveReplyMessage.mockResolvedValueOnce({ replyContext: { author: 'Alice', text: 'forwarded content' } });
+    await connect();
+    const events = collectEvents();
+    const incoming = groupMessage({});
+    incoming.message.chat_type = 'p2p';
+    incoming.message.message_type = 'merge_forward';
+    incoming.message.content = 'Merged and Forwarded Message';
+    await mocks.eventHandlers['im.message.receive_v1']!(incoming);
+    expect(events[0]).toMatchObject({ text: '[合并转发消息]', replyContext: { text: 'forwarded content' } });
+    expect(mocks.resolveReplyMessage).toHaveBeenCalledWith('om_msg1', 'oc_chat1');
+  });
+
   it('main-stream reply fetch failure keeps the existing group-history fallback', async () => {
     mocks.resolveReplyMessage.mockResolvedValueOnce(null);
     await connect();

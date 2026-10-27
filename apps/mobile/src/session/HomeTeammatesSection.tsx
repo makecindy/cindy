@@ -8,7 +8,7 @@
  * Android 把首页列表挂到根节点渲染（ResidentHomeList），所以名册与路由的导航上下文要在路由里取，
  * 再由本段重新提供。
  */
-import { useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { useTranslation } from 'react-i18next';
@@ -40,6 +40,7 @@ import { useTeammateCreateController } from './TeammateCreateController';
 import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } from './TeammateList';
 import { cloudCompanionRoute } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
+import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
 
 /** Desktop previews five in a 260px sidebar; three keeps the first screen of tasks on a phone. */
 export const HOME_TEAMMATE_PREVIEW_LIMIT = 3;
@@ -127,13 +128,13 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
   const stored = local?.owner === owner ? local.collapsed : navigation.teammatesCollapsed;
   // Search results are always rows; the stored fold returns with the search cleared.
   const collapsed = stored && !search;
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
   const toggleCollapsed = useCallback(() => {
     const next = !stored;
     runDisclosure(() => { setLocal({ owner, collapsed: next }); if (next) setShowAll(false); });
     void setTeammatesCollapsed(next);
-  }, [stored, owner, runDisclosure, setTeammatesCollapsed]);
+  }, [stored, owner, runDisclosure, setTeammatesCollapsed, setShowAll]);
   const createTargets = useStableValue(roster.createTargets, sameHosts);
   const groupCreateTargets = useStableValue(roster.groupTargets.filter(groups.isOnline), sameHosts);
   const canCreate = createTargets.length > 0 || groupCreateTargets.length > 0;
@@ -146,16 +147,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure only adds a header action,
   // never a notice row that changes the list's height.
-  const error = groups.error ?? roster.error;
+  const error = groups.error ?? roster.error ?? cloud.error;
   const errorKey = error === 'CHAT_ENDPOINT_UNAVAILABLE' ? 'groupChat.server.endpointUnavailable'
     : error === 'CHAT_LIST_FAILED' ? 'groupChat.server.loadFailed'
     : entries.length ? 'devices.companions.stale' : 'devices.resources.loadFailed';
   const retrying = roster.refreshing || groups.refreshing;
   const showError = useDelayedConnectionNotice(!!error && focused && visible && !search);
   const retry = () => {
-    void roster.refresh();
-    if (groups.supported) void groups.refresh();
-    if (cloud.supported) void refreshCloud();
+    if (roster.error) void roster.refresh();
+    if (groups.error) void groups.refresh();
+    if (cloud.error) void refreshCloud();
   };
   // A first read with nothing cached stays out of the way instead of flashing an empty section.
   const shown = visible && (search ? entries.length > 0 : !!error || !(!entries.length && (!canCreate || roster.loading)));
@@ -227,9 +228,61 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
   return <>{body}{creator.sheets}</>;
 }
 
-function StripCell({ entry, online, connected, quiet, onPress }: {
+interface StripCellProps {
   entry: TeammateListEntry; online: boolean; connected: boolean | null; quiet: boolean; onPress(): void;
+}
+
+function StripCell({ entry, online, connected, quiet, onPress }: StripCellProps) {
+  const { i18n } = useTranslation();
+  const currentPress = useRef(onPress);
+  useLayoutEffect(() => { currentPress.current = onPress; }, [onPress]);
+  const press = useCallback(() => currentPress.current(), []);
+  if (entry.kind === 'group') return <GroupStripCell entry={entry} online={online} connected={connected} quiet={quiet} onPress={press} />;
+  const { row } = entry;
+  const { display } = row.item;
+  return <BotStripCell deviceId={row.host.deviceId} botId={row.item.ref.id}
+    title={resolveRemoteText(display.title, i18n.language)} lastReplyAt={display.lastReplyAt}
+    avatarKind={display.avatar?.kind} avatarValue={display.avatar?.value}
+    avatarFallback={display.avatar?.fallbackText} avatarColor={display.avatar?.color}
+    connected={connected} quiet={quiet} working={online && !!display.generation} onPress={press} />;
+}
+
+const StripAvatar = memo(RemoteCompanionAvatar);
+const BotStripCell = memo(function BotStripCell({ deviceId, botId, title, lastReplyAt,
+  avatarKind, avatarValue, avatarFallback, avatarColor, connected, quiet, working, onPress }: {
+  deviceId: string; botId: string; title: string; lastReplyAt?: number;
+  avatarKind?: string; avatarValue?: string; avatarFallback?: string; avatarColor?: string;
+  connected: boolean | null; quiet: boolean; working: boolean; onPress(): void;
 }) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const { user } = useAuth();
+  // Observe this companion's receipt, not the cache's global revision. Other
+  // rosters and read acknowledgements need not rerender every strip avatar.
+  const readUnread = useCallback(() => isRemoteResourceUnread(user?.id ?? '', deviceId, botId, lastReplyAt),
+    [user?.id, deviceId, botId, lastReplyAt]);
+  const unread = useSyncExternalStore(subscribeRemoteResourceCache, readUnread);
+  const avatar = useMemo(() => avatarKind === undefined ? undefined : {
+    kind: avatarKind, value: avatarValue ?? '', fallbackText: avatarFallback ?? '', color: avatarColor,
+  }, [avatarKind, avatarValue, avatarFallback, avatarColor]);
+  const dimmed = connected === false && !quiet;
+  const offline = dimmed ? t('devices.resources.hostOffline') : '';
+  return <Pressable accessibilityRole="button" disabled={false} accessibilityState={{ disabled: false }}
+    accessibilityLabel={[title, offline, working ? t('groupChat.list.running') : '', unread ? t('devices.companions.unread') : ''].filter(Boolean).join(', ')}
+    onPress={onPress} style={({ pressed }) => [styles.cell, pressed && mobileInteractionStyles.pressed]}
+    testID={`home.teammatesStrip.bot.${deviceId}.${botId}`}>
+    <View style={styles.cellAvatar}>
+      <View style={dimmed ? { opacity: OFFLINE_AVATAR_OPACITY } : undefined}>
+        <StripAvatar avatar={avatar} deviceId={deviceId} name={title} online={connected === true} size={STRIP_AVATAR_SIZE} framed />
+      </View>
+      <CompanionPresenceRing active={working} />
+      {unread ? <View style={styles.unreadRing} testID="home.teammatesStrip.unread"><View style={styles.unreadDot} /></View> : null}
+    </View>
+    <Text style={[styles.cellName, unread && styles.cellNameUnread]} numberOfLines={1}>{title}</Text>
+  </Pressable>;
+});
+
+function GroupStripCell({ entry, online, connected, quiet, onPress }: StripCellProps) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { user } = useAuth();

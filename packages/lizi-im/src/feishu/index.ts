@@ -63,6 +63,8 @@ export interface FeishuIMOptions {
   ipc?: boolean;
   /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
   guests?: boolean;
+  /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
+  shouldAnnounceLifecycle?: () => boolean;
 }
 
 export class FeishuIM extends BaseIM implements ChannelIM {
@@ -102,6 +104,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       secretKeyPrefix: options.secretKeyPrefix ?? '',
       ipc: options.ipc !== false,
       guests: options.guests === true,
+      shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     });
     // 设置页那份(无前缀、带 IPC)就是默认作用域: 单测直接调模块函数、Electron IPC 进来
     // 没有作用域时都落在它上面。
@@ -825,12 +828,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * threadId 走 thread 容器。**权限不足/调用失败直接抛错** — 调用方据此
    * 区分「无历史」与「拉取失败」并给 owner 可见提示;turn 降级照跑由调用方兜。
    */
-  fetchChatHistoryPage(args: {
-    chatId: string;
-    threadId?: string;
-    pageToken?: string;
-    pageSize?: number;
-  }): Promise<outbound.ChatHistoryPage> {
+  fetchChatHistoryPage(args: Parameters<typeof outbound.fetchChatHistoryPage>[0]): Promise<outbound.ChatHistoryPage> {
     return outbound.fetchChatHistoryPage(args);
   }
 

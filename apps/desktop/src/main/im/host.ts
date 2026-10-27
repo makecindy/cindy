@@ -65,6 +65,7 @@ import {
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
 import { buildPersonalBotCommandMenu } from './shared/botCommands';
+import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
 
 const log = createLogger('im/host');
 
@@ -190,13 +191,20 @@ const host: IMHost = {
   createLogger,
 };
 
-export const feishuIm = createFeishuIM(host);
+export const feishuIm = createFeishuIM(host, {
+  shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+});
 /**
  * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
  * IPC、对外开放(非主人的私聊与群 @ 带非主人标记进业务层)。
  */
 export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
-  return createFeishuIM(host, { secretKeyPrefix, ipc: false, guests: true });
+  return createFeishuIM(host, {
+    secretKeyPrefix,
+    ipc: false,
+    guests: true,
+    shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+  });
 }
 export const discordIm = createDiscordIM(host, {
   resolveImageUrl: resolveManagedImageAbsPath,

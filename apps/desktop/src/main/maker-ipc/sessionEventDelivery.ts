@@ -15,11 +15,13 @@ import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface DeliverSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
@@ -46,7 +48,7 @@ export interface DeliverSessionEventDeps {
   ) => void;
   readonly sessionTurnActivityTracker: Pick<
     SessionTurnActivityTracker,
-    'scheduleIdleAfterTerminalBroadcast' | 'scheduleIdleAfterStatusBroadcast'
+    'isSessionInTurn' | 'scheduleIdleAfterTerminalBroadcast' | 'scheduleIdleAfterStatusBroadcast'
   >;
   readonly notifyGoalIdleAfterTurnSettled: (sessionId: string) => void;
   readonly settlePendingCredentialSwitch: (sessionId: string, source: string) => void;
@@ -180,9 +182,21 @@ export function deliverSessionEvent(
     deps.agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
     deps.refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
   } else if (shouldMarkTurnStatusIdleAfterBroadcast) {
+    const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
     deps.sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
     deps.markTurnEndedAfterPersistDrain(session.id);
+    if (
+      wasInTurn && event.turnOrigin?.kind !== 'goal'
+    ) {
+      deps.sessionListActivityTracker.end(session.id, {
+        identity: event.sessionTurnGeneration === undefined ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+        statusOnly: true,
+        hold: deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+          deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id),
+      });
+    }
     noteClaudeSessionTurnState(session.id, false);
   }
   if (event.type === 'done' && !isContinuationBoundary) {

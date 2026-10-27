@@ -2065,3 +2065,43 @@ it('normalizes a pending bare URL once and still discovers the following URL', (
     expect(prefixScans).toBeLessThanOrEqual(2);
   } finally { spy.mockRestore(); }
 });
+
+// #7088 follow-up: each formatted token rescanned all remaining syntax, blocking
+// Hermes on a long paragraph. Count examined suffix characters through the real
+// parser (unit, not wall-clock timing); existing semantic tests miss this cost.
+it('bounds repeated suffix searches while keeping text, links and images', () => {
+  const source = '**one** `two` '.repeat(30) + '![photo](https://example.invalid/a.png) after src/end.ts';
+  const exec = RegExp.prototype.exec;
+  let searchedCharacters = 0;
+  const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+    const from = this.lastIndex;
+    const match = Reflect.apply(exec, this, [input]);
+    if (input === source && this.global) searchedCharacters += (match ? match.index + match[0].length : source.length) - from;
+    return match;
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+      { type: 'text', text: ' after ' },
+      { type: 'link', text: 'src/end.ts', url: 'src/end.ts', bare: true },
+    ]);
+    expect(searchedCharacters).toBeLessThan(source.length * 20);
+  } finally { spy.mockRestore(); }
+});
+
+// The pending-search optimization must retain raw prefix boundaries and rejected
+// spans. Through the public parser, protect rendering when another grammar wins
+// before/inside a candidate; these cases distinguish unsafe token-level caching.
+it.each([
+  ['**a**_b_', [{ type: 'strong', text: 'a' }, { type: 'text', text: '_b_' }]],
+  ['`a`$b$', [{ type: 'code', text: 'a' }, { type: 'text', text: '$b$' }]],
+  ['![a `b`](bad) then ![ok](src/a.png)', [
+    { type: 'text', text: '![a ' }, { type: 'code', text: 'b' },
+    { type: 'text', text: '](bad) then ' }, { type: 'image', alt: 'ok', url: 'src/a.png' },
+  ]],
+])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
+  expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
+});

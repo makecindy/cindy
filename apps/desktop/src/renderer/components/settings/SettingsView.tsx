@@ -45,7 +45,6 @@ import { WorktreeRecycleCard } from './WorktreeRecycleCard';
 import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
-import { CompactionSection } from './CompactionSection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
 import { StreamFadeSection } from './StreamFadeSection';
@@ -538,9 +537,6 @@ export function SettingsView() {
                   aria-label={t('settings.contacts.title')}
                 >
                   <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
-                </section>
-                <section id="settings-search-target-personalization-compaction" className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
-                  <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                 <section id="settings-search-target-personalization-terminal-shell" className="pb-[18px]" aria-label={t('settings.sections.terminalShell')}>

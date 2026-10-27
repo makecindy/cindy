@@ -7,7 +7,10 @@ export function ModelRouteSelector({ agentDeviceId, sshRemote, deviceId, ...prop
   ComponentProps<typeof ModelSelector> & { agentDeviceId?: string | null; sshRemote?: boolean }) {
   const locations = useModelRouteDevices({ controlledDeviceId: deviceId ?? null,
     leadAgentDeviceId: agentDeviceId, sshRemote });
-  return <ModelSelector {...props} deviceId={deviceId}
+  // The trigger and the menu must read the selected, readable execution location.
+  // Keep the home location separate for browsing local/controlled-host models.
+  const catalogDeviceId = locations.devices ? locations.leadAgentDeviceId ?? deviceId : deviceId;
+  return <ModelSelector {...props} deviceId={catalogDeviceId}
     remoteAgent={locations.devices ? { devices: locations.devices,
-      selectedDeviceId: agentDeviceId ?? null, homeDeviceId: deviceId } : undefined} />;
+      selectedDeviceId: locations.leadAgentDeviceId, homeDeviceId: deviceId } : undefined} />;
 }

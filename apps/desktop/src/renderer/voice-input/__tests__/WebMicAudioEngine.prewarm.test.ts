@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { prewarmVoiceInputAudio } from '../audioContextPool';
 import {
+  COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
+  createComposerLongPressVoiceGesture,
+} from '../composerLongPressGesture';
+import {
   disposeKeepAliveVoiceInputMicrophone,
   isMicrophoneDeviceUnavailableError,
   prewarmVoiceInputMicrophoneWithAutomaticFallback,
@@ -114,6 +118,39 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  // User report 2026-10-26: short clicks switch Bluetooth headphones into mic
+  // mode. Existing preparation tests only checked eventual track cleanup.
+  // Unit: run the real gesture + preparation with getUserMedia as the device
+  // boundary; cancelling before the hold threshold must never open that device.
+  it.each(['release', 'move', 'dispose'] as const)(
+    'does not open the microphone when a pending composer hold ends via %s',
+    async (cancel) => {
+      vi.useFakeTimers();
+      const start = vi.fn();
+      const gesture = createComposerLongPressVoiceGesture({
+        getState: () => 'idle',
+        prepare: () => prepareVoiceInputMicrophone({
+          workletUrl: 'https://app.local/pcm16k-worklet.js',
+        }),
+        start,
+        stop: vi.fn(),
+      });
+      try {
+        gesture.press({ x: 0, y: 0 });
+        await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+        if (cancel === 'move') gesture.move({ x: 20, y: 0 });
+        else gesture[cancel]();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(getUserMedia).not.toHaveBeenCalled();
+        expect(start).not.toHaveBeenCalled();
+      } finally {
+        gesture.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('prepares without activating PCM and closes a cancelled press', async () => {
     const release = prepareVoiceInputMicrophone({ workletUrl: 'https://app.local/pcm16k-worklet.js' });

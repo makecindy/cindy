@@ -1,12 +1,15 @@
 /** Preserve Pi's provider-specific serializers for independently named Cindy connections. */
 export function nativeProviderAdapterAliases(
   nativeProviders: Array<{ id: string; name: string; adapterProvider?: string; apiKeyEnvVar?: string;
-    sourceProviderId?: string; models?: Array<{ id: string; wireId?: string }>; modelIdAliases?: Record<string, string> }>,
+    sourceProviderId?: string; api?: string; headers?: Record<string, string>;
+    models?: Array<{ id: string; wireId?: string; api?: string }>; modelIdAliases?: Record<string, string> }>,
   guestModelIds?: readonly string[],
   hosted = false,
-): Array<{ id: string; name: string; provider: string; keyEnv?: string; remoteProviderId?: string; models?: Array<{ id: string; grant: string }> }> {
+): Array<{ id: string; name: string; provider: string; keyEnv?: string; cachedCodex?: boolean; remoteProviderId?: string; models?: Array<{ id: string; grant: string }> }> {
   return nativeProviders.flatMap((provider) => {
-    const adapter = provider.adapterProvider ?? (hosted || guestModelIds ? provider.id : undefined);
+    const cachedCodex = !hosted && !guestModelIds && Boolean(provider.headers?.['x-cindy-pi-provider-id'])
+      && (provider.api === 'openai-codex-responses' || provider.models?.some(model => model.api === 'openai-codex-responses'));
+    const adapter = provider.adapterProvider ?? (hosted || guestModelIds || cachedCodex ? provider.id : undefined);
     const source = provider.sourceProviderId ?? provider.id;
     const models = guestModelIds ? (provider.models ?? []).flatMap(model => {
       const grant = guestModelIds.find(id => id === model.id || provider.modelIdAliases?.[id] === model.id
@@ -17,6 +20,7 @@ export function nativeProviderAdapterAliases(
       id: provider.id,
       name: provider.name,
       provider: adapter,
+      ...(cachedCodex ? { cachedCodex: true } : {}),
       ...(hosted && !guestModelIds ? { remoteProviderId: source } : {}),
       ...(provider.apiKeyEnvVar ? { keyEnv: provider.apiKeyEnvVar } : {}),
       ...(models ? { models } : {}),
@@ -26,7 +30,7 @@ export function nativeProviderAdapterAliases(
 }
 
 export const PI_NATIVE_PROVIDER_ADAPTER_SOURCE = String.raw`
-type CindyAdapterAlias = { id: string; name: string; provider: string; keyEnv?: string; remoteProviderId?: string; models?: Array<{ id: string; grant: string }> };
+type CindyAdapterAlias = { id: string; name: string; provider: string; keyEnv?: string; cachedCodex?: boolean; remoteProviderId?: string; models?: Array<{ id: string; grant: string }> };
 type CindyProviderRefreshSnapshot = {
   nonce: string;
   env: Record<string, string>;
@@ -64,6 +68,7 @@ function parseCindyProviderRefreshSnapshot(raw: unknown, nonce: string): CindyPr
     if (typeof alias.id !== 'string' || !alias.id || seen.has(alias.id)) return undefined;
     if (typeof alias.name !== 'string') return undefined;
     if (typeof alias.provider !== 'string' || !alias.provider) return undefined;
+    if (alias.cachedCodex !== undefined && typeof alias.cachedCodex !== 'boolean') return undefined;
     if (alias.remoteProviderId !== undefined && (typeof alias.remoteProviderId !== 'string' || !alias.remoteProviderId)) return undefined;
     if (alias.keyEnv !== undefined && (
       typeof alias.keyEnv !== 'string'
@@ -74,6 +79,7 @@ function parseCindyProviderRefreshSnapshot(raw: unknown, nonce: string): CindyPr
       !model || typeof model.id !== 'string' || !model.id || typeof model.grant !== 'string' || !model.grant))) return undefined;
     seen.add(alias.id);
     aliases.push({ id: alias.id, name: alias.name, provider: alias.provider,
+      ...(alias.cachedCodex === true ? { cachedCodex: true } : {}),
       ...(alias.remoteProviderId ? { remoteProviderId: alias.remoteProviderId } : {}),
       ...(alias.keyEnv ? { keyEnv: alias.keyEnv } : {}),
       ...(alias.models ? { models: alias.models.map((model: any) => ({ id: model.id, grant: model.grant })) } : {}) });
@@ -127,11 +133,21 @@ async function registerCindyNativeProviderAdapters(pi: any) {
         const placeholderKey = !token || ['pi-native-keyless', 'cindy-pi-provider-auth-placeholder', 'cindy-local-provider'].includes(token);
         const gatewayKey = token && !placeholderKey
           ? 'Bearer ' + token : options?.headers?.['cf-aig-authorization'];
-        const nativeOptions = alias.provider === 'cloudflare-ai-gateway'
+        let nativeOptions = alias.provider === 'cloudflare-ai-gateway'
           ? { ...options, apiKey: undefined, headers: { ...options?.headers,
               ...(gatewayKey ? { 'cf-aig-authorization': gatewayKey } : {}),
               Authorization: null, 'x-api-key': null } }
           : options;
+        if (alias.cachedCodex && model.api === 'openai-codex-responses') {
+          nativeOptions = { ...nativeOptions, transport: 'websocket-cached',
+            onPayload: async (payload: any, requestModel: any) => {
+              const next = await options?.onPayload?.(payload, requestModel);
+              const body = next === undefined ? payload : next;
+              return typeof body?.model === 'string' && body.model.endsWith('[1m]')
+                ? { ...body, model: body.model.slice(0, -4) } : body;
+            },
+          };
+        }
         const events = simple ? api.streamSimple(nativeModel, nativeContext, nativeOptions) : api.stream(nativeModel, nativeContext, nativeOptions);
         return (async function* () {
           for await (const event of events) yield { ...event,

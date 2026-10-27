@@ -183,6 +183,68 @@ function startUpgradeUpstream(opts: { handshakeDelayMs?: number } = {}): Promise
 }
 
 describe('anthropic-compat-proxy websocket upgrades', () => {
+  it('prepares host authentication without forwarding client credentials and revokes live sockets', async () => {
+    const upstream = await startUpgradeUpstream();
+    const controller = new AbortController();
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid', transformRequest: [],
+      resolveWebSocketUpstream: () => upstream.url,
+      prepareWebSocketRequest: async ({ headers }) => ({ headers: {
+        authorization: 'Bearer fixture-host-token', 'sec-websocket-key': headers['sec-websocket-key'],
+        'sec-websocket-version': headers['sec-websocket-version'],
+      }, signal: controller.signal }),
+    });
+    const client = await openUpgrade(proxy.url, '/codex/responses', Buffer.alloc(0), [
+      'Authorization: Bearer client-placeholder', 'X-Cindy-Pi-Session-Token: fixture-local-secret',
+    ]);
+    expect(client.head).toContain('101 Switching Protocols');
+    expect(upstream.requests[0].url).toBe('/codex/responses');
+    expect(upstream.requests[0].headers.authorization).toBe('Bearer fixture-host-token');
+    expect(upstream.requests[0].headers['x-cindy-pi-session-token']).toBeUndefined();
+    const closed = new Promise<void>(resolve => client.socket.once('close', () => resolve()));
+    controller.abort(); await closed;
+    expect(client.socket.destroyed).toBe(true);
+  });
+
+  it('rechecks live authorization on reused sockets while preserving compression negotiation', async () => {
+    const upstream = await startUpgradeUpstream();
+    let authorized = true;
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid', transformRequest: [],
+      resolveWebSocketUpstream: () => upstream.url,
+      prepareWebSocketRequest: async ({ headers }) => ({ headers: { ...headers },
+        signal: new AbortController().signal, authorize: () => authorized }),
+    });
+    const client = await openUpgrade(proxy.url);
+    expect(client.head).toContain('permessage-deflate');
+    client.socket.write('PING');
+    await waitForSocketText(client.socket, client.rest, 'PONG');
+    const closed = new Promise<void>(resolve => client.socket.once('close', () => resolve()));
+    authorized = false;
+    client.socket.write('FORBIDDEN');
+    await closed;
+    expect(upstream.received.join('')).not.toContain('FORBIDDEN');
+  });
+
+  it('does not dispatch when authorization is revoked while preparation is pending', async () => {
+    const upstream = await startUpgradeUpstream();
+    const controller = new AbortController();
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid', transformRequest: [],
+      resolveWebSocketUpstream: () => upstream.url,
+      prepareWebSocketRequest: async () => {
+        controller.abort(); return { headers: {}, signal: controller.signal };
+      },
+    });
+    const endpoint = new URL(proxy.url);
+    const socket = connect(Number(endpoint.port), endpoint.hostname); sockets.add(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('error', reject); socket.once('close', () => resolve());
+      socket.once('connect', () => socket.write(upgradeRequest('/codex/responses', endpoint.host)));
+    });
+    expect(upstream.requests).toHaveLength(0);
+  });
+
   it('forwards the upgrade handshake, strips /v1, and pipes buffered bytes both ways', async () => {
     const upstream = await startUpgradeUpstream();
     proxy = await createAnthropicCompatProxy({
@@ -689,6 +751,35 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     const response = await readUpgradeFailure(proxy.url);
     expect(response).toContain(`HTTP/1.1 ${status} ${statusText}`);
     expect(response).toContain(`{"error":{"status":${status}}}`);
+  });
+
+  // Regression #7427: host OAuth handling must see complete 401/403 upgrade
+  // bodies, including 403 responses mapped to native HTTP fallback. Collection
+  // is bounded and observer failures never replace the original response.
+  it.each([
+    { status: 401, bytes: 128, observed: true },
+    { status: 403, bytes: 128, observed: true },
+    { status: 401, bytes: 65_537, observed: false },
+  ])('observes bounded upgrade authentication refusals: %j', async ({ status, bytes, observed }) => {
+    const body = JSON.stringify({ error: { code: 'token_revoked', padding: 'x'.repeat(bytes) } });
+    const upstream = createServer((_req, res) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(body);
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+    const observe = vi.fn(async () => { throw new Error('fixture observer failure'); });
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid', transformRequest: [],
+      resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
+      prepareWebSocketRequest: async ({ headers }) => ({ headers: { ...headers },
+        signal: new AbortController().signal, onUpgradeFailure: observe }),
+    });
+    const response = await readUpgradeFailure(proxy.url);
+    expect(response).toContain(status === 403 ? 'HTTP/1.1 426' : 'HTTP/1.1 401');
+    if (status === 401) expect(response).toContain(body);
+    if (observed) expect(observe).toHaveBeenCalledExactlyOnceWith(status, body);
+    else expect(observe).not.toHaveBeenCalled();
   });
 
   it('does not impose a local websocket capacity limit', async () => {

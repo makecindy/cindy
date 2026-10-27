@@ -9,6 +9,8 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { codexPackagePathPrepends } from '../agent-binaries/codex-cli-launcher.js';
 
 import {
   isModelDisabled,
@@ -26,7 +28,7 @@ import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
-import { readCompactionPct } from './compaction-settings-store.js';
+import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
@@ -213,7 +215,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     configurable: false,
   });
   Object.defineProperty(config, 'autoCompactThresholdPct', {
-    get: () => readCompactionPct(),
+    get: () => DEFAULT_MODEL_COMPACTION_PCT,
     enumerable: true,
     configurable: false,
   });
@@ -223,7 +225,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         assessModelSwitchContext({
           contextTokens,
           targetContextWindow: contextWindow,
-          autoCompactThresholdPct: readCompactionPct(),
+          autoCompactThresholdPct: DEFAULT_MODEL_COMPACTION_PCT,
         }),
       ),
     enumerable: true,
@@ -316,7 +318,12 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
   // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
   get pathPrepends() {
-    return [bundledRipgrepDir()];
+    return [
+      bundledRipgrepDir(),
+      ...(process.platform === 'win32'
+        ? codexPackagePathPrepends(getCachedBinaryStatus('codex').binaryPath, process.platform)
+        : []),
+    ];
   },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {

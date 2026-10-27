@@ -7,17 +7,20 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { OperationBudget } from '../../utils/operationBudget';
+import { enqueueGitRepoWrite } from '../../git-snapshot/gitRepoWriteQueue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
+  spawn: vi.fn(),
   killProcessTree: vi.fn(),
   withCrossProcessLock: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
+vi.mock('node:child_process', () => ({ execFile: mocks.execFile, spawn: mocks.spawn }));
 vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killProcessTree }));
 vi.mock('../../device-link/crossProcessLock', () => ({
   withCrossProcessLock: mocks.withCrossProcessLock,
@@ -162,6 +165,18 @@ async function flushMicrotasks() {
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.execFile.mockReset();
+  // Drive the same lifecycle fixtures through spawn's actual stream/close API.
+  mocks.spawn.mockReset().mockImplementation((file, args, opts) => {
+    const child = mocks.execFile(file, args, opts, (error: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+      if (error && typeof error.code !== 'number') child.emit('error', error);
+      else child.emit('close', error?.code ?? 0, null);
+    });
+    child.stdout ??= new EventEmitter();
+    child.stderr ??= new EventEmitter();
+    return child;
+  });
   mocks.killProcessTree.mockReset();
   mocks.withCrossProcessLock.mockReset();
   // 默认按「持锁成功」直通, 让 dubious-ownership 的 read+add 序列可逐步驱动;
@@ -179,6 +194,150 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
+  // #7351 CI: execFile silently discarded detached. Exercise spawn's actual
+  // boundary and byte streams; the old mock only checked the ignored option.
+  it.each([0, 128])('uses a detached POSIX spawn and preserves UTF-8 output for exit %s', async (code) => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const pending = gitExec(['status'], '/repo');
+    expect(mocks.spawn).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({ detached: true }));
+    const bytes = Buffer.from('\u4e2d\u6587');
+    state.child.stdout.emit('data', bytes.subarray(0, 2));
+    state.child.stdout.emit('data', bytes.subarray(2));
+    state.child.stderr.emit('data', Buffer.from('diagnostic'));
+    state.child.emit('close', code, null);
+    const output = { stdout: '\u4e2d\u6587', stderr: 'diagnostic' };
+    if (code === 0) await expect(pending).resolves.toEqual(output);
+    else await expect(pending).rejects.toMatchObject({ ...output, exitCode: code });
+  });
+
+  it.each(['stdout', 'stderr'] as const)('bounds POSIX %s and drains the process group on overflow', async (stream) => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const { group } = installProcessKillMock();
+    const pending = gitExec(['status'], '/repo');
+    const observed = probe(pending);
+    state.child[stream].emit('data', Buffer.alloc(16 * 1024 * 1024 + 1));
+    await flushMicrotasks();
+    expect(group.signals).toContain('SIGTERM');
+    expect(observed.settled).toBe(false);
+    group.alive = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).rejects.toMatchObject({
+      cleanupUnconfirmed: false, cause: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' },
+    });
+  });
+
+  // #7259: unit tier. Explicit abort must kill the tree, not only drop its
+  // promise; a blocked child is the minimal reproduction. No wall-clock waits.
+  it.each(['win32', 'linux'] as const)('abort terminates the %s tree before settling', async (platform) => {
+    setPlatform(platform);
+    const state = installExecFileMock();
+    state.psTable = [];
+    const { group } = installProcessKillMock();
+    let finish!: () => void;
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => { finish = done; });
+    const controller = new AbortController();
+    const pending = gitExec(['status'], undefined, { signal: controller.signal });
+    const observed = probe(pending);
+    controller.abort();
+    await flushMicrotasks();
+    expect(observed.settled).toBe(false);
+    if (platform === 'win32') {
+      expect(mocks.killProcessTree).toHaveBeenCalledOnce();
+      state.gitCb!(null, 'late success', '');
+      finish();
+    } else {
+      expect(group.signals).toContain('SIGTERM');
+      group.alive = false;
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await expect(pending).rejects.toMatchObject({ aborted: true, cleanupUnconfirmed: false });
+  });
+
+  it('does not spawn Git for an already-aborted request', async () => {
+    installExecFileMock();
+    const controller = new AbortController();
+    controller.abort(new Error('stopped'));
+    await expect(gitExec(['add', '-A'], undefined, { signal: controller.signal })).rejects.toThrow('stopped');
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it('cleans the automatic status process tree when its output overflows', async () => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const { group } = installProcessKillMock();
+    const pending = gitExec(['status'], undefined, { signal: new AbortController().signal });
+    const observed = probe(pending);
+    state.gitCb!(Object.assign(new Error('maxBuffer exceeded'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), '', '');
+    await flushMicrotasks();
+    expect(group.signals).toContain('SIGTERM');
+    expect(observed.settled).toBe(false);
+    group.alive = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).rejects.toMatchObject({
+      cleanupUnconfirmed: false, cause: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' },
+    });
+  });
+
+  it('quarantines only the affected repository when automatic cleanup cannot be confirmed', async () => {
+    setPlatform('win32');
+    installExecFileMock();
+    const budget = new OperationBudget(50);
+    const pending = budget.run(() => enqueueGitRepoWrite('/uncertain-snapshot', () => gitExec(['status'], '/uncertain-snapshot')));
+    probe(pending);
+    await vi.advanceTimersByTimeAsync(3_050);
+    await expect(pending).rejects.toThrow('deadline');
+    const write = vi.fn(async () => {});
+    await expect(enqueueGitRepoWrite('/uncertain-snapshot', write)).rejects.toThrow('cleanup unconfirmed');
+    expect(write).not.toHaveBeenCalled();
+    await enqueueGitRepoWrite('/independent-snapshot', write);
+    expect(write).toHaveBeenCalledOnce();
+  });
+  // Regression: manual fetch used to die at 30s even while downloading. Existing
+  // tests only cover absolute deadlines. Unit tier: real gitExec, fake child/time.
+  it('keeps advancing Git progress alive beyond the idle budget, but repeated progress still times out', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const result = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    const rejected = expect(result).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 10.00 Ki'));
+    state.child.stderr.emit('data', Buffer.from('B | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 2.00 KiB/s\r'));
+    state.child.stderr.emit('data', Buffer.from('remote: keepalive\n'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up an idle watchdog on success and still honors an explicit absolute deadline', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const success = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    state.gitCb!(null, 'done', '');
+    await expect(success).resolves.toMatchObject({ stdout: 'done' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    const bounded = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000, timeoutMs: 30_000 });
+    const rejected = expect(bounded).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(20_000);
+    state.child.stderr.emit('data', 'Resolving deltas: 10% (1/10)\r');
+    await vi.advanceTimersByTimeAsync(10_000);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+  });
+
   it('keeps a dead checkout root leased while a Windows descendant remains', async () => {
     setPlatform('win32');
     const state = installExecFileMock();

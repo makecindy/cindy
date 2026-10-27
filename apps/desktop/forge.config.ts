@@ -145,6 +145,9 @@ const NATIVE_RUNTIME_DEPS = [
   '@protobufjs/pool',
   '@protobufjs/utf8',
   'long',
+  // turndown keeps this require in the bundled browser recipes. Ship its
+  // dependency-free DOM implementation so packaged startup can resolve it.
+  '@mixmark-io/domino',
   // @parcel/watcher: file-browser 用的 OS 原生 watcher。N-API 模块, 无需
   // electron-rebuild, 但平台特定子包 (@parcel/watcher-{platform}-{arch})
   // 必须跟主包一起进包, 否则运行时 require('@parcel/watcher') 找不到 .node。

@@ -80,6 +80,12 @@ describe('buildContentSecurityPolicy — shared invariants', () => {
       for (const scheme of ['xdt-file:', 'xdt-audio:', 'xdt-video:', 'cindy-remote-media:', 'cindy-media:']) {
         expect(d['media-src']).toContain(scheme);
       }
+      for (const directive of ['script-src', 'connect-src', 'frame-src']) {
+        expect(d[directive]).not.toContain('xdt-file:');
+        expect(d[directive]).not.toContain('xdt-audio:');
+      }
+      expect(d['media-src']).not.toContain('*');
+      expect(d['media-src']).not.toContain('file:');
       // data: / blob: needed for canvas, object URLs, inline assets.
       expect(d['img-src']).toEqual(expect.arrayContaining(['data:', 'blob:']));
       expect(d['media-src']).toEqual(expect.arrayContaining(['blob:']));

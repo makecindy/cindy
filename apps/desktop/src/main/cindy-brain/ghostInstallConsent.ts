@@ -64,6 +64,18 @@ export function confirmedTaskCapability(
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
 }
 
+/** Named approvals are written only after the package/receiver consent has been revalidated. */
+export function confirmedHarnessCapabilities(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] | undefined {
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.filter(item => item.key.startsWith('harness:')).map(item => item.key);
+}
+
 /**
  * 登记一次等待中的确认，账号边界时由 `abortAllGhostInstallConsentPrompts` 一并取消。
  * 确认不得占用 owner 租约；取消是为了让等待中的安装调用尽快按用户取消收口。

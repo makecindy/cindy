@@ -15,7 +15,7 @@ it('evaluates the production regional legal links for the Global build', () => {
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports: any = {};
   new Function('require', 'exports', compiled)(() => ({ AUTH_REGION: 'global' }), exports);
-  expect(exports.LEGAL_LINKS).toEqual({ termsOfService: 'https://protocol.xd.com/cindy/agreement-1.0.html', privacyPolicy: 'https://protocol.xd.com/cindy/privacy.html' });
+  expect(exports.LEGAL_LINKS).toEqual({ termsOfService: 'https://cindy.app/terms', privacyPolicy: 'https://cindy.app/privacy' });
 });
 
 // The P1 was clipped Android hit bounds and an unlabeled checkbox. Run the
@@ -86,12 +86,12 @@ describe("parseLegalSegments(单 key 内联链接标记,词序无关)", () => {
 });
 
 describe("LEGAL_LINKS(区域分流,测试构建 = cn)", () => {
-  it("cn 构建 → protocol.xd.cn 双链接", () => {
+  it("cn 构建 → cindy.cn 双链接", () => {
     expect(LEGAL_LINKS.termsOfService).toBe(
-      "https://protocol.xd.cn/cindy/agreement.html",
+      "https://cindy.cn/terms",
     );
     expect(LEGAL_LINKS.privacyPolicy).toBe(
-      "https://protocol.xd.cn/cindy/privacy-1.0.html",
+      "https://cindy.cn/privacy",
     );
   });
 });

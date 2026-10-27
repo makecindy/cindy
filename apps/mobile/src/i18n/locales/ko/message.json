@@ -69,6 +69,7 @@
     "copyStateCopied": "복사됨",
     "copyStateFailed": "복사 실패",
     "copyStateCopy": "복사",
+    "copyCode": "코드 복사",
     "thinkingHidden": "생각 내용 숨김",
     "thinkingDone": "생각 {{duration}}",
     "thinkingActive": "생각 중 {{elapsed}}",

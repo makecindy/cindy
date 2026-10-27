@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
-import { PassThrough, Readable, type Transform } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
 import { URL } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
@@ -2872,6 +2872,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let upstreamReqForEarlyClose: ClientRequest | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let upstreamAttempt = 0;
+    let removeAuthorizationListener: (() => void) | undefined;
+    let authorizeWebSocket: (() => boolean) | undefined;
+    let preparedTransforms: (() => { outbound: Transform; inbound: Transform }) | undefined;
+    let onUpgradeFailure: ((status: number, body: string) => Promise<void>) | undefined;
     // bundled Codex 0.145.0 的 startup-prewarm / reconnect 都带稳定 thread-id。
     // 真正无 scope 的非 Codex / 通用 socket 仍保留空值隔离；不能把泛用的
     // x-client-request-id 当作稳定 recovery key，误逐出其它 thread 的连接。
@@ -2903,6 +2907,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const settle = (why: string, err?: Error): void => {
       if (settled) return;
       settled = true;
+      removeAuthorizationListener?.();
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -2987,6 +2992,26 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       void (async () => {
         const outbound = await resolveOutboundForTarget(target, reqId);
         if (settled || clientSocket.destroyed) return;
+        let outboundHeaders = headers;
+        if (opts.prepareWebSocketRequest) {
+          const prepared = await opts.prepareWebSocketRequest({ url, headers });
+          if (settled || clientSocket.destroyed) return;
+          const revoke = (): void => {
+            settle('host-authorization-revoked');
+            upstreamReqForEarlyClose?.destroy();
+            connection.upstreamSocket?.destroy();
+            clientSocket.destroy();
+          };
+          if (prepared.signal.aborted) { revoke(); return; }
+          removeAuthorizationListener?.();
+          prepared.signal.addEventListener('abort', revoke, { once: true });
+          removeAuthorizationListener = () => prepared.signal.removeEventListener('abort', revoke);
+          outboundHeaders = prepared.headers;
+          authorizeWebSocket = prepared.authorize;
+          onUpgradeFailure = prepared.onUpgradeFailure;
+          if (prepared.transforms && !opts.webSocketTransforms) throw new Error('WEBSOCKET_TRANSFORMS_REQUIRE_UNCOMPRESSED_NEGOTIATION');
+          preparedTransforms = prepared.transforms;
+        }
         let attemptSettled = false;
 
       // codex 构造 WS URL 的规则是 `base_url + "/responses"`。宿主给 codex 的 base_url
@@ -3019,7 +3044,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         method: req.method ?? 'GET',
         path: upstreamPath,
         headers: {
-          ...headers,
+          ...outboundHeaders,
           host: formatHostHeader(target.hostname, target.port, target.protocol),
           connection: 'Upgrade',
           upgrade: 'websocket',
@@ -3125,7 +3150,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamSocket.on('error', abort('upstream-error'));
 
         let guarded: ReturnType<NonNullable<ProxyOptions['webSocketTransforms']>> | undefined;
-        try { guarded = opts.webSocketTransforms?.({ url, headers }); }
+        try { guarded = preparedTransforms?.() ?? opts.webSocketTransforms?.({ url, headers }); }
         catch { abort('websocket-guard-failed')(); return; }
         if (guarded) {
           guarded.outbound.on('error', abort('websocket-outbound-rejected'));
@@ -3134,13 +3159,31 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           guarded.outbound.pipe(upstreamSocket);
           guarded.inbound.pipe(clientSocket);
         }
+        // Check the live host route even on a reused socket. This gate preserves
+        // compressed/fragmented bytes and does not buffer model context.
+        const authorizationGate = authorizeWebSocket ? new Transform({
+          transform(chunk, _encoding, callback) {
+            try {
+              if (!authorizeWebSocket!()) { callback(new Error('WEBSOCKET_AUTHORIZATION_CHANGED')); return; }
+              callback(null, chunk);
+            } catch (error) {
+              callback(error instanceof Error ? error : new Error('WEBSOCKET_AUTHORIZATION_CHANGED'));
+            }
+          },
+        }) : undefined;
+        if (authorizationGate) {
+          authorizationGate.on('error', abort('host-authorization-changed'));
+          clientSocket.once('close', () => authorizationGate.destroy());
+          authorizationGate.pipe(guarded?.outbound ?? upstreamSocket);
+        }
+        const outboundStream = authorizationGate ?? guarded?.outbound ?? upstreamSocket;
         try {
           if (!locallyAcceptedForReconnect) {
             clientSocket.write(serializeResponseHead(upstreamRes));
           }
           // 双向把握手时已缓冲的首包补上, 再对接。
           if (upstreamHead?.length) (guarded?.inbound ?? clientSocket).write(upstreamHead);
-          if (head?.length) (guarded?.outbound ?? upstreamSocket).write(head);
+          if (head?.length) outboundStream.write(head);
 
           clientSocket.setNoDelay(true);
           upstreamSocket.setNoDelay(true);
@@ -3152,7 +3195,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         }
 
         upstreamSocket.pipe(guarded?.inbound ?? clientSocket);
-        clientSocket.pipe(guarded?.outbound ?? upstreamSocket);
+        clientSocket.pipe(outboundStream);
         if (locallyAcceptedForReconnect) clientSocket.resume();
         logger.info?.('◀ websocket established', {
           reqId, status: upstreamRes.statusCode, live: liveWebSockets,
@@ -3173,6 +3216,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamReqForEarlyClose = null;
         settle('upstream-refused');
         const status = upstreamRes.statusCode ?? 502;
+        if (onUpgradeFailure && (status === 401 || status === 403)) {
+          const observe = onUpgradeFailure;
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          upstreamRes.on('data', (chunk: Buffer) => {
+            bytes += chunk.length;
+            if (bytes <= 64 * 1024) chunks.push(Buffer.from(chunk));
+          });
+          upstreamRes.once('end', () => {
+            if (bytes <= 64 * 1024) void observe(status, Buffer.concat(chunks).toString('utf8')).catch(() => {});
+          });
+        }
         logger.warn?.('upstream refused websocket upgrade', {
           reqId,
           status,
