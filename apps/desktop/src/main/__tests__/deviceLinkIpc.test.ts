@@ -1250,9 +1250,9 @@ describe('device-link controller handlers', () => {
     const deps = makeDeps({ invoke: vi.fn().mockResolvedValue({ ok: true, result: [] }) });
     const args = [200, 'active'];
     await handleInvoke(deps, 'dev-2', 'local-db:sessions:list', args, { background: true });
-    expect(deps.invoke).toHaveBeenCalledWith('dev-2', 'local-db:sessions:list', args, { background: true });
+    expect(deps.invoke).toHaveBeenCalledWith('dev-2', 'local-db:sessions:list', args, { background: true, passiveLink: true });
     await handleInvoke(deps, 'dev-2', 'local-db:sessions:list', args, { background: 'true' });
-    expect(deps.invoke).toHaveBeenLastCalledWith('dev-2', 'local-db:sessions:list', args);
+    expect(deps.invoke).toHaveBeenLastCalledWith('dev-2', 'local-db:sessions:list', args, { passiveLink: true });
   });
 
   it('invoke:CHANNEL_NOT_ALLOWED → 映射 IpcError', async () => {
