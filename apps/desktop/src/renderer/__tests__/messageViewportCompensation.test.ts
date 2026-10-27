@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   canCompensateMessageHeight,
+  isRestoredScrollTakeover,
+  measureRestoredScrollGeometry,
   rememberedItemIntrinsicSize,
   viewportAnchorCorrection,
 } from '../components/chat/messageViewportCompensation';
@@ -54,5 +56,55 @@ describe('measured message height compensation', () => {
     for (const key of Object.keys(idle)) {
       expect(canCompensateMessageHeight({ ...idle, [key]: true }), key).toBe(false);
     }
+  });
+});
+
+// #7425: a cross-origin iframe chains scroll without a parent wheel event.
+// Existing compensation tests do not distinguish this input from layout settle.
+// Unit tier models measured DOM geometry; the Electron probe exercises the real
+// MessageStream and native iframe wheel chaining, including the old failure.
+describe('restored reading position handoff', () => {
+  function setup() {
+    const state = { top: 200, height: 4000, width: 800, viewport: 600,
+      anchorTop: 240, anchorHeight: 300, connected: true };
+    const anchor = { getBoundingClientRect: () => ({
+      top: state.anchorTop - state.top + 40, height: state.anchorHeight,
+    }) } as HTMLElement;
+    const container = {
+      get scrollTop() { return state.top; },
+      get scrollHeight() { return state.height; },
+      get clientWidth() { return state.width; },
+      get clientHeight() { return state.viewport; },
+      getBoundingClientRect: () => ({ top: 40 }),
+      contains: (node: HTMLElement) => node === anchor && state.connected,
+    } as HTMLElement;
+    return { state, container, previous: measureRestoredScrollGeometry(container, anchor) };
+  }
+
+  it.each([-100, 400])('hands off a %i px chained scroll with stable layout', (delta) => {
+    const { state, container, previous } = setup();
+    state.top += delta;
+    expect(isRestoredScrollTakeover(container, previous, true, false)).toBe(true);
+    expect(isRestoredScrollTakeover(container, previous, false, false)).toBe(false);
+    expect(isRestoredScrollTakeover(container, previous, true, true)).toBe(false);
+  });
+
+  it.each([
+    { height: 4200 },
+    { width: 700 },
+    { viewport: 500 },
+    { anchorTop: 340 }, // Equal total height can still hide displacement above the anchor.
+    { anchorHeight: 350 },
+    { connected: false },
+  ])('keeps restoring after a layout/anchor change: %j', (change) => {
+    const { state, container, previous } = setup();
+    Object.assign(state, change, { top: 300 });
+    expect(isRestoredScrollTakeover(container, previous, true, false)).toBe(false);
+  });
+
+  it('ignores an aligned scroll notification and an absent restoration measurement', () => {
+    const { container, previous } = setup();
+    expect(isRestoredScrollTakeover(container, previous, true, false)).toBe(false);
+    expect(isRestoredScrollTakeover(container, null, true, false)).toBe(false);
   });
 });
