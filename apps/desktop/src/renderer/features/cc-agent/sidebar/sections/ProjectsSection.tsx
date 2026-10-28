@@ -1,4 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { sidebarTaskPresentation } from '../sidebarTaskPresentation';
+import type { PresentationPinnedEntry } from '../../lib/sidebarTaskPresentation';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
  * ProjectsSection — Sidebar 中部的 Projects 段
@@ -190,6 +192,7 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 }
 
 export interface ProjectsSectionProps {
+  pinnedEntries?: readonly PresentationPinnedEntry[];
   unclassified: Session[];
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
@@ -295,7 +298,11 @@ export interface ProjectsSectionProps {
   isCreateDialogueDisabled?: boolean;
 }
 
-export function ProjectsSection({
+export function ProjectsSection(props: ProjectsSectionProps) {
+  return <sidebarTaskPresentation.Section {...props} Original={ProjectsSectionContent} />;
+}
+
+function ProjectsSectionContent({
   unclassified,
   projects,
   dialogues,

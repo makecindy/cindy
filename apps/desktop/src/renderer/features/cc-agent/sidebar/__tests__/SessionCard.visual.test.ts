@@ -54,6 +54,7 @@ vi.mock('react-i18next', () => ({
     init: () => {},
   },
   useTranslation: () => ({
+    i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, options?: Record<string, unknown>) => {
       if (mocks.translate) return mocks.translate(key, options);
       const count = Number(options?.count ?? 0);

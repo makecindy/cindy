@@ -1,3 +1,4 @@
+import { sidebarTaskPresentation } from './sidebarTaskPresentation';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -652,7 +653,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
 
   return (
-    <div
+    sidebarTaskPresentation.wrapRow(<div
       ref={cardRef}
       data-session-id={session.id}
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
@@ -1179,7 +1180,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           onOpenChange={setShareExportOpen}
         />
       )}
-    </div>
+    </div>, { session, navigate, onClick })
   );
 });
 

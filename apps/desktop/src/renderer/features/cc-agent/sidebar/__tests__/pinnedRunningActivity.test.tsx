@@ -21,7 +21,13 @@ import {
 } from '../sections/PinnedSection';
 
 const view = vi.hoisted(() => ({ mode: 'text' }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty' as const, init: () => {} },
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en', resolvedLanguage: 'en' },
+  }),
+}));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => false }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: view.mode, setMode: vi.fn() }),
