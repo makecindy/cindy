@@ -10,6 +10,8 @@
  * 候选是否真的存在、是否落在本轮时间窗内,由调用方在渲染 / 投影前用 stat 复核。
  */
 
+import { getModel3DFormat } from '@cindy/maker-shared/model3d';
+
 /** 文件候选需带扩展名;复制/移动命令的目录目标可用末尾分隔符明确表达。 */
 const EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
 
@@ -169,7 +171,7 @@ function extractCommandPathTokens(command: string): CommandPathToken[] {
 }
 
 const WRITE_CALL_PREFIX_RE =
-  /(?:\.|\b)(?:save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*(?:(?:path_or_buf|excel_writer|path|filename|fname|fp|file)\s*=\s*)?(?:[rubf]{0,2})?['"]$/i;
+  /(?:\.|\b)(?:export|export_scene\.[a-z0-9_]+|save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*(?:(?:path_or_buf|excel_writer|path|filepath|filename|fname|fp|file)\s*=\s*)?(?:[rubf]{0,2})?['"]$/i;
 const WRITE_CALL_LATER_KEYWORD_PREFIX_RE =
   /(?:\.|\b)(?:save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*[^();\r\n]+,\s*(?:path_or_buf|excel_writer|path|filename|fname|fp|file)\s*=\s*(?:[rubf]{0,2})?['"]$/i;
 const OBJECT_FIRST_WRITE_CALL_PREFIX_RE =
@@ -731,6 +733,35 @@ function positionalConverterOutputs(args: readonly string[]): string[] {
   return output ? [output] : [];
 }
 
+const MIVO_EXEC_RE = /^mivo(?:\.exe)?$/i;
+
+/**
+ * `mivo file download <FILE_ID> [SAVE_PATH]`:第二个位置参数就是保存路径(CLI 的固定契约,
+ * 缺省才落到配置的下载目录,此时没有可认的路径)。保存名常是纯文件名,所以走合成候选。
+ */
+function mivoDownloadOutputs(args: readonly string[]): string[] {
+  const execIndex = args.findIndex((arg) => MIVO_EXEC_RE.test(commandArgumentBasename(arg)));
+  if (execIndex < 0) return [];
+  const positionals = args.slice(execIndex + 1).filter((arg) => !arg.startsWith('-'));
+  if (positionals[0] !== 'file' || positionals[1] !== 'download') return [];
+  const savePath = positionals[3];
+  return savePath ? [savePath] : [];
+}
+
+/**
+ * `-o / --output / --out <name>` 且产物是 3D 模型:纯文件名也收。写出位置由选项唯一确定,
+ * 扩展名限定在模型格式内,不会把普通的「带点 token」放进候选池;mtime 时间窗仍由渲染方复核。
+ */
+function bareModelOutputOptionOutputs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (!/^(?:-o|--output|--out|--outfile)$/.test(args[index] ?? '')) continue;
+    const value = args[index + 1] ?? '';
+    if (!value.startsWith('-') && getModel3DFormat(value)) out.push(value);
+  }
+  return out;
+}
+
 /** 转换器 / 无头浏览器写出的产物路径(合成,可能不在命令文本里字面出现)。 */
 export function extractConverterOutputPaths(command: string): string[] {
   if (!command) return [];
@@ -744,7 +775,12 @@ export function extractConverterOutputPaths(command: string): string[] {
       .map((argument) => argument.value)
       .filter((value) => value.length > 0);
     if (args.length === 0) continue;
-    out.push(...libreOfficeConvertOutputs(args), ...positionalConverterOutputs(args));
+    out.push(
+      ...libreOfficeConvertOutputs(args),
+      ...positionalConverterOutputs(args),
+      ...mivoDownloadOutputs(args),
+      ...bareModelOutputOptionOutputs(args),
+    );
   }
   return out.filter((value) => isSynthesizedOutputCandidate(value));
 }
