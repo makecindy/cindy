@@ -9297,6 +9297,7 @@
       "scanning": "正在掃描本機常駐…",
       "refresh": "重新整理",
       "loadFailed": "讀取本機常駐失敗",
+      "refreshFailed": "重新整理失敗，清單可能不是最新的",
       "unsupported": "本機常駐清單目前只支援 Windows",
       "empty": "還沒有由任務建立的本機常駐項目",
       "owner": "建立任務：{{title}}",

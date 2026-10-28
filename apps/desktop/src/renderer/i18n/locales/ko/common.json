@@ -9297,6 +9297,7 @@
       "scanning": "상주 작업을 스캔하는 중…",
       "refresh": "새로 고침",
       "loadFailed": "상주 작업을 읽지 못했습니다",
+      "refreshFailed": "새로고침 실패. 이 목록은 최신이 아닐 수 있습니다",
       "unsupported": "상주 작업 목록은 현재 Windows만 지원합니다",
       "empty": "작업이 만든 상주 작업이 아직 없습니다",
       "owner": "만든 작업: {{title}}",

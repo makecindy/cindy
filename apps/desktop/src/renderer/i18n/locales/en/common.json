@@ -9329,6 +9329,7 @@
       "scanning": "Scanning background items…",
       "refresh": "Refresh",
       "loadFailed": "Couldn't read background items",
+      "refreshFailed": "Refresh failed; this list may be out of date",
       "unsupported": "Background items are only available on Windows",
       "empty": "No background items created by tasks yet",
       "owner": "Created by: {{title}}",

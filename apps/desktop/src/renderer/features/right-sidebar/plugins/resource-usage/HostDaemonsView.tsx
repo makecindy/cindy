@@ -177,9 +177,12 @@ export function HostDaemonsView() {
 
       <div className="host-daemons-footer">
         <div className="host-daemons-note">
-          {entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
-            ? t('rightSidebar.hostDaemons.unrelated', { count: snapshot?.unrelatedCount ?? 0 })
-            : ''}
+          {/* 保留旧列表时也要说清楚它可能不是最新的（停止/删除后的状态同理）。 */}
+          {failed
+            ? t('rightSidebar.hostDaemons.refreshFailed')
+            : entries.length > 0 && (snapshot?.unrelatedCount ?? 0) > 0
+              ? t('rightSidebar.hostDaemons.unrelated', { count: snapshot?.unrelatedCount ?? 0 })
+              : ''}
         </div>
         <Button variant="secondary" size="xs" disabled={loading} onClick={() => void load()}>
           <RefreshCw aria-hidden size={12} strokeWidth={1.8} />

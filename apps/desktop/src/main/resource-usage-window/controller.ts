@@ -16,10 +16,11 @@ import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');
-// 到点先展示 React 壳（面板自带加载态），不等首份采样：实测冷启动时等待 5s
-// 才出现窗口，用户感知就是「打开很慢」。只有在 renderer 完全没挂载时才会
-// 走到重建，这条兜底仍然保留。
-const DEFAULT_OPEN_TIMEOUT_MS = 1500;
+// 认定「这个窗口起不来」的时限：到点仍没挂载就销毁重建。
+const DEFAULT_OPEN_TIMEOUT_MS = 5000;
+// 只提前「显示」的时限：壳已经挂上、首份采样还没到，就先露加载态。
+// 与上面分开，慢启动的窗口不会被提前销毁。
+const DEFAULT_SHOW_TIMEOUT_MS = 1500;
 const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const DEFAULT_LEAVE_TIMEOUT_MS = 2000;
@@ -60,6 +61,8 @@ export interface ResourceUsageWindowControllerDeps {
   /** 测试注入；默认走 main i18n 的当前 locale。 */
   resolveNativeTitle?: (locale: SupportedLocale | null) => string;
   openTimeoutMs?: number;
+  /** 壳已挂载、首份采样未到时的提前显示时限；与 openTimeoutMs（认定启动失败）分开。 */
+  showTimeoutMs?: number;
   prewarmTimeoutMs?: number;
   recoveryStabilityMs?: number;
   /** 测试注入；macOS 退出全屏若没有 leave-full-screen，到期后仍完成隐藏。 */
@@ -70,6 +73,7 @@ export class ResourceUsageWindowController {
   private winRef: BrowserWindow | null = null;
   private rendererReady = false;
   private presentationReady = false;
+  private showTimeout: ReturnType<typeof setTimeout> | null = null;
   private visible = false;
   private pendingOpen = false;
   private openTimeout: NodeJS.Timeout | null = null;
@@ -133,8 +137,26 @@ export class ResourceUsageWindowController {
       this.showAndFocus(win);
       return true;
     }
+    // 注意顺序：scheduleOpenFallback 会清掉所有兜底计时器，提前显示要排在它后面。
     this.scheduleOpenFallback(win);
+    this.scheduleShowFallback(win);
     return true;
+  }
+
+  /**
+   * 壳已挂载、首份采样还没到：先把窗口露出来（面板自带加载态），别让用户干等。
+   * 壳还没挂上就什么都不做 —— 那是启动失败，交给 scheduleOpenFallback 判定。
+   */
+  private scheduleShowFallback(win: BrowserWindow): void {
+    this.clearShowTimeout();
+    this.showTimeout = setTimeout(() => {
+      this.showTimeout = null;
+      if (win !== this.winRef || win.isDestroyed() || !this.pendingOpen) return;
+      if (!this.rendererReady) return;
+      this.showAndFocus(win);
+      log.info('resource-usage shown with loading state before first sample');
+    }, this.deps.showTimeoutMs ?? DEFAULT_SHOW_TIMEOUT_MS);
+    this.showTimeout.unref?.();
   }
 
   /** renderer 根组件已挂载；用于确认超时兜底至少有 React 壳可展示。 */
@@ -499,7 +521,14 @@ export class ResourceUsageWindowController {
     }
   }
 
+  private clearShowTimeout(): void {
+    if (!this.showTimeout) return;
+    clearTimeout(this.showTimeout);
+    this.showTimeout = null;
+  }
+
   private clearOpenTimeout(): void {
+    this.clearShowTimeout();
     if (!this.openTimeout) return;
     clearTimeout(this.openTimeout);
     this.openTimeout = null;
