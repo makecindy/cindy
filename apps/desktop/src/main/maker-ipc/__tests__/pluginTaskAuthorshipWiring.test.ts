@@ -96,7 +96,11 @@ it('marks plugin dispatch and every queue fallback with the host-only receipt', 
   const start = source.indexOf('async function sendToSessionInternal(params: {');
   const end = source.indexOf('const startOrcaTeamForCaller', start);
   const dispatch = source.slice(start, end);
-  expect(dispatch).toContain("message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
+  const pluginStart = source.indexOf('      dispatch: async (pluginId, taskId, clientId, text');
+  expect(pluginStart).toBeGreaterThan(0);
+  const pluginDispatch = source.slice(pluginStart, source.indexOf('      inspect:', pluginStart));
+  // Independent context changes the message expression, not its Host authorship.
+  expect(pluginDispatch).toContain("autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
   // Verified create handoffs add a fifth durable entry; all must retain provenance.
   expect(queues).toHaveLength(5);

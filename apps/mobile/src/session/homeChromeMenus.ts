@@ -311,9 +311,14 @@ export function buildHomeDisplayPullDownActions(input: {
   return [
     section("organize", organize),
     section("narrow", [
-      submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
-        STATUS_OPTIONS.map((status) =>
-          checkable(`status.${status}`, t(`${MENU}.status.${status}`), state.statusFilter === status))),
+      {
+        ...submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
+          STATUS_OPTIONS.map((status) => ({
+            ...checkable(`status.${status}`, t(`${MENU}.status.${status}`), state.statusFilter === status),
+            filterReminder: state.statusFilter === "archived" && status === "archived",
+          }))),
+        filterReminder: state.statusFilter === "archived",
+      },
       filter,
     ]),
     section("appearance", [

@@ -22,6 +22,10 @@
     }
   },
   "localAgent": {
+    "createVisibleSessions": "在 Cindy 中创建可见任务",
+    "createVisibleSessionsHint": "仅影响该应用之后打开的任务。消息会保存在 Cindy 中，关闭后已有任务仍保留。",
+    "saveFailed": "保存设置失败，请重试。",
+    "messageSource": "由本机应用「{{name}}」发送",
     "title": "本机应用连接",
     "empty": "尚未连接应用",
     "description": "允许已授权的本机应用使用 Cindy 的模型与执行能力。供应商登录仍由 Cindy 管理。",
@@ -313,6 +317,35 @@
     "closeAllDescription": "所有访客将无法继续访问，任务记录保留。"
   },
   "providerShare": {
+    "memberBudget": {
+      "recommended": "推荐模型",
+      "none": "不指定",
+      "unavailable": "用量数据不可用",
+      "title": "个人模型占比",
+      "chooseModels": "选择模型",
+      "used": "当前占比 {{percent}}%",
+      "addGroup": "添加模型上限",
+      "remove": "移除",
+      "removeGroup": "移除第 {{index}} 条上限",
+      "invalid": "请选择模型，并填写 1–100% 的整数占比。",
+      "yourBudget": "我的模型占比上限",
+      "progress": "当前占比 {{used}}% · 上限 {{limit}}%",
+      "paused": "此模型已暂停，请选择其他可用模型。",
+      "recommendation": "推荐使用 {{model}}",
+      "unsupported": "此供应商组暂不支持模型占比限制。",
+      "basis": "近 7 个自然日 · 输入＋输出 token，不含缓存",
+      "maxPercent": "占个人用量的上限",
+      "empty": "暂无用量数据",
+      "recorded": "已记录用量",
+      "enable": "启用模型占比限制",
+      "active": "已启用",
+      "draft": "草案 · 未启用",
+      "window": "统计日期：{{start}} — {{end}}",
+      "draftExceeded": "按当前记录已达上限；草案未启用，不会拦截。",
+      "pausedOnSave": "保存并启用后，将暂停此模型的新请求。",
+      "enforcement": "对后续消息生效；已开始的用量可能超过上限。",
+      "modelUnavailable": "模型不可用"
+    },
     "modelAccess": {
       "title": "允许远程调用的模型",
       "description": "只限制远程调用，本机使用不受影响。保存后，创建任务、切换模型和发送下一轮消息时生效。",
@@ -7340,6 +7373,11 @@
       "confirm": {
         "dialogTitle": "插件「{{name}}」请你确认"
       },
+      "modelPicker": {
+        "useConfiguration": "使用此配置",
+        "title": "为插件「{{name}}」选择模型",
+        "unavailable": "这个模型配置暂时不可用，请重新选择后确认。"
+      },
       "workspace": {
         "dialogTitle": "选择项目文件夹",
         "dialogMessage": "插件「{{name}}」请求你选择一个项目文件夹，用于在侧边栏创建任务"
@@ -9587,6 +9625,10 @@
       "checkFailed": "没能发送，请重试",
       "dailyCheck": "每天帮我查一次",
       "dailyCheckMeta": "工作日 9:00，没有新待办不打扰",
+      "recentTasks": "近期任务",
+      "unread": "未读结果",
+      "stopDailyCheck": "停止每天检查",
+      "loadFailed": "待办加载失败，点击重试",
       "dailyCheckFailed": "没能保存，请重试",
       "outputs": "输出内容",
       "outputMeta": "{{time}} · {{task}}",
@@ -10323,7 +10365,7 @@
           "removeAdmin": "取消管理员",
           "transfer": "转让群主",
           "transferTitle": "将群主转让给 {{name}}？",
-          "transferHint": "对方成为群主，你将成为管理员。伙伴也可以担任群主。",
+          "transferHint": "对方成为群主，你将成为管理员。",
           "removeTitle": "将 {{name}} 移出群？",
           "removeHint": "该成员将无法继续查看或发消息；如果是伙伴的主人，其伙伴也会退出。",
           "addCompanion": "邀请我的伙伴",
@@ -11796,6 +11838,7 @@
       "submitFeedbackAria": "发送反馈"
     },
     "pastedText": {
+      "pluginContextLabel": "附带资料",
       "chipLabel": "粘贴的文本({{lines}} 行)",
       "previewTitle": "粘贴的文本",
       "editTitle": "编辑粘贴的文本",
@@ -12828,6 +12871,7 @@
       "pluginSent": "由插件发送",
       "pluginViewDetail": "查看插件",
       "sourceIds": {
+        "localApp": "应用 ID：{{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "任务 ID：{{id}}",
         "teammate": "伙伴 ID：{{id}}",
@@ -12954,6 +12998,7 @@
       "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+      "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。请让电脑主人在「远程与分享」中调整开放范围，或换一个模型。",
       "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
@@ -17778,9 +17823,11 @@
     "autoTitle": "启用 Auto 自动审批",
     "autoMessage": "允许“{{name}}”使用 Auto 自动审批？",
     "autoDetail": "主任务和 Worker 的操作将交由 Cindy 自动审批。审批要求人工确认或拒绝时仍会暂停；这不是完全访问。此选择保存到插件 AI 设置，不改变其他任务的全局权限。",
+    "autoTaskDetail": "主任务和 Worker 的操作将交由 Cindy 自动审批。审批要求人工确认或拒绝时仍会暂停；这不是完全访问。仅更改当前任务的权限，不改动插件默认设置。",
     "title": "允许插件的 AI 修改文件？",
     "message": "允许“{{name}}”的 AI 修改文件并继续？",
     "detail": "将此插件的 AI 权限设为“允许修改”，后续任务沿用此选择。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以随时在插件 AI 设置中改回只读。",
+    "taskDetail": "仅将当前任务的权限设为“允许修改”。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以在当前任务的权限菜单中调整。",
     "allow": "允许并继续",
     "cancel": "暂不允许"
   },

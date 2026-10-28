@@ -22,6 +22,10 @@
     }
   },
   "localAgent": {
+    "createVisibleSessions": "Cindy에 표시되는 세션 생성",
+    "createVisibleSessionsHint": "앞으로 이 앱이 여는 세션에 적용됩니다. 메시지는 Cindy에 저장되며 꺼도 기존 세션은 유지됩니다.",
+    "saveFailed": "설정을 저장하지 못했습니다. 다시 시도해 주세요.",
+    "messageSource": "로컬 앱 “{{name}}”에서 전송",
     "title": "로컬 앱 연결",
     "empty": "연결된 앱 없음",
     "description": "승인된 로컬 앱이 Cindy 모델과 실행 기능을 사용할 수 있습니다. 제공자 인증 정보는 Cindy가 관리합니다.",
@@ -313,6 +317,35 @@
     "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
   "providerShare": {
+    "memberBudget": {
+      "recommended": "추천 모델",
+      "none": "추천하지 않음",
+      "unavailable": "사용량 데이터를 가져올 수 없음",
+      "title": "개인 모델 사용 비율",
+      "chooseModels": "모델 선택",
+      "used": "현재 비율 {{percent}}%",
+      "addGroup": "모델 한도 추가",
+      "remove": "삭제",
+      "removeGroup": "모델 한도 {{index}} 삭제",
+      "invalid": "모델을 선택하고 1~100% 사이의 정수 비율을 입력하세요.",
+      "yourBudget": "내 모델 사용 비율 상한",
+      "progress": "현재 {{used}}% · 상한 {{limit}}%",
+      "paused": "이 모델이 중지되었습니다. 사용 가능한 다른 모델을 선택하세요.",
+      "recommendation": "추천: {{model}}",
+      "unsupported": "이 제공자 그룹은 아직 모델 사용 비율 제한을 지원하지 않습니다.",
+      "basis": "최근 7일(오늘 포함) · 캐시 제외 입력＋출력 토큰",
+      "maxPercent": "개인 사용량 중 최대 비율",
+      "empty": "기록된 사용량 없음",
+      "recorded": "기록된 사용량",
+      "enable": "모델 사용 비율 제한 활성화",
+      "active": "활성화됨",
+      "draft": "초안 · 비활성화",
+      "window": "집계 기간: {{start}} — {{end}}",
+      "draftExceeded": "현재 기록이 상한에 도달했습니다. 초안은 요청을 차단하지 않습니다.",
+      "pausedOnSave": "제한을 활성화하여 저장하면 이 모델의 새 요청이 중지됩니다.",
+      "enforcement": "이후 메시지에 적용됩니다. 진행 중인 사용량은 한도를 넘을 수 있습니다.",
+      "modelUnavailable": "모델을 사용할 수 없음"
+    },
     "modelAccess": {
       "title": "원격 호출을 허용할 모델",
       "description": "원격 사용만 제한하며 로컬 사용에는 영향이 없습니다. 저장 후 작업 생성, 모델 변경, 다음 메시지 전송 시 적용됩니다.",
@@ -7340,6 +7373,11 @@
       "confirm": {
         "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
       },
+      "modelPicker": {
+        "useConfiguration": "이 설정 사용",
+        "title": "플러그인 \"{{name}}\"에 사용할 모델 선택",
+        "unavailable": "현재 이 모델 설정을 사용할 수 없습니다. 다시 선택한 후 확인해 주세요."
+      },
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 사이드바에 세션을 만들기 위해 프로젝트 폴더 선택을 요청합니다"
@@ -9587,6 +9625,10 @@
       "checkFailed": "보내지 못했습니다. 다시 시도하세요",
       "dailyCheck": "매일 확인",
       "dailyCheckMeta": "평일 9:00, 새 할 일이 없으면 알리지 않습니다",
+      "recentTasks": "최근 세션",
+      "unread": "읽지 않은 결과",
+      "stopDailyCheck": "매일 확인 중지",
+      "loadFailed": "할 일을 불러오지 못했습니다. 다시 시도하세요.",
       "dailyCheckFailed": "저장하지 못했습니다. 다시 시도하세요",
       "outputs": "결과물",
       "outputMeta": "{{time}} · {{task}}",
@@ -10323,7 +10365,7 @@
           "removeAdmin": "관리자 해제",
           "transfer": "소유권 이전",
           "transferTitle": "{{name}}에게 소유권을 이전할까요?",
-          "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다. 파트너도 소유자가 될 수 있습니다.",
+          "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
           "addCompanion": "내 파트너 초대",
@@ -11796,6 +11838,7 @@
       "submitFeedbackAria": "피드백 보내기"
     },
     "pastedText": {
+      "pluginContextLabel": "첨부 자료",
       "chipLabel": "붙여넣은 텍스트({{lines}}줄)",
       "previewTitle": "붙여넣은 텍스트",
       "editTitle": "붙여넣은 텍스트 편집",
@@ -12828,6 +12871,7 @@
       "pluginSent": "플러그인에서 보냄",
       "pluginViewDetail": "플러그인 보기",
       "sourceIds": {
+        "localApp": "앱 ID: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "세션 ID: {{id}}",
         "teammate": "동료 ID: {{id}}",
@@ -12954,6 +12998,7 @@
       "REMOTE_AGENT_BUSY": "상대 컴퓨터에서 실행 중인 세션이 너무 많습니다. 일부를 종료한 뒤 다시 시도하세요.",
       "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+      "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 원격 사용을 허용하지 않았습니다. 제공자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하거나 다른 모델을 선택하세요.",
       "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
       "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
@@ -17778,11 +17823,13 @@
     "title": "이 플러그인의 AI가 파일을 수정하도록 허용할까요?",
     "message": "“{{name}}”의 AI가 파일을 수정하도록 허용하고 계속할까요?",
     "detail": "이 플러그인의 AI 권한을 수정 가능으로 변경하며, 이후 작업에도 적용됩니다. 별도의 작업 디렉터리는 시스템 샌드박스가 아니며, 명령에는 계속 Cindy의 권한 검사가 적용됩니다. 플러그인 AI 설정에서 언제든지 읽기 전용으로 되돌릴 수 있습니다.",
+    "taskDetail": "현재 세션에만 수정을 허용합니다. 별도의 작업 디렉터리는 시스템 샌드박스가 아니며, 명령에는 계속 Cindy의 권한 검사가 적용됩니다. 이 세션의 권한 메뉴에서 변경할 수 있습니다.",
     "allow": "허용하고 계속",
     "cancel": "지금은 허용 안 함",
     "autoTitle": "Auto 자동 승인 사용",
     "autoMessage": "“{{name}}”에 Auto 자동 승인을 허용할까요?",
-    "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다."
+    "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다.",
+    "autoTaskDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아닙니다. 현재 세션의 권한만 변경하며 플러그인 기본 설정은 변경하지 않습니다."
   },
   "groupTools": {
     "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 파트너 소유자가 이 그룹에서 다시 요청해 주세요.",

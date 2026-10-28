@@ -433,7 +433,7 @@ export function SplashScreen() {
                   width: SPLASH_PANEL.spinner.size,
                   height: SPLASH_PANEL.spinner.size,
                   // 轨道走 --login-loading-ring-track(与登录页 LoginLoadingRing 同构,
-                  // 暗色 rgba(212,212,212,.18) 才可见;内弧走 --login-secondary-text 次要档)
+                  // 墨水弱档 黑 10% / 白 13%;内弧走 --login-secondary-text 次要档)
                   border: '6px solid var(--login-loading-ring-track)',
                   borderTopColor: LOGIN_COLORS.secondaryText,
                 }}

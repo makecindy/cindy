@@ -54,13 +54,19 @@ export function chatGroupMembership(group: Pick<BotGroupSummary, 'serverBacked' 
   return { self, owner, manager, canLeave };
 }
 
-/** Latest activity first, like every other chat list. */
-export function sortBotGroups(groups: readonly BotGroupSummary[]): BotGroupSummary[] {
-  const activityAt = (group: BotGroupSummary) =>
-    Math.max(group.lastMessage?.createdAt ?? 0, group.updatedAt, group.createdAt);
-  return [...groups].sort(
-    (left, right) => activityAt(right) - activityAt(left) || left.id.localeCompare(right.id),
-  );
+/** Group activity includes topic replies and system notices, but never deleted messages. */
+export function latestBotGroupMessage<T extends { seq: string; deleted?: boolean }>(messages: readonly T[]): T | undefined {
+  let latest: T | undefined;
+  for (const message of messages) {
+    if (!message.deleted && (!latest || BigInt(message.seq) > BigInt(latest.seq))) latest = message;
+  }
+  return latest;
+}
+
+/** Creation gives empty groups a position; profile/settings edits are not chat activity. */
+export function botGroupActivityAt(group: { createdAt: number; lastMessage?: { createdAt: number } | null }): number {
+  const lastAt = group.lastMessage?.createdAt ?? 0;
+  return Math.max(Number.isFinite(lastAt) ? lastAt : 0, Number.isFinite(group.createdAt) ? group.createdAt : 0);
 }
 
 export function botGroupMemberNames(

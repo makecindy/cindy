@@ -47,7 +47,7 @@ import { BotDeleteDialog } from './BotDeleteDialog';
 import { BotGroupSidebarRow } from './BotGroupSidebarRow';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { refreshBotGroups, useBotGroupList } from './botGroupStore';
-import { BOT_GROUP_SETTINGS_PARAM } from './botGroupPresentation';
+import { BOT_GROUP_SETTINGS_PARAM, botGroupActivityAt } from './botGroupPresentation';
 import { chatErrorKey } from './chatError';
 import { subscribeBotReadState, getBotLastReadAtMap, isBotGroupUnread } from './botReadState';
 import { withoutBotHiddenLanes } from './botGroupLane';
@@ -332,7 +332,7 @@ export function TeammatesSection() {
       pinned: 'pinnedAt' in bot && Boolean(bot.pinnedAt),
       activityAt: 'activityAt' in bot ? bot.activityAt : bot.lastMessageAt ?? bot.createdAt })),
     ...visibleGroups.map(group => ({ kind: 'group' as const, group, pinned: false,
-      activityAt: group.lastMessage?.createdAt ?? group.updatedAt })),
+      activityAt: botGroupActivityAt(group) })),
     ...(showCindy && currentCindy ? [{ kind: 'cindy' as const, pinned: cindyOptions.some(option => 'pinnedAt' in option.bot && Boolean(option.bot.pinnedAt)),
       activityAt: Math.max(...cindyOptions.map(option => 'activityAt' in option.bot ? option.bot.activityAt : option.bot.lastMessageAt ?? option.bot.createdAt)) }] : []),
   ].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.activityAt - a.activityAt);

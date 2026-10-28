@@ -56,6 +56,21 @@ export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
 export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
+export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+
+/** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
+export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const result: Record<string, number | string | null> = {};
+  for (const key of ['toolCount', 'messageCount']) {
+    const count = row[key];
+    if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 && count <= 1_000_000) result[key] = count;
+  }
+  result.wireEffort = typeof row.wireEffort === 'string' &&
+    ['none', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(row.wireEffort)
+    ? row.wireEffort : null;
+  return result;
+}
 
 /** Cindy-enforced bash bound when the model omits timeout or passes a non-positive number. */
 export const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS = 300;
@@ -155,6 +170,7 @@ const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
 const MAX_PI_PACKAGE_SOURCE_LENGTH = 2_048;
 const projectPiPackageCommandDiagnostic = ${projectPiPackageCommandDiagnostic.toString()};
 const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString()};
+const projectPiRequestDiagnostics = ${projectPiRequestDiagnostics.toString()};
 
 // Pi 的模型鉴权、localhost proxy 与 MCP bearer 需要留在父进程 env 供 runtime
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
@@ -4349,7 +4365,23 @@ export default async function cindyBridge(piApi: any) {
   }
   pi.on('before_provider_request', async (event, ctx) => {
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    return learnedCachePayload((await nativeFastPayload(payload, ctx.model, ctx)) ?? payload, ctx.model);
+    const next = learnedCachePayload((await nativeFastPayload(payload, ctx.model, ctx)) ?? payload, ctx.model);
+    // A one-way native notification adds no host round trip. This is the payload
+    // preparation hook, not proof that HTTP was sent or accepted upstream.
+    const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (token) {
+      try {
+        const messages = next?.messages ?? next?.input ?? next?.contents;
+        ctx.ui.notify(${JSON.stringify(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)} + token + ':' + JSON.stringify(
+          projectPiRequestDiagnostics({
+            toolCount: Array.isArray(next?.tools) ? next.tools.length : undefined,
+            messageCount: Array.isArray(messages) ? messages.length : undefined,
+            wireEffort: next?.reasoning_effort ?? next?.reasoning?.effort ?? next?.output_config?.effort,
+          }),
+        ), 'info');
+      } catch { /* Diagnostics must never block a model request. */ }
+    }
+    return next;
   });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,

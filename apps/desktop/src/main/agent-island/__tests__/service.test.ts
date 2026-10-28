@@ -1723,7 +1723,9 @@ describe('AgentIslandService native publishing', () => {
     );
   });
 
-  it('relays the last reply as the completion summary for other devices', async () => {
+  // #7566 review, unit: verify the actual producer marks converted text so a
+  // second host can retain literal code instead of applying Markdown twice.
+  it('relays the last reply as a plain-text completion summary for other devices', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
       getMainWindow: () => null,
@@ -1738,7 +1740,7 @@ describe('AgentIslandService native publishing', () => {
     const meta = { sessionId: 'summary', agentKind: 'codex' as const };
 
     service.handleUserPrompt(meta, 'fix the login bug');
-    service.handleAgentEvent(meta, textEvent('Login is fixed.', true));
+    service.handleAgentEvent(meta, textEvent('**Fixed**: `foo_bar **literal**`', true));
     service.handleAgentEvent(meta, doneEvent());
 
     expect(mocks.tapWindowBroadcast).toHaveBeenLastCalledWith(
@@ -1746,7 +1748,8 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({
         sessionId: 'summary',
         phase: 'completed',
-        compactDetail: 'Login is fixed.',
+        compactDetail: 'Fixed: foo_bar **literal**',
+        summaryFormat: 'plain-text',
       }),
     );
   });

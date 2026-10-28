@@ -234,6 +234,10 @@ describe('conversationSearch workingDir filtering', () => {
       const rows = [
         ['drive', 'C:/work/repo'],
         ['unc', '//SERVER/Share/Work/Repo'],
+        // #7644 (unit): exercise the real DB search filter with a mixed-case container;
+        // previous fixtures only varied the base path and missed worktree folding.
+        ['worktree-drive', 'C:/Work/Repo/.CINDY-WORKTREES/topic'],
+        ['worktree-unc', '//server/share/work/repo/.XDT-WORKTREES/topic'],
         ['other', 'C:/work/other'],
         ['posix-lower', '/work/repo'],
         ['posix-upper', '/Work/Repo'],
@@ -248,7 +252,9 @@ describe('conversationSearch workingDir filtering', () => {
         semanticMode: 'keyword',
         filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
       });
-      expect(windows.results.map((item) => item.session.id).sort()).toEqual(['drive', 'unc']);
+      expect(windows.results.map((item) => item.session.id).sort()).toEqual([
+        'drive', 'unc', 'worktree-drive', 'worktree-unc',
+      ]);
 
       const posix = await searchConversations({
         query: 'needle',

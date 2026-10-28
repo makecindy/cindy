@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, isUserPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
+import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
 import { effectiveSourceIdForModel, findCatalogModel, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
@@ -197,6 +198,7 @@ describe('complete selection commit boundaries', () => {
     profile = automatic;
     // A new scope instance also exercises a restart between turns.
     const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: createScheduledModelScope(deps),
       waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
       refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),
@@ -241,6 +243,7 @@ describe('complete selection commit boundaries', () => {
     const deps = { pendingSwitches: pending, getLiveSession: () => null, selectSameAgentModel: selected,
       bootstrapSwitchedSession: vi.fn(), log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, { agentSwitchPending: pending, acquireSendToSessionLock,
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: { restore: vi.fn(async () => {}) },
       waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
       refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),
@@ -344,6 +347,7 @@ describe('Orca model-only picker intent admission', () => {
       bootstrapSwitchedSession: vi.fn(), withCloseSuppressed: (_id: string, fn: () => Promise<unknown>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
       scheduledModelScope: { restore: vi.fn(async () => {}) },
       waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
       refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),

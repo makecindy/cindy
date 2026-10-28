@@ -15,6 +15,9 @@
 
 - 沿用既有字段：`origin`（scheduler / session / orca）、`imSource`、`hookSource`、
   `sharedTaskAuthor`；新增 `sourceDevice`、`sourcePlugin`；群内显式发给主人的私聊消息使用 `sourceGroup` 保存群名与 ID，桌面和手机的 assistant 消息均显示此来源。
+- 本机应用的可见任务复用 `sourcePlugin` 的保留前缀 `local-app:<client-id>`，与既有
+  `mcp-app:` 一样是应用来源的兼容投影；名称来自已授权连接，桌面与手机显示本机应用，
+  模型说明及交接使用 `app_id`，不链接到插件详情。它不改变应用授权或工具范围。
 - 新数据**不进** `origin`：多处 host 逻辑把任何 `origin.kind` 当作非人工派发。
 - 全部只用于归属展示，**不是**权限或信任判据；wire 传入的同名字段一律丢弃，由 host 重写。
 - 共享任务访客收到脱敏后的数据：任务来源去掉 id 与标题，自动化只保留「由自动化发送」，

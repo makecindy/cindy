@@ -130,7 +130,7 @@ import {
 } from './provider-route.js';
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
-import { guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
+import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
@@ -2518,7 +2518,8 @@ function codexCustomProviderRouteFailure(status: number, code: string): RoutingD
   };
 }
 
-function codexGuestRouteRefusal(): RoutingDecision {
+function codexGuestRouteRefusal(sessionId?: string | null, model = ''): RoutingDecision {
+  const denial = guestProviderModelDenial(sessionId, model);
   return {
     localHandler: async ({ res }) => {
       res.writeHead(403, {
@@ -2528,8 +2529,8 @@ function codexGuestRouteRefusal(): RoutingDecision {
       res.end(JSON.stringify({
         error: {
           type: 'invalid_request_error',
-          code: 'shared_provider_only',
-          message: 'This request is outside the provider shared with you.',
+          code: denial?.code ?? 'shared_provider_only',
+          message: denial?.message ?? 'This request is outside the provider shared with you.',
         },
       }));
     },
@@ -2573,16 +2574,16 @@ export function createCodexGuestRoutingGuard(
     const reviewerModel = requestModel === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
       ? reviewerModelBySession.get(sessionId)
       : undefined;
-    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal();
+    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel);
     if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
-      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal();
+      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel);
       const offered = effectiveModel === CODEX_AUTO_REVIEW_MODEL
         ? isOpenAiSubscriptionProviderId(providerId)
         : await guestProviderOffersModel(providerId, 'codex', effectiveModel, sessionId ?? undefined);
-      if (!offered) return codexGuestRouteRefusal();
+      if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel);
     }
     if (requestSessionId) {
       return guestProviderRouteForSession(requestSessionId)?.providerId === providerId
@@ -3445,6 +3446,7 @@ async function createCodexProxyHandle(
         providerId: customProviderId ?? gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId
           ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
       }, ctx);
+      if (!decision?.localHandler && guestProviderId && isOpenAiSubscriptionProviderId(guestProviderId)) return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
         || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
       // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
@@ -3535,6 +3537,13 @@ async function createCodexProxyHandle(
     ),
     responseObserver: composeResponseObservers(
       ctx => {
+        if (!guestSessionId || ctx.status < 200 || ctx.status >= 300) return null;
+        let model = '';
+        try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
+        const record = captureGuestRequestUsage(guestSessionId, model);
+        return record ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+      },
+      ctx => {
         const record = pricing.get(ctx.reqId);
         return record && ctx.status >= 200 && ctx.status < 300
           ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
@@ -3582,6 +3591,8 @@ async function createCodexProxyHandle(
      * thread 不预扫描、不降级，继续保留原生 WS 容量体验。
      */
     resolveWebSocketUpstream: ({ headers }) => {
+      // Member budgets and grants are evaluated for every request on the isolated guest proxy.
+      if (guestProviderId) return null;
       if ((frozenAuthInjection ?? getCodexProxyAuthInjection()) !== 'oauth-bearer') return null;
       // Hosted owner tasks need HTTP so every model request (and later revocation) reaches the live grant check.
       if (hasHostedSessionModelAccess(sessionIdFromHeaders(headers))) return null;

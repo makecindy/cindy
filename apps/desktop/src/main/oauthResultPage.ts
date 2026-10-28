@@ -379,8 +379,8 @@ updateCountdown();
  * 参数权威:callback-pages-classification.md「新设计三类卡片规格」(figma §6.1,
  * 失败/警告卡 680×680 r36;成功卡在移除 CTA 后采用 560×500 紧凑流式布局,
  * 这是 2026-09-02 登录成功回调 UX 裁决对旧成功态 Figma 帧的覆盖。
- * White 卡 #FBFBFB/#D4D4D4、Dark 卡 #312F2F/#434343;页面底色浅 #EEEEEE/深
- * #2A2828,design.md §7.4 条 1)+ U-10 裁决(topOffset = w<760?88:80;scale 按
+ * 2026-10-27 起卡片、描边、CTA 与页面底色同登录页墨水口径:卡 #FDFDF8 / #1F1F1F +
+ * 墨水线,CTA 同主按钮,页面底 = login-bg-base #F2F2ED / #181818)+ U-10 裁决(topOffset = w<760?88:80;scale 按
  * 页面标记的卡片尺寸计算,transform-origin=top center,水平居中,缩不下时纵向
  * 滚动不裁内容)。色值按 token-decision-table 决策以可序列化常量内联(系统
  * 浏览器页拿不到 renderer token,表内「browser callback main 使用同一份可
@@ -422,9 +422,9 @@ function renderBrandLoginCallbackPage(
 <meta name="color-scheme" content="light dark">
 <title>${title} · Cindy</title>
 <style>
-:root{color-scheme:light;--page:#eeeeee;--card:#fbfbfb;--card-border:#d4d4d4;--title:rgba(0,0,0,.88);--body:rgba(0,0,0,.56);--detail:rgba(0,0,0,.44);--cta:#2a2828;--cta-border:#434343;--cta-text:#d4d4d4;--cta-hover:rgba(255,255,255,.08);--cta-active:rgba(0,0,0,.5)}
-:root[data-theme="dark"]{color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
-@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
+:root{color-scheme:light;--page:#f2f2ed;--card:#fdfdf8;--card-border:rgba(0,0,0,.08);--title:rgba(0,0,0,.88);--body:rgba(0,0,0,.56);--detail:rgba(0,0,0,.44);--cta:#3c3f43;--cta-border:#3c3f43;--cta-text:#fcfcfc;--cta-hover:rgba(0,0,0,.2);--cta-active:rgba(0,0,0,.4)}
+:root[data-theme="dark"]{color-scheme:dark;--page:#181818;--card:#1f1f1f;--card-border:rgba(255,255,255,.1);--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#eeeeee;--cta-text:#151515;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
+@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#181818;--card:#1f1f1f;--card-border:rgba(255,255,255,.1);--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#eeeeee;--cta-text:#151515;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:var(--page);font-family:"HarmonyOS Sans SC",Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 .stage{position:relative;margin:0 auto 24px}
@@ -434,9 +434,8 @@ h1{position:absolute;left:42px;top:352px;width:598px;height:38px;margin:0;font-s
 .body{position:absolute;left:41px;top:396px;width:599px;height:23px;margin:0;font-size:20px;line-height:23px;font-weight:400;color:var(--body);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .detail{position:absolute;left:41px;top:434px;width:599px;margin:0;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;color:var(--detail);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cta{position:absolute;left:70px;top:529px;width:540px;height:80px;border-radius:40px;background:var(--cta);border:1px solid var(--cta-border);color:var(--cta-text);font-size:24px;font-weight:700;display:grid;place-items:center;text-decoration:none;overflow:hidden}
-.cta::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .15s ease}
-@media(hover:hover){.cta:hover::after{opacity:1;background:var(--cta-hover)}}
-.cta:active::after{opacity:1;background:var(--cta-active)}
+@media(hover:hover){.cta:hover{background-image:linear-gradient(var(--cta-hover),var(--cta-hover))}}
+.cta:active{background-image:linear-gradient(var(--cta-active),var(--cta-active))}
 .cta:focus-visible{outline:3px solid rgba(59,130,246,.5);outline-offset:3px}
 .card.success{width:560px;height:500px;display:flex;flex-direction:column;align-items:center;padding:48px 40px 44px}
 .card.success .visual{position:static;flex:0 0 240px;width:240px;height:240px}

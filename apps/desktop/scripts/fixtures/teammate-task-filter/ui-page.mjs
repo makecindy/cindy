@@ -9,8 +9,26 @@ export default {
     'src/renderer/features/device-link/useMachineSwitcher': `export const useEffectiveSelectedMachineId=()=> 'all';`,
     'src/renderer/features/cc-agent/hooks/useRemoteHostProjectOrders': `export const useLocalHostProjectOrder=()=>({snapshot:undefined}); export const useRemoteHostProjectOrders=()=>({orders:new Map()}); export const projectOrderWriteScopeForSelection=()=>({kind:'viewer'}); export const controllerManualOrderForDevice=()=>[];`,
   },
-  cases: { default: { about: 'Legacy choice migration → one Cindy across computers → unrestricted → single/multiple/reset; archived creator avatar' } },
+  cases: {
+    default: { about: 'Legacy choice migration → one Cindy across computers → unrestricted → single/multiple/reset; archived creator avatar' },
+    'archived-reminder': { about: 'Display settings → Task status → Archived shows reminder at every level; Active/All clear it' },
+  },
   async check(page, ui) {
+    if (ui.case === 'archived-reminder') {
+      const statusRow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.taskStatusHeading') }).first();
+      await statusRow.press('ArrowRight');
+      const archived = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.taskStatus.archived'), exact: true });
+      for (const reset of ['all', 'active']) {
+        await archived.click();
+        await statusRow.locator('[data-filter-reminder]').waitFor();
+        assert.equal(await archived.locator('[data-filter-reminder]').count(), 1);
+        assert.equal(await page.locator('button [data-filter-reminder]').count(), 1);
+        await ui.capture(`archived-before-${reset}`);
+        await page.getByRole('menuitem', { name: await ui.t(`ccAgent.sidebar.taskStatus.${reset}`), exact: true }).click();
+        assert.equal(await page.locator('[data-filter-reminder]').count(), 0);
+      }
+      return;
+    }
     const rows = page.locator('[data-task]');
     assert.equal(await rows.count(), 4);
     const filterHeading = await ui.t('ccAgent.sidebar.filterHeading');

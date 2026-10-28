@@ -32,7 +32,7 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { getActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
 import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
-import { registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
+import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 
@@ -50,6 +50,18 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  it('returns an identifiable member-budget refusal and never meters unbound owner requests', async () => {
+    const code = 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
+    registerGuestProviderRoute('budget-guest', 'openai', () => false, () => true, () => ({ code, message: `[${code}] Choose another model.` }));
+    const guard = createCodexGuestRoutingGuard('openai', 'oauth-bearer', 'budget-guest');
+    const decision = await guard({ model: 'astra' }, ctx('/responses'));
+    let body = '';
+    let status = 0;
+    await decision!.localHandler!({ res: { writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; } } } as never);
+    expect(status).toBe(403);
+    expect(JSON.parse(body).error.code).toBe(code);
+    expect(captureGuestRequestUsage('owner-local', 'astra')).toBeUndefined();
+  });
   beforeEach(() => {
     const provider = (id: string, model: string) => buildUserProvider({
       id,

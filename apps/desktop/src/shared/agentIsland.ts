@@ -85,6 +85,8 @@ export interface AgentIslandSessionActivity
   interactionKind?: AgentIslandInteractionKind;
   /** Compatibility/display alias; canonical probe field is currentActionSummary. */
   compactDetail: string;
+  /** Only marked summaries can bypass legacy Markdown recovery on another host. */
+  summaryFormat?: 'plain-text';
 }
 
 export type AgentIslandDisplayMode = 'compact' | 'expanded';
@@ -855,6 +857,7 @@ export function parseAgentIslandCompanionChats(raw: unknown): AgentIslandCompani
  * 只含 running / needs-interaction / 未读终态;范围由 renderer 按侧栏「任务范围」裁剪。
  */
 export interface AgentIslandRemoteSessionInput {
+  summaryFormat?: 'plain-text';
   completionToken?: string;
   completionNotification?: 'pending' | 'teammate' | 'silent';
   sessionId: string;
@@ -933,6 +936,7 @@ export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteS
       ...(record.completionNotification === 'pending' || record.completionNotification === 'teammate' || record.completionNotification === 'silent'
         ? { completionNotification: record.completionNotification } : {}),
       detail: readBoundedString(record.detail, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '',
+      ...(record.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
       ...(workingPhase ? { workingPhase } : {}),
       ...(interactionKind ? { interactionKind } : {}),
       ...(companion ? { companion } : {}),

@@ -245,6 +245,13 @@ describe('bot group remote resources', () => {
     } });
   });
 
+  it('uses creation for empty group ordering without publishing a creation notice or counting settings edits', () => {
+    const group = summary({ createdAt: 70, updatedAt: 100, lastMessage: null, openPlan: null });
+    expect(botGroupRemoteItem(group).display).toMatchObject({ timestamp: 70 });
+    expect(botGroupRemoteItem(group).display.preview).toBeUndefined();
+    expect(botGroupRemoteItem({ ...group, lastMessage: summary().lastMessage }).display.timestamp).toBe(70);
+  });
+
   it('names who shared a thread reply, never the card text, the way the desktop sidebar does', () => {
     const share = (extra: Record<string, unknown>) => botGroupRemotePreview(summary({ openPlan: null,
       lastMessage: { authorName: '小满', preview: '', createdAt: 50, threadShare: true, ...extra } as never }));

@@ -26,6 +26,7 @@ import {
   cloneActivityTextStreamState,
   createActivityTextStreamState,
   normalizeActivityText,
+  normalizeRemoteActivityText,
   type ActivityTextStreamState,
 } from './activityTextStream.js';
 
@@ -571,7 +572,7 @@ export function applyAgentIslandUserPrompt(
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   clearAssistantStream(session);
-  const line = appendActivityLine(session, 'user', text);
+  const line = appendNormalizedActivityLine(session, 'user', text);
   if (line) enqueueMessagePreview(session, line, now);
   session.sortActivityAt = now;
   replaceAgentIslandCard(session, now);
@@ -1277,10 +1278,11 @@ function applyDeviceSessionPhase(
         session.phase = 'running';
         session.sortActivityAt = now;
       }
-      const changed = entering || session.detail !== input.detail || session.workingPhase !== workingPhase;
+      const detail = normalizeRemoteActivityText(input.detail, input.summaryFormat);
+      const changed = entering || session.detail !== detail || session.workingPhase !== workingPhase;
       session.workingPhase = workingPhase;
-      session.detail = input.detail;
-      session.detailSource = input.detail ? 'status' : null;
+      session.detail = detail;
+      session.detailSource = detail ? 'status' : null;
       if (changed) touchSessionActivity(session, now);
       return { changed, event: null };
     }
@@ -1312,14 +1314,14 @@ function applyDeviceSessionPhase(
     case 'completed': {
       const silent = input.completionNotification === 'silent';
       if (previous === 'completed' && (!silent || session.completionNotification === 'silent')) {
-        return { changed: mirrorDeviceSessionSummary(session, input.detail), event: null };
+        return { changed: mirrorDeviceSessionSummary(session, input, state.strings.done), event: null };
       }
       clearDeviceSessionInteraction(session);
       session.running = false;
       touchSessionActivity(session, now);
       // 先换掉上一轮的摘要,且必须先于 complete:有摘要可显示时就不再补「完成」占位。
       session.activityLines = [];
-      mirrorDeviceSessionSummary(session, input.detail);
+      mirrorDeviceSessionSummary(session, input, state.strings.done);
       // 对方设备已经仲裁过终态,这里不再套本机「报错后的配对 done」保护。
       session.completionAllowedAfterTerminalError = true;
       completeAgentIslandSession(state, session, now, observed && !silent
@@ -1351,11 +1353,11 @@ function applyDeviceSessionPhase(
  * 设备任务不同步对话,只带对方岛上算好的一行摘要,不带消息角色。记成状态行(不冒充
  * 回复):完成卡片取它当文案,连续更新原地替换;没有摘要时才退回「完成」。
  */
-function mirrorDeviceSessionSummary(session: AgentIslandSessionState, detail: string): boolean {
-  const text = normalizeActivityText(detail);
+function mirrorDeviceSessionSummary(session: AgentIslandSessionState, input: AgentIslandRemoteSessionInput, fallback: string): boolean {
+  const text = normalizeRemoteActivityText(input.detail, input.summaryFormat) || fallback;
   const last = session.activityLines.at(-1);
-  if (!text || (last?.kind === 'status' && last.text === text)) return false;
-  appendActivityLine(session, 'status', text);
+  if (last?.kind === 'status' && last.text === text) return false;
+  appendNormalizedActivityLine(session, 'status', text);
   return true;
 }
 
@@ -2651,8 +2653,7 @@ function messagePreviewTextForSession(session: AgentIslandSessionState): string 
   if (session.phase === 'needs-interaction' || session.phase === 'error') return null;
   const line = session.messagePreview?.line;
   if (!line || (line.kind !== 'user' && line.kind !== 'assistant')) return null;
-  const text = normalizeActivityText(line.text);
-  return text || null;
+  return line.text || null;
 }
 
 function isGenericRunningStatusDetail(detail: string): boolean {
@@ -2683,7 +2684,7 @@ function latestUserActivityTitle(session: AgentIslandSessionState): string | nul
     .reverse()
     .find((line) => line.kind === 'user');
   if (!latestUserLine) return null;
-  const text = normalizeActivityText(latestUserLine.text);
+  const text = latestUserLine.text;
   if (!text) return null;
   return text.slice(0, 72);
 }
@@ -3097,7 +3098,15 @@ function appendActivityLine(
   kind: AgentIslandActivityLineKind,
   rawText: string,
 ): AgentIslandActivityLine | null {
-  const text = normalizeActivityText(rawText);
+  return appendNormalizedActivityLine(session, kind, normalizeActivityText(rawText));
+}
+
+/** Activity lines are already display text; do not parse literal code a second time. */
+function appendNormalizedActivityLine(
+  session: AgentIslandSessionState,
+  kind: AgentIslandActivityLineKind,
+  text: string,
+): AgentIslandActivityLine | null {
   if (!text) return null;
   const previous = session.activityLines.at(-1);
   if (previous && previous.kind === kind && kind !== 'user' && kind !== 'assistant') {
@@ -3157,7 +3166,7 @@ function applyAssistantTextLine(
     }
   }
 
-  const line = appendActivityLine(session, 'assistant', text);
+  const line = appendNormalizedActivityLine(session, 'assistant', text);
   if (!line) return null;
   if (isFinal) {
     clearAssistantStream(session);

@@ -1,6 +1,6 @@
 import { iconSize, spacing } from '@/theme';
-import { Fragment, useEffect } from 'react';
-import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle, useNativeState } from '@expo/ui/swift-ui';
+import { Fragment } from 'react';
+import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle } from '@expo/ui/swift-ui';
 import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteActionField } from '@cindy/device-link';
@@ -11,6 +11,7 @@ import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import type { CompanionProfileNativeViewProps } from './CompanionProfileNativeView';
 import type { ProfilePanel, ProfileValues } from './companionProfileData';
+import { useNativeTextDraft } from './nativeTextDraft';
 import { CompanionPortraitPicker } from './CompanionPortraitPicker';
 import { CompanionNativeContent } from './CompanionNativeContent.ios';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -20,15 +21,14 @@ export function CompanionNativeField({ field, values, onChange, busy }: { field:
   const { colors } = useTheme();
   const label = resolveRemoteText(field.label, i18n.language);
   const value = typeof values[field.id] === 'string' ? values[field.id] as string : '';
-  const text = useNativeState(value);
-  useEffect(() => { if (text.get() !== value) text.set(value); }, [value, text]);
-  const update = (value: string | boolean) => onChange({ ...values, [field.id]: value });
+  const update = (next: string | boolean) => onChange({ ...values, [field.id]: next });
+  const draft = useNativeTextDraft(value, next => update(next));
   if (field.id === 'avatarImageBase64') return <Section title={label}><CompanionNativeContent><CompanionPortraitPicker value={value} onChange={update} disabled={busy} /></CompanionNativeContent></Section>;
   if (field.kind === 'toggle') return <Toggle label={label} isOn={values[field.id] === true} onIsOnChange={update} modifiers={[disabled(busy), tint(colors.inputCaret)]} />;
   if (field.kind === 'select') return <Picker label={label} selection={value} onSelectionChange={next => update(String(next))} modifiers={[pickerStyle('menu'), disabled(busy)]}>
     {(field.options ?? []).map(option => <Text key={option.value} modifiers={[tag(option.value)]}>{resolveRemoteText(option.label, i18n.language)}</Text>)}
   </Picker>;
-  return <Section title={label}><TextField text={text} onTextChange={update} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
+  return <Section title={label}><TextField text={draft.text} onTextChange={draft.onTextChange} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
     maxLength={field.id === 'name' || field.id === 'confirmName' ? 200 : field.id === 'body' ? 55000 : 12000} testID={`companionProfile.field.${field.id}`}
     modifiers={[disabled(busy), accessibilityLabel(label), ...(field.kind === 'multiline' ? [lineLimit({ min: 3, max: 8 })] : [])]} /></Section>;
 }

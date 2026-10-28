@@ -222,15 +222,30 @@ export function queueItemVisibleText(item: {
   files?: readonly unknown[];
   origin?: unknown;
   sourcePlugin?: unknown;
+  chatMessage?: { pastedTextRanges?: readonly { start: number; end: number; display: string }[] };
 }): string {
   const text = item.text ?? '';
   if (!isAutoSentQueueItem(item)) return text;
   const persisted = item.persistedContent ?? text;
-  if (!item.files?.length) return persisted;
+  const ranges = item.chatMessage?.pastedTextRanges;
+  if (!item.files?.length && !ranges?.length) return persisted;
   try {
     const envelope = JSON.parse(persisted) as unknown;
     const envelopeText = readRecord(envelope)?.text;
-    if (typeof envelopeText === 'string') return envelopeText;
+    if (typeof envelopeText === 'string') {
+      if (!ranges?.length) return envelopeText;
+      let cursor = 0;
+      const parts: string[] = [];
+      for (const range of ranges) {
+        if (!Number.isInteger(range.start) || !Number.isInteger(range.end)
+          || range.start < cursor || range.end <= range.start || range.end > envelopeText.length
+          || typeof range.display !== 'string') return envelopeText;
+        parts.push(envelopeText.slice(cursor, range.start), range.display);
+        cursor = range.end;
+      }
+      parts.push(envelopeText.slice(cursor));
+      return parts.join('');
+    }
   } catch {
     // Not an envelope: the persisted row is already the visible text.
   }

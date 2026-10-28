@@ -2,6 +2,7 @@
  * Raw imports embed the same shipped Markdown in dev, tests and packaged builds.
  */
 import overview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-overview.md?raw';
+import sourceVerification from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-source-verification.md?raw';
 import routineEvents from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-routine-events.md?raw';
 import design from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-design.md?raw';
 import structure from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-structure.md?raw';
@@ -41,6 +42,7 @@ import compatibility from '../../../resources/system-skills/cindy-plugin-creator
 
 export const FORGE_GUIDE = [
   overview,
+  sourceVerification,
   routineEvents,
   design,
   structure,

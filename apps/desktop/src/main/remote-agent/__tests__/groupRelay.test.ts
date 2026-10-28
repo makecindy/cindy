@@ -23,6 +23,8 @@ import { RemoteAgentRunClient } from '../controller/runClient';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder } from '../host/providerAccess';
 import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
+import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
+import { memberBudgetStatus } from '../../device-link/providerShareBudgetCalculation';
 import {
   createRemoteAgentHost,
   hostSessionIdFor,
@@ -350,6 +352,12 @@ describe('provider group relay for shared users', () => {
   // only opus, while the executor offers opus and sonnet; revoke opus mid-run.
   it('projects the original member catalog and rechecks every child call across the relay', async () => {
     const allowed = new Set(['claude-opus']);
+    const ledger = createProviderShareUsageStore(path.join(root, 'ratio-usage.json'));
+    const record = (model: string, tokens: number) => ledger.record('share', GUEST_A, { providerId: 'shared-provider', kind: 'claude-code', memberKey: 'mini',
+      samples: [{ model, inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0, turns: 0 }] });
+    record('claude-opus', 60); record('claude-sonnet', 140);
+    const policy = { basis: 'member-input-output-7d' as const, enabled: true, recommendedModel: 'claude-sonnet',
+      rules: [{ id: 'limit', models: ['claude-opus'], maxPercent: 50 }] };
     let executorAllowed = true;
     const binder = createGuestProviderRouteBinder({
       readProviders: async () => [{ id: MEMBER_MINI.providerId, models: { 'claude-code': [
@@ -358,7 +366,13 @@ describe('provider group relay for shared users', () => {
       guestAccess: () => null, ownerAllowed: () => true, providerAllowed: () => executorAllowed,
       modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
     });
-    const check = vi.fn((_provider: string, controller: string, model?: string) => controller === GUEST_A && (!model || allowed.has(model)));
+    const check = vi.fn((_provider: string, controller: string, model?: string) => {
+      if (controller !== GUEST_A || (model && !allowed.has(model))) return false;
+      const status = memberBudgetStatus(ledger.memberTokenSnapshot(new Set(['share']), 'shared-provider', GUEST_A), policy);
+      if (model && status.rules.some(rule => rule.models.includes(model) && rule.blocked))
+        throw new Error('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] Model share reached');
+      return true;
+    });
     const env = setup({ memberBinder: binder, owner: { modelAccess: {
       isAllowed: check, models: async () => [...allowed], restricted: () => true,
     } } });
@@ -367,13 +381,22 @@ describe('provider group relay for shared users', () => {
       try {
         const input = env.memberStarted.mini[0].input;
         expect(input.guestProvider!.modelIds).toEqual(['claude-opus']);
-        const allows = async (model: string) => {
+        const decision = async (model: string) => {
           const response = await fetch(input.tunnel.url + '/cindy/model-access', { method: 'POST',
             headers: { Authorization: 'Bearer ' + input.tunnel.token }, body: JSON.stringify({ model }) });
-          return (await response.json() as { allowed: boolean }).allowed;
+          return await response.json() as { allowed: boolean; code?: string };
         };
+        const allows = async (model: string) => (await decision(model)).allowed;
         expect(await allows('claude-opus')).toBe(true);
         expect(await allows('claude-sonnet')).toBe(false);
+        record('claude-opus', 200);
+        expect(await decision('claude-opus')).toEqual({ allowed: false, code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED' });
+        await expect(client.call('send', [{ content: 'blocked', attachments: [] }, {}])).rejects.toThrow('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]');
+        expect(env.memberStarted.mini[0].sends).toHaveLength(0);
+        record('claude-sonnet', 200);
+        expect(await allows('claude-opus')).toBe(true);
+        await client.call('send', [{ content: 'resumed', attachments: [] }, {}]);
+        expect(env.memberStarted.mini[0].sends).toHaveLength(1);
         allowed.clear();
         expect(await allows('claude-opus')).toBe(false);
         allowed.add('claude-opus');
@@ -382,7 +405,10 @@ describe('provider group relay for shared users', () => {
         expect(await allows('claude-opus')).toBe(false);
         expect(check).toHaveBeenCalledWith('shared-provider', GUEST_A, 'claude-sonnet');
       } finally { await client.close('close', 'navigation'); }
-    } finally { for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); } }
+    } finally {
+      await ledger.flush();
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
   });
 
   it.each([true, false])('handles a legacy executor with restricted=%s and stops it when new restrictions appear', async restrictedAtStart => {
@@ -682,6 +708,27 @@ describe('provider group relay: starting, load and cleanup', () => {
     expect(env.relay.noteStartFailure).toHaveBeenCalledTimes(9);
     expect(env.memberStarted.studio).toHaveLength(1);
     await client.close('close', 'navigation');
+  });
+
+  // Unit: Host.handle(open) must release a reserved group slot if final admission throws.
+  // Regression #7666/r4398894989: existing cleanup tests covered boolean denials, not budget exceptions.
+  // Minimal input: group plan reserves a slot, then isAllowed throws the stable pause error before runs.set.
+  it('releases reserved group load when final admission throws a member budget pause', async () => {
+    const load = { setRunning: vi.fn(), release: vi.fn() };
+    const paused = Object.assign(new Error('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] Model share reached'), {
+      code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED',
+    });
+    const env = setup({ plans: [{ kind: 'local', load }], owner: { modelAccess: { isAllowed: () => { throw paused; } } } });
+    try {
+      await expect(env.owner.handle(GUEST_A, {
+        op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload(SESSION) },
+      })).rejects.toBe(paused);
+      expect(load.release).toHaveBeenCalledTimes(1);
+      expect(env.owner.runCount()).toBe(0);
+      expect(env.ownerStarted).toHaveLength(0);
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
   });
 
   it('counts the load from the moment it picks, including tasks the group runs on this computer', async () => {

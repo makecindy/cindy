@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "Sent by local app “{{name}}”",
+    "sourceLocalAppId": "App ID: {{id}}",
     "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",
     "moreActions": "More message actions",
     "reply": "Reply",

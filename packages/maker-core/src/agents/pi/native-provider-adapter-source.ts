@@ -121,7 +121,12 @@ async function registerCindyNativeProviderAdapters(pi: any) {
             method: 'POST', headers: { Authorization: 'Bearer ' + CINDY_HOSTED.token, 'content-type': 'application/json' },
             body: JSON.stringify({ model: grant, ...(alias.remoteProviderId ? { providerId: alias.remoteProviderId } : {}) }), signal,
           });
-          if (!response.ok || (await response.json()).allowed !== true) throw new Error('The model is not authorized for this remote task');
+          const decision = response.ok ? await response.json() : null;
+          if (decision?.allowed !== true) {
+            if (decision?.code === 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED')
+              throw new Error('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] This model has reached your shared-provider model limit.');
+            throw new Error('The model is not authorized for this remote task');
+          }
         }
         const api = getApiProvider(model.api);
         if (!api) throw new Error('The selected native provider API is unavailable');

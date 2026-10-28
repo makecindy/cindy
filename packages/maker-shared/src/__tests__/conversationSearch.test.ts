@@ -182,6 +182,20 @@ describe('filterResultsByWorkingDirs', () => {
       matching: '//server/share/repo',
       different: '//server/share/other',
     },
+    // #7644 (unit): remote search must keep worktrees when filtering by their base
+    // project; the earlier case-variant fixtures never varied a container name.
+    {
+      name: 'worktree drive',
+      selected: 'c:/Work/Repo',
+      matching: 'C:/work/repo/.CINDY-WORKTREES/topic',
+      different: 'C:/work/other/.CINDY-WORKTREES/topic',
+    },
+    {
+      name: 'worktree UNC',
+      selected: '//Server/Share/Repo',
+      matching: '//server/share/repo/.CLAUDE/Worktrees/topic',
+      different: '//server/share/other/.CLAUDE/Worktrees/topic',
+    },
   ])('keeps Windows $name case variants but drops genuinely different directories', ({ selected, matching, different }) => {
     const page = filterResultsByWorkingDirs(
       response([

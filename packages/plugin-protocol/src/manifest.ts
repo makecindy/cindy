@@ -960,7 +960,7 @@ export interface GhostManifest {
    * 页用它避免抖动)。须与 settingsHtml 成对声明。
    */
   settingsHeight?: number;
-  /** 是否显示宿主「模型与任务」默认配置卡；缺省或 true 显示，false 仅隐藏卡片。 */
+  /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];

@@ -11,8 +11,33 @@ import {
   botGroupExecutionFailureBatches,
   chatGroupMembership,
   botGroupNewMessageCount,
+  botGroupActivityAt,
+  latestBotGroupMessage,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupPlanView } from '../botGroupChat.js';
+
+describe('group list activity', () => {
+  it('keeps creation as a floor without treating settings edits as activity', () => {
+    const group = { createdAt: 20, updatedAt: 100, lastMessage: null };
+    expect(botGroupActivityAt(group)).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 10 } })).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: NaN, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: 20, lastMessage: { createdAt: NaN } })).toBe(20);
+  });
+
+  it('selects topics and shared notices by exact server position without mutating the snapshot', () => {
+    const main = { seq: '9007199254740992', deleted: false, threadRootId: null };
+    const topic = { ...main, seq: '9007199254740993', threadRootId: 'root' };
+    const joined = { ...main, seq: '9007199254740994', origin: 'system' };
+    const deleted = { ...main, seq: '9007199254740995', deleted: true };
+    const messages = Object.freeze([main, deleted, topic]);
+    expect(latestBotGroupMessage(messages)).toBe(topic);
+    expect(latestBotGroupMessage([joined, ...messages])).toBe(joined);
+    expect(latestBotGroupMessage([deleted])).toBeUndefined();
+    expect(latestBotGroupMessage([])).toBeUndefined();
+  });
+});
 
 // Unit: history browsing needs an actionable count; old-page loads and repeated pushes are not arrivals.
 it('counts only new messages from other people and companions below the observed tail', () => {

@@ -252,27 +252,22 @@ describe('Ghost plugin detail sections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Permissions: Read service' }));
     expect(within(await screen.findByRole('dialog')).getByText('Only the declared service')).toBeTruthy();
   });
-  it('shows the plugin purpose and capabilities before the collapsed local update notes', () => {
+  it('keeps installed use details focused on the plugin without a version and publishing section', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Only version changes', tools: [{ name: 'example', description: 'Example tool' }] }} panelStatus={null}
       onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
       onUninstall={vi.fn()} toggleDisabled={false} />);
-    const summary = screen.getByText('settings.ghosts.contribution.versionUpdates');
-    const updates = summary.closest('details')!;
-    expect(updates.open).toBe(false);
-    expect(screen.getByText(detail.description).compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Tools' }).compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(summary);
-    expect(updates.open).toBe(true);
-    expect(screen.getByText('Only version changes')).toBeTruthy();
+    expect(screen.getByText(detail.description)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.queryByText('Only version changes')).toBeNull();
   });
 
 
   it.each(['pending', 'approved', 'rejected', 'cancelled'] as const)(
-    'keeps the %s version result without advertising a submission that cannot be repeated', (status) => {
+    'hides a submission that cannot be repeated for the %s version without showing publishing details', (status) => {
       vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
       const publish = vi.fn();
-      const refresh = vi.fn();
       const preview: PreparedPluginContribution = {
         preparedId: 'preview', instanceId: 'instance', pluginId: 'plugin', ghostId: 'example',
         name: detail.name, description: detail.description, version: '1.0.0', sha256: 'a'.repeat(64),
@@ -289,51 +284,37 @@ describe('Ghost plugin detail sections', () => {
       const view = (prepared: PreparedPluginContribution) => <GhostPluginDetailView
         ghost={null} detail={detail} panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()}
         onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
-        onContribute={publish} onRefreshPublishing={refresh}
-        publishingPreview={prepared} contributionSummary={`1.0.0 · ${status}`}
+        onContribute={publish} publishingPreview={prepared}
         contributionUnavailableReason={prepared.preflight?.actions.canSubmit ? undefined : 'Change the version before publishing again'} />;
       const { rerender } = render(view(preview));
-      const updates = screen.getByText('settings.ghosts.contribution.versionUpdates').closest('details')!;
-      expect(updates.open).toBe(false);
-      expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.version · 1.0.0' }).closest('details')).toBe(updates);
-      fireEvent.click(screen.getByText('settings.ghosts.contribution.versionUpdates'));
       expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
-      expect(screen.getByRole('status').textContent).toBe(`1.0.0 · ${status}`);
-      expect(screen.getByText('Change the version before publishing again')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.version · 1.0.0' })).toBeTruthy();
+      expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+      expect(screen.queryByText('Change the version before publishing again')).toBeNull();
       expect(screen.queryByText('settings.ghosts.contribution.versionConsumedHint')).toBeNull();
-      expect(screen.getByText('Complete package release notes')).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.refreshSummary' }));
-      expect(refresh).toHaveBeenCalledOnce();
+      expect(screen.queryByText('Complete package release notes')).toBeNull();
       expect(publish).not.toHaveBeenCalled();
       // A previous cancelled/rejected/approved result does not hide a new eligible version.
       rerender(view({ ...preview, version: '1.1.0', preflight: { ...preview.preflight!, target: { ...preview.preflight!.target, version: '1.1.0' }, pendingRelease: null, blockers: [], actions: { canSubmit: true } } }));
       const submit = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
       expect(submit).toHaveProperty('disabled', false);
-      expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.publishingVersion' })).toBeTruthy();
       fireEvent.click(submit);
       expect(publish).toHaveBeenCalledOnce();
     },
   );
 
-  it('keeps the local publishing entry in the use header and release information secondary', () => {
+  it('keeps the local publishing entry in the use header without a publishing section', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     const publish = vi.fn();
     render(<GhostPluginDetailView ghost={null} detail={detail} panelStatus={null}
       onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
       onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
-      onContribute={publish} contributionSummary="2.0.0 · Pending Review" />);
-    const summary = screen.getByText('settings.ghosts.contribution.versionUpdates');
-    const updates = summary.closest('details')!;
-    expect(updates.open).toBe(false);
+      onContribute={publish} />);
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
     expect(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }).closest('header')).toBeTruthy();
-    expect(within(updates).getByRole('status').textContent).toBe('2.0.0 · Pending Review');
     const chat = screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' });
     expect(within(chat.closest('.plugin-detail-actions') as HTMLElement).getByRole('switch')).toBeTruthy();
-    expect(screen.getByText('Example plugin').compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(summary);
+    expect(screen.getByText('Example plugin')).toBeTruthy();
     const action = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
-    expect(within(updates).getByRole('status').textContent).toBe('2.0.0 · Pending Review');
     fireEvent.click(action);
     expect(publish).toHaveBeenCalledOnce();
   });

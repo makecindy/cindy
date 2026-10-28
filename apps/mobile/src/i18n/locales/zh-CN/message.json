@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本机应用「{{name}}」发送",
+    "sourceLocalAppId": "应用 ID：{{id}}",
     "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "moreActions": "更多消息操作",
     "reply": "回复",

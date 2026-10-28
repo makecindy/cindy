@@ -56,7 +56,7 @@ import {
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
-import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupExecutionFailureBatches } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
@@ -1602,7 +1602,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (reads) for (const view of [...messages, ...(messageUpdates ?? [])]) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads);
     const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads) : undefined;
     messages.sort((a, b) => a.sequence - b.sequence);
-    const last = s.messages[0];
+    const last = latestBotGroupMessage(s.messages);
     const lastView = last ? messageView(last, s.members, ownerMembers) : null;
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
@@ -2721,6 +2721,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const route = type === 'update' || type === 'archive' ? '' : type === 'member' ? '/members' : type === 'botAccess' ? '/bot-access' : `/${type}`;
       const asManager = type === 'update' || type === 'archive' || type === 'transfer' || (type === 'member' && !['leave', 'invite'].includes(action.action));
       const s = await groupSnapshot(target);
+      if (action.type === 'transfer') {
+        const recipient = s.members.find(member => member.id === action.actorId && member.state === 'joined');
+        if (!recipient) throw new Error('MEMBER_NOT_FOUND');
+        if (recipient.kind !== 'human') throw new Error('HUMAN_OWNER_REQUIRED');
+      }
       const actorId = asManager ? managementActor(s) : undefined;
       await api(`/conversations/${target}${route}`, type === 'update' || type === 'archive' ? 'PATCH' : 'POST', {
         operationId: randomUUID(), ...payload, ...(type === 'archive' ? { archived: action.archived } : {}),

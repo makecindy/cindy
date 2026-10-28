@@ -156,16 +156,18 @@ function pickDefinedUsage(usage: RemoteSessionUsage): RemoteSessionUsage {
  * 行内 PR 信息。enabled=false(未勾选 PR / 非远程任务)时不订阅、不查询。
  * refreshKey 传任务的 updatedAt:任务有新动静时(可能刚提了 PR)提前重查。
  */
-function useHomeSessionPr(
+export function useHomeSessionPr(
   deviceId: string | undefined,
   sessionId: string,
   enabled: boolean,
   refreshKey?: string,
+  foreground = false,
+  includeRelated = false,
 ): HomeSessionPrInfo | null {
   const link = useDeviceLink();
   const { accountGeneration } = useAuth();
   const key = enabled && deviceId
-    ? homeSessionPrCacheKey(String(accountGeneration), deviceId, sessionId)
+    ? homeSessionPrCacheKey(String(accountGeneration), deviceId, sessionId) + (includeRelated ? ':related' : '')
     : null;
   const subscribe = useCallback(
     (listener: () => void) => (key ? subscribeHomeSessionPr(key, listener) : () => undefined),
@@ -182,8 +184,8 @@ function useHomeSessionPr(
     let retry: ReturnType<typeof setTimeout> | undefined;
     // eventful = 回到首页 / 回到前台:期间的轮询被跳过,PR 可能已合并或关闭,不沿用 90 秒缓存。
     const refresh = (eventful = false) => {
-      if (AppState.currentState !== 'active' || !isActive()) return;
-      const retryIn = refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous), {
+      if (AppState.currentState !== 'active' || (!foreground && !isActive())) return;
+      const retryIn = refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous, includeRelated), {
         eventful,
         now: Date.now(),
         refreshKey,
@@ -208,7 +210,7 @@ function useHomeSessionPr(
       stopResume();
       appState.remove();
     };
-  }, [deviceId, isActive, key, link.connectionEpoch, link.invoke, onResume, online, refreshKey, sessionId]);
+  }, [deviceId, foreground, includeRelated, isActive, key, link.connectionEpoch, link.invoke, onResume, online, refreshKey, sessionId]);
   return value;
 }
 

@@ -2,7 +2,7 @@ import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorizat
 import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { PluginTaskError } from '../pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { describe, expect, it, vi } from 'vitest';
@@ -1227,11 +1227,11 @@ describe('retained tasks after explicit plugin uninstall', () => {
     'keeps $input source distinct from $state task ownership',async({input,state})=>{
       const epoch={client:{}};
       const active=input==='idle'?null:input==='plugin'?{clientId:'plugin-task:run'}:input==='human'?{clientId:'human',authoredText:'Continue my task'}:{clientId:'retry',retrySourceClientId:'plugin-task:run',autoResume:input==='auto-retry'};
-      const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,
+      const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,isPluginTaskPermissionAllowed,
         maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>active},
         createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:state==='revoked'})}}),
         pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:state==='ask'?'default':'auto',planModeEnabled:state==='plan'})}),
-        isPluginTaskAuthorized:()=>state!=='disabled',readPluginTaskConfig:()=>({permissionMode:'auto'})};
+        isPluginTaskAuthorized:()=>state!=='disabled',getPluginTaskDefaults:()=>({permissionMode:'auto'})};
       const override=new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
       const ordinary=state==='revoked'&&['human','idle'].includes(input);
       if(state==='healthy'||ordinary)await expect(override('lead')).resolves.toMatchObject({permissionMode:ordinary?undefined:'auto'});
@@ -1240,11 +1240,11 @@ describe('retained tasks after explicit plugin uninstall', () => {
   it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('requires an active plugin task outside Plan Mode for %s', async action => {
     for (const {status,planModeEnabled} of [{status:'active',planModeEnabled:false},{status:'archived',planModeEnabled:false},{status:'active',planModeEnabled:true}]) {
       const epoch = { client: {} };
-      const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+      const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, isPluginTaskPermissionAllowed,
         maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
         createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: '{}' }) }),
         pluginTaskServiceForCurrentOwner: () => ({ get: async () => ({ status, permissionMode: 'auto', planModeEnabled }) }),
-        isPluginTaskAuthorized: () => true, readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
+        isPluginTaskAuthorized: () => true, getPluginTaskDefaults: () => ({ permissionMode: 'auto' }),
       };
       const override = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(callbacks));
       const { deps, service } = createDeps({ getWorkerPermissionModeOverride: override,
@@ -1263,11 +1263,11 @@ describe('retained tasks after explicit plugin uninstall', () => {
   });
   it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('uses ordinary permissions for %s with a retained revoked receipt', async action => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked'); });
-    const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+    const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, isPluginTaskPermissionAllowed,
       maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: true }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => false,
-      readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
+      getPluginTaskDefaults: () => ({ permissionMode: 'auto' }),
     };
     const override = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(callbacks));
     const { deps, service } = createDeps({

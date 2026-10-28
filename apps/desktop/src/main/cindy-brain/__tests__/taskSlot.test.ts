@@ -2,8 +2,37 @@ import { describe, expect, it, vi } from 'vitest';
 import { isPluginTeamPlanWithinBudget, PLUGIN_TEAM_PLAN_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { handlePluginTaskRequest, validPluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { buildPluginMessage } from '../../../shared/pluginMessage.js';
+import { parseUserContent } from '../../../renderer/lib/imageRef.js';
+import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
 describe('plugin task pipe', () => {
+  it('round-trips collapsed context with screenshots while model history retains the full material', () => {
+    const message = buildPluginMessage('Look here', 'Window text and pointer coordinates', 'Attached context');
+    const persisted = JSON.stringify({ ...message,
+      images: [{ url: 'cindy-media://blobs/example.png', mimeType: 'image/png', originalName: 'window.png' }] });
+    const parsed = parseUserContent(persisted);
+    const range = parsed.pastedTextRanges![0]!;
+    expect(parsed.text.slice(0, range.start).trim()).toBe('Look here');
+    expect(parsed.text.slice(range.start, range.end)).toContain('Window text and pointer coordinates');
+    expect(range.display).toBe('Attached context');
+    expect(parsed.images).toHaveLength(1);
+    expect(projectPersistedAgentFacingUserText(persisted)).toBe(message.text);
+    expect(buildPluginMessage('Legacy text', undefined, 'Attached context')).toEqual({ text: 'Legacy text' });
+  });
+  // unit: Ping exposed capture diagnostics as prose and pinned every new task to
+  // an emote label. Existing cases never exercised independent context/title mode.
+  it('accepts bounded separate context and explicit automatic naming without weakening legacy requests', () => {
+    const create = { type: 'tasks-request', kind: 'create', requestKey: 'new' };
+    expect(validPluginTaskRequest({ ...create, autoTitle: true })).toBe(true);
+    expect(validPluginTaskRequest(create)).toBe(false);
+    expect(validPluginTaskRequest({ ...create, title: 'Chosen title' })).toBe(true);
+    expect(validPluginTaskRequest({ ...create, autoTitle: true, title: 'Conflicting title' })).toBe(false);
+    const send = { type: 'tasks-request', kind: 'send', taskId: 'task', requestKey: 'send', expectedRevision: 1, text: 'Look here' };
+    expect(validPluginTaskRequest({ ...send, context: 'Window contents' })).toBe(true);
+    expect(validPluginTaskRequest({ ...send, context: { system: 'not allowed' } })).toBe(false);
+    expect(validPluginTaskRequest({ ...send, context: 'x'.repeat(32769) })).toBe(false);
+  });
   it('bounds the complete JSON plan without truncating scope or breaking representative 200-item batches', () => {
     const item = {label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'测'.repeat(2600)};
     const plan = {concurrency:4,task:'c'.repeat(8000),items:Array.from({length:200},(_,i)=>({...item,label:'w'+i}))};
@@ -15,6 +44,26 @@ describe('plugin task pipe', () => {
     expect(isPluginTeamPlanWithinBudget({task:'\n'.repeat(room)})).toBe(false);
   });
   const ghost = { enabled: true, taskCapabilityApproved: true, approval: {state:'approved', revision:'r'}, manifest: { agent: { tasks: true } } } as InstalledGhost;
+  // unit: the creation API must accept a permission choice, without accepting a
+  // grant or a permission change on existing tasks. Legacy tests only omitted it.
+  it('advertises and forwards supported creation permissions without granting authority', async () => {
+    const handler = vi.fn(async () => ({ taskId: 'created' }));
+    const deps = { getGhost: () => ghost, handler, isCurrent: () => true };
+    const create = { type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'Work' };
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
+      .toMatchObject({ ok: true, data: { createPermissionMode: true } });
+    for (const permissionMode of ['ask', 'auto', 'bypassPermissions']) {
+      const request = { ...create, permissionMode };
+      expect(await handlePluginTaskRequest('p', request, deps)).toMatchObject({ ok: true });
+      expect(handler).toHaveBeenLastCalledWith('p', request);
+    }
+    for (const permissionMode of ['acceptEdits', 'plan', 'default', null, 1]) {
+      expect(validPluginTaskRequest({ ...create, permissionMode })).toBe(false);
+    }
+    expect(validPluginTaskRequest({ ...create, permissionMode: 'auto', confirmed: true })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'send', taskId: 't', requestKey: 's',
+      text: 'Continue', expectedRevision: 1, permissionMode: 'auto' })).toBe(false);
+  });
   it('requires its own declared capability; errand alone grants nothing', async () => {
     const handler = vi.fn();
     const result = await handlePluginTaskRequest(

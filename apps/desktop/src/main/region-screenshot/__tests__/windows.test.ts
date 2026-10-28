@@ -101,6 +101,7 @@ function fakeWindow() {
     show: vi.fn(() => { visible = true; window.emit('show'); }),
     isDestroyed: () => destroyed,
     isVisible: () => visible,
+    getMediaSourceId: () => 'window:999:0',
     setVisibleOnAllWorkspaces: vi.fn(),
     setAlwaysOnTop: vi.fn(),
     setBounds: vi.fn(),
@@ -160,6 +161,44 @@ describe('screenshot window lifecycle', () => {
     closeAllPins();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  // Region detection: native hit-testing can replace the transparent front
+  // rectangle. Existing lifecycle tests never queried elements. Minimal input:
+  // two overlapping windows on an offset display; unit, no OS UI or real waits.
+  it('returns the corrected window in display coordinates and drops a query after the session closes', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'darwin' } }));
+    const monitor = { ...display, bounds: { x: -100, y: 100, width: 100, height: 100 } } as Display;
+    const overlay = pool.ensure(monitor)!;
+    const owner = overlay.window.webContents;
+    pool.markShellReady(owner, owner.mainFrame);
+    const captured = [
+      { handle: 1, pid: 1, rect: [-100, 100, 0, 200] as [number, number, number, number], snapRects: [[-100, 120, 0, 200] as [number, number, number, number]] },
+      { handle: 2, pid: 2, rect: [-90, 110, -10, 190] as [number, number, number, number] },
+    ];
+    const hit = vi.fn(async () => captured[1]);
+    const elements = vi.fn(async () => ({ rects: [[-80, 120, -50, 150]], preferredRect: [-80, 120, -50, 150] }));
+    const session = new RegionScreenshotSession({ pool, captures: [{ display: monitor, image }], helper: { windowAt: hit, elements } as unknown as SnapshotHelper, windows: captured, lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    await session.open();
+    // Snapshot defaults must reach the first paint on an offset display, before
+    // any ELEMENTS_AT reply; previous coverage only inspected query conversion.
+    const begin = vi.mocked(owner.send).mock.calls.find(([name]) => name === 'region-screenshot:begin')![1];
+    expect(begin.windows[0].snapRects).toEqual([{ x: 0, y: 20, width: 100, height: 80 }]);
+    await expect(session.elementsAt(owner, owner.mainFrame, session.token, 0, 25, 25)).resolves.toEqual({
+      window: { id: 1, rect: { x: 10, y: 10, width: 80, height: 80 } },
+      rects: [{ x: 20, y: 20, width: 30, height: 30 }],
+      preferredRect: { x: 20, y: 20, width: 30, height: 30 },
+    });
+    expect(hit).toHaveBeenCalledWith(captured, -75, 125, [999]);
+    expect(elements).toHaveBeenCalledWith(captured[1], -75, 125);
+    hit.mockClear();
+    await expect(session.elementsAt(owner, owner.mainFrame, 'old-token', 0, 25, 25)).resolves.toBeNull();
+    await expect(session.elementsAt(owner, owner.mainFrame, session.token, 0, 125, 25)).resolves.toBeNull();
+    expect(hit).not.toHaveBeenCalled();
+    const pending = session.elementsAt(owner, owner.mainFrame, session.token, 0, 25, 25);
+    session.cancel(owner, owner.mainFrame, session.token);
+    await expect(pending).resolves.toBeNull();
+    expect(elements).toHaveBeenCalledTimes(1);
   });
 
   // 用户反馈：打开截图时整屏缩放。实机验证 Aura 动画；unit 保护临时开关
@@ -289,7 +328,10 @@ describe('screenshot window lifecycle', () => {
 
   // Auto scrolling operates on the source app: stale tokens must never trigger it,
   // and stopping while a frame is pending must prevent the next wheel event. tier: unit.
-  it('confines automatic scrolling to the owner and stops before a pending frame completes', async () => {
+  // A transparent desktop overlay can precede the browser in CGWindow order.
+  // Unit: resolve the real input window, and cancel a pending resolution on Stop.
+  it.each(['darwin', 'win32'])('confines automatic scrolling to the owner on %s and stops pending input', async (platform) => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));
     const largeDisplay = { ...display, bounds: { x: 0, y: 0, width: 1280, height: 900 }, scaleFactor: 1 };
     mocks.screen.getAllDisplays.mockReturnValue([largeDisplay]);
     const overlay = pool.ensure(largeDisplay)!;
@@ -300,13 +342,28 @@ describe('screenshot window lifecycle', () => {
     const source = { getSize: () => ({ width: 1280, height: 900 }), toBitmap: () => Buffer.alloc(1280 * 900 * 4), crop: () => crop } as unknown as NativeImage;
     const scroll = vi.fn(async () => true);
     const target = { handle: 99, pid: 1, rect: [0, 0, 1280, 900] as [number, number, number, number] };
-    const session = new RegionScreenshotSession({ pool, captures: [{ display: largeDisplay, image: source }], helper: { scroll } as unknown as SnapshotHelper, windows: [target], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    const scrollTarget = vi.fn(async () => target);
+    const candidates = platform === 'darwin' ? [{ ...target, handle: 98, pid: 2 }, target] : [target];
+    const session = new RegionScreenshotSession({ pool, captures: [{ display: largeDisplay, image: source }], helper: { scroll, scrollTarget } as unknown as SnapshotHelper, windows: candidates, lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
     await session.open();
     session.painted(owner, owner.mainFrame, session.token);
     session.startLive(owner, owner.mainFrame, session.token, 'scroll', { x: 100, y: 100, width: 400, height: 300 });
     expect(session.autoScroll(owner, owner.mainFrame, 'stale', true)).toBe(false);
     expect(session.autoScroll(owner, {} as Electron.WebFrameMain, session.token, true)).toBe(false);
     expect(session.autoScroll(owner, owner.mainFrame, session.token, true)).toBe(true);
+    if (platform === 'darwin') {
+      let resolveTarget!: (value: typeof target) => void;
+      scrollTarget.mockImplementationOnce(() => new Promise(done => { resolveTarget = done; }));
+      mocks.liveCapture.mockResolvedValueOnce(bitmap);
+      const resolving = session.liveFrame(owner, owner.mainFrame, session.token, false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.autoScroll(owner, owner.mainFrame, session.token, false)).toBe(true);
+      resolveTarget(target);
+      expect((await resolving)?.autoScrolling).toBe(false);
+      expect(scroll).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(session.autoScroll(owner, owner.mainFrame, session.token, true)).toBe(true);
+    }
     mocks.liveCapture.mockResolvedValueOnce(bitmap);
     expect((await session.liveFrame(owner, owner.mainFrame, session.token, false))?.autoScrolling).toBe(true);
     expect(scroll).toHaveBeenCalledExactlyOnceWith(target, 300, 250, -60);

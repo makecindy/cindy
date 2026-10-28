@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
+    "sourceLocalAppId": "應用程式 ID：{{id}}",
     "failedSamplingAttempt": "此回覆未完成，內容僅供參考。",
     "moreActions": "更多訊息操作",
     "reply": "回覆",

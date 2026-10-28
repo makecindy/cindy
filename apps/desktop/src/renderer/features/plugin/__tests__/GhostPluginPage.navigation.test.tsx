@@ -405,7 +405,7 @@ describe('plugin page return navigation', () => {
     { id: 'personal-plugin', namespace: 'org', namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'privatePlugin' },
     { id: 'personal-plugin', namespace: null, namespaceState: 'pending', approval: 'approved', reason: 'identityPending' },
     { id: 'personal-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'invalid', reason: 'approvalRequired' },
-  ])('explains why $id cannot be published ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
+  ])('keeps publishing restrictions out of use details for $id ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
     const installed = {
       manifest: { ...detail.manifest, id, name: 'Installed Plugin' },
       dir: '/tmp/brain/' + id, namespace, namespaceState, publishingSource: { kind: 'local', source: 'manual' },
@@ -415,9 +415,9 @@ describe('plugin page return navigation', () => {
     window.electronAPI.pluginMarket.snapshot = async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
     render(page('/plugins'));
     fireEvent.click(await screen.findByText('Installed Plugin'));
-    fireEvent.click(screen.getByText('settings.ghosts.contribution.versionUpdates'));
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
-    expect(screen.getByText('settings.ghosts.contribution.unavailable.' + reason)).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.contribution.unavailable.' + reason)).toBeNull();
   });
 
   it('offers only locally publishable exact installations and opens a read-only package summary without uploading or publishing', async () => {

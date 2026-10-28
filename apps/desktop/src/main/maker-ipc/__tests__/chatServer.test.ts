@@ -380,6 +380,31 @@ describe('Chat Server result delivery and refresh', () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}`, 'PATCH', expect.objectContaining({ name: 'Draft', expectedRevision: 7 }));
   });
+  // Unit: renderer filtering alone left older servers callable with bot targets.
+  // Exercise production manage with a nonhuman/left target and the legacy bot-owner
+  // recovery path; assertions cover rejected writes and the delegated HTTP identity.
+  it.each(['bot', 'integration', 'left', 'human', 'legacy'] as const)('validates the ownership transfer recipient (%s) before sending', async mode => {
+    const targetId = mode === 'legacy' ? selfId : botId;
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: mode === 'legacy' ? 'admin' : 'owner' },
+        { id: botId, kind: mode === 'bot' || mode === 'legacy' ? 'bot' : mode === 'integration' ? 'integration' : 'human',
+          ownerActorId: mode === 'legacy' ? selfId : botId, state: mode === 'left' ? 'left' : 'joined', role: mode === 'legacy' ? 'owner' : 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const requestsStart = fixture.requests.length;
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'transfer', actorId: targetId } });
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/transfer` && method === 'POST');
+    if (mode === 'human' || mode === 'legacy') {
+      expect(result).toEqual({ ok: true });
+      expect(writes).toEqual([[`/conversations/${roomId}/transfer`, 'POST', { actorId: targetId, operationId: expect.any(String) }]]);
+      expect(fixture.requests.slice(requestsStart).find(r => r.url.endsWith('/transfer'))?.actor).toBe(mode === 'legacy' ? botId : selfId);
+    } else {
+      expect(result).toEqual({ ok: false, errorCode: mode === 'left' ? 'MEMBER_NOT_FOUND' : 'HUMAN_OWNER_REQUIRED' });
+      expect(writes).toEqual([]);
+    }
+  });
   // Group avatar regression: exercise the production manage entry, real image
   // validation and HTTP payload, with only the network/image decoder faked.
   it.each(['set', 'reset', 'keep', 'invalid', 'unsupported', 'upload-failure', 'account-change'] as const)(

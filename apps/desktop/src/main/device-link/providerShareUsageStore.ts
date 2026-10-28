@@ -154,24 +154,46 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
   const now = options.now ?? Date.now;
   let rows: Map<string, ProviderShareUsageRow> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // Missing data on/before this local date can affect a rolling snapshot until it ages out.
+  let incompleteThroughDay: string | null = null;
   let writing: Promise<void> = Promise.resolve();
 
   const keyOf = (row: Pick<ProviderShareUsageRow, 'day' | 'shareId' | 'memberId' | 'kind' | 'providerId' | 'model'>) =>
     JSON.stringify([row.day, row.shareId, row.memberId, row.kind, row.providerId, row.model]);
 
+  function markIncomplete(day?: unknown, persist = true): void {
+    const today = localDay(now());
+    let through = today;
+    if (typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day) && day <= today) {
+      const [year, month, date] = day.split('-').map(Number);
+      if (localDay(new Date(year!, month! - 1, date!).getTime()) === day) through = day;
+    }
+    if (!incompleteThroughDay || through > incompleteThroughDay) {
+      incompleteThroughDay = through;
+      // Persist detection even without a new usage receipt; reopening must not move the boundary.
+      if (persist || through !== day) scheduleFlush();
+    }
+  }
+
   function load(): Map<string, ProviderShareUsageRow> {
     if (rows) return rows;
     rows = new Map();
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { version?: unknown; rows?: unknown };
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+        version?: unknown; rows?: unknown; incomplete?: unknown; incompleteThroughDay?: unknown;
+      };
+      if (parsed.incompleteThroughDay !== undefined) markIncomplete(parsed.incompleteThroughDay, false);
+      else if (parsed.incomplete === true) markIncomplete(); // Migrate the old undated marker once.
       if (parsed.version === FILE_VERSION && Array.isArray(parsed.rows)) {
         for (const raw of parsed.rows) {
           const row = parseRow(raw);
           if (row) rows.set(keyOf(row), row);
+          else markIncomplete((raw as { day?: unknown } | null)?.day);
         }
-      }
-    } catch {
-      // 没有文件或文件损坏：从空账本开始。
+      } else markIncomplete();
+    } catch (error) {
+      // A missing ledger is empty; unreadable/corrupt data must not become a measured 0%.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') markIncomplete();
     }
     return rows;
   }
@@ -187,7 +209,9 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
   async function writeNow(): Promise<void> {
     const map = load();
     prune(map);
-    const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()] });
+    if (incompleteThroughDay && incompleteThroughDay < providerShareUsageRangeStart('7d', now())!) incompleteThroughDay = null;
+    const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()],
+      ...(incompleteThroughDay ? { incomplete: true, incompleteThroughDay } : {}) });
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
     try {
@@ -208,6 +232,21 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
   }
 
   return {
+    /** Same member/provider only, today's local calendar date plus six preceding dates. */
+    memberTokenSnapshot(shareIds: ReadonlySet<string>, providerId: string, memberId: string, at = now()) {
+      const start = providerShareUsageRangeStart('7d', at)!;
+      const end = localDay(at);
+      const date = new Date(at);
+      const totals = new Map<string, number>();
+      for (const row of load().values()) {
+        if (!shareIds.has(row.shareId) || row.memberId !== memberId || row.providerId !== providerId
+          || row.day < start || row.day > end) continue;
+        totals.set(row.model, (totals.get(row.model) ?? 0) + row.inputTokens + row.outputTokens);
+      }
+      return { available: !incompleteThroughDay || incompleteThroughDay < start, windowStart: start, windowEnd: end,
+        nextWindowAt: new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime(),
+        models: [...totals].map(([model, tokens]) => ({ model, tokens })) };
+    },
     /** memberKey：这一轮在哪台组内电脑运行(本机为 `local`)。 */
     record(
       shareId: string,

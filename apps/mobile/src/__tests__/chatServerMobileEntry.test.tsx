@@ -380,6 +380,25 @@ it('clears access on everyone member-read rejection and ignores an older authori
   await act(async () => { chat.reload(); });
   expect(chat.state.kind).toBe('ready');
 });
+it('deduplicates computer copies before the server roster discovers a new group', async () => {
+  h.auth.accountGeneration++;
+  h.targets = ['mac', 'pc'].map(deviceId => ({ deviceId, deviceName: deviceId }));
+  h.legacy.isOnline.mockReturnValue(true);
+  h.legacy.items = h.targets.map(host => ({ key: host.deviceId, host, item: {
+    ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [],
+  } }));
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let finish!: (rooms: typeof room[]) => void;
+  const pending = new Promise<typeof room[]>(resolve => { finish = resolve; });
+  h.auth.apiFetch.mockImplementation((path, options) => path.startsWith('/v1/conversations?') ? pending : original(path, options));
+  await render();
+  expect(roster.items.map(row => row.item.ref.id)).toEqual([id]);
+  expect(roster.items[0].host.deviceId).toBe('mac');
+  await act(async () => { finish([room]); });
+  expect(roster.items.map(row => row.item.ref.id)).toEqual([id]);
+  expect(roster.items[0].host.deviceId).toBe('');
+});
+
 it('deduplicates server copies from multiple computers while retaining a local legacy group', async () => {
   h.legacy.items = ['mac', 'pc'].map(deviceId => ({ key: deviceId, host: { deviceId, deviceName: deviceId }, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [] } }));
   h.legacy.isOnline.mockReturnValue(true);

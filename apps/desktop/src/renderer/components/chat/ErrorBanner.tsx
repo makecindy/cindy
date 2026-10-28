@@ -1,3 +1,4 @@
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
@@ -364,7 +365,7 @@ export function ErrorBanner({
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
-  const remoteErrorKey = remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
+  const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
@@ -412,7 +413,7 @@ export function ErrorBanner({
   });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
-  const hideRetry =
+  const hideRetry = isMemberBudgetPaused(error) ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
     isGatewayProxyTokenInvalid ||

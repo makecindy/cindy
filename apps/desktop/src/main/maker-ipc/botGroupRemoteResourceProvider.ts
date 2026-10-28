@@ -48,7 +48,7 @@ import {
   type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
-import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -174,7 +174,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       title: group.name,
       subtitle: group.members.map((member) => member.name).join('、'),
       ...(preview ? { preview } : {}),
-      timestamp: group.lastMessage?.createdAt ?? group.updatedAt,
+      timestamp: botGroupActivityAt(group),
       lastReplyAt: group.lastReplyAt,
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
     },

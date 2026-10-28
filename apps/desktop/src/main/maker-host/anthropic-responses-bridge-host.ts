@@ -1,3 +1,4 @@
+import { captureGuestRequestUsage } from './guest-provider-route-store.js';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
@@ -763,6 +764,7 @@ export function getPiNativeSubscriptionHandler(
       headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
       let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
+      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (isOpenAiSubscriptionProviderId(providerId)) {
@@ -780,6 +782,7 @@ export function getPiNativeSubscriptionHandler(
         } catch (error) {
           decodeError = error;
         }
+        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
         const profile = withOpenaiContextProfileModel(current);
         current = profile ?? current;
         let changed = profile !== null;
@@ -862,8 +865,8 @@ export function getPiNativeSubscriptionHandler(
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res, recordUsage
-        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', recordUsage) : undefined);
+      await pipeNativeResponse(response, res, recordUsage || recordGuestUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', value => { recordUsage?.(value); recordGuestUsage?.(value); }) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot

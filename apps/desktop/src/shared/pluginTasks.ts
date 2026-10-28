@@ -1,11 +1,16 @@
 import type { PluginMessageAttachment } from './pluginAttachments.js';
-/** Ordinary local Session API. No Bot/Orca identity or permission override is accepted. */
+/** Ordinary local Session API. Identity and permission grants remain Host-owned. */
 export interface PluginTaskRoute {
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+}
+export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
+export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
+export function isPluginTaskPermissionMode(value: unknown): value is PluginTaskPermissionMode {
+  return typeof value === 'string' && (PLUGIN_TASK_PERMISSION_MODES as readonly string[]).includes(value);
 }
 export type PluginTaskRunStatus =
   | 'queued'
@@ -85,8 +90,12 @@ export type PluginTaskRequest = (
       /** Optional active tool-call context; Host resolves its task and checks plugin ownership. */
       callId?: string;
       requestKey: string;
-      title: string;
+      title?: string;
+      /** Opt in to Host naming after the first accepted message; omit title. */
+      autoTitle?: boolean;
       route?: PluginTaskRoute;
+      /** New task only; the plugin's Host card ceiling applies only when enabled. */
+      permissionMode?: PluginTaskPermissionMode;
       isolatedWorkspace?: boolean;
       /** Requires `agent.hiddenTasks`; creates the task as a background task. */
       hidden?: boolean;
@@ -106,6 +115,8 @@ export type PluginTaskRequest = (
       requestKey: string;
       expectedRevision: number;
       text: string;
+      /** Supplementary material, collapsed in the conversation but sent to the Agent. */
+      context?: string;
       attachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;

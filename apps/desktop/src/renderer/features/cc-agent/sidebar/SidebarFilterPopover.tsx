@@ -234,6 +234,7 @@ function MenuSubRow({
   value,
   valueNode,
   valueEmphasized = false,
+  filterReminder = false,
   Icon,
   contentClassName,
   children,
@@ -250,6 +251,7 @@ function MenuSubRow({
   valueNode?: ReactNode;
   /** 偏离默认值时右侧摘要转正文色，提示筛选生效。 */
   valueEmphasized?: boolean;
+  filterReminder?: boolean;
   contentClassName?: string;
   children: ReactNode;
 }) {
@@ -258,6 +260,7 @@ function MenuSubRow({
       <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
         <MenuItemIcon Icon={Icon} />
         <span className="truncate" title={label}>{label}</span>
+        {filterReminder && <FilterReminderDot inline />}
         <span
           className={cn(
             'ml-auto max-w-[96px] truncate text-right',
@@ -295,6 +298,7 @@ function SelectMenuItem({
   onSelect,
   Icon,
   tip,
+  filterReminder = false,
 }: {
   label: string;
   selected: boolean;
@@ -302,6 +306,7 @@ function SelectMenuItem({
   Icon?: LucideIcon;
   /** 可选 hover 说明(见 Option.tipKey);为空时 Tip 透明透传,不挂 tooltip。 */
   tip?: string;
+  filterReminder?: boolean;
 }) {
   return (
     // side="right":菜单本身贴着侧栏右缘,提示往上/下会压住相邻选项,往右才有空间
@@ -318,6 +323,7 @@ function SelectMenuItem({
       >
         <MenuItemIcon Icon={Icon} />
         <span className="truncate">{label}</span>
+        {filterReminder && <FilterReminderDot inline />}
         {selected && (
           <Check size={15} className="ml-auto shrink-0 text-[var(--msg-assistant-text)]" />
         )}
@@ -692,6 +698,7 @@ export function SidebarFilterPopover({
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskStatusHeading')}
                 value={statusValue}
+                filterReminder={status === 'archived'}
                 Icon={ListChecks}
               >
                 {STATUS_OPTIONS.map((option) => (
@@ -699,6 +706,7 @@ export function SidebarFilterPopover({
                     key={option.value}
                     label={t(option.labelKey)}
                     selected={status === option.value}
+                    filterReminder={status === 'archived' && option.value === 'archived'}
                     Icon={option.Icon}
                     onSelect={() => setStatus(option.value)}
                   />

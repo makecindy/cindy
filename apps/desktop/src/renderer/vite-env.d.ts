@@ -1590,6 +1590,10 @@ interface ElectronAPI {
     ) => () => void;
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
+    onModelPickerRequest: (callback: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) => () => void;
+    onModelPickerDismissed: (callback: (request: { requestId: string }) => void) => () => void;
+    resolveModelPicker: (requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
+    answerRemoteModelPicker: (viewId: string, requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
     /** taskView 槽:插件请求在指定任务的右侧栏打开 / 聚焦它的任务页页签(main 已资格审)。 */
     onTaskViewOpen: (
       callback: (payload: { instanceId: string; sessionId: string; focus?: true }) => void,

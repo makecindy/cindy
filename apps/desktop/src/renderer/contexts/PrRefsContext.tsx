@@ -616,6 +616,18 @@ export function usePrRefsForSession(sessionId: string): SessionPrRef[] {
   );
 }
 
+/** Bounded multi-task views reuse the same refs cache; unrelated changes keep the snapshot stable. */
+export function usePrRefsForSessions(sessionIds: readonly string[]): SessionPrRef[] {
+  const store = useContext(PrStoreContext);
+  const previous = useRef<SessionPrRef[]>([]);
+  const read = () => {
+    const next = sessionIds.flatMap(id => store.getRefs(id).slice(0, MAX_STATUS_QUERIES));
+    if (next.length !== previous.current.length || next.some((ref, i) => ref !== previous.current[i])) previous.current = next;
+    return previous.current;
+  };
+  return useSyncExternalStore(store.subscribe, read, read);
+}
+
 /** 单个 PR 的状态(按会话 + prStatusKey 订阅;结果未变时引用稳定)。列表行徽标专用。 */
 export function usePrStatus(sessionId: string, key: string): PrStatusResult | undefined {
   const store = useContext(PrStoreContext);

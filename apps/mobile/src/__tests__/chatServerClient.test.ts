@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
+import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
   revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
@@ -14,6 +16,51 @@ const message = (n: number): ChatMessage => ({ id: id(n), seq: String(9007199254
 const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099', messages: [], members: [
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
+
+describe('group list activity', () => {
+  it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
+    const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
+    const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });
+    const topic = chatRoomRow(room(3), { ...snapshot(), messages: [{ ...message(21), threadRootId: id(20), createdAt: '2026-10-12T12:00:00Z' }] });
+    expect(orderedBotGroups([old, fresh, topic], '', 'zh-CN').map(row => row.item.ref.id)).toEqual([id(3), id(2), id(1)]);
+  });
+
+  it('orders a new empty group by creation, without inventing a creation message or bumping on edits', () => {
+    const empty = { ...room(), created_at: '2026-10-10T12:00:00Z', updated_at: '2026-10-20T12:00:00Z' };
+    const row = chatRoomRow(empty, { ...snapshot(), room: empty });
+    expect(row.item.display.timestamp).toBe(Date.parse(empty.created_at));
+    expect(row.item.display.preview).toBe('');
+    expect(chatRoomRow(empty).item.display.timestamp).toBe(Date.parse(empty.created_at));
+  });
+
+  it('uses the newest topic reply even when the snapshot is unordered, excluding deleted messages', () => {
+    const main = { ...message(20), createdAt: '2026-10-10T12:00:00Z' };
+    const topic = { ...message(21), threadRootId: main.id, createdAt: '2026-10-11T12:00:00Z' };
+    const deleted = { ...message(22), deleted: true, createdAt: '2026-10-12T12:00:00Z' };
+    const row = chatRoomRow(room(), { ...snapshot(), messages: [main, deleted, topic] });
+    expect(row.item.display).toMatchObject({ timestamp: Date.parse(topic.createdAt), preview: '21' });
+  });
+
+  it('localizes shared joins for every reader without adding unread replies, then yields to a new message', () => {
+    const reply = { ...message(20), createdAt: '2026-10-10T12:00:00Z' };
+    const joined: ChatMessage = { ...message(21), origin: 'system', createdAt: '2026-10-11T12:00:00Z',
+      content: [{ type: 'card', namespace: 'cindy.membership', schemaRevision: 1, fallback: 'Taylor joined the group',
+        data: { type: 'member.joined', actorId: id(12), displayName: 'Taylor' } }] };
+    const value = { ...snapshot(), messages: [reply, joined] };
+    for (const self of [id(11), id(12)]) {
+      const display = chatRoomRow(room(), value, self).item.display;
+      expect(display).toMatchObject({
+        timestamp: Date.parse(joined.createdAt), lastReplyAt: Date.parse(reply.createdAt),
+      });
+      expect(resolveRemoteText(display.preview!, 'zh-CN')).toBe('Taylor加入了群聊');
+    }
+    const later = { ...message(22), createdAt: '2026-10-12T12:00:00Z' };
+    expect(chatRoomRow(room(), { ...value, messages: [reply, joined, later] }).item.display)
+      .toMatchObject({ timestamp: Date.parse(later.createdAt), preview: '22' });
+    expect(chatRoomRow(room(), { ...value, messages: [{ ...joined, origin: 'user' }] }).item.display.preview)
+      .toBe('Taylor joined the group');
+  });
+});
 
 // Merge regression: history generation changes while execution state is read.
 // Production load must retry, retaining both the new revision and fresh work.

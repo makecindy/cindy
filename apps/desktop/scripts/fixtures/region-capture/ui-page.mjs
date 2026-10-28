@@ -4,6 +4,7 @@ export default {
   real: 'RegionScreenshotOverlay, ScrollCaptureOverlay, LiveCapturePanel, ScrollCapture, CaptureRecorder, real Chromium canvas/MediaRecorder and GIF encoding',
   notCovered: 'Native screen acquisition, global keyboard sampling, macOS permissions and native save dialogs; frame source is synthetic.',
   cases: {
+    snapping: { about: 'Correct a transparent window guess, hover adjacent elements, cycle hierarchy and click to select' },
     default: { about: 'Scroll overlapping text, finish, export the actual stitched pixels' },
     idle: { about: 'Repainting before the first scroll keeps the gesture hint, then scrolling still exports a long image' },
     'preview-motion': { about: 'Prepending reveals new rows without jumping existing content; growth and scrolling share one animation' },
@@ -14,6 +15,21 @@ export default {
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'snapping') {
+      await page.getByText('180 × 140', { exact: true }).waitFor();
+      await ui.capture('first-element');
+      await page.mouse.move(400, 180);
+      await page.getByText('200 × 140', { exact: true }).waitFor();
+      await ui.capture('adjacent-element');
+      await page.mouse.wheel(0, -120);
+      await page.getByText('480 × 360', { exact: true }).waitFor();
+      await ui.capture('corrected-window');
+      await page.mouse.click(400, 180);
+      await page.mouse.move(650, 550);
+      assert.equal(await page.getByText('480 × 360', { exact: true }).count(), 1, 'click keeps the resolved window selected');
+      await ui.capture('selected');
+      return;
+    }
     if (ui.case === 'preview-motion') await page.emulateMedia({ reducedMotion: 'no-preference' });
     const isScroll = ['default', 'idle', 'preview-motion'].includes(ui.case);
     const button = async (key) => page.getByRole('button', { name: await ui.t(key), exact: true });

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('@cindy/maker-core', () => ({
   LOCAL_AGENT_CLIENT: Symbol('local-agent-client'),
   assertSendDispatched: (result: { accepted: boolean }) => {
@@ -15,7 +16,12 @@ vi.mock('@cindy/maker-core', () => ({
   },
 }));
 import { openLocalAgentRuntime } from '../runtime.js';
+import {
+  installLocalAgentVisibleSessionHost,
+  takeOverLocalAgentVisibleSession,
+} from '../visibleSessions.js';
 import type { AgentEvent } from '@cindy/maker-core';
+import { acquireSendToSessionLock } from '../../maker-ipc/sendToSessionLock.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -46,11 +52,17 @@ function handle(id: string) {
     }),
   };
 }
-async function fixture() {
+async function fixture(visible = false) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-local-runtime-'));
   cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
   const first = handle('first');
   const maker = { startLocalAgentSession: vi.fn(async () => first) };
+  const host = {
+    open: vi.fn(async (_options: any) => first),
+    persistInput: vi.fn(async (..._args: any[]) => {}),
+    close: vi.fn(async (_id: string, session: any) => session.close()),
+  };
+  installLocalAgentVisibleSessionHost(() => host as any);
   const events: unknown[] = [];
   const runtime = await openLocalAgentRuntime(
     maker as any,
@@ -72,6 +84,7 @@ async function fixture() {
       },
       access: 'none',
       tools: [],
+      ...(visible ? { visibleSession: { title: 'TapTap', clientId: 'com.taptap.pc' } } : {}),
     },
     {
       url: 'http://127.0.0.1:1/mcp/fixture',
@@ -80,7 +93,7 @@ async function fixture() {
     },
   );
   cleanups.push(() => runtime.close());
-  return { runtime, maker, first, directory, events };
+  return { runtime, maker, first, host, directory, events };
 }
 const image = { type: 'image', mimeType: 'image/png', data: Buffer.from('png').toString('base64') };
 async function inputFiles(directory: string) {
@@ -91,13 +104,153 @@ async function inputFiles(directory: string) {
 const message = { parts: [{ type: 'text', text: 'hello' }], effort: 'high' };
 
 describe('local client runtime lifecycle', () => {
+  // PR #7684: send persistence coverage did not exercise same-turn input.
+  // A failed image/database write must reject steer before provider delivery.
+  it('persists visible steer before delivery and never delivers a failed write', async () => {
+    const f = await fixture(true);
+    await f.runtime.call('send', { parts: message.parts });
+    const delivered = vi.fn();
+    f.first.steer.mockImplementation(async (...args: any[]) => {
+      await args[1]?.beforeProviderStart?.();
+      delivered();
+    });
+    f.host.persistInput.mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(f.runtime.call('steer', { parts: [image] })).rejects.toThrow('disk unavailable');
+    expect(delivered).not.toHaveBeenCalled();
+    expect(await inputFiles(f.directory)).toEqual([]);
+    f.host.persistInput.mockImplementationOnce(async () => {
+      expect(delivered).not.toHaveBeenCalled();
+    });
+    await f.runtime.call('steer', { parts: message.parts });
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
+  // #7631 review P0: the existing visible-session tests only mock persistence.
+  // A Cindy input must await close/handoff and fence all subsequent app input.
+  // Minimal input: one live visible runtime followed by a host takeover (integration).
+  it('fences the app before handing the visible task to Cindy', async () => {
+    const f = await fixture(true);
+    const entered = deferred(), finish = deferred();
+    cleanups.push(async () => { finish.resolve(); });
+    f.host.close.mockImplementationOnce(async () => {
+      entered.resolve();
+      await finish.promise;
+      await f.first.close();
+    });
+    let ready = false;
+    const takeover = takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!).then(() => {
+      ready = true;
+    });
+    await entered.promise;
+    expect(ready).toBe(false);
+    await expect(f.runtime.call('send', message)).rejects.toThrow('已关闭');
+    await expect(f.runtime.call('steer', message)).rejects.toThrow('已关闭');
+    finish.resolve();
+    await takeover;
+    expect(ready).toBe(true);
+    await takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!);
+    expect(f.host.close).toHaveBeenCalledTimes(1);
+    expect(f.first.send).not.toHaveBeenCalled();
+    f.first.onEvent.mock.calls[0][0]({ type: 'text', data: { text: 'private Cindy output' } } as AgentEvent);
+    expect(f.events).toEqual([]);
+  });
+
+  it('joins an API close queued behind the Cindy send lease without waiting on itself', async () => {
+    const f = await fixture(true);
+    const release = await acquireSendToSessionLock(f.runtime.visibleSessionId!);
+    cleanups.push(async () => { release(); });
+    const closing = f.runtime.close();
+    try {
+      await takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!, true);
+      expect(f.first.close).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+    await closing;
+    expect(f.host.close).toHaveBeenCalledOnce();
+  });
+
+  it('does not reopen an external engine waiting behind a Cindy takeover', async () => {
+    const f = await fixture(true);
+    const release = await acquireSendToSessionLock(f.runtime.visibleSessionId!);
+    cleanups.push(async () => { release(); });
+    await f.runtime.call('instructions', { instructions: 'new instructions' });
+    const sending = f.runtime.call('send', message);
+    const rejected = expect(sending).rejects.toThrow('已关闭');
+    try {
+      await vi.waitFor(() => expect(f.first.close).toHaveBeenCalledOnce());
+      await takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!, true);
+    } finally {
+      release();
+    }
+    await rejected;
+    expect(f.host.open).toHaveBeenCalledOnce();
+    expect(f.first.send).not.toHaveBeenCalled();
+  });
+
+  it('blocks takeover on failed handoff and retries without reopening the app runtime', async () => {
+    const f = await fixture(true);
+    f.host.close.mockRejectedValueOnce(new Error('handoff unavailable'));
+    await expect(takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!))
+      .rejects.toThrow('handoff unavailable');
+    await expect(f.runtime.call('send', message)).rejects.toThrow('已关闭');
+    await takeOverLocalAgentVisibleSession(f.runtime.visibleSessionId!);
+    expect(f.host.close).toHaveBeenCalledTimes(2);
+    expect(f.host.open).toHaveBeenCalledTimes(1);
+  });
+
+  // #7631: publishing a task must retain the app tool boundary, save the
+  // original input before dispatch, and close through the task handoff path.
+  it('publishes opted-in sessions with durable input and the same app capability', async () => {
+    const f = await fixture(true);
+    expect(f.maker.startLocalAgentSession).not.toHaveBeenCalled();
+    expect(f.runtime.visibleSessionId).toEqual(expect.any(String));
+    expect(f.host.open.mock.calls[0][0]).toMatchObject({
+      id: f.runtime.visibleSessionId,
+      title: 'TapTap',
+      workspaceKind: 'dialogue',
+      makerMemoryEnabled: false,
+    });
+    f.first.send.mockImplementation(async (...args: any[]) => {
+      await args[1].onAccepted();
+      return { accepted: true };
+    });
+    await f.runtime.call('send', { parts: message.parts });
+    await vi.waitFor(() => expect(f.host.persistInput).toHaveBeenCalledTimes(1));
+    expect(f.host.persistInput.mock.calls[0][1]).toEqual({ type: 'user', content: message.parts });
+    expect((f.first.send.mock.calls[0] as any)[0].content.at(-1).text).toContain(
+      'app_id: com.taptap.pc',
+    );
+    await f.runtime.close();
+    expect(f.host.close).toHaveBeenCalledWith(f.runtime.visibleSessionId, f.first);
+  });
+
+  it('does not dispatch an opted-in input if its durable task record cannot be saved', async () => {
+    const f = await fixture(true);
+    f.host.persistInput.mockRejectedValueOnce(new Error('disk unavailable'));
+    const dispatched = vi.fn();
+    f.first.send.mockImplementation(async (...args: any[]) => {
+      await args[1].onAccepted();
+      dispatched();
+      return { accepted: true };
+    });
+    await f.runtime.call('send', { parts: message.parts });
+    await vi.waitFor(() =>
+      expect(f.events).toContainEqual({
+        type: 'turn_end',
+        data: { status: 'failed', message: 'Cindy 未能完成本次发送。' },
+      }),
+    );
+    expect(dispatched).not.toHaveBeenCalled();
+  });
+
   it('passes slash-prefixed app text as a literal instead of rejecting paths or running a native command', async () => {
     const f = await fixture();
     await f.runtime.call('send', { parts: [{ type: 'text', text: '/workspace/example' }] });
     expect(f.first.send).toHaveBeenCalledWith({
       type: 'user',
       content: [{ type: 'text', text: ' /workspace/example' }],
-    });
+    }, undefined);
   });
   it('keeps the app execution busy across a provider continuation until Session observes its final boundary', async () => {
     const f = await fixture();
@@ -194,7 +347,10 @@ describe('local client runtime lifecycle', () => {
       held = deferred(),
       second = handle('second'),
       third = handle('third');
-    cleanups.push(() => second.close(), () => third.close());
+    cleanups.push(
+      () => second.close(),
+      () => third.close(),
+    );
     f.maker.startLocalAgentSession
       .mockImplementationOnce(async () => {
         entered.resolve();

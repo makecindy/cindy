@@ -102,6 +102,8 @@ import {
   CINDY_PI_TEXT_ONLY_INPUT_PREFIX,
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
+  CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
+  projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
 import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
@@ -608,7 +610,7 @@ interface ConfigHomeCleanupLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
 }
 
-type PiStartupStage = 'mcp-ready' | 'pi-spawn' | 'rpc-ready' | 'first-model-request';
+type PiStartupStage = 'mcp-ready' | 'pi-spawn' | 'rpc-ready' | 'first-prompt-rpc';
 
 function logPiStartupStage(
   logger: AgentDeps['logger'],
@@ -3541,6 +3543,10 @@ export class PiAgent extends BaseAgent {
     };
     let activeToolsDisabled = false;
     let textOnlyPolicyReady = false;
+    let providerRequestSequence = 0;
+    let providerRequestObservedAt: number | undefined;
+    let providerTurnObservedAt: number | undefined;
+    let providerFirstOutputLogged = false;
     const textOnlyInput = (text: string): string => {
       if (!activeToolsDisabled) return text;
       if (!textOnlyPolicyReady) throw new Error('Pi text-only input policy is unavailable.');
@@ -5753,6 +5759,52 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          // Native retries remain within one agent_start/settled lifecycle.
+          // A new start also recovers diagnostics if the previous turn omitted
+          // settled (abort/retry exhaustion), without changing turn execution.
+          if (event.type === 'agent_start') {
+            providerRequestObservedAt = undefined;
+            providerTurnObservedAt = undefined;
+            providerFirstOutputLogged = false;
+          }
+          if (!remote && event.type === 'extension_ui_request' && event.method === 'notify' &&
+              typeof event.message === 'string' && event.message.startsWith(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)) {
+            const prefix = `${CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX}${runtimeInstanceId}:`;
+            if (event.message.startsWith(prefix) && event.message.length <= prefix.length + 1024) {
+              try {
+                const metadata = projectPiRequestDiagnostics(JSON.parse(event.message.slice(prefix.length)));
+                providerRequestObservedAt = performance.now();
+                providerTurnObservedAt ??= providerRequestObservedAt;
+                providerFirstOutputLogged = false;
+                providerRequestSequence++;
+                this.deps.logger.debug('pi request stage', {
+                  startupTraceId, requestSequence: providerRequestSequence,
+                  stage: 'provider-request-prepared', ...metadata,
+                });
+              } catch { /* Invalid diagnostic frames never enter logs or user UI. */ }
+            }
+            return;
+          }
+          if (providerRequestObservedAt !== undefined) {
+            const update = event.assistantMessageEvent as { type?: unknown } | undefined;
+            if (!providerFirstOutputLogged && event.type === 'message_update' &&
+                ['text_delta', 'thinking_delta', 'toolcall_start', 'toolcall_delta'].includes(String(update?.type))) {
+              providerFirstOutputLogged = true;
+              this.deps.logger.debug('pi request stage', {
+                startupTraceId, requestSequence: providerRequestSequence, stage: 'first-output',
+                elapsedMs: Math.max(0, performance.now() - providerRequestObservedAt),
+              });
+            }
+            if (event.type === 'agent_settled') {
+              this.deps.logger.debug('pi request stage', {
+                startupTraceId, requestSequence: providerRequestSequence, stage: 'agent-settled',
+                elapsedMs: Math.max(0, performance.now() - providerRequestObservedAt),
+                turnElapsedMs: Math.max(0, performance.now() - providerTurnObservedAt!),
+              });
+              providerRequestObservedAt = undefined;
+              providerTurnObservedAt = undefined;
+            }
+          }
           if (event.type === 'agent_start' && !ctx.pendingHostTurnStartToken) {
             syncNativePlanMode?.();
           }
@@ -6643,7 +6695,7 @@ export class PiAgent extends BaseAgent {
 
     const deps = this.deps;
     const agentKind = this.kind;
-    let firstModelRequestLogged = false;
+    let firstPromptRpcLogged = false;
 
     // 取消边界:main 的队列协调器在 Stop/close 抢占时会 abort 传入的 signal 并撤下
     // steer 标记。send/steer 必须在**构建 prompt(读附件是 async)前后、投递 RPC 前**
@@ -7797,9 +7849,6 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
-          const firstModelRequestStartedAt = firstModelRequestLogged ? undefined : Date.now();
-          if (firstModelRequestStartedAt !== undefined) firstModelRequestLogged = true;
-          let firstModelRequestStatus: 'ok' | 'degraded' = 'degraded';
           try {
             doctorCommandActivity.enter(isDoctorCommand);
             const { resp, pendingTurnStartToken } = await runExclusivePiRpc(async () => {
@@ -7821,6 +7870,14 @@ export class PiAgent extends BaseAgent {
               }
               const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
               promptRequestStarted = true;
+              const firstPromptRpcStartedAt = firstPromptRpcLogged ? undefined : Date.now();
+              firstPromptRpcLogged = true;
+              const logPromptResponse = (success: boolean) => {
+                if (firstPromptRpcStartedAt !== undefined) logPiStartupStage(
+                  deps.logger, startupTraceId, 'first-prompt-rpc', firstPromptRpcStartedAt,
+                  success ? 'ok' : 'degraded',
+                );
+              };
               const resp = await proc.request(command, {
                 timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
                 // Prompt acceptance may legitimately span multiple compaction
@@ -7828,6 +7885,12 @@ export class PiAgent extends BaseAgent {
                 // preflight, so a healthy long compaction is not killed at 10m.
                 refreshTimeoutOnEvent: (event) =>
                   PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+              }).then(response => {
+                logPromptResponse(response.success);
+                return response;
+              }, error => {
+                logPromptResponse(false);
+                throw error;
               });
               // Only consume the one-shot choice after acceptance. A confirmed
               // rejection must preserve it for a retry without a message snapshot.
@@ -7839,7 +7902,6 @@ export class PiAgent extends BaseAgent {
               }
               return { resp, pendingTurnStartToken };
             });
-            firstModelRequestStatus = resp.success ? 'ok' : 'degraded';
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
@@ -7965,15 +8027,6 @@ export class PiAgent extends BaseAgent {
               }
             }
           } finally {
-            if (firstModelRequestStartedAt !== undefined) {
-              logPiStartupStage(
-                deps.logger,
-                startupTraceId,
-                'first-model-request',
-                firstModelRequestStartedAt,
-                firstModelRequestStatus,
-              );
-            }
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
             }

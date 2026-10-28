@@ -1,3 +1,5 @@
+import { MemberBudgetEditor } from './MemberBudgetEditor';
+import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../../shared/providerShareBudget';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -67,6 +69,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   const [storedView, setView] = useState<RemoteModelAccessView | null>(null);
   const loadedOwner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const [models, setModels] = useState<RemoteModelSelection>(null);
+  const [memberBudget, setMemberBudget] = useState<ProviderShareMemberBudget | null>(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -82,7 +85,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
       if (request !== sequence.current || !isDataOwnerGenerationCurrent(owner)) return;
       if (next?.version !== 1) { setError(key + 'needsUpdate'); return; }
       loadedOwner.current = owner;
-      setView(next); setModels(next.models); setError(null);
+      setView(next); setModels(next.models); setMemberBudget(next.memberBudget ?? null); setError(null);
     }, (reason) => {
       if (request === sequence.current && isDataOwnerGenerationCurrent(owner)) setError(key + (isProviderManagementOutdated(reason) ? 'needsUpdate' : 'loadFailed'));
     });
@@ -96,10 +99,11 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   const rows = [...available, ...missing].filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(search.toLowerCase()));
   const save = async () => {
     if (inFlight.current || !view) return;
+    if (memberBudget && !isProviderShareMemberBudget(memberBudget)) { setError('providerShare.memberBudget.invalid'); return; }
     inFlight.current = true; setSaving(true); setError(null);
     const request = ++sequence.current;
     try {
-      const next = await providerShareManagementCommand({ action: 'set-model-access', providerId, memberId, models }, deviceId);
+      const next = await providerShareManagementCommand({ action: 'set-model-access', providerId, memberId, models, ...(memberId && view.budgetSupported ? { memberBudget } : {}) }, deviceId);
       if (request === sequence.current && isDataOwnerGenerationCurrent(owner)) {
         if (next?.version !== 1) { setError(key + 'needsUpdate'); return; }
         if (onSaved) onSaved(next); else onClose();
@@ -110,14 +114,15 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   };
   return (
     <ProviderShareDialog open busy={saving} returnFocusTo={returnFocusTo} initialFocusRef={searchRef} onOpenChange={(next) => { if (!next) onClose(); }} maxWidth={520}>
-      <ProviderShareDialogTitle>{t(key + (memberId ? 'memberTitle' : 'choose'))}</ProviderShareDialogTitle>
+      <ProviderShareDialogTitle className="shrink-0">{view?.providerName ? `${view.providerName} · ` : ''}{t(key + (memberId ? 'memberTitle' : 'choose'))}</ProviderShareDialogTitle>
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
       <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t(key + (memberId ? 'memberDescription' : 'description'), { name: memberName })}</p>
       <label className="mt-4 flex min-h-8 items-center gap-2 text-13 leading-[1.5] text-[var(--text-primary)]">
         <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" checked={models === null} disabled={!view || saving} onChange={(event) => setModels(event.target.checked ? null : [])} />
         {t(key + (memberId ? 'inherit' : 'allFuture'))}
       </label>
       <div className="mt-3"><Input inputRef={searchRef} value={search} onChange={setSearch} placeholder={t(key + 'search')} aria-label={t(key + 'search')} disabled={!view || saving} /></div>
-      <div className="mt-2 max-h-72 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-default)] p-2" aria-busy={!view}>
+      <div className="mt-2 max-h-72 shrink-0 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-default)] p-2" aria-busy={!view}>
         {rows.map((model) => {
           const allowed = providerAllows(model.id);
           const checked = models === null ? allowed : models.includes(model.id);
@@ -132,8 +137,13 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
         })}
         {rows.length === 0 && <p role="status" className="p-2 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(key + (view ? 'empty' : 'loading'))}</p>}
       </div>
+      {memberId && view?.budgetSupported && <MemberBudgetEditor value={memberBudget} onChange={setMemberBudget}
+        budgetModelIds={view.budgetModelIds} recommendationModelIds={view.recommendationModelIds}
+        models={available.filter(model => providerAllows(model.id) && (models === null || models.includes(model.id)))}
+        disabled={saving} canAddRules={view.budgetAvailable === true} status={view.budgetStatus} />}
       {models?.length === 0 && <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(key + 'none')}</p>}
       {error && <ErrorNotice role="alert" className="mt-3" message={t(error)} />}
+      </div>
       <ProviderShareDialogFooter>
         <Button variant="secondary" disabled={saving} onClick={onClose}>{t('settings.providers.button.cancel')}</Button>
         <Button variant="primary" disabled={!view || saving} onClick={() => { void save(); }}>{t('settings.providers.custom.save')}</Button>

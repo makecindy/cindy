@@ -137,15 +137,18 @@ export function installLocalAgentHost(maker: Maker): void {
         return localAgentModels(providers, maker.listAvailableAgents());
       },
       async approve(signal, client) {
-        const approved = await confirmLocalAgent({
-          title: t('localAgent.connectTitle'),
-          message: t('localAgent.connectMessage').replaceAll('{{app}}', () => client.name),
-          detail: `${t('localAgent.connectDetail')}\n\n${t('localAgent.clientIdentity')
-            .replaceAll('{{id}}', () => client.id)
-            .replaceAll('{{version}}', () => client.version ?? '—')}`,
-          confirmText: t('localAgent.allow'),
-          cancelText: t('localAgent.cancel'),
-        }, signal);
+        const approved = await confirmLocalAgent(
+          {
+            title: t('localAgent.connectTitle'),
+            message: t('localAgent.connectMessage').replaceAll('{{app}}', () => client.name),
+            detail: `${t('localAgent.connectDetail')}\n\n${t('localAgent.clientIdentity')
+              .replaceAll('{{id}}', () => client.id)
+              .replaceAll('{{version}}', () => client.version ?? '—')}`,
+            confirmText: t('localAgent.allow'),
+            cancelText: t('localAgent.cancel'),
+          },
+          signal,
+        );
         return approved && !signal.aborted && scopeNow() === scope;
       },
       open: (input, bridge) =>
@@ -275,6 +278,34 @@ export async function revokeLocalAgentConnections(
     if (selected) return server.revoke(selected.id);
     await server.revokeAll();
     return true;
+  });
+}
+
+export async function setLocalAgentCreateVisibleSessions(
+  connectionId: unknown,
+  enabled: unknown,
+  assertCaller = () => {},
+): Promise<boolean> {
+  if (
+    typeof connectionId !== 'string' ||
+    !connectionId ||
+    connectionId.length > 128 ||
+    typeof enabled !== 'boolean'
+  )
+    throwIpcError('INVALID_PARAMS', t('localAgent.invalidConnection'));
+  return settingsOperation(async () => {
+    const owner = activeOwnerScopeKey();
+    const pendingServer = current;
+    const server = pendingServer ? await pendingServer : undefined;
+    assertCaller();
+    if (
+      !server ||
+      current !== pendingServer ||
+      owner !== activeOwnerScopeKey() ||
+      isAppSessionBoundaryPending()
+    )
+      return false;
+    return server.setCreateVisibleSessions(connectionId, enabled);
   });
 }
 

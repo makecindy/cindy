@@ -4,23 +4,30 @@
  */
 import {
   actualSourceIdForModel,
+  findCatalogModel,
   effectiveSourceIdForModel,
   type AgentKind,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderSharePeer } from '@cindy/device-link';
 import { registerGuestProviderRoute, guestProviderModelAllowed } from '../../maker-host/guest-provider-route-store.js';
+import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource.js';
+import type { GuestRequestUsage } from '../../maker-host/guest-provider-route-store.js';
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget.js';
 import type { RemoteAgentHostDeps } from './runHost.js';
 
 /** Shared users and same-account group relays both need a guest-isolated proxy binding. */
 export function createGuestProviderRouteBinder(deps: {
+  recordRequestUsage?(controller: string, providerId: string, kind: AgentKind, sample: GuestRequestUsage): void;
   readProviders(): Promise<readonly ProviderView[]>;
   guestAccess(controller: string): { providerId: string; memberId: string } | null;
   ownerAllowed(controller: string): boolean;
   providerAllowed(providerId: string): boolean;
+  memberBudgetDenial?(providerId: string, model: string, memberId?: string): { code: string; message: string } | null;
+  memberBudgetAllows?(providerId: string, model: string, memberId?: string): Promise<boolean>;
   modelAccess: {
     allows(providerId: string, model: string, memberId?: string): boolean;
-    read(providerId: string, memberId?: string): { models: readonly string[] | null; providerModels: readonly string[] | null };
+    read(providerId: string, memberId?: string): { models: readonly string[] | null; providerModels: readonly string[] | null; memberBudget?: { enabled: boolean; rules: unknown[] } | null };
   };
 }): NonNullable<RemoteAgentHostDeps['bindGuestProviderRoute']> {
   return async ({ kind, hostSessionId, providerId, controller, isCurrent, relayModelAccess }) => {
@@ -40,22 +47,46 @@ export function createGuestProviderRouteBinder(deps: {
     };
     if (!providerAllowed()) return null;
     const localAllows = (model: string) => isCurrent() && providerAllowed() && deps.modelAccess.allows(providerId, model, memberId);
-    const allowsModel = async (model: string) => localAllows(model)
-      && (!relayModelAccess || await relayModelAccess.allows(model)) && localAllows(model);
+    const relayDenials = new Map<string, { code: string; message: string }>();
+    const allowsModel = async (model: string) => {
+      relayDenials.delete(model);
+      try {
+        return localAllows(model) && (!relayModelAccess || await relayModelAccess.allows(model))
+          && (!deps.memberBudgetAllows || await deps.memberBudgetAllows(providerId, model, memberId)) && localAllows(model);
+      } catch (error) {
+        if (isMemberBudgetPaused(error)) relayDenials.set(model, {
+          code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED',
+          message: '[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] This model has reached your shared-provider model limit.',
+        });
+        return false;
+      }
+    };
+    const modelDenial = (model: string) => localAllows(model)
+      ? deps.memberBudgetDenial?.(providerId, model, memberId) ?? relayDenials.get(model) ?? null : null;
+    // The native runtime freezes this list at startup. Keep temporary pauses out of
+    // it: each request is checked live, and a recovered model must work without restart.
     const modelIds = guestProviderModelIds(views, providerId, kind)
       .filter(model => localAllows(model) && (!relayModelAccess || relayModelAccess.models.includes(model)));
     if (!isCurrent()) return null;
+    const provider = views.find(view => view.id === providerId);
+    const receiptMetering = sharedPeer && (kind === 'codex' || kind === 'pi') && provider && providerWeeklyQuotaSource(provider) === 'codex' && !!deps.recordRequestUsage;
     const binding = registerGuestProviderRoute(hostSessionId, providerId, allowsModel, () => {
       if (relayModelAccess) return true;
       try {
         const rule = deps.modelAccess.read(providerId, memberId);
-        return rule.models !== null || rule.providerModels !== null;
+        return rule.models !== null || rule.providerModels !== null || !!(rule.memberBudget?.enabled && rule.memberBudget.rules.length);
       } catch { return true; }
-    });
+    }, modelDenial, receiptMetering ? sample => {
+      if (!isCurrent()) return;
+      const model = findCatalogModel(provider, sample.model, kind)?.id ?? sample.model;
+      deps.recordRequestUsage!(controller, providerId, kind, { ...sample, model });
+    } : undefined);
     return {
+      receiptMetering: !!receiptMetering,
       routeToken: binding.token,
       modelIds,
       allowsModel: model => guestProviderModelAllowed(providerId, model, hostSessionId),
+      modelDenial,
       release: binding.release,
     };
   };

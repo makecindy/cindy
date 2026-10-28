@@ -1,5 +1,6 @@
 import type {
   RegionRect,
+  RegionScreenshotHit,
   RegionScreenshotBegin,
   RegionScreenshotBitmap,
   RegionScreenshotExport,
@@ -30,7 +31,7 @@ export interface RegionScreenshotOverlayBridge {
   copyText(token: string, text: string): void;
   cancel(token: string): void;
   abandon(): void;
-  elementsAt(token: string, windowId: number, x: number, y: number): Promise<RegionRect[]>;
+  elementsAt(token: string, windowId: number, x: number, y: number): Promise<RegionScreenshotHit | null>;
   exportImage(token: string, payload: RegionScreenshotExport): Promise<boolean>;
 }
 

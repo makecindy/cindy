@@ -100,6 +100,7 @@ void mountPage({
       onSessionCredentialSwitchApplied: subscription('credential-applied'),
       onSessionCredentialSwitchFailed: subscription('credential-failed'),
       onPiPackagesChanged: subscription('pi-packages'),
+      onMcpChanged: subscription('mcp-changed'),
       listAgentSkills: async () => ({ success: true, skills: [] }),
       getSessionAgentSwitchIntent: async () => null,
     },

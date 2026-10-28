@@ -75,7 +75,12 @@ async function resolveMobilePluginMedia(instanceId: string, url: string, current
   return file && /^[a-f0-9]{64}\.[a-z0-9]+$/.test(file) ? { path: `/media/${file}`, mediaKind: result.kind } : null;
 }
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
-import { projectGhostAgentModels } from './ghostAgentModels.js';
+import {
+  createGhostAgentModelsCache,
+  projectGhostAgentModels,
+  type GhostAgentLocationsReadResult,
+} from './ghostAgentModels.js';
+import { GhostModelPicker, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from './ghostModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -285,6 +290,7 @@ import {
   setGhostKvStore,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
+  setGhostModelPickerProvider,
   setGhostOauthHandler,
   setGhostSandboxDevToolsDisabled,
   setGhostSecretsHandler,
@@ -567,6 +573,7 @@ import {
   isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
+  type ProviderView,
   xaiApiOfficialRuntimeAgents,
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
@@ -1252,6 +1259,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
+  modelPickerSingleton?.cancel();
   getForgeOidcInstallConfirmBridge()?.cancelAll();
   installConsentWindowBridge.cancelAll();
   abortAllGhostInstallConsentPrompts();
@@ -2085,6 +2093,7 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
+          modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);
         }
@@ -2166,6 +2175,19 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
   getGhostAgentSlot().setRunner(runner);
 }
 
+const ghostAgentModelsCache = createGhostAgentModelsCache();
+let listGhostAgentLocations: (() => Promise<GhostAgentLocationsReadResult>) | null = null;
+let readGhostAgentRemoteViews: ((agentDeviceId: string) => Promise<ProviderView[]>) | null = null;
+
+/** maker-ipc 注入设备列表与跨设备目录读取；静态 import device-link 会成环。 */
+export function setGhostAgentModelLocationSources(sources: {
+  listLocations: () => Promise<GhostAgentLocationsReadResult>;
+  readRemoteViews: (agentDeviceId: string) => Promise<ProviderView[]>;
+} | null): void {
+  listGhostAgentLocations = sources?.listLocations ?? null;
+  readGhostAgentRemoteViews = sources?.readRemoteViews ?? null;
+}
+
 /** maker-ipc 完成初始化后注入「切到这条可见任务」；保持 cindy-brain 不反向依赖 deepLink。 */
 export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | null): void {
   getGhostAgentSlot().setRevealSession(reveal);
@@ -2205,6 +2227,13 @@ export function pluginTaskAuthorizationRevision(id: string): string | null {
 export function pluginTargetAuthorizationRevision(id: string): string | null {
   const ghost = findGhostForInstanceId(id);
   return hasPluginTargetApproval(ghost) ? pluginTaskAuthorizationRevision(id) : null;
+}
+
+// Undefined means this plugin opted out of its Host task card. Saved settings
+// remain on disk, but are neither read nor used for that plugin at runtime.
+export function getPluginTaskDefaults(id: string) {
+  const ghost = findGhostForInstanceId(id);
+  return ghost && ghost.manifest.showTaskPreferences !== false ? readPluginTaskConfig(id) : undefined;
 }
 
 export function isPluginTaskAuthorized(id: string): boolean {
@@ -3749,6 +3778,50 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
   return confirmSlotSingleton;
 }
 
+let modelPickerSingleton: GhostModelPicker | null = null;
+export function getGhostModelPicker(): GhostModelPicker {
+  return modelPickerSingleton ??= new GhostModelPicker({
+    getGhost: findGhostForInstanceId,
+    installation: ghostInstallMutationTargetFor,
+    target: (ghostId, mobilePageId) => {
+      if (mobilePageId) return mobilePluginPages?.modelPickerTarget(mobilePageId, ghostId) ?? null;
+      const focused = BrowserWindow.getFocusedWindow();
+      const win = focused && isTrustedAppRendererWindow(focused) ? focused
+        : BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && isTrustedAppRendererWindow(w));
+      if (!win || win.isDestroyed()) return null;
+      const contents = win.webContents, ownerStamp = getGhostOwnerPushStamp();
+      let cleanup = () => {};
+      return {
+        id: contents.id,
+        send: (request, cancel) => {
+          if (contents.isDestroyed()) return false;
+          const navigation = (_event: unknown, _url: string, sameDocument: boolean, mainFrame: boolean) => {
+            if (mainFrame && !sameDocument) cancel();
+          };
+          contents.once('destroyed', cancel);
+          contents.once('render-process-gone', cancel);
+          contents.on('did-start-navigation', navigation);
+          cleanup = () => {
+            contents.removeListener('destroyed', cancel);
+            contents.removeListener('render-process-gone', cancel);
+            contents.removeListener('did-start-navigation', navigation);
+          };
+          sendGhostContentsPush(contents, 'ghosts:model-picker:request', request, ownerStamp);
+          return true;
+        },
+        dismiss: (requestId) => {
+          cleanup();
+          if (!contents.isDestroyed()) sendGhostContentsPush(contents, 'ghosts:model-picker:dismissed', { requestId }, ownerStamp);
+        },
+      };
+    },
+    available: async route => {
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+      return isPluginModelPickerRouteAvailable(route, views, getPluginModelPickerAgents());
+    },
+  });
+}
+
 let pickSlotSingleton: GhostPickSlot | null = null;
 
 /**
@@ -5150,7 +5223,7 @@ configureProviderMediaRuntime({
 function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
-  const config = readPluginTaskConfig(ghostId);
+  const config = getPluginTaskDefaults(ghostId) ?? {};
   if (!config.model) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
@@ -7988,6 +8061,7 @@ async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInst
     const releaseSync = pluginDeviceSync.beginMutation(storagePart);
     try {
       if (!enabled) {
+        modelPickerSingleton?.cancel(storagePart);
         runtime.stop(storagePart); // 沉睡立即熄灯
         getGhostNodeRuntimeBroker().stop(storagePart); // 随包 Node 也立即关闭
         getGhostSubscriptionGateway().dropGhost(storagePart); // 订阅态清零(缓冲/熔断/seq)
@@ -8195,6 +8269,7 @@ export function registerGhostIpc(): void {
     installFile: installRemoteGhostFile,
   });
   mobilePluginPages = new MobilePluginPages({
+    answerModelPicker: (pageId, requestId, route) => getGhostModelPicker().resolve(pageId, requestId, route),
     management: remotePluginManagement,
     list: availableGhosts,
     listOrder: () => {
@@ -8274,11 +8349,23 @@ export function registerGhostIpc(): void {
   ipcMain.handle(LEGACY_GHOST_RECOVERY_RETRY_CHANNEL, legacyRecoveryIpc.retry);
   setGhostSandboxDevToolsDisabled(app.isPackaged);
   setGhostAppContextProvider(currentGhostAppContext);
+  setGhostModelPickerProvider((id, options, current, signal) => getGhostModelPicker().request(id, options, current, signal));
   setGhostMediaModelsProvider(getGhostConfigurableMediaModels);
-  setGhostAgentModelsProvider(async (instanceId) => {
+  setGhostAgentModelsProvider(async (instanceId, agentDeviceId) => {
     const owner = activeOwnerScopeKey();
     if (!findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+    }
+    if (agentDeviceId !== undefined) {
+      const readRemote = readGhostAgentRemoteViews;
+      if (!readRemote) {
+        return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' };
+      }
+      const catalog = await ghostAgentModelsCache.catalog(owner, agentDeviceId, () => readRemote(agentDeviceId));
+      if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
+        return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+      }
+      return catalog;
     }
     const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
@@ -8292,7 +8379,13 @@ export function registerGhostIpc(): void {
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled || !maker) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
     }
-    return projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
+    const projected = projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
+    if (!projected.ok || !listGhostAgentLocations) return projected;
+    const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
+    if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
+      return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+    }
+    return locations ? { ...projected, locations } : projected;
   });
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /
@@ -8979,7 +9072,21 @@ export function registerGhostIpc(): void {
     if (type === 'confirm-request') {
       return getGhostConfirmSlot().handleRequest(id, payload);
     }
+    if (type === 'model-picker-request') {
+      const target = ghostInstallMutationTargetFor(id);
+      return getGhostModelPicker().request(id, payload, () =>
+        !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id &&
+        target !== null && ghostInstallMutationTargetFor(id) === target);
+    }
     throwIpcError('INVALID_PARAMS', '未知的管子消息类型');
+  });
+
+  ipcMain.handle('ghosts:model-picker:resolve', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const p = raw as { requestId?: unknown; route?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || !p.requestId || p.requestId.length > 128)
+      throwIpcError('INVALID_PARAMS', 'Invalid model picker response');
+    return getGhostModelPicker().resolve(event.sender.id, p.requestId, p.route);
   });
 
   // ── 确认弹窗回包(confirm 槽)────────────────────────────────────────

@@ -17,6 +17,7 @@ const mock = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
   revoke: vi.fn(async (_id: string) => true),
   revokeAll: vi.fn(async () => {}),
+  setVisible: vi.fn(async (_id: string, _enabled: boolean) => true),
   close: vi.fn(async () => {}),
   send: vi.fn(),
   trusted: true,
@@ -93,6 +94,7 @@ vi.mock('../server.js', () => ({
       ],
       revoke: mock.revoke,
       revokeAll: mock.revokeAll,
+      setCreateVisibleSessions: mock.setVisible,
       close: mock.close,
     };
   },
@@ -110,6 +112,7 @@ import {
   localAgentConnections,
   localAgentDeveloperConnection,
   revokeLocalAgentConnections,
+  setLocalAgentCreateVisibleSessions,
 } from '../service.js';
 
 beforeEach(async () => {
@@ -145,6 +148,18 @@ afterEach(async () => {
 });
 
 describe('generic local app Cindy authorization', () => {
+  // #7631: a settings write is owner-scoped, validated and never granted by
+  // an app RPC. Existing revocation tests do not exercise this new operation.
+  it('changes only the requested connection and rejects malformed or stale-owner settings writes', async () => {
+    expect(await setLocalAgentCreateVisibleSessions('grant-a', true)).toBe(true);
+    expect(mock.setVisible).toHaveBeenCalledWith('grant-a', true);
+    await expect(setLocalAgentCreateVisibleSessions('grant-a', 'true')).rejects.toThrow('[INVALID_PARAMS]');
+    mock.setVisible.mockClear();
+    const pending = setLocalAgentCreateVisibleSessions('grant-a', false);
+    mock.generation++;
+    expect(await pending).toBe(false);
+    expect(mock.setVisible).not.toHaveBeenCalled();
+  });
   // Regression: the old OS dialog owned cancellation. The shared Renderer round trip
   // must now retire the exact request, including queued prompts and late replies.
   it.each(['abort', 'close', 'destroyed', 'render-process-gone', 'navigation', 'in-page', 'timeout', 'owner'] as const)(

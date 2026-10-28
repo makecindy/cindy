@@ -16,7 +16,7 @@ vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (.
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
 
-const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any }));
+const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
   const View = ({ children }: { children?: ReactNode }) =>
     createElement("div", {}, children);
@@ -75,7 +75,7 @@ vi.mock("@/components/AppText", () => ({
 vi.mock("@/theme", async () => ({
   ...(await import("../theme/tokens")),
   useThemedStyles: () => ({}),
-  useTheme: () => ({ colors: { textPrimary: '#111' } }),
+  useTheme: () => ({ mode: h.mode, colors: { surface: '#181818', textPrimary: '#eeeeee' } }),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -93,6 +93,7 @@ let unmount: (() => void) | undefined;
 afterEach(() => {
   unmount?.();
   unmount = undefined;
+  h.mode = 'light';
   vi.clearAllMocks();
 });
 describe("native plugin card deliberate actions", () => {
@@ -185,8 +186,32 @@ describe("native plugin card deliberate actions", () => {
     const preview = container.querySelector('[data-testid="html-preview"]')!;
     expect(h.inject.mock.calls.some(([script]) => script.includes('data:image/png;base64,aGVsbG8='))).toBe(true);
     expect(preview.getAttribute('data-html')).toContain("script-src 'none'");
+    expect(preview.getAttribute('data-html')).not.toMatch(/data-cindy-mail-run|pre-wrap/);
     expect(html).toContain('src="cid:logo"');
     expect(h.invoke).not.toHaveBeenCalled();
+  });
+  it('repaints native reading colors on theme changes without replacing the document or changing mail', async () => {
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const html = '<p style="background:rgb(249,154,60);color:black">Ticket</p><section style="background:linear-gradient(#fff,#eee);color:#000">Gradient</section>';
+    const render = () => act(async () => root.render(createElement(MobileMailHtmlPreview, { html, deviceId: 'device' })));
+    await render();
+    const source = h.web.source;
+    const frame = document.createElement('iframe'); document.body.append(frame);
+    try {
+      const doc = frame.contentDocument!;
+      doc.open(); doc.write(source.html); doc.close();
+      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', script)(doc, {}, doc.defaultView!.getComputedStyle.bind(doc.defaultView)));
+      for (const mode of ['dark', 'light', 'dark']) {
+        h.mode = mode;
+        await render();
+        expect(h.web.source).toBe(source);
+        expect(doc.querySelector('p')!.style.backgroundColor).toBe(mode === 'dark' ? 'rgb(129, 71, 14)' : 'rgb(249, 154, 60)');
+        expect(doc.querySelector('section')!.style.backgroundImage).toBe(mode === 'dark' ? 'none' : 'linear-gradient(rgb(255, 255, 255), rgb(238, 238, 238))');
+        expect(doc.querySelector('[data-cindy-mail-run]')).toBeNull();
+      }
+      expect(h.invoke).not.toHaveBeenCalled();
+    } finally { h.inject.mockReset(); frame.remove(); }
   });
   it('uploads from the phone then attaches to the same card; cancellation never dispatches', async () => {
     const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));

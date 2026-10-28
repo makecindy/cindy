@@ -22,6 +22,10 @@
     }
   },
   "localAgent": {
+    "createVisibleSessions": "Cindy に表示するセッションを作成",
+    "createVisibleSessionsHint": "今後このアプリが開くセッションに適用します。メッセージは Cindy に保存され、オフにしても既存のセッションは残ります。",
+    "saveFailed": "設定を保存できませんでした。もう一度お試しください。",
+    "messageSource": "ローカルアプリ「{{name}}」から送信",
     "title": "ローカルアプリの接続",
     "empty": "接続済みのアプリはありません",
     "description": "承認したローカルアプリが Cindy のモデルと実行機能を利用できます。認証情報は Cindy が管理します。",
@@ -313,6 +317,35 @@
     "closeAllDescription": "すべてのゲストがアクセスできなくなります。タスクの履歴は保持されます。"
   },
   "providerShare": {
+    "memberBudget": {
+      "recommended": "おすすめモデル",
+      "none": "指定しない",
+      "unavailable": "使用量データを取得できません",
+      "title": "個人のモデル使用割合",
+      "chooseModels": "モデルを選択",
+      "used": "現在の割合 {{percent}}%",
+      "addGroup": "モデル上限を追加",
+      "remove": "削除",
+      "removeGroup": "モデル上限 {{index}} を削除",
+      "invalid": "モデルを選び、1〜100% の整数で割合を入力してください。",
+      "yourBudget": "モデル使用割合の上限",
+      "progress": "現在 {{used}}% · 上限 {{limit}}%",
+      "paused": "このモデルは停止中です。他の利用可能なモデルを選んでください。",
+      "recommendation": "おすすめ：{{model}}",
+      "unsupported": "このプロバイダーグループではモデル使用割合の制限に未対応です。",
+      "basis": "直近7暦日 · 入力＋出力トークン（キャッシュを除く）",
+      "maxPercent": "個人使用量に占める割合の上限",
+      "empty": "使用記録がありません",
+      "recorded": "記録済みの使用量",
+      "enable": "モデル使用割合の制限を有効にする",
+      "active": "有効",
+      "draft": "下書き · 無効",
+      "window": "集計期間：{{start}} — {{end}}",
+      "draftExceeded": "現在の記録では上限に達しています。下書きのためリクエストは制限されません。",
+      "pausedOnSave": "有効にして保存すると、このモデルへの新しいリクエストを停止します。",
+      "enforcement": "以降のメッセージに適用されます。処理中の使用量は上限を超える場合があります。",
+      "modelUnavailable": "モデルを利用できません"
+    },
     "modelAccess": {
       "title": "リモート利用を許可するモデル",
       "description": "リモート利用のみを制限し、ローカル利用には影響しません。保存後、タスクの作成、モデルの変更、次のメッセージの送信時に適用されます。",
@@ -7340,6 +7373,11 @@
       "confirm": {
         "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
       },
+      "modelPicker": {
+        "useConfiguration": "この設定を使用",
+        "title": "プラグイン「{{name}}」のモデルを選択",
+        "unavailable": "このモデル設定は現在利用できません。選択し直して確定してください。"
+      },
       "workspace": {
         "dialogTitle": "プロジェクトフォルダを選択",
         "dialogMessage": "プラグイン「{{name}}」がサイドバーにセッションを作成するため、プロジェクトフォルダの選択を求めています"
@@ -9587,6 +9625,10 @@
       "checkFailed": "送信できませんでした。もう一度お試しください",
       "dailyCheck": "毎日確認する",
       "dailyCheckMeta": "平日 9:00、新しい Todo がなければ通知しません",
+      "recentTasks": "最近のセッション",
+      "unread": "未読の結果",
+      "stopDailyCheck": "毎日の確認を停止",
+      "loadFailed": "To-do を読み込めませんでした。再試行してください。",
       "dailyCheckFailed": "保存できませんでした。もう一度お試しください",
       "outputs": "成果物",
       "outputMeta": "{{time}} · {{task}}",
@@ -10323,7 +10365,7 @@
           "removeAdmin": "管理者を解除",
           "transfer": "所有権を譲渡",
           "transferTitle": "{{name}} に所有権を譲渡しますか？",
-          "transferHint": "相手がオーナーになり、あなたは管理者になります。パートナーもオーナーになれます。",
+          "transferHint": "相手がオーナーになり、あなたは管理者になります。",
           "removeTitle": "{{name}} をグループから削除しますか？",
           "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーのパートナーも退出します。",
           "addCompanion": "自分のパートナーを招待",
@@ -11796,6 +11838,7 @@
       "submitFeedbackAria": "フィードバックを送信"
     },
     "pastedText": {
+      "pluginContextLabel": "補足資料",
       "chipLabel": "貼り付けたテキスト({{lines}} 行)",
       "previewTitle": "貼り付けたテキスト",
       "editTitle": "貼り付けたテキストを編集",
@@ -12828,6 +12871,7 @@
       "pluginSent": "プラグインから送信",
       "pluginViewDetail": "プラグインを表示",
       "sourceIds": {
+        "localApp": "アプリ ID：{{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "セッション ID：{{id}}",
         "teammate": "仲間 ID：{{id}}",
@@ -12954,6 +12998,7 @@
       "REMOTE_AGENT_BUSY": "相手のパソコンで実行中のセッションが多すぎます。いくつか終了してからもう一度お試しください。",
       "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
       "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
+      "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "このモデルは共有者が設定したモデル使用割合の上限に達しました。別の利用可能なモデルで続行してください。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルのリモート利用が許可されていません。提供者に「リモートと共有」で利用範囲を変更してもらうか、別のモデルを選んでください。",
       "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
       "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
@@ -17778,11 +17823,13 @@
     "title": "このプラグインの AI にファイルの編集を許可しますか？",
     "message": "「{{name}}」の AI にファイルの編集を許可して続行しますか？",
     "detail": "このプラグインの AI 権限を編集可能に変更します。今後のタスクにも適用されます。独立した作業ディレクトリはシステムのサンドボックスではなく、コマンドには引き続き Cindy の権限チェックが適用されます。プラグインの AI 設定でいつでも読み取り専用に戻せます。",
+    "taskDetail": "現在のセッションのみ編集を許可します。独立した作業ディレクトリはシステムのサンドボックスではなく、コマンドには引き続き Cindy の権限チェックが適用されます。このセッションの権限メニューで変更できます。",
     "allow": "許可して続行",
     "cancel": "今は許可しない",
     "autoTitle": "Auto 自動承認を有効化",
     "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
-    "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"
+    "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。",
+    "autoTaskDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。現在のセッションの権限のみを変更し、プラグインの既定設定は変更しません。"
   },
   "groupTools": {
     "authorizationRequired": "グループの許可が失効したか、この操作は許可されていません。パートナーの所有者からこのグループで再度依頼してください。",

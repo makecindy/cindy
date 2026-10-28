@@ -1,3 +1,4 @@
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
  * ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'

@@ -1,3 +1,4 @@
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 /**
  * provider-route —— 把 catalog 的 `RoutingDescriptor` 翻译成 loopback proxy 的 `RoutingDecision`,
  * 并据 per-session 选定的供应商解析本会话的路由。
@@ -393,14 +394,8 @@ function buildRouteDecisionBase(
       };
       const decision: RoutingDecision = { headerOverride };
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
-      // Copilot assigns personal/business/enterprise API hosts in its inference token.
-      // Follow that assignment only for the official preset and official Copilot hosts.
       if (routing.upstream && oauthToken) {
-        const upstream = new URL(routing.upstream);
-        if (upstream.protocol === 'https:' && upstream.hostname === 'api.individual.githubcopilot.com') {
-          const host = oauthToken.match(/(?:^|;)proxy-ep=(proxy\.(?:individual|business|enterprise)\.githubcopilot\.com)(?:;|$)/)?.[1];
-          if (host) { upstream.hostname = host.replace(/^proxy\./, 'api.'); decision.upstreamOverride = upstream.toString().replace(/\/$/, ''); }
-        }
+        decision.upstreamOverride = resolveCopilotAccountUrl(routing.upstream, oauthToken);
       }
       // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
       // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。

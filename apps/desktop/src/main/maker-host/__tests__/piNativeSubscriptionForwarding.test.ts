@@ -65,6 +65,7 @@ import {
 import { buildUserProvider } from '@cindy/model-providers';
 import { setCustomProviders, setXaiDiscoveredModels } from '../active-catalog.js';
 import { registerUsagePricing, clearUsagePricing } from '../model-usage-pricing.js';
+import { registerGuestProviderRoute } from '../guest-provider-route-store.js';
 import { setSessionFastMode } from '../session-effort-store.js';
 
 function responseRecorder() {
@@ -1112,4 +1113,22 @@ it.each([false, true])('scopes independent Grok limits and drops stale token pus
     if (stale) expect(injected.recordXaiRateLimit).not.toHaveBeenCalled();
     else expect(injected.recordXaiRateLimit).toHaveBeenCalledWith(expect.objectContaining({ remainingRequests: 7 }), 'xai-work');
   } finally { setCustomProviderConfigs([]); }
+});
+
+// The production native handler must meter a child model before forwarding its final bytes.
+// This covers the path the turn-summary tests cannot observe. Tier: unit; injected HTTP response.
+it('records a shared native request once by its requested model and preserves streaming bytes', async () => {
+  const record = vi.fn();
+  const binding = registerGuestProviderRoute('guest-meter', 'openai', undefined, undefined, undefined, record);
+  const frame = { type: 'response.completed', response: { usage: { input_tokens: 120, output_tokens: 8, input_tokens_details: { cached_tokens: 100 } } } };
+  const wire = `data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify(frame)}\n\n`;
+  const injected = deps({ fetch: vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } })) });
+  const body = { model: 'astra', input: [] };
+  const res = responseRecorder();
+  try {
+    await getPiNativeSubscriptionHandler('openai', 'guest-meter', injected)({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { method: 'POST', url: '/codex/responses', headers: { 'content-type': 'application/json' } }, res } as never);
+    expect(Buffer.concat(res.chunks).toString()).toBe(wire);
+    expect(record).toHaveBeenCalledExactlyOnceWith({ model: 'astra', inputTokens: 20, outputTokens: 8, cacheReadTokens: 100, cacheCreateTokens: 0 });
+  } finally { binding.release(); }
 });

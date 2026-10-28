@@ -57,20 +57,42 @@ describe('ghosts:errand-prefs (plugin model & tasks)', () => {
   });
 });
 
+// unit: invoke the real Host defaults reader; hidden values must never be read,
+// and opting back in must expose the original saved values without migration.
+const createDefaults = createGhostProductionCallbacks<{ getPluginTaskDefaults(id: string): Record<string, unknown> | undefined }>({
+  functions: ['getPluginTaskDefaults'],
+});
+it('opts out of every saved default without modifying storage or affecting another plugin', () => {
+  const configs = { hidden: { model: 'old', permissionMode: 'bypassPermissions', workingDir: '/old' }, visible: { model: 'current' } };
+  const readConfig = vi.fn((id: keyof typeof configs) => configs[id]);
+  let hidden = true;
+  const api = createDefaults({ readPluginTaskConfig: readConfig, findGhostForInstanceId: (id: string) =>
+    id === 'missing' ? null : ({ manifest: { showTaskPreferences: id === 'hidden' ? !hidden : undefined } }) });
+  expect(api.getPluginTaskDefaults('hidden')).toBeUndefined();
+  expect(api.getPluginTaskDefaults('missing')).toBeUndefined();
+  expect(readConfig).not.toHaveBeenCalled();
+  configs.hidden.permissionMode = 'ask';
+  expect(api.getPluginTaskDefaults('hidden')).toBeUndefined();
+  expect(api.getPluginTaskDefaults('visible')).toEqual(configs.visible);
+  hidden = false;
+  expect(api.getPluginTaskDefaults('hidden')).toEqual(configs.hidden);
+});
+
 type OneshotSelection = { providerId?: string; agentKind: string; model: string } | null;
 
 const createSelection = createGhostProductionCallbacks<{
   getPluginOneshotModelSelection: (ghostId: string) => OneshotSelection;
-}>({ functions: ['getPluginOneshotModelSelection'] });
+}>({ functions: ['getPluginTaskDefaults', 'getPluginOneshotModelSelection'] });
 
 describe('getPluginOneshotModelSelection (plugin oneshot model pin)', () => {
-  function select(config: Record<string, unknown>, resolved: OneshotSelection): {
+  function select(config: Record<string, unknown>, resolved: OneshotSelection, showTaskPreferences?: boolean): {
     result: OneshotSelection;
     resolve: ReturnType<typeof vi.fn>;
   } {
     const resolve = vi.fn(() => resolved);
     const { getPluginOneshotModelSelection } = createSelection({
       readPluginTaskConfig: () => config,
+      findGhostForInstanceId: () => ({ manifest: { showTaskPreferences } }),
       resolveOneshotCatalogModel: resolve,
       getActiveCatalog: () => ({}),
       readModelDisableOverrides: () => undefined,
@@ -79,6 +101,14 @@ describe('getPluginOneshotModelSelection (plugin oneshot model pin)', () => {
     });
     return { result: getPluginOneshotModelSelection('writer'), resolve };
   }
+
+  // unit: a hidden settings card must not pin oneshot billing/model routing.
+  // Existing cases cover provider matching but not a plugin opting out of defaults.
+  it('ignores a stored model when the plugin opts out of host task preferences', () => {
+    const { result, resolve } = select({ agentKind: 'cc', providerId: 'old', model: 'old' }, null, false);
+    expect(result).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
 
   it('keeps the user-chosen provider when the Pi route only resolves on another provider', () => {
     // 用户选的供应商没有快问快答通道,目录只在另一家解析到同名模型:不换供应商。

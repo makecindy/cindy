@@ -22,6 +22,10 @@
     }
   },
   "localAgent": {
+    "createVisibleSessions": "Create visible sessions in Cindy",
+    "createVisibleSessionsHint": "Applies to sessions this app opens from now on. Messages are saved in Cindy; existing sessions are kept when turned off.",
+    "saveFailed": "Could not save this setting. Try again.",
+    "messageSource": "Sent by local app “{{name}}”",
     "title": "Local App Connections",
     "empty": "No connected apps",
     "description": "Authorized local apps can use Cindy models and agent capabilities. Cindy keeps supplier credentials.",
@@ -313,6 +317,35 @@
     "closeAllDescription": "Guests will lose access. Task history is kept."
   },
   "providerShare": {
+    "memberBudget": {
+      "recommended": "Recommended model",
+      "none": "No recommendation",
+      "unavailable": "Usage data unavailable",
+      "title": "Personal model share",
+      "chooseModels": "Choose a model",
+      "used": "Current share {{percent}}%",
+      "addGroup": "Add model limit",
+      "remove": "Remove",
+      "removeGroup": "Remove model limit {{index}}",
+      "invalid": "Choose a model and a whole-number share from 1 to 100%.",
+      "yourBudget": "My model share limits",
+      "progress": "Current share {{used}}% · limit {{limit}}%",
+      "paused": "This model is paused. Choose another available model.",
+      "recommendation": "Recommended: {{model}}",
+      "unsupported": "Model share limits are not yet supported for this provider group.",
+      "basis": "Last 7 calendar days · input + output tokens, excluding cache",
+      "maxPercent": "Maximum share of personal usage",
+      "empty": "No usage recorded",
+      "recorded": "Recorded usage",
+      "enable": "Enable model share limits",
+      "active": "Enabled",
+      "draft": "Draft · disabled",
+      "window": "Date range: {{start}} — {{end}}",
+      "draftExceeded": "Current records meet the limit. This draft does not block requests.",
+      "pausedOnSave": "Saving with limits enabled will pause new requests for this model.",
+      "enforcement": "Applies to subsequent messages. Usage already in progress may exceed the limit.",
+      "modelUnavailable": "Model unavailable"
+    },
     "modelAccess": {
       "title": "Models allowed for remote use",
       "description": "Only limits remote use. Local use is unchanged. Saved changes apply when creating a task, switching models, or sending the next message.",
@@ -7371,6 +7404,11 @@
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"
       },
+      "modelPicker": {
+        "useConfiguration": "Use this configuration",
+        "title": "Choose a model for plugin “{{name}}”",
+        "unavailable": "This model configuration is unavailable. Choose again and confirm."
+      },
       "workspace": {
         "dialogTitle": "Choose a project folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a project folder to create a session in the sidebar"
@@ -9621,6 +9659,10 @@
       "checkFailed": "Couldn't send. Try again.",
       "dailyCheck": "Check every day",
       "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
+      "recentTasks": "Recent tasks",
+      "unread": "Unread result",
+      "stopDailyCheck": "Stop daily checking",
+      "loadFailed": "Couldn’t load to-dos. Try again.",
       "dailyCheckFailed": "Couldn't save. Try again.",
       "outputs": "Outputs",
       "outputMeta": "{{time}} · {{task}}",
@@ -10357,7 +10399,7 @@
           "removeAdmin": "Remove admin role",
           "transfer": "Transfer ownership",
           "transferTitle": "Transfer ownership to {{name}}?",
-          "transferHint": "They will become the owner and you will become an admin. Companions can also own groups.",
+          "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
           "addCompanion": "Invite my companion",
@@ -11831,6 +11873,7 @@
       "submitFeedbackAria": "Send feedback"
     },
     "pastedText": {
+      "pluginContextLabel": "Attached context",
       "chipLabel": "Pasted text ({{lines}} lines)",
       "previewTitle": "Pasted text",
       "editTitle": "Edit Pasted Text",
@@ -12873,6 +12916,7 @@
       "pluginSent": "Sent by plugin",
       "pluginViewDetail": "View plugin",
       "sourceIds": {
+        "localApp": "App ID: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "Session ID: {{id}}",
         "teammate": "Teammate ID: {{id}}",
@@ -12999,6 +13043,7 @@
       "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+      "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t granted you remote access to this provider or the selected model. Ask its owner to adjust access in Remote & Sharing, or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
@@ -17838,9 +17883,11 @@
     "autoTitle": "Enable Auto approval",
     "autoMessage": "Allow “{{name}}” to use Auto approval?",
     "autoDetail": "Cindy will review coordinator and Worker actions automatically. Actions requiring confirmation or denied actions still pause. This is not Full access. The choice is saved in plugin AI settings without changing global permissions for other tasks.",
+    "autoTaskDetail": "Cindy will review coordinator and Worker actions automatically. Actions requiring confirmation or denied actions still pause. This is not Full access. Only this session’s permission changes; plugin defaults stay unchanged.",
     "title": "Allow this plugin’s AI to edit files?",
     "message": "Allow the AI in “{{name}}” to edit files and continue?",
     "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
+    "taskDetail": "This allows edits only for the current session. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can change this in the session’s permission menu.",
     "allow": "Allow and continue",
     "cancel": "Not now"
   },

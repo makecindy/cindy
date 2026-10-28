@@ -600,9 +600,12 @@ describe('guest provider access and usage', () => {
     const started: Started[] = [];
     const host = makeHost(started, { bindGuestProviderRoute: bind });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(currents).toHaveLength(1));
+    await vi.waitFor(() => expect(currents).toHaveLength(1), { timeout: 10_000 });
     await host.handle(GUEST, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // Windows CI run 40667219234 exceeded the default 1s disk-preparation wait.
+    // Observe RUN_2's completed handshake before checking that RUN_1 stays stale.
+    await waitForStarted(host, GUEST, RUN_2);
+    expect(started).toHaveLength(1);
     expect(currents[0]!()).toBe(false);
     openGate();
     await new Promise((resolve) => setTimeout(resolve, 20));

@@ -65,6 +65,35 @@ function withUiLanguageNote(content: string): string {
 function withUiLanguageUserMessage(content: string): { type: 'user'; content: string } {
   return { type: 'user', content: withUiLanguageNote(content) };
 }
+
+describe('local application task takeover', () => {
+  // #7631 review P0. Runtime tests do not cover the ordinary send transaction.
+  // Minimal regression (unit): a live external Session must be retired before
+  // selecting the send target; failed handoff must never dispatch Cindy input.
+  it.each([false, true])('does not reuse the external runtime (handoff fails=%s)', async (fails) => {
+    const { deps, session } = createDeps();
+    const replacement = createSession();
+    let live: typeof session | undefined = session;
+    deps.getSession = () => live;
+    deps.bootstrapSession = vi.fn(async () => {
+      live = replacement;
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    deps.prepareExternalInput = async () => {
+      if (fails) throw new Error('handoff unavailable');
+      live = undefined;
+    };
+    const send = createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'private Cindy input', { id: 'session-1', agentKind: 'codex', workingDir: '/repo' },
+    );
+    if (fails) await expect(send).rejects.toThrow('handoff unavailable');
+    else {
+      await send;
+      expect(replacement.send).toHaveBeenCalledOnce();
+    }
+    expect(session.send).not.toHaveBeenCalled();
+  });
+});
 describe('MCP App next-turn context', () => {
   it('keeps ordinary user intent when validating App context without a replacement intent', async () => {
     const assertCurrent = vi.fn(async () => {});

@@ -3680,7 +3680,7 @@ assertRouteCurrent();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
       const speed = translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined;
-      return attachLiveGeneration(usageTracker.snapshot(), {
+      return attachLiveGeneration({ ...usageTracker.snapshot(), requestUsage: usageTracker.getRequestMetering() }, {
         tokenSpeed: speed,
         // Legacy clients use these fields: they must share the speed snapshot's
         // measured numerator/denominator, never the billing ledger's lifetime.
@@ -11137,6 +11137,7 @@ assertRouteCurrent();
             cancelled: turn.status === 'interrupted',
             ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}),
             usage: codexDoneUsage,
+            requestUsage: usageTracker.getRequestMetering(),
             raw: turn,
           },
           source: 'codex',
@@ -11236,6 +11237,7 @@ assertRouteCurrent();
             type: 'codex/event/task_complete',
             result: finalAssistantText,
             usage: codexDoneUsage,
+            requestUsage: usageTracker.getRequestMetering(),
             raw: turn,
             plan: latestPlanByTurn.get(turn.id) ?? null,
           },

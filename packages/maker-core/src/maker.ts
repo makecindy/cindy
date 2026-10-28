@@ -786,6 +786,15 @@ export class Maker {
     let codexThreadClaim: CodexThreadClaimLease | null = null;
     let handle: AgentSessionHandle;
     let agentStartAttempted = false;
+    // Local apps own their native history and require an explicit failed resume,
+    // including failures discovered on first send. Visible tasks still use this
+    // createSession path; never authorize a fresh conversation/replay for them.
+    const onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'] =
+      startOpts[LOCAL_AGENT_CLIENT]
+        ? async () => false
+        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+          ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+          : undefined;
     try {
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
@@ -815,11 +824,7 @@ export class Maker {
             ...startOpts,
             sessionId: id,
             sessionInstanceId,
-            onInvalidResumeSession:
-              opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-                ? (expectedSdkSessionId) =>
-                    this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-                : undefined,
+            onInvalidResumeSession,
           },
         });
       } else handle = await agent.startSession({
@@ -832,11 +837,7 @@ export class Maker {
         // 就把 SDK 回填、已落库的 sdk_session_id 变成幽灵 id(见 claude-code/index.ts
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
-        onInvalidResumeSession:
-          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-            ? (expectedSdkSessionId) =>
-                this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-            : undefined,
+        onInvalidResumeSession,
       });
       handle = withFastModePolicy(handle, startOpts.fastModePolicy);
     } catch (error) {

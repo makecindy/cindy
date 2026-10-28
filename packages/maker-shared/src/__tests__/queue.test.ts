@@ -18,6 +18,19 @@ function queued(clientId: string): { clientId: string } {
 }
 
 describe('shared queue presentation model', () => {
+  // unit: plugin context without an image still uses a persisted envelope. The
+  // old files-only decoder exposed that envelope and its raw capture diagnostics.
+  it('projects collapsed plugin context in pending rows with or without images', () => {
+    const body = 'Look here';
+    const text = body + '\n\nWindow details';
+    const pastedTextRanges = [{ start: body.length, end: text.length, display: 'Attached context' }];
+    for (const files of [undefined, [{ name: 'window.png' }]]) {
+      const item = { text, persistedContent: JSON.stringify({ text, pastedTextRanges }), files,
+        sourcePlugin: { pluginId: 'example' }, chatMessage: { pastedTextRanges } };
+      expect(queueItemVisibleText(item)).toBe(body + 'Attached context');
+      expect(item.text).toContain('Window details');
+    }
+  });
   it('preserves and pauses queue only when Stop sees queued rows', () => {
     expect(stopOptionsForProjection({ pendingQueue: [] })).toBeUndefined();
     expect(stopOptionsForProjection({ pendingQueue: [queued('q-1')] })).toEqual({

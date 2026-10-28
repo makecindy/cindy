@@ -1,5 +1,41 @@
 # 跨端协议兼容
 
+## 本机应用的可见任务（2026-10-28）
+
+本机 Agent API v1 的 `session/open` 响应可选追加 `cindySessionId`。应用授权记录可选
+保存 `createVisibleSessions: true`，缺省与旧授权均为关闭；旧客户端忽略新增响应字段，
+不改变既有令牌、恢复句柄与工具策略。每次 open 创建新任务，调用方不能指定已有 Cindy 任务。
+设置操作 `local-agent:set-create-visible-sessions` 只接受本机受信 Renderer，不进入
+device-link 的 invoke 白名单。普通任务及消息沿用现有多端同步路径；本机应用来源使用
+已有 `sourcePlugin` 元数据的 `local-app:` 前缀。旧查看端可能按插件显示来源，
+不影响正文或执行授权；更新后显示本机应用。协议与验证入口见[本机 Agent API](../local-agent-api.md)。
+
+## 群主与伙伴成员归属（2026-10-28）
+
+Chat Server 的 group 新建者和新任 owner 仅允许 human；非真人目标返回既有错误体中的
+`HUMAN_OWNER_REQUIRED`（400）。伙伴实际加入群前，服务端在群锁内确认真人主人已加入且未禁用，
+否则 `BOT_OWNER_NOT_IN_GROUP`（409）；真人离群同时撤销其伙伴的成员与待接受邀请。
+不新增字段、IPC、能力协商、环境变量或数据库迁移，direct 与 channel 行为不变。
+先升级全部服务端副本，再升级客户端；旧服务副本在滚动期间仍可能接受旧规则请求。
+旧客户端可能仍展示伙伴转让入口，新服务端统一拒绝；新 Desktop 还会过滤按钮，并在 Main
+校验最新成员快照，连接旧服务端时也不再提交非真人转让。新错误复用本地化权限提示，旧客户端
+按原通用失败提示降级。存量伙伴群主仍可由所属真人代为转让给已入群真人，不自动改写历史归属；
+没有批量清理线上数据。回退旧服务会恢复旧的宽松规则，不保证继续维持该限制。
+
+## 灵动岛摘要的纯文本标记
+
+既有 `local-db:sessions:activity` 可选追加 `summaryFormat: 'plain-text'`，仅标记
+`compactDetail` 已经由所属 Host 转为显示文字。Desktop 控制端经活动 store、远端输入
+投影与 Main IPC 校验保留标记；运行及完成卡片只折叠空白、限制长度，不再解析 Markdown。
+缺省或未知值继续走旧摘要兼容转换：压平截断的组件块不显示源码，前置正文保留，
+仍有围栏上下文时沿用共享 parser 保护代码引用。无法恢复正文时复用本地化“完成”。
+
+旧控制端忽略可选字段，新控制端接受旧 Host 的无标记摘要；双方可独立升级。
+旧 Host 已经压平的代码示例无法可靠还原格式，完整字面符号保留需双方更新。
+不新增 channel、权限、连接恢复、持久化、服务端或 Mobile 原生配置；回滚时忽略标记，
+保持旧摘要显示。回归见 `activityTextStream.test.ts`、`service.test.ts` 与
+`agentIslandRemoteSessions.test.ts`。
+
 ## 同 Harness 换电脑接续原生记录
 
 `remote-agent` caps 增加可选 `nativeHistoryTransfer: true`，仅同账号 owner 可用；缺省、旧端或分享中转继续使用 handoff。
@@ -21,6 +57,16 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 配额均衡的同账号提议复用既有 `kind: auto`，桌面与手机不弹常规换电脑确认。实际需要摘要时，宿主通过既有 permission
 确认卡（`hostOwnedConfirmation: native_history_fallback`）询问，支持同账号远控回答；取消、超时保留原电脑与原生记录。
 旧客户端已支持 auto 和通用 permission 卡；共享来源仍沿用原来的 ask/记住偏好，不自动扩大授权。
+
+## 插件宿主模型选择器（新增接口，尚未发布）
+
+`PluginPagePoll` 新增可选 `modelPickers`，Host 绑定原插件安装与页面，手机及远程桌面
+设置页使用执行电脑的统一模型目录，只把用户确认的完整 route 通过原页面回传。
+远程设置的密封命令增量为 `answer-model-picker`；原有命令、权限、安装批准与账号凭证合同不变。
+未更新的控制端忽略可选字段，Host 在 90 秒后取消；新插件检查 `cindy.pickModel` 是否存在，
+不把目录读取或选模当成执行授权。两端都更新后才具备原生选模回执，不需要服务端变更。
+新增 Renderer IPC 仅本机宿主使用，不进入 device-link 通用 invoke/push 白名单；跨设备
+复用既有插件页面资源与密封设置链。正文详见 [插件规则](plugin-security-and-authoring.md#宿主统一模型选择器新增接口尚未发布)。
 
 ## 接受已保存的伙伴模型
 
@@ -817,6 +863,10 @@ device-link 授权、撤权与 owner fence；仅有归属范围权限的调用�
 本次不改服务端和数据库 schema；手机与 IM 通过所在电脑的 Agent 使用能力，无新增界面。
 SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integrations/historyDevices.ts`、
 `localDb/ipc/historyQuery.ts` 和 `packages/lizi-mcps/src/__tests__/historyDevices.test.ts`。
+
+## 插件 Agent 模型目录的运行位置（2026-10-27）
+
+插件同源 `GET /agent-models` 新增可选查询参数 `agent_device_id`（Agent 在哪台同账号电脑或分享来的供应商上；省略 = 本机清单）。无参响应在原 `models` 上追加 `locations: [{agentDeviceId, name}]`，与 Lead `list_available_models` 的 `locations` 同源（同账号在线且开了远程控制的电脑 + 生效中的供应商分享，不含本机）；位置列表读失败时仍返回 200，只省略 `locations`。带参时只投影那台允许远程调用的来源，响应回显 `agentDeviceId`，不附 `locations`。旧 Host 仍拒绝任何查询字符串，带参返回 400；新 Host 其它参数、重复参数、空或超过 128 字符的 id 同样 400。格式合法但那台离线、未知或没开远程控制时返回 503 且 `errorCode` 为 `NOT_AVAILABLE`，响应里没有本机条目，旧客户端应退回无参本机清单。不覆盖 SSH 远程主机目录，不改变 `create_worker` / `agent_device_id` 派工校验。实现与回归见 `electronSandboxAdapter.ts`、`ghostAgentModels.ts`、`workerAgentLocations.ts`。
 
 ## 定时任务的 Agent 运行位置（2026-10-22）
 

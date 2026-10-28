@@ -268,6 +268,36 @@ export interface PluginPagePoll {
   unreadAt?: number;
   directories?: PluginDirectoryRequest[];
   intents?: PluginNativeIntent[];
+  /** Optional; old controllers ignore requests and Host timeout cancels them. */
+  modelPickers?: PluginModelPickerRequest[];
+}
+
+export interface PluginModelSelection {
+  agentKind: 'cc' | 'codex' | 'pi';
+  providerId: string;
+  model: string;
+  effort: string;
+  fastMode: boolean | 'ultrafast';
+}
+
+export function isPluginModelSelection(value: unknown): value is PluginModelSelection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  const text = (key: string, max: number) => typeof v[key] === 'string' &&
+    (v[key] as string).trim().length > 0 && (v[key] as string).length <= max;
+  return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode'].includes(key)) &&
+    ['cc', 'codex', 'pi'].includes(String(v.agentKind)) && text('providerId', 128) && text('model', 256) &&
+    typeof v.effort === 'string' && v.effort.length <= 32 &&
+    (typeof v.fastMode === 'boolean' || v.fastMode === 'ultrafast');
+}
+
+/** Native Host model selection; never forwarded into the plugin document. */
+export interface PluginModelPickerRequest {
+  requestId: string;
+  ghostId: string;
+  ghostName: string;
+  initial?: PluginModelSelection;
+  expiresAt: number;
 }
 export type PluginNativeIntent = {
   id: string;

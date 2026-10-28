@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 import { PLUGIN_OAUTH_CHANNEL, REMOTE_RESOURCE_INVOKE_CHANNEL } from '@cindy/device-link';
 import { MobilePluginPages } from '../mobilePageService.js';
+import { GhostModelPicker } from '../ghostModelPicker.js';
 import { AuthenticatedOauthHost, OauthHostIdentity } from '../../plugin-oauth/authentication.js';
 import { getRemoteOauthContext, withRemoteOauthContext } from '../../plugin-oauth/context.js';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
@@ -56,6 +57,7 @@ import {
   openRemotePluginSettings,
   closeRemotePluginSettings,
   answerRemotePluginSettingsDirectory,
+  answerRemotePluginSettingsModelPicker,
   resolveRemoteSettingsAttach,
   parseSettingsDocument,
 } from '../remotePluginSettingsController.js';
@@ -68,7 +70,8 @@ afterEach(() => {
   mock.peerCurrent = true;
   vi.clearAllMocks();
 });
-function fixture(namespace: string | null = null) {
+function fixture(namespace: string | null = null,
+  answerModelPicker?: ConstructorParameters<typeof MobilePluginPages>[0]['answerModelPicker']) {
   let owner: string | null = 'owner',
     revision = 'installed-1',
     allowed = true,
@@ -127,6 +130,7 @@ function fixture(namespace: string | null = null) {
     async () => '/target/resolved',
   );
   const service = new MobilePluginPages({
+    answerModelPicker,
     now: () => Date.now() + nowOffset,
     list: () => [ghost],
     revision: () => revision,
@@ -474,6 +478,32 @@ describe('original remote plugin settings', () => {
     expect((await writing).status).toBe(503);
     expect(f.stored.size).toBe(0);
   });
+  // New native request/result across the existing sealed settings channel. Unlike catalog GET,
+  // this must bind the answering host and withhold native requests from author HTML. Tier: unit.
+  it('returns model configuration from the originating remote settings view and strips native picker requests from author polling', async () => {
+    let picker!: GhostModelPicker;
+    const f = fixture(null, (page, id, route) => picker.resolve(page, id, route));
+    picker = new GhostModelPicker({ getGhost: () => f.ghost, installation: () => 'installed-1',
+      target: (id, page) => page ? f.service.modelPickerTarget(page, id) : null,
+      available: async () => true });
+    cleanup.push(() => picker.cancel());
+    const { view, fetch } = await f.open();
+    const pageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()][0];
+    const selected = picker.request(f.ghost.instanceKey!, { mobilePageId: pageId });
+    const html = await (await fetch('/settings.html')).text();
+    const internal = /src="([^"]+\.js)"/.exec(html)![1].slice(0, -3);
+    const poll = await fetch(internal, { method: 'POST', body: JSON.stringify({ kind: 'poll', after: 0 }) });
+    expect((await poll.json()).modelPickers).toBeUndefined();
+    const notice = vi.mocked(f.host.send).mock.calls.find(call => call[0] === 'ghosts:model-picker:request')![1];
+    expect(notice).toMatchObject({ deviceId: 'target-b', remoteViewId: view.id, ghostId: f.ghost.instanceKey });
+    const route = { agentKind: 'codex', providerId: 'target-provider', model: 'model', effort: 'high', fastMode: true };
+    const answer = { viewId: view.id, requestId: notice.requestId, route };
+    await expect(answerRemotePluginSettingsModelPicker({} as WebContents, answer)).rejects.toThrow();
+    expect(await answerRemotePluginSettingsModelPicker(f.host, answer)).toEqual({ handled: true, accepted: true });
+    expect(await selected).toEqual({ ok: true, route });
+    expect(f.host.send).toHaveBeenCalledWith('ghosts:model-picker:dismissed', { requestId: notice.requestId }, expect.anything());
+  });
+
   it('returns a trusted directory selection to the target picker through the sealed page', async () => {
     const f = fixture(),
       { view, fetch } = await f.open();

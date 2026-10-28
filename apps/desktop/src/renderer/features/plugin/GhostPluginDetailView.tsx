@@ -1,5 +1,4 @@
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
-import { PluginVersionUpdates } from './PluginVersionUpdates';
 import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
@@ -119,9 +118,7 @@ interface GhostPluginDetailViewProps {
   /** Opens publishing; package preparation and submission belong to the dialog. */
   onContribute?: () => void;
   contributionBusy?: boolean;
-  contributionSummary?: string;
   publishingPreview?: PreparedPluginContribution;
-  onRefreshPublishing?: () => void;
   contributionUnavailableReason?: string;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
@@ -164,9 +161,7 @@ export function GhostPluginDetailView({
   onExport,
   onContribute,
   contributionBusy = false,
-  contributionSummary,
   publishingPreview,
-  onRefreshPublishing,
   contributionUnavailableReason,
   toggleDisabled,
   onIconLoadError,
@@ -174,7 +169,6 @@ export function GhostPluginDetailView({
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
-  const contributionNoticeId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
@@ -297,7 +291,6 @@ export function GhostPluginDetailView({
                   onClick={onContribute}
                   loading={contributionBusy}
                   disabled={Boolean(contributionUnavailableReason)}
-                  aria-describedby={contributionNoticeId}
                   title={contributionUnavailableReason}
                 >
                   {t('settings.ghosts.contribution.publishPlugin')}
@@ -536,47 +529,7 @@ export function GhostPluginDetailView({
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
 
-        {publishingSection ?? ((onContribute || contributionUnavailableReason || publishingPreview || detail.releaseNotes?.trim()) ? (
-          <PluginVersionUpdates key={detail.id}>
-            {(onContribute || contributionUnavailableReason) ? (
-              <div className="mt-3 space-y-1 text-13 leading-5 text-[var(--text-secondary)]">
-                <p id={contributionNoticeId}>
-                  {contributionUnavailableReason ?? t('settings.ghosts.contribution.publishHint')}
-                </p>
-                {contributionBusy || contributionSummary ? (
-                  <p role="status">
-                    {contributionBusy ? t('settings.ghosts.contribution.preparing') : contributionSummary}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
-            {publishingPreview ? (
-              <section className="space-y-2 text-13 leading-5 text-[var(--text-secondary)]">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="font-medium text-[var(--text-primary)]">
-                    {publicationBlocked ? `${t('settings.ghosts.contribution.version')} · ${publishingPreview.version}` : t('settings.ghosts.contribution.publishingVersion', { version: publishingPreview.version })}
-                  </h3>
-                  <Button size="sm" variant="secondary" tone="quiet" onClick={onRefreshPublishing}>
-                    {t('settings.ghosts.contribution.refreshSummary')}
-                  </Button>
-                </div>
-                {publishingPreview.releaseNotes?.trim() ? (
-                  <>
-                    <h4 className="font-medium text-[var(--text-primary)]">{t('settings.ghosts.contribution.releaseNotes')}</h4>
-                    <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words">{publishingPreview.releaseNotes}</p>
-                  </>
-                ) : null}
-                {!publicationBlocked ? <p>{t('settings.ghosts.contribution.versionConsumedHint')}</p> : null}
-              </section>
-            ) : detail.releaseNotes?.trim() ? (
-              <section className="space-y-2">
-                <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.contribution.releaseNotes')} · {detail.version}</h3>
-                <p className="whitespace-pre-wrap break-words text-13 leading-5 text-[var(--text-secondary)]">{detail.releaseNotes}</p>
-              </section>
-            ) : null}
-          </PluginVersionUpdates>
-        ) : null)}
+        {publishingSection}
 
         <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
       </article>
