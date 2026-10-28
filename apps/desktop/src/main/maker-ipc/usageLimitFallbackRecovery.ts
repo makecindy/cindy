@@ -48,6 +48,16 @@ export interface UsageLimitFallbackRecoveryDeps {
   continueAfterReset(sessionId: string, token: number, info: AutoResumeInfo): Promise<AutoRetryOutcome>;
   /** 交回既有的「等额度重置」流程。 */
   armResetWait(sessionId: string, signals: InterruptedTurnErrorSignals, token: number): void;
+  /**
+   * 降级换路**成功续跑**后通知宿主：那里开始记回切 episode。
+   * 只做记账，不改本模块的任何控制流；抛错会被吞掉并记日志。
+   */
+  onResumed?(params: {
+    sessionId: string;
+    policy: SessionUsageLimitFallback;
+    signals: InterruptedTurnErrorSignals;
+    now: number;
+  }): void | Promise<void>;
   now(): number;
   log: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -143,7 +153,18 @@ export function createUsageLimitFallbackRecovery(
         fromModel: labels.from,
         toModel: labels.to,
       });
-      if (outcome === 'resumed') return { resumed: true, token: resumeToken };
+      if (outcome === 'resumed') {
+        // 记账：回切只消费这条 episode（见 usageLimitFallbackRevert.ts）。
+        try {
+          await deps.onResumed?.({ sessionId, policy, signals, now: deps.now() });
+        } catch (error: unknown) {
+          deps.log.warn('usage-limit fallback episode not recorded', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return { resumed: true, token: resumeToken };
+      }
       // 到点了却没续跑成：把等待退回候选，并交出仍然有效的那张令牌。
       const backToken = deps.rearm(sessionId, lease, null);
       return { resumed: false, token: backToken ?? resumeToken };

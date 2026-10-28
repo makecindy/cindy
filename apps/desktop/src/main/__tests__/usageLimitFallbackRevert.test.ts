@@ -1,0 +1,382 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  USAGE_LIMIT_FALLBACK_REVERT_BASE_INTERVAL_MS,
+  USAGE_LIMIT_FALLBACK_REVERT_MAX_ATTEMPTS,
+  createUsageLimitFallbackEpisode,
+  createUsageLimitFallbackRevert,
+  usageLimitFallbackRevertBackoffMs,
+  type UsageLimitFallbackRevertDeps,
+} from '../maker-ipc/usageLimitFallbackRevert.js';
+import type { SessionRuntimeProfile } from '../maker-ipc/sessionRuntimeControl.js';
+import type { SessionUsageLimitFallback } from '../maker-ipc/sessionUsageLimitFallback.js';
+import type { SessionUsageLimitFallbackEpisode } from '../maker-host/session-usage-limit-fallback-store.js';
+
+const T0 = 1_700_000_000_000;
+const MIN = 60_000;
+
+const source: SessionRuntimeProfile = {
+  agentKind: 'codex',
+  model: 'gpt-6.1-sol',
+  providerId: 'openai',
+  effort: 'medium',
+  fastMode: false,
+  agentDeviceId: null,
+};
+
+/** 降级后的组合：换来源与模型，Harness 不变。 */
+const targetRoute = { providerId: 'xd', model: 'deepseek-v4-flash' };
+const onTarget: SessionRuntimeProfile = {
+  ...source,
+  providerId: targetRoute.providerId,
+  model: targetRoute.model,
+};
+
+const policy: SessionUsageLimitFallback = { source, target: targetRoute };
+
+function episode(overrides: Partial<SessionUsageLimitFallbackEpisode> = {}): SessionUsageLimitFallbackEpisode {
+  return {
+    failedAtMs: T0,
+    knownResetAtMs: null,
+    targetRoute,
+    attempts: 0,
+    // 默认「已到期」：单测通过 now 控制时间门。
+    nextEligibleAtMs: T0,
+    ...overrides,
+  };
+}
+
+function harness(options: {
+  episodes?: Array<{ sessionId: string; policy: SessionUsageLimitFallback; episode: SessionUsageLimitFallbackEpisode }>;
+  effective?: SessionRuntimeProfile;
+  hasPendingSelection?: boolean;
+  profilesMissing?: boolean;
+  turnRunning?: boolean;
+  hasRecovery?: boolean;
+  eligible?: boolean;
+  offMachine?: boolean;
+  grouped?: boolean;
+  knownLimited?: boolean;
+  applyResult?: Partial<{ deferred: boolean; superseded: boolean; contextWindowConfirmationRequired: number }>;
+  throwOnApply?: boolean;
+} = {}) {
+  const state = {
+    now: T0,
+    episodes: new Map(
+      (options.episodes ?? [{ sessionId: 's1', policy, episode: episode() }]).map((entry) => [
+        entry.sessionId,
+        entry,
+      ]),
+    ),
+    effective: options.effective ?? { ...onTarget },
+    pending: options.hasPendingSelection ?? false,
+    turnRunning: options.turnRunning ?? false,
+    hasRecovery: options.hasRecovery ?? false,
+    eligible: options.eligible ?? true,
+  };
+  const applySourceSelection = vi.fn(async (input: {
+    sessionId: string;
+    from: SessionRuntimeProfile;
+    source: SessionRuntimeProfile;
+    generation: number;
+  }) => {
+    if (options.throwOnApply) throw new Error('switch failed');
+    const applied = { deferred: false, superseded: false, ...options.applyResult };
+    // 只有真正切成功，任务才离开降级组合；deferred / 需要确认 / superseded 都还停在原地。
+    if (
+      !applied.deferred &&
+      !applied.superseded &&
+      applied.contextWindowConfirmationRequired === undefined
+    ) {
+      state.effective = { ...input.source };
+    }
+    return applied;
+  });
+  const writeEpisode = vi.fn(async (sessionId: string, next: SessionUsageLimitFallbackEpisode | null) => {
+    const entry = state.episodes.get(sessionId);
+    if (!next) {
+      state.episodes.delete(sessionId);
+      return;
+    }
+    if (entry) state.episodes.set(sessionId, { ...entry, episode: next });
+  });
+  const claimAttempt = vi.fn(
+    async (
+      sessionId: string,
+      expected: { failedAtMs: number; attempts: number },
+      next: SessionUsageLimitFallbackEpisode,
+    ) => {
+      const entry = state.episodes.get(sessionId);
+      // 与真实 store 一样做比较-写入：期间被清掉/改过就不认领。
+      if (
+        !entry ||
+        entry.episode.failedAtMs !== expected.failedAtMs ||
+        entry.episode.attempts !== expected.attempts
+      ) {
+        return false;
+      }
+      state.episodes.set(sessionId, { ...entry, episode: next });
+      return true;
+    },
+  );
+  const deps: UsageLimitFallbackRevertDeps = {
+    readEpisodes: () => [...state.episodes.values()],
+    readProfiles: async (sessionId) => {
+      if (options.profilesMissing) return null;
+      return sessionId === 's1'
+        ? { effective: state.effective, generation: 3, hasPendingSelection: state.pending }
+        : null;
+    },
+    isEligible: async () => state.eligible,
+    runsOffThisMachine: async () => options.offMachine ?? false,
+    isBoundToProviderGroup: () => options.grouped ?? false,
+    isTurnRunning: () => state.turnRunning,
+    hasUsageLimitRecovery: () => state.hasRecovery,
+    canApplySelection: () => true,
+    withSessionLock: (_sessionId, task) => task(),
+    applySourceSelection,
+    isSourceKnownLimited: async () => options.knownLimited ?? false,
+    writeEpisode,
+    claimAttempt,
+    now: () => state.now,
+    log: { info: vi.fn(), warn: vi.fn() },
+  };
+  return { deps, applySourceSelection, writeEpisode, claimAttempt, state };
+}
+
+describe('usage-limit fallback revert (episode accounting)', () => {
+  it('没有 episode 的任务永远不切（降级没发生 / 用户已选过模型）', async () => {
+    const { deps, applySourceSelection } = harness({ episodes: [] });
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(result).toEqual({ episodes: 0, due: 0, reverted: 0, failed: 0, exhausted: 0 });
+  });
+
+  it('没到已知重置时刻就不切', async () => {
+    const { deps, applySourceSelection } = harness({
+      episodes: [
+        {
+          sessionId: 's1',
+          policy,
+          episode: episode({ knownResetAtMs: T0 + 60 * MIN, nextEligibleAtMs: T0 }),
+        },
+      ],
+    });
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(result.due).toBe(0);
+  });
+
+  it('没到退避时刻就不切', async () => {
+    const { deps, applySourceSelection } = harness({
+      episodes: [
+        {
+          sessionId: 's1',
+          policy,
+          episode: episode({ knownResetAtMs: T0 - 1, nextEligibleAtMs: T0 + 5 * MIN }),
+        },
+      ],
+    });
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('到期且切成功 → 用 policy.source 的完整组合切回，并清掉 episode', async () => {
+    const { deps, applySourceSelection, writeEpisode } = harness({
+      episodes: [
+        {
+          sessionId: 's1',
+          policy,
+          episode: episode({ knownResetAtMs: T0 - 1, nextEligibleAtMs: T0 }),
+        },
+      ],
+    });
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).toHaveBeenCalledWith({
+      sessionId: 's1',
+      from: expect.objectContaining({ providerId: targetRoute.providerId, model: targetRoute.model }),
+      source: policy.source,
+      generation: 3,
+    });
+    expect(writeEpisode).toHaveBeenLastCalledWith('s1', null);
+    expect(result.reverted).toBe(1);
+  });
+
+  it('失败后 attempts 递增、退避翻倍，用完预算就清 episode 不再试', async () => {
+    const { deps, applySourceSelection, state } = harness({
+      applyResult: { deferred: true },
+    });
+    const revert = createUsageLimitFallbackRevert(deps);
+
+    for (let attempt = 1; attempt <= USAGE_LIMIT_FALLBACK_REVERT_MAX_ATTEMPTS; attempt += 1) {
+      const entry = [...state.episodes.values()][0];
+      if (!entry) break;
+      const before = entry.episode.attempts;
+      // 每次到点再扫。
+      state.now = Math.max(state.now, entry.episode.nextEligibleAtMs);
+      await revert.sweep();
+      if (attempt < USAGE_LIMIT_FALLBACK_REVERT_MAX_ATTEMPTS) {
+        const next = [...state.episodes.values()][0]?.episode;
+        expect(next?.attempts).toBe(before + 1);
+        expect(next?.nextEligibleAtMs).toBe(
+          state.now + USAGE_LIMIT_FALLBACK_REVERT_BASE_INTERVAL_MS * 2 ** before,
+        );
+      }
+    }
+
+    expect(state.episodes.size).toBe(0);
+    // 预算用完后即便再扫也不会动手。
+    state.now += 24 * 60 * MIN;
+    await revert.sweep();
+    expect(applySourceSelection).toHaveBeenCalledTimes(USAGE_LIMIT_FALLBACK_REVERT_MAX_ATTEMPTS);
+  });
+
+  it('退避公式：第 n 次尝试后等 base * 2^(n-1)', () => {
+    expect(usageLimitFallbackRevertBackoffMs(1)).toBe(USAGE_LIMIT_FALLBACK_REVERT_BASE_INTERVAL_MS);
+    expect(usageLimitFallbackRevertBackoffMs(2)).toBe(USAGE_LIMIT_FALLBACK_REVERT_BASE_INTERVAL_MS * 2);
+    expect(usageLimitFallbackRevertBackoffMs(3)).toBe(USAGE_LIMIT_FALLBACK_REVERT_BASE_INTERVAL_MS * 4);
+  });
+
+  it('episode 初始时间门：有重置时刻取它（至少 1 分钟），没有则 30 分钟宽限', () => {
+    const withReset = createUsageLimitFallbackEpisode({
+      now: T0,
+      knownResetAtMs: T0 + 10 * MIN,
+      targetRoute,
+    });
+    expect(withReset.nextEligibleAtMs).toBe(T0 + 10 * MIN);
+
+    const resetAlreadyPast = createUsageLimitFallbackEpisode({
+      now: T0,
+      knownResetAtMs: T0 - MIN,
+      targetRoute,
+    });
+    expect(resetAlreadyPast.nextEligibleAtMs).toBe(T0 + MIN);
+
+    const noReset = createUsageLimitFallbackEpisode({ now: T0, knownResetAtMs: null, targetRoute });
+    expect(noReset.nextEligibleAtMs).toBe(T0 + 30 * MIN);
+    expect(noReset.attempts).toBe(0);
+    expect(noReset.failedAtMs).toBe(T0);
+  });
+
+  it('共享 / 暂停 / 远程 / SSH（isEligible=false）时不切', async () => {
+    const { deps, applySourceSelection } = harness({ eligible: false });
+    await createUsageLimitFallbackRevert(deps).sweep();
+    expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('Agent 在别的电脑运行（含 SSH 远程）时不切', async () => {
+    const { deps, applySourceSelection } = harness({ offMachine: true });
+    await createUsageLimitFallbackRevert(deps).sweep();
+    expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('归供应商组的任务不切', async () => {
+    const { deps, applySourceSelection } = harness({ grouped: true });
+    await createUsageLimitFallbackRevert(deps).sweep();
+    expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('待生效选模存在时不切', async () => {
+    const { deps, applySourceSelection } = harness({ hasPendingSelection: true });
+    await createUsageLimitFallbackRevert(deps).sweep();
+    expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('锁内发现刚挂上额度恢复 → 不切，也不消耗一次尝试', async () => {
+    const { deps, applySourceSelection, state, claimAttempt } = harness();
+    deps.withSessionLock = async (_sessionId, task) => {
+      state.hasRecovery = true; // 判定之后、进锁之前挂上了等待
+      return task();
+    };
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(claimAttempt).not.toHaveBeenCalled();
+    expect([...state.episodes.values()][0]?.episode.attempts).toBe(0);
+  });
+
+  it('扫到一半用户选了同一个模型（episode 被清）→ 不切，也不把 episode 复活', async () => {
+    const { deps, applySourceSelection, state } = harness();
+    deps.withSessionLock = async (_sessionId, task) => {
+      // 模拟用户在锁外选了模型：SET_MODEL 先清 episode，随后才轮到这里。
+      state.episodes.delete('s1');
+      return task();
+    };
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(state.episodes.size).toBe(0);
+  });
+
+  it('锁内发现任务刚开始共享（isEligible 变 false）→ 不切', async () => {
+    const { deps, applySourceSelection, state } = harness();
+    deps.withSessionLock = async (_sessionId, task) => {
+      state.eligible = false; // 判定之后、进锁之前任务被共享/暂停
+      return task();
+    };
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect([...state.episodes.values()][0]?.episode.attempts).toBe(0);
+  });
+
+  it('仍在限额里（快照否定条件）不白试，也不消耗尝试', async () => {
+    const { deps, applySourceSelection, writeEpisode } = harness({ knownLimited: true });
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(writeEpisode).not.toHaveBeenCalled();
+  });
+
+  it('已经不在降级组合上（用户换走过）→ 清 episode、不切', async () => {
+    const { deps, applySourceSelection, state, writeEpisode } = harness({
+      effective: { ...source, model: 'glm-4.6', providerId: 'zhipu' },
+    });
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(writeEpisode).toHaveBeenCalledWith('s1', null);
+    expect(state.episodes.size).toBe(0);
+  });
+
+  it('任务已不存在 → 清 episode', async () => {
+    const { deps, applySourceSelection, state } = harness({ profilesMissing: true });
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).not.toHaveBeenCalled();
+    expect(state.episodes.size).toBe(0);
+  });
+
+  it('需要弹上下文窗口确认也算失败（自动动作不替用户跳过确认）', async () => {
+    const { deps, applySourceSelection, state } = harness({
+      applyResult: { contextWindowConfirmationRequired: 200_000 },
+    });
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(applySourceSelection).toHaveBeenCalledTimes(1);
+    expect(result.reverted).toBe(0);
+    expect(result.failed).toBe(1);
+    expect([...state.episodes.values()][0]?.episode.attempts).toBe(1);
+  });
+
+  it('单个任务抛错只记警告，不影响整轮', async () => {
+    const { deps } = harness({ throwOnApply: true });
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(result.reverted).toBe(0);
+    expect(deps.log.warn).toHaveBeenCalled();
+  });
+
+  it('同一时刻只跑一轮扫描', async () => {
+    const { deps, applySourceSelection } = harness();
+    const revert = createUsageLimitFallbackRevert(deps);
+
+    const [a, b] = await Promise.all([revert.sweep(), revert.sweep()]);
+    expect(applySourceSelection).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+  });
+});

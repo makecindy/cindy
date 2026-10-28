@@ -138,7 +138,7 @@ import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, com
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
-import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { clearXaiRateLimitSnapshot, observeUsageChanges } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
@@ -1274,8 +1274,12 @@ import {
 } from '../maker-host/session-effort-store.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
+  claimSessionUsageLimitFallbackEpisodeAttempt,
+  readAllSessionUsageLimitFallbackEpisodes,
+  readAllSessionUsageLimitFallbacks,
   readSessionUsageLimitFallback,
   writeSessionUsageLimitFallback,
+  writeSessionUsageLimitFallbackEpisode,
 } from '../maker-host/session-usage-limit-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -1498,6 +1502,10 @@ import {
   type UsageLimitFallbackRoute,
 } from './sessionUsageLimitFallback.js';
 import { createUsageLimitFallbackRecovery } from './usageLimitFallbackRecovery.js';
+import {
+  createUsageLimitFallbackEpisode,
+  createUsageLimitFallbackRevert,
+} from './usageLimitFallbackRevert.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
 import {
   isBotCandidateUnavailable,
@@ -11337,6 +11345,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
     onUserRouteSelectionLanded: async (sessionId) => {
+      // 用户选择在发送时落地（含同值重选）也算显式接手：回切 episode 作废。
+      await writeSessionUsageLimitFallbackEpisode(sessionId, null).catch(() => undefined);
       await updateScheduledPreference(sessionId, null);
       await markImSessionManualRouteOverride(sessionId);
     },
@@ -20022,9 +20032,114 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.continueAfterUsageLimitReset(sessionId, token, info),
     armResetWait: (sessionId, signals, token) =>
       usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    // 降级真正成功续跑 → 记一条回切 episode。重置时刻只取那次错误本身能确定的值
+    // （不查快照：快照过了重置点会给出假的 limited:false）；拿不到就留 null 走宽限期。
+    onResumed: async ({ sessionId, policy, signals, now }) => {
+      await writeSessionUsageLimitFallbackEpisode(
+        sessionId,
+        createUsageLimitFallbackEpisode({
+          now,
+          knownResetAtMs: readTurnUsageResetAt(signals, now, { localTimeZoneTrusted: true }),
+          targetRoute: policy.target,
+        }),
+      );
+    },
     now: () => Date.now(),
     log,
   });
+
+  /**
+   * 回切（usage-limit-auto-continue.md § 额度恢复后回切）：只消费 episode，不猜状态。
+   * 快照在这里只做否定条件 —— 过了重置点的旧快照会给出假的 `limited:false`。
+   */
+  const usageLimitFallbackRevert = createUsageLimitFallbackRevert({
+    readEpisodes: () => {
+      const policies = new Map(
+        readAllSessionUsageLimitFallbacks().map(({ sessionId, policy }) => [sessionId, policy]),
+      );
+      return readAllSessionUsageLimitFallbackEpisodes().flatMap(({ sessionId, episode }) => {
+        const policy = policies.get(sessionId);
+        return policy ? [{ sessionId, policy, episode }] : [];
+      });
+    },
+    readProfiles: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      return profiles
+        ? {
+            effective: profiles.effective,
+            generation: profiles.control.generation,
+            hasPendingSelection: profiles.pendingMutation !== null,
+          }
+        : null;
+    },
+    isEligible: (sessionId) => isUsageLimitAutoResumeEligible(sessionId),
+    runsOffThisMachine: (sessionId) => sessionRunsOffThisMachine(sessionId),
+    isBoundToProviderGroup: (sessionId) => Boolean(readProviderGroupBinding(sessionId)),
+    isTurnRunning: (sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false,
+    hasUsageLimitRecovery: (sessionId) =>
+      agentInputCoordinatorHolder?.hasUsageLimitRecovery(sessionId) === true,
+    canApplySelection: (sessionId, generation) =>
+      canApplyAutomaticRuntimeSelection(sessionId, generation),
+    withSessionLock: (sessionId, task) => withSendToSessionLock(sessionId, task),
+    applySourceSelection: ({ sessionId, from, source, generation }) =>
+      applySessionRuntimeSelection(
+        sessionId,
+        source.model,
+        source.providerId,
+        { effort: source.effort, fastMode: source.fastMode },
+        {
+          source: 'agent',
+          expectedGeneration: generation,
+          effectiveProfile: from,
+          routeExplicit: true,
+          deferWhileRunning: true,
+        },
+      ),
+    isSourceKnownLimited: async (policy) => {
+      const limit = await readAccountUsageLimit(
+        policy.source.agentKind,
+        policy.source.providerId,
+        policy.source.model,
+      );
+      // 只当否定条件用：true = 确定仍受限，这一轮不白试。绝不当「已恢复」的证据。
+      return limit?.limited === true;
+    },
+    writeEpisode: (sessionId, episode) =>
+      writeSessionUsageLimitFallbackEpisode(sessionId, episode),
+    claimAttempt: (sessionId, expected, next) =>
+      claimSessionUsageLimitFallbackEpisodeAttempt(sessionId, expected, next),
+    now: () => Date.now(),
+    log,
+  });
+
+  // 触发：用量快照广播防抖 + 60s 兜底 + 启动补扫。sweep 自己只看 episode 与时间，
+  // 没有到期 episode 时几乎零成本（只读缓存文件，不做 DB 读）。
+  let revertSweepTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleUsageLimitFallbackRevert = (): void => {
+    if (revertSweepTimer) return;
+    revertSweepTimer = setTimeout(() => {
+      revertSweepTimer = null;
+      void usageLimitFallbackRevert.sweep().catch((error: unknown) => {
+        log.warn('usage-limit fallback revert sweep failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 2_000);
+  };
+  const unsubscribeRevertUsageChanges = observeUsageChanges((kind) => {
+    if (kind === 'codex' || kind === 'claude' || kind === 'xai' || kind === 'subscription') {
+      scheduleUsageLimitFallbackRevert();
+    }
+  });
+  const revertSweepInterval = setInterval(scheduleUsageLimitFallbackRevert, 60_000);
+  onQuit('usage-limit-fallback-revert', () => {
+    clearInterval(revertSweepInterval);
+    if (revertSweepTimer) clearTimeout(revertSweepTimer);
+    revertSweepTimer = null;
+    unsubscribeRevertUsageChanges();
+  });
+  // 启动后扫一次：关着应用的那段时间可能已经过了重置点。
+  scheduleUsageLimitFallbackRevert();
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
@@ -24542,6 +24657,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         usageLimitAutoResume.noteUserAction(sessionId);
         providerGroupService?.noteUserAction(sessionId);
         agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId);
+        // 用户自己选了模型或来源（含选回同一个值）→ 回切 episode 作废：
+        // 之后不再自动把这条任务改回「原路线」，选择权归用户。
+        void writeSessionUsageLimitFallbackEpisode(sessionId, null).catch(() => undefined);
       }
       return handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' });
     },
