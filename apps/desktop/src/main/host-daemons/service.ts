@@ -144,7 +144,12 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
 
         if (!owner) {
           const mtime = task.definitionMtimeMs;
-          const alreadyMissed = mtime !== null && deps.ledger.getMissMtime(task.id) === mtime;
+          // 时间窗还没过去时必须重算：任务可能是刚由会话创建的，工具调用行可能比
+          // 这次扫描晚落库（用户先打开面板、再回到会话），此时记下的 miss 会让它
+          // 永远停在「无关」里。窗口过去之后才相信 miss。
+          const windowOpen = mtime !== null && capturedAtMs <= mtime + ATTRIBUTION_WINDOW_MS;
+          const alreadyMissed =
+            mtime !== null && !windowOpen && deps.ledger.getMissMtime(task.id) === mtime;
           if (mtime === null || alreadyMissed || traces >= MAX_TRACES_PER_SCAN) {
             unrelatedCount += 1;
             continue;

@@ -395,6 +395,12 @@
   text-align: center;
 }
 
+/* 扫描/失败/空态在同一位置居中：三态切换不跳位。 */
 .host-daemons-loading {
   height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
 }

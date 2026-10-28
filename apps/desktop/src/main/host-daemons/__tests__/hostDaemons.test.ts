@@ -155,6 +155,63 @@ describe('hostDaemons service', () => {
     });
   });
 
+  // 用户先打开面板、再回到会话：第一次扫描时工具调用行还没落库，miss 不能让这条任务
+  // 永远停在「无关」里；时间窗（mtime +5min）过后才相信 miss，避免反复扫全库。
+  it('re-traces a missed task while its attribution window is still open', async () => {
+    const createdMs = 1_800_000_000_000;
+    let clockMs = createdMs + 60_000;
+    let rows: ToolMessageRow[] = [];
+    let queries = 0;
+    const deps = {
+      scanTasks: async () => [task({ id: '\fresh', name: 'fresh', definitionMtimeMs: createdMs })],
+      readToolMessages: async () => {
+        queries += 1;
+        return rows;
+      },
+      ledger: memoryLedger(),
+      stopTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32' as const,
+      now: () => clockMs,
+    };
+
+    expect((await createHostDaemonsService(deps).list()).entries).toEqual([]);
+    rows = [{ sessionId: 's1', title: '建任务', content: 'schtasks /create /tn fresh' }];
+    clockMs = createdMs + 3 * 60_000;
+    expect((await createHostDaemonsService(deps).list()).entries.map((entry) => entry.name)).toEqual([
+      'fresh',
+    ]);
+    expect(queries).toBe(2);
+
+    // 已归属的条目不再查询（稳态零成本）。
+    clockMs = createdMs + 30 * 60_000;
+    expect((await createHostDaemonsService(deps).list()).entries.map((entry) => entry.name)).toEqual([
+      'fresh',
+    ]);
+    expect(queries).toBe(2);
+  });
+
+  it('stops re-querying an unattributed task once its window closed', async () => {
+    const createdMs = 1_800_000_000_000;
+    let queries = 0;
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task({ id: '\never', name: 'never', definitionMtimeMs: createdMs })],
+      readToolMessages: async () => {
+        queries += 1;
+        return [];
+      },
+      ledger: memoryLedger(),
+      stopTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => createdMs + 30 * 60_000,
+    });
+
+    expect((await service.list()).unrelatedCount).toBe(1);
+    expect((await service.list()).unrelatedCount).toBe(1);
+    expect(queries).toBe(1);
+  });
+
   it('falls back to an unsupported snapshot off Windows', async () => {
     const service = createHostDaemonsService({
       scanTasks: async () => {
