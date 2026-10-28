@@ -31,6 +31,18 @@ let minSide: CGFloat = 4
 let maxSnapLayer = Int(CGWindowLevelForKey(.dockWindow))
 var elementDeadline: Date?
 
+// Window-targeted posting needs both the window number and its coordinate
+// stamp. Without the latter, Chromium silently drops the wheel event. Keep
+// this optional SPI dynamically resolved: unsupported systems fail closed,
+// never fall back to the HID tap (which moves the user's system pointer).
+// CGPoint's two CGFloat fields use the same ABI as two Doubles on macOS.
+typealias SetScrollWindowLocation = @convention(c) (CGEvent, Double, Double) -> Void
+let setScrollWindowLocation: SetScrollWindowLocation? = {
+  guard let framework = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_LOCAL),
+    let symbol = dlsym(framework, "CGEventSetWindowLocation") else { return nil }
+  return unsafeBitCast(symbol, to: SetScrollWindowLocation.self)
+}()
+
 func emit(_ object: [String: Any]) {
   guard let data = try? JSONSerialization.data(withJSONObject: object),
     let line = String(data: data, encoding: .utf8)
@@ -63,6 +75,30 @@ func onScreenWindows() -> [[String: Any]] {
     result.append(["hwnd": number, "pid": pid, "rect": rectArray(rect)])
   }
   return result
+}
+
+func scrollInputTarget(_ point: CGPoint) -> [String: Any]? {
+  guard AXIsProcessTrusted() else { return nil }
+  // A transparent, input-ignoring window can still be first in CGWindow order.
+  // Resolve its receiving app through AX before choosing that app's front window.
+  // Only retry our own overlay while WindowServer applies ignoresMouseEvents.
+  let system = AXUIElementCreateSystemWide()
+  AXUIElementSetMessagingTimeout(system, 0.05)
+  var hitPid: pid_t = 0
+  for attempt in 0..<11 {
+    var hit: AXUIElement?
+    AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit)
+    hitPid = 0
+    if let hit = hit { AXUIElementGetPid(hit, &hitPid) }
+    if hitPid != getppid() || attempt == 10 { break }
+    usleep(10000)
+  }
+  guard hitPid > 0 else { return nil }
+  return onScreenWindows().first { window in
+    guard window["pid"] as? Int == Int(hitPid) else { return false }
+    guard let rect = window["rect"] as? [Double] else { return false }
+    return point.x >= rect[0] && point.x < rect[2] && point.y >= rect[1] && point.y < rect[3]
+  }
 }
 
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -228,9 +264,17 @@ while let line = readLine() {
   else { continue }
   let id = request["id"] ?? NSNull()
   switch request["op"] as? String {
+  case "scroll-target":
+    guard let x = (request["x"] as? NSNumber)?.doubleValue,
+      let y = (request["y"] as? NSNumber)?.doubleValue, x.isFinite, y.isFinite,
+      let target = scrollInputTarget(CGPoint(x: x, y: y))
+    else { emit(["id": id, "ok": false]); continue }
+    emit(["id": id, "hwnd": target["hwnd"]!, "pid": target["pid"]!])
   case "scroll":
     guard AXIsProcessTrusted(),
+      let setScrollWindowLocation = setScrollWindowLocation,
       let pid = (request["pid"] as? NSNumber)?.int32Value,
+      let windowId = (request["hwnd"] as? NSNumber)?.intValue,
       let x = (request["x"] as? NSNumber)?.doubleValue,
       let y = (request["y"] as? NSNumber)?.doubleValue,
       let delta = (request["delta"] as? NSNumber)?.int32Value,
@@ -239,12 +283,22 @@ while let line = readLine() {
       let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0)
     else { emit(["id": id, "ok": false]); continue }
     let point = CGPoint(x: x, y: y)
-    var hit: AXUIElement?
-    AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(x), Float(y), &hit)
-    var hitPid: pid_t = 0
-    if let hit = hit { AXUIElementGetPid(hit, &hitPid) }
-    guard hitPid == pid else { emit(["id": id, "ok": false]); continue }
+    // Revalidate the same captured window on every step. Covering it with a
+    // different input window stops scrolling instead of redirecting the event.
+    guard let target = scrollInputTarget(point),
+      target["hwnd"] as? Int == windowId, target["pid"] as? Int == Int(pid)
+    else { emit(["id": id, "ok": false]); continue }
     event.location = point
+    event.flags = []
+    // CoreGraphics' windowNumber field (51) is not in the public Swift enum.
+    // The coordinate stamp is screen-space, despite the SPI's name; routing
+    // derives the receiving window's local point. Post exactly once to the
+    // revalidated owner, without moving the cursor or changing focus.
+    event.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(windowId))
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowId))
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowId))
+    event.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(pid))
+    setScrollWindowLocation(event, x, y)
     event.postToPid(pid)
     emit(["id": id, "ok": true])
   case "keys":

@@ -119,6 +119,8 @@ import {
   type SchedulerQueueDeps,
 } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
+import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SessionStatus = Parameters<Parameters<Session['onStatusChange']>[0]>[0];
@@ -947,6 +949,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(req.sessionId).toBe(SESSION_ID);
       expect(req.text).toContain('PR #971 heartbeat prompt');
       expect(req.text).toContain('[Scheduled run context]');
+      expect(req.text).toContain('Unattended: nobody is watching this run. Do not call ask_user_question');
       expect(req.text).toContain(
         '\nschedule: 「PR #971 心跳」(schedule_id: schedule-hb)\nfiredAtEpochMs: 1700000000100',
       );
@@ -972,6 +975,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       // 排队等待仍属于当前 Desktop turn，不能被未来的 scheduler turn
       // 提前标成 headless，否则当前 turn 的插件设置卡会被错误抑制。
       expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+      expect(isUnattendedTurn(SESSION_ID)).toBe(false);
 
       // drain 派发 → runner 挂 turn 监听 → done 收尾。
       await queue.accept();
@@ -980,6 +984,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       });
       await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
       expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
+      // 无人值守标记与 headless 同时生效：本轮的任何提问都按系统收口处理。
+      expect(isUnattendedTurn(SESSION_ID)).toBe(true);
       harness.emit({
         type: 'text',
         data: { text: 'heartbeat summary', isFinal: true },
@@ -993,6 +999,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       // listener 已摘干净,不泄漏。
       expect(harness.listenerCount()).toBe(0);
       expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+      expect(isUnattendedTurn(SESSION_ID)).toBe(false);
       expect(harness.setVendorOptions).toHaveBeenLastCalledWith({
         [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
       });
@@ -1001,6 +1008,55 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
     },
   );
+
+  it('reports a plan review it had to decline in the run result', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+    // 这轮在 plan 模式下被自动拒绝了一次计划审批。
+    noteUnattendedPlanReviewDeclined(SESSION_ID);
+    harness.emit({
+      type: 'text',
+      data: { text: 'plan: do the thing', isFinal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+    const result = await fire;
+    expect(result.resultText).toContain('plan: do the thing');
+    expect(result.resultText).toContain('[plan review declined]');
+  });
+
+  it('releases the unattended mark when the turn ends, not when the run finishing notifying', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    let releaseNotify!: () => void;
+    const notifyGate = new Promise<void>((resolve) => { releaseNotify = resolve; });
+    notifier.notify.mockImplementation(async () => { await notifyGate; });
+
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+    expect(isUnattendedTurn(SESSION_ID)).toBe(true);
+
+    // turn 结束(done)后会话立刻可接用户下一条消息,而 run 还在等通知落地。
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await vi.waitFor(() => expect(isUnattendedTurn(SESSION_ID)).toBe(false));
+    // ghost-setup 标记仍按 fire 生命周期存在,两者互不影响。
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
+
+    releaseNotify();
+    await fire;
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+    expect(isUnattendedTurn(SESSION_ID)).toBe(false);
+  });
 
   it.each(
     ['result', 'finalText'].flatMap((field) =>

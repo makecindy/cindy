@@ -128,6 +128,13 @@ interface Pending {
 
 /** 一次截图会话内的识别程序进程。所有请求失败都返回空结果, 不抛错。 */
 export class SnapshotHelper {
+  /** Resolve through input-transparent overlays, but only within the captured windows. */
+  async scrollTarget(candidates: readonly SnapshotWindow[], x: number, y: number): Promise<SnapshotWindow | null> {
+    const response = await this.request({ op: 'scroll-target', x, y });
+    return candidates.find(({ handle, pid, rect }) => handle === response?.hwnd && pid === response?.pid
+      && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]) ?? null;
+  }
+
   /** One bounded wheel step in the captured window; never an arbitrary input bridge. */
   async scroll(window: SnapshotWindow, x: number, y: number, delta: number): Promise<boolean> {
     const response = await this.request({ op: 'scroll', hwnd: window.handle, pid: window.pid, x, y, delta });

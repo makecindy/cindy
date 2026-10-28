@@ -37,7 +37,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
+const PI_BINARY = process.env.CINDY_PI_MCP_TEST_BINARY || path.join(
   REPO_ROOT,
   'apps',
   'pi-bin',
@@ -184,6 +184,17 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('verify MCP structured result')) {
+    const scenario = requestBody.includes('structured failure') ? 'failure'
+      : requestBody.includes('rich failure') ? 'rich-failure' : 'success';
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'result_payload' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'result_payload', args: { scenario } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(3, 'Result received');
+  }
   if (requestBody.includes('local host tool isolation')) {
     const calls = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -625,6 +636,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           })}]};
         });
       } else if (isWorkspace) {
+        server.registerTool('result_payload', {
+          description: 'Return structured workspace data', inputSchema: { scenario: z.enum(['success', 'failure', 'rich-failure']) },
+        }, async ({ scenario }) => ({
+          content: scenario === 'rich-failure' ? [
+            { type: 'text' as const, text: 'Screenshot of the failing input' },
+            { type: 'image' as const, mimeType: 'image/png',
+              data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' },
+            { type: 'text' as const, text: 'Correct the highlighted field' },
+          ] : [],
+          structuredContent: { status: scenario, resultCanary: 'MCP_STRUCTURED_MODEL_CANARY' },
+          ...(scenario !== 'success' ? { isError: true } : {}),
+          _meta: { privateCanary: 'MCP_CLIENT_ONLY_CANARY' },
+        }));
         server.registerTool(
           'status',
           { description: 'Read the workspace status', inputSchema: {} },
@@ -1130,6 +1154,32 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((d) => d.text)
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it.each(['success', 'failure', 'rich-failure'] as const)(
+    'preserves MCP structured %s data in the real Pi model request',
+    { timeout: 90_000 },
+    async (scenario) => {
+      const { requests, events } = await runOneTurn('bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'allow' }), 'local-multi',
+        'verify MCP structured result ' + (scenario === 'failure' ? 'structured failure'
+          : scenario === 'rich-failure' ? 'rich failure' : 'success'));
+      expect(requests).toHaveLength(3);
+      const messages = requests.at(-1)!.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      const result = messages.flatMap(message => message.content).filter(block => block.type === 'tool_result').at(-1)!;
+      expect(JSON.stringify(result.content)).toContain('MCP_STRUCTURED_MODEL_CANARY');
+      expect(Boolean(result.is_error)).toBe(scenario !== 'success');
+      const toolResult = events.filter(event => event.type === 'tool_result_full').at(-1)!;
+      expect((toolResult.data as { isError: boolean }).isError).toBe(scenario !== 'success');
+      if (scenario === 'rich-failure') {
+        const blocks = result.content as Array<Record<string, unknown>>;
+        expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
+        expect(blocks[0].text).toBe('Screenshot of the failing input');
+        expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
+        expect(blocks[2].text).toBe('Correct the highlighted field');
+      }
+      expect(JSON.stringify(requests)).not.toContain('MCP_CLIENT_ONLY_CANARY');
     },
   );
 

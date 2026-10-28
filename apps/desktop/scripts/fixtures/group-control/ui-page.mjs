@@ -33,6 +33,11 @@ export default {
   notCovered:
     'Sending, round control, real device-link control and revocation, pending interactions, plans and attachments; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
   cases: {
+    'remote-limits': {
+      about: '#6835: lane-unavailable notices show device and total task limits with recovery advice',
+      viewport: { width: 720, height: 700 },
+      data: { ...base, sidebar: false, remoteLimits: true },
+    },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
     'work-reading': { about: 'Actual group work status, scenario data: file reading', data: { ...base, messages: 2, workState: 'reading-file' } },
@@ -122,6 +127,14 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'remote-limits') {
+      const timeline = page.getByTestId('bot-group-timeline');
+      for (const [i, code] of ['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'].entries()) {
+        const expected = (await ui.t(`bots.groupChat.notice.runtimeFailure.${code}`)).replace('{{name}}', members[i].name);
+        assert.ok((await timeline.innerText()).includes(expected));
+      }
+      return;
+    }
     if (definition.data.workState) {
       const state = definition.data.workState;
       await ui.emit('sessionActivity', [{ sessionId: 'fixture-work', phase: 'running',

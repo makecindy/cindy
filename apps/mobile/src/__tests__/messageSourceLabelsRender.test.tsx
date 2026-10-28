@@ -116,6 +116,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
   FileArchive: () => null,
@@ -312,6 +313,28 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+it('diagnoses a historical execution error through the real message renderer', () => {
+  const raw = 'provider mismatch api_key=private-history-value';
+  const onDiagnoseError = vi.fn();
+  const { host, unmount } = mount([{
+    ...msg('historical-error', JSON.stringify({ message: raw }), null), role: 'error',
+  }], { onDiagnoseError });
+  try {
+    expect(host.querySelector('[data-testid="agentError.diagnose"]')).toBeNull();
+    const toggle = [...host.querySelectorAll<HTMLElement>('div')].find(
+      (node) => node.textContent === i18n.t('session.tail.showErrorDetails') && node.onclick,
+    );
+    expect(toggle).toBeTruthy();
+    act(() => toggle!.click());
+    expect(host.textContent).toContain('provider mismatch');
+    expect(host.textContent).not.toContain('private-history-value');
+    act(() => host.querySelector<HTMLElement>('[data-testid="agentError.diagnose"]')!.click());
+    expect(onDiagnoseError).toHaveBeenCalledWith(expect.objectContaining({ details: raw }));
+  } finally {
+    unmount();
+  }
 });
 
 describe("device source label", () => {

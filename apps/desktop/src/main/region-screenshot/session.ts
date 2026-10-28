@@ -99,7 +99,7 @@ export class RegionScreenshotSession {
   private videoCapture: RegionVideoCapture | null = null;
   private recordingControls: RegionRect | null = null;
   private draggingControls = false;
-  private live: { member: Member; selection: RegionRect; mode: RegionCaptureMode; sampling: boolean; lastSample: number; editing: boolean; layout: ScrollCaptureLayout | null; automatic: boolean; target: SnapshotWindow | null; ignoring: boolean; previewHeight: number } | null = null;
+  private live: { member: Member; selection: RegionRect; mode: RegionCaptureMode; sampling: boolean; lastSample: number; editing: boolean; layout: ScrollCaptureLayout | null; automatic: boolean; target: SnapshotWindow | null; targetResolved: boolean; ignoring: boolean; previewHeight: number } | null = null;
   private scrollPointerTimer: ReturnType<typeof setInterval> | null = null;
   private revealTimer: ReturnType<typeof setTimeout> | null = null;
   private releaseEscapeShortcut: (() => void) | null = null;
@@ -349,7 +349,7 @@ export class RegionScreenshotSession {
     const center = { x: display.bounds.x + selection.x + selection.width / 2, y: display.bounds.y + selection.y + selection.height / 2 };
     const physical = process.platform === 'win32' ? screen.dipToScreenPoint(center) : center;
     const target = this.deps.windows.find(({ rect }) => physical.x >= rect[0] && physical.x < rect[2] && physical.y >= rect[1] && physical.y < rect[3]) ?? null;
-    this.live = { member, selection, mode: mode as RegionCaptureMode, sampling: false, lastSample: 0, editing: false, layout, automatic: false, target, ignoring: false, previewHeight: layout ? Math.min(layout.preview.height, Math.ceil(croppedSize.height * layout.preview.width / croppedSize.width)) : 0 };
+    this.live = { member, selection, mode: mode as RegionCaptureMode, sampling: false, lastSample: 0, editing: false, layout, automatic: false, target, targetResolved: process.platform !== 'darwin', ignoring: false, previewHeight: layout ? Math.min(layout.preview.height, Math.ceil(croppedSize.height * layout.preview.width / croppedSize.width)) : 0 };
     for (const other of this.members.values()) {
       if (other === member) continue;
       hideScreenshotOverlay(other.overlay.window);
@@ -455,9 +455,22 @@ export class RegionScreenshotSession {
         // Let native hit-testing see the source, including when Stop is hovered.
         member.overlay.window.setIgnoreMouseEvents(true, { forward: true });
         live.ignoring = true;
-        const ok = await this.deps.helper.scroll(live.target, Math.round(point.x), Math.round(point.y), -Math.max(1, Math.min(120, Math.floor(live.selection.height / 5))));
-        if (this.closed || this.live !== live || live.editing) return null;
-        if (!ok) live.automatic = false;
+        if (!live.targetResolved) {
+          const target = await this.deps.helper.scrollTarget(this.deps.windows, Math.round(point.x), Math.round(point.y));
+          if (this.closed || this.live !== live || live.editing) return null;
+          if (target) {
+            live.target = target;
+            live.targetResolved = true;
+          } else {
+            live.automatic = false;
+          }
+        }
+        // Stop may arrive while the native input target is being resolved.
+        if (live.automatic) {
+          const ok = await this.deps.helper.scroll(live.target, Math.round(point.x), Math.round(point.y), -Math.max(1, Math.min(120, Math.floor(live.selection.height / 5))));
+          if (this.closed || this.live !== live || live.editing) return null;
+          if (!ok) live.automatic = false;
+        }
         this.updateScrollHitTest();
       }
       const point = screen.getCursorScreenPoint();

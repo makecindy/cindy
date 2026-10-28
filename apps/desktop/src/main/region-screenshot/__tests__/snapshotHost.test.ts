@@ -132,6 +132,26 @@ describe('snapshot helper failure isolation', () => {
     await expect(result).resolves.toEqual({ rects: [[20, 30, 60, 70]], ...expected });
   });
 
+  // Unit: resolving through a transparent overlay must not admit a new window
+  // or reused handle outside the original capture. Existing tests only read lists.
+  it('resolves scrolling only to a captured window containing the selection center', async () => {
+    const overlay = { handle: 4, pid: 8, rect: [0, 0, 100, 100] as [number, number, number, number] };
+    const source = { handle: 5, pid: 9, rect: [0, 0, 20, 30] as [number, number, number, number] };
+    const candidates = [overlay, source];
+    const valid = helper.scrollTarget(candidates, 10, 10);
+    child.stdout.write(JSON.stringify({ id: 1, hwnd: 5, pid: 9 }) + '\n');
+    await expect(valid).resolves.toEqual(source);
+    const reused = helper.scrollTarget(candidates, 10, 10);
+    child.stdout.write(JSON.stringify({ id: 2, hwnd: 5, pid: 10 }) + '\n');
+    await expect(reused).resolves.toBeNull();
+    const newWindow = helper.scrollTarget(candidates, 10, 10);
+    child.stdout.write(JSON.stringify({ id: 3, hwnd: 6, pid: 9 }) + '\n');
+    await expect(newWindow).resolves.toBeNull();
+    const outside = helper.scrollTarget(candidates, 25, 10);
+    child.stdout.write(JSON.stringify({ id: 4, hwnd: 5, pid: 9 }) + '\n');
+    await expect(outside).resolves.toBeNull();
+  });
+
   // Unit: the production start entry on unsupported platforms must keep screen
   // capture optional, without attempting to spawn the Windows helper binary.
   it('does not start a native helper on an unsupported platform', async () => {

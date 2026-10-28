@@ -1319,6 +1319,7 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].replyContext).toEqual({
+      messageId: '40',
       author: 'Cindy',
       text: '方案 A: 先改 transport',
       isBot: true,

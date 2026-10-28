@@ -227,7 +227,7 @@ import {
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
-import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -755,6 +755,8 @@ import {
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import {
   createPiIdleReleaseWatcher,
+  piIdleReleaseCandidateWhere,
+  piIdleReleaseIdleSince,
   DEFAULT_PI_IDLE_RELEASE_MINUTES,
   type PiIdleReleaseWatcher,
 } from './piIdleReleaseWatcher.js';
@@ -6769,7 +6771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       projectSessionRuntimeControl(sessionId, baseline) as Record<string, unknown>,
     );
   };
-  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelSelection) => {
+  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline) => {
     const baseline: ScheduledModelSelection = {
       agentKind: saved.agentKind, model: saved.model, providerId: saved.providerId,
       ...(saved.agentDeviceId !== undefined ? { agentDeviceId: saved.agentDeviceId } : {}),
@@ -6786,6 +6788,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       runtimeBaseline: baseline,
       runtimeEffective: baseline,
       runtimePending: null,
+      runtimeBaselineRecoveryPending: !saved.pendingBotProfileVersion,
     };
   };
   setSessionRuntimeProjector((session) => {
@@ -8647,6 +8650,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     agent: AgentKind,
     model: string,
     providerId: string | null,
+    unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<ProviderView[]> {
     let views: ProviderView[] = [];
     const checked = await checkDeviceRoute(
@@ -8664,6 +8668,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const rejection = checked === 'unreachable' && isProviderShareAgentDeviceId(deviceId)
       ? 'REMOTE_AGENT_SHARE_UNAVAILABLE'
       : checked;
+    // Restoration can recover a removed source/model from the saved companion
+    // profile. Preserve transient offline/paused errors and their retry behavior.
+    if (unavailableCode && (rejection === 'not-offered' || rejection === 'REMOTE_AGENT_SHARE_REMOVED')) {
+      throwIpcError(unavailableCode, 'the saved model is no longer offered by its execution computer');
+    }
     log.warn('remote agent selection rejected', { agent, model, providerId, rejection });
     if (rejection.startsWith('REMOTE_AGENT_SHARE_')) {
       // 分享来的供应商：给出分享专属原因(device-link 控制端同样降级为 PRECONDITION_FAILED)。
@@ -8791,6 +8800,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     model: string,
     providerId: string | null,
     remoteHostId?: string | null,
+    unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<string | undefined> {
     if (agent === 'codex' && remoteHostId) {
       assertSshCodexModel(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders), model, providerId);
@@ -8799,7 +8809,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const verdict = await verdictForModelRoute(agent, model, providerId);
     if (verdict.kind === 'reject') {
       throwIpcError(
-        'INVALID_PARAMS',
+        verdict.reason === 'payment-required' ? 'INVALID_PARAMS' : unavailableCode ?? 'INVALID_PARAMS',
         describeModelRouteRejection(verdict.reason, model, providerId),
       );
     }
@@ -11471,9 +11481,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
     resolveSelection: createScheduledModelSelectionResolver({
-      readRemoteProviders: readUsableAgentDeviceProviders,
+      readRemoteProviders: (deviceId, agent, model, providerId) =>
+        readUsableAgentDeviceProviders(deviceId, agent, model, providerId, 'MODEL_SELECTION_UNAVAILABLE'),
+      readSshCodexProviders: (hostId) => readSshCodexModelList({ id: hostId }, listSshCodexProviders),
       resolveLocalSelection: async (route) => {
-        const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId);
+        const reroute = await assertModelRouteUsable(route.agentKind, route.model, route.providerId, undefined, 'MODEL_SELECTION_UNAVAILABLE');
         return resolveScheduledModelSelectionLive({ ...route,
           providerId: reroute && shouldApplyExclusiveProviderRerouteLive(route.providerId)
             ? reroute : route.providerId,
@@ -11574,6 +11586,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isBusy: (sessionId) => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning() ||
       isUserPendingAgentSwitchIntent(agentSwitchPending.get(sessionId)),
     apply: async (sessionId, profile) => { await applyScheduledProfile(sessionId, profile); },
+    recoverUnavailableBaseline: (sessionId, expectedBaseline) =>
+      reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
   });
   const updateScheduledPreference = async (
     sessionId: string, patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] } | null,
@@ -16385,23 +16399,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   idleReleaseWatcher.start();
 
-  // ─── pi 普通会话 idle watcher ────────────────────────────────────────────
-  // 只回收本机桌面来源的普通 pi 会话：Orca 角色/远程/插件隐藏任务/bot 与 IM
-  // 来源都有各自的生命周期。归档会话也纳入(归档不关运行时)，其余安全闸门见
+  // ─── pi 普通与插件会话 idle watcher ──────────────────────────────────────
+  // 插件隐藏任务也由宿主回收；Orca 角色/远程/bot 与 IM 沿用各自生命周期。
+  // 归档会话也纳入(归档不关运行时)，其余安全闸门见
   // piIdleReleaseWatcher；释放后下一次发送走 lazy create-session 透明重建。
-  const PI_IDLE_RELEASE_SESSION_STATUSES = ['active', 'archived'] as const;
-  const piIdleReleaseIdleSince = () =>
-    sql<number>`max(${sessions.updatedAt}, coalesce(${sessions.lastTurnEndedAt}, 0), coalesce(${sessions.userSendAt}, 0))`;
-  const piIdleReleaseCandidateWhere = () =>
-    and(
-      eq(sessions.agentKind, 'pi'),
-      inArray(sessions.status, PI_IDLE_RELEASE_SESSION_STATUSES),
-      eq(sessions.source, 'desktop'),
-      isNull(sessions.orcaRole),
-      isNull(sessions.hiddenAt),
-      isNull(sessions.remoteHostId),
-      isNull(sessions.agentDeviceId),
-    );
   piIdleReleaseWatcher?.stop();
   piIdleReleaseWatcher = createPiIdleReleaseWatcher({
     readIdleReleaseMinutes: () => DEFAULT_PI_IDLE_RELEASE_MINUTES,
@@ -16663,7 +16664,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     route: SessionRouteSelection,
     currentAgentKind: AgentKind,
-  ): Promise<void> => {
+  ): Promise<SessionRouteSelection | void> => {
     // Legacy callers without a location must not move a remote session implicitly.
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
@@ -16674,12 +16675,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(route.agentDeviceId !== undefined ? { agentDeviceId: route.agentDeviceId } : {}),
         configStaged: true,
       });
+      const intent = agentSwitchPending.get(sessionId);
+      return intent ? {
+        ...route, agentKind: intent.targetAgentKind, model: intent.model,
+        providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
+      } : route;
     } else {
-      await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+      const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
         applySessionRuntimeSelection(sessionId, route.model, route.providerId,
           { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
             ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
           { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
+      // SET_MODEL stages local user selections without returning their provider.
+      // The pending intent already contains the validated/rebound connection.
+      const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
+      return { ...route, providerId: result.effectiveProviderId === undefined
+        ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
     }
   };
   followMovedCindyAutoRoutesNow = async () => {
@@ -16836,6 +16848,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
     },
+    readAppliedGroup: (sessionId) => providerGroupService?.sessionGroup(sessionId) ?? Promise.resolve(null),
     apply: createBotModelRouteApplier({
       stage: (sessionId, route, current) => stageSessionRouteSelection(
         sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind),

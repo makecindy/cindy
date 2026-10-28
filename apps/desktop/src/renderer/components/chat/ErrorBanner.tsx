@@ -593,7 +593,16 @@ export function ErrorBanner({
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
-    isGatewayProxyTokenInvalid;
+    isGatewayProxyTokenInvalid ||
+    isPiImageInputUnsupportedError(error) ||
+    isCodexAppServerForceRetired ||
+    isCodexThreadStale ||
+    showInvalidEncryptedContentRecovery ||
+    isOversizedHistoryError ||
+    isCodexRemoteAuthMissing ||
+    isOpenAiConnectionExpired ||
+    isCodexLocalOAuthAuthMissing ||
+    isGatewayQuotaExhausted;
 
   const handleSwitchToClaudeSubscription = async (): Promise<void> => {
     if (!onSwitchToClaudeSubscription || switchingClaudeSubscription) return;

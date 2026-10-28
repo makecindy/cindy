@@ -97,6 +97,36 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
+### 请求计时与档位核验
+
+`pi startup stage` 的 `first-prompt-rpc` 只测第一次 prompt RPC 发出至回执／失败，
+不再使用容易误解的 `first-model-request` 名称。RPC 接受不等于 HTTP 已发送或整轮完成。
+
+本机 Pi bridge 在原生 `before_provider_request` 处理后，通过既有单向通知发送白名单
+请求摘要。宿主以 `startupTraceId + requestSequence` 记录 debug 级 `pi request stage`：
+`provider-request-prepared`（本桥处理后的工具数、消息数、wire effort）、`first-output`
+（首个文本／推理增量或工具调用开始／增量）、`agent-settled`（原生整轮终态，不能用 `agent_end` 替代）。
+请求阶段时长用宿主单调时钟，`elapsedMs` 从最近一次请求摘要到达起算；终态另有
+`turnElapsedMs`，从本轮第一次请求摘要到达起算，包含重试／工具等后续处理。
+原生 `agent_start` 清空上一轮遗留计时，即使上一轮因中止／重试耗尽缺少终态，
+下一轮也不继承旧起点；同轮请求重试保留本轮起点。
+这是请求构造钩子的观测时间，不是 socket 发出时间、上游接收时间或插件收到答复时间；
+后加载的用户扩展仍可能改写请求。没有测点的 SSH/旧运行时不编造该阶段。
+只记录有界计数和已知档位名，无法识别的请求字段省略，不把未知工具数当成零。
+不记录请求正文、工具定义、模型 ID、凭据或任意上游字符串；
+诊断失败不能阻止发送，也不出现在聊天里，不增加需要宿主应答的 RPC。
+
+Gateway 的档位成员仍以供应商实报为准。目录支持 low 时，Cindy 能传 low；不支持时，
+启动选择按现有默认档收敛，不能把直接调用 SDK 的 low→medium 结果冒充完整宿主路径。
+bundled map 对已支持档位的 remap 保留，medium 可能映射为 high，因此不能仅凭档位名称
+声称推理强度降低。`pi-agent.integration.test.ts` 用真实 Pi 和 loopback 假网关验证
+low→low、声明的 medium→high，以及不支持 low→默认 high；它验证客户端传输，
+不代表 XD 线上目录已开放 low 或已完成真实模型质量／速度评测。
+
+主干已有 `SendOptions.toolsDisabled`，通过 host-owned 输入标记阻止本轮工具执行；
+它不是移除请求工具 schema 的优化，不能描述成“只给模型两个工具”或“无工具请求”。
+是否精简工具与 system prompt 需实际请求单变量对照；不借诊断改动删掉 Pi 原生能力。
+
 图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
 提前拦截。目录、原生模型资料或用户配置明确声明 `supportsImageInput: false` / `input: ['text']`
 时仍保持仅文本；此默认值不写回用户配置，也不代表上游接口保证支持图片。活动任务沿用启动时
@@ -443,7 +473,8 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
   持续累积（upstream #5830）。
 - **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
-  5min 扫描）。候选只取本机桌面来源、无 Orca 角色、非远程、未隐藏的 pi 会话
+  5min 扫描）。候选只取本机桌面普通任务或插件任务、无 Orca 角色、非远程的 pi 会话；
+  插件任务包含隐藏任务，其余隐藏任务仍排除
   （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
   续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
   `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作

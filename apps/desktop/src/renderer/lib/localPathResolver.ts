@@ -204,7 +204,7 @@ function normalizeKnownFileHref(href: string): string {
  * `[name.docx](name.docx)` because the prompt exposes the original filename,
  * while the real file lives outside the session working directory. In that
  * case, resolve by unique attachment basename before falling back to cwd-based
- * path resolution.
+ * path resolution. Explicit absolute/home paths keep their own identity.
  *
  * Matching is case-insensitive. Windows / macOS-default filesystems are
  * case-insensitive, and LLMs frequently lowercase the basename when authoring
@@ -221,6 +221,8 @@ export function resolveKnownLocalFileHref(
   files: readonly KnownLocalFileRef[] | undefined,
 ): string | null {
   if (!href || !files || files.length === 0) return null;
+  const decoded = safeDecodeURIComponent(stripQueryAndHash(href.trim()));
+  if (/^(?:file:\/\/|[\\/]|[a-z]:[\\/]|~[\\/])/i.test(decoded)) return null;
   const wanted = normalizeKnownFileHref(href).toLowerCase();
   if (!wanted) return null;
 

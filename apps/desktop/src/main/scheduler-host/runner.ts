@@ -118,6 +118,10 @@ import type { SchedulerDrizzleDb } from './storage';
 import { backfillSessionMeta } from './runners/_shared';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
+import {
+  beginUnattendedTurn,
+  takeUnattendedPlanReviewDeclines,
+} from '../mcp-integrations/unattendedTurn.js';
 import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target';
 
@@ -428,6 +432,13 @@ class RoutinePermissionMismatchError extends RoutineDispatchDeferredError {
  */
 const PERSISTENT_PERMISSION_MISMATCH_FIRES = 3;
 
+/**
+ * Appended to the run result when a plan-mode fire had to decline its own plan
+ * review. Without it the run looks like it silently did nothing.
+ */
+const UNATTENDED_PLAN_REVIEW_DECLINED_NOTE =
+  '[plan review declined] This scheduled run is unattended, so its plan was not approved automatically and nothing was executed. The plan above is the result — approve it in the session to continue.';
+
 /** An ordinary session was stopped before vendor dispatch; never retry it. */
 class ScheduledDispatchStoppedError extends Error {}
 
@@ -446,6 +457,12 @@ interface TurnCompletionWaiterOptions {
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
   /** Coordinator queue path has authoritative per-turn origins; direct fallback keeps legacy compatibility. */
   requireTurnOrigin?: boolean;
+  /**
+   * Turn-scoped marks that must stop applying the moment this turn ends — not
+   * when the fire settles. The session accepts a user message again at `done`,
+   * while finalize may still be saving the report or waiting on a notification.
+   */
+  onTurnSettled?: () => void;
 }
 
 interface SchedulerRunContextOwner {
@@ -782,6 +799,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // native context intact until an actual next send chooses its target model.
       await this.clearSchedulerRunContext(holder);
       holder.headlessGhostSetupTurn?.close();
+      holder.releaseUnattendedTurn?.();
+      holder.releaseUnattendedTurn = undefined;
       if (
         holder.sessionId &&
         !holder.keepAlive &&
@@ -1577,7 +1596,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 登记,后续任何 throw 都能被收尾。
     holder.sessionId = session.id;
     holder.keepAlive = isHeartbeat || !!schedule.persistentSession;
-    holder.headlessGhostSetupTurn = createHeadlessGhostSetupTurnGuard(session.id);
+    holder.headlessGhostSetupTurn = createHeadlessGhostSetupTurnGuard(session.id, holder);
 
     // 4.4.1 heartbeat 模型 / effort 同步：schedule 上的选择与绑定 session 当前值
     // 不一致时，把改动推给 session 运行时。必须显式 setModel / setEffort ——
@@ -1915,6 +1934,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     } as const;
     const waiter = this.createTurnCompletionWaiter(session, {
       onProgress: ctx.onProgress, onQueueWaitStart: ctx.onQueueWaitStart, endQueueWait: ctx.endQueueWait, origin,
+      onTurnSettled: () => holder.releaseUnattendedTurn?.(),
     });
     const turnFinished = waiter.turnFinished;
 
@@ -2382,7 +2402,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // runner has already settled. Do not acquire a marker that no
           // remaining finally block could release.
           if (headlessTurn.closed || headlessTurn.release) return;
-          headlessTurn.release = beginHeadlessGhostSetupTurn(sessionId);
+          const marks = beginScheduledTurnMarkers(sessionId);
+          headlessTurn.release = marks.release;
+          holder.releaseUnattendedTurn = marks.releaseTurn;
         },
         options,
       );
@@ -2728,6 +2750,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             endQueueWait: ctx.endQueueWait,
             origin,
             requireTurnOrigin: true,
+            onTurnSettled: () => holder.releaseUnattendedTurn?.(),
           });
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
@@ -3359,6 +3382,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     assistantText: string,
     finalTextMatchesStream: boolean,
   ): Promise<FireResult> {
+    const declinedPlanReviews = takeUnattendedPlanReviewDeclines(sessionId);
+    const streamedResultText = !runError && assistantText ? assistantText : undefined;
+    const resultText: string | undefined = runError
+      ? undefined
+      : declinedPlanReviews > 0
+        ? [streamedResultText?.trim(), UNATTENDED_PLAN_REVIEW_DECLINED_NOTE].filter(Boolean).join('\n\n')
+        : streamedResultText;
     const finalRun: ScheduleRun = {
       id: ctx.runId,
       scheduleId: schedule.id,
@@ -3368,7 +3398,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       status: runError ? 'failed' : 'success',
       errorMsg: runError,
       // 仅 success 时落库 — 失败 run 的部分输出意义不大,errorMsg 已经覆盖原因
-      resultText: !runError && assistantText ? assistantText : undefined,
+      resultText,
     };
     // 静默 run:静默运行默认静默;若 agent 经 schedule_notify_current_run 主动上报,
     // scheduler.isRunSilenced 会变回 false,这里照常通知。
@@ -3475,7 +3505,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (runError) throw new Error(runError);
     if (reportPersistFailed) throw new Error('Scheduled result could not be saved');
-    return { sessionId, resultText: assistantText || undefined };
+    return { sessionId, resultText: resultText || undefined };
   }
 
   /**
@@ -3538,6 +3568,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentSession = null;
       };
       const cleanup = (): void => {
+        // Turn-scoped host marks end with the turn, before the run finalizes:
+        // the session can already accept the next user message here.
+        options.onTurnSettled?.();
         if (quotaWaiting) {
           quotaWaiting = false;
           options.endQueueWait?.(false);
@@ -3899,6 +3932,7 @@ function buildScheduledRunContextInstruction(
     `firedAtUtc: ${new Date(ctx.firedAt).toISOString()}`,
     `firedAtInScheduleTimezone: ${firedAtInScheduleTimezone}`,
     'These timestamps identify when this run was triggered, not when a queued run started processing. Use the task instructions to determine the requested time range.',
+    'Unattended: nobody is watching this run. Do not call ask_user_question — decide with a stated default and list any open question in the final report. In plan mode the plan review cannot be approved automatically: put the plan in the final report and leave execution to the owner.',
     ...buildTeammateTurnAuthorityLine(schedule),
   ].join('\n');
 }
@@ -3979,6 +4013,12 @@ interface EphemeralSessionHolder {
   releaseAgentSwitchLock?: () => void;
   /** unique ownership generation for the session-level scheduler run context. */
   schedulerRunContextOwner?: SchedulerRunContextOwner;
+  /**
+   * Releases the turn-scoped unattended mark. Called when the turn settles (the
+   * session can accept the next user message there) and again from the fire's
+   * finally as a safety net; releasing twice is a no-op.
+   */
+  releaseUnattendedTurn?: () => void;
 }
 
 interface HeadlessGhostSetupTurnGuard {
@@ -3990,13 +4030,54 @@ interface HeadlessGhostSetupTurnGuard {
   close(): void;
 }
 
-function createHeadlessGhostSetupTurnGuard(sessionId: string): HeadlessGhostSetupTurnGuard {
+/**
+ * Surface marks for one dispatched scheduler turn. Acquired together because the
+ * queued path and the direct path acquire them at different call sites; keeping
+ * them in one helper stops them from diverging again.
+ *
+ * The unattended mark matters because ask_user_question / plan_review cards have
+ * no timeout by design (nobody is watching a scheduled fire). Without it the run
+ * parks on an unanswerable card until the 60min stall guard.
+ *
+ * The two halves have different lifetimes: ghost-setup suppression belongs to the
+ * fire, the unattended mark must die with the turn — the session accepts a user
+ * message at `done` while the run is still saving its report or notifying.
+ */
+function beginScheduledTurnMarkers(sessionId: string): {
+  release: () => void;
+  releaseTurn: () => void;
+} {
+  const releaseGhostSetup = beginHeadlessGhostSetupTurn(sessionId);
+  const releaseUnattended = beginUnattendedTurn(sessionId);
+  let turnReleased = false;
+  const releaseTurn = (): void => {
+    if (turnReleased) return;
+    turnReleased = true;
+    releaseUnattended();
+  };
+  return {
+    releaseTurn,
+    release: () => {
+      releaseGhostSetup();
+      releaseTurn();
+    },
+  };
+}
+
+function createHeadlessGhostSetupTurnGuard(
+  sessionId: string,
+  holder: EphemeralSessionHolder,
+): HeadlessGhostSetupTurnGuard {
   let closed = false;
   let release: (() => void) | undefined;
   return {
     markDispatched() {
       if (closed) return false;
-      release ??= beginHeadlessGhostSetupTurn(sessionId);
+      if (!release) {
+        const marks = beginScheduledTurnMarkers(sessionId);
+        release = marks.release;
+        holder.releaseUnattendedTurn = marks.releaseTurn;
+      }
       return true;
     },
     close() {

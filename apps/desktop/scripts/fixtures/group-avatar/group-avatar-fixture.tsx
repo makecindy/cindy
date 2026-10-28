@@ -19,5 +19,11 @@ mountPage({
     profileGetState: forbid('profileGetState'),
     profileUpdate: forbid('profileUpdate'),
   },
-  render: () => <ChatGroupSettings group={group} />,
+  render: ctx => <ChatGroupSettings group={ctx.case === 'human-owner' ? {
+    ...group, members: [
+      { ...group.members[0]!, role: 'owner' },
+      { ...group.members[1]!, role: 'member' },
+      { actorId: 'companion', botId: 'companion', actorKind: 'bot', name: 'Companion', role: 'member', ownerName: 'Nana' },
+    ],
+  } : group} />,
 });

@@ -14,6 +14,7 @@ interface GroupData {
   workParallel?: boolean;
   workLastStopping?: boolean;
   bodyAnswer?: boolean;
+  remoteLimits?: boolean;
   name: string;
   members: Array<{ botId: string; name: string }>;
   messages: number;
@@ -261,7 +262,10 @@ function groupFrom(data: GroupData) {
     ...(data.bubbles || data.arrangement || data.division ? { serverBacked: true } : {}),
     ...(data.settings ? { autoContinue: false } : {}),
     ...(data.threadUnread ? { threads: threadSummaries() } : {}),
-    messages: data.bodyAnswer ? bodyMessages() : data.arrangement ? arrangementMessages(data.arrangement) : data.division ? divisionMessages()
+    messages: data.remoteLimits ? ['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'].map((runtimeFailureCode, i) =>
+      message({ id: `limit-${i}`, sequence: i + 1, kind: 'notice', authorKind: 'system',
+        authorBotId: data.members[i].botId, authorName: data.members[i].name, content: '',
+        noticeCode: 'member-unavailable', runtimeFailureCode, createdAt: T0 + i * MINUTE })) : data.bodyAnswer ? bodyMessages() : data.arrangement ? arrangementMessages(data.arrangement) : data.division ? divisionMessages()
       : bubbles ? bubbles.map(m => (data.threadUnread && UNREAD[m.id as string] ? { ...m, threadUnread: UNREAD[m.id as string] } : m))
       : Array.from({ length: data.messages }, (_, i) => ({
       id: `m${i}`,

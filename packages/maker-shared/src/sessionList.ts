@@ -692,7 +692,11 @@ export function buildSessionScheduleIndex(
       if (isUnreadScheduleRun(run) && (run.status === 'success' || isUnreadFailure)) {
         unreadRunIds.push(run.id);
       }
-      const candidate = activeFailures.has(run.id) ? { runId: run.id, firedAt, scheduleId: run.scheduleId, failureKind: classifyScheduleFailure(run) } : undefined;
+      const candidate = activeFailures.has(run.id) ? {
+        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        failureKind: classifyScheduleFailure(run),
+        errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+      } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
         ? candidate : existing?.latestFailedRun;
       const running = (existing?.running ?? false) || run.status === 'running';

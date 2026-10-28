@@ -478,11 +478,15 @@ describe('botGroupChatService', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, {
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness, ['mimi', 'abu']);
     await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'no-lane' });
@@ -831,11 +835,15 @@ describe('botGroupChatService 分工', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness);
     const plan = await proposePlan(harness, groupId);

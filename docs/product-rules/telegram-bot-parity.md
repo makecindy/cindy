@@ -11,6 +11,21 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 两者是**两套架构**，不是同一份代码的两个开关。所以"统一"不等于"让两条代码路径长得
 一样"，而是：**能同源的同源；不能同源的，差异必须写在这张表里、有裁决、有理由。**
 
+2026-10-28 入站引用：个人 bot 的 `telegram/messageText.ts` 与官方服务端同名投影按
+`quote.text` → 原消息 `text` / `caption` / `rich_message.blocks` 提取可见正文；群窗口也
+读取富文本块；列表保留勾选状态，表格保留空列及合并行列占位。遍历预算与文字上限分开，
+允许官方上限内的 500 个块和 16 层格式包装，异常深度与处理量仍有界。
+引用关系独立于正文：原消息无可读文字时仍携带原消息 ID 和缺失说明，
+个人侧已识别的纯附件继续使用类型占位；受保护原消息仍不导出。原消息 ID 与触发消息
+ID 分开保存。官方在入队前组装引用，沿用既有任务持久化恢复；普通群窗口中继仍只送在线
+桌面。两仓分别维护投影与回归测试，客户端升级不能代替官方服务端部署。
+
+个人 bot 的无说明非文字块统一投影类型占位（文件、图片、音频、视频、动画、语音、地图、
+分隔线）；仅文件类媒体允许附加可见文件名，地图不输出坐标等字段。嵌套块与引用、群历史
+共用判据；这些占位仅描述消息内容，不代表附件已提供。
+嵌套富媒体的字节下载尚未接入，附件仍沿用现有顶层路径。官方同名文字投影需独立
+同步这部分占位，不能因客户端支持就声称官方服务端也已支持。
+
 2026-10-17 群触发与空回复：默认召唤模式下，仅提到显示名（包括句首的「Cindy 赞助」）
 不触发。个人 bot 保留显式 `@显示名` 的兼容入口；平台提及、回复 bot、命令及用户主动
 开启的全响应模式沿用原有规则。Telegram 成功轮次没有正文和附件时不补发「空回复」或
@@ -108,7 +123,7 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | 群消息本地库的**保留策略** | `im/shared/groupWindowCore.ts` | 上限数值（每命名空间 1 GiB 正文 + 500 万行安全阀）、回收低水位（0.9）与回收实现都在这一处；两侧把同一份 `DEFAULT_GROUP_WINDOW_RETENTION` 传进同一个 `recordGroupWindowEntry`。**额度靠 provider 命名空间隔离**：官方 `telegram:<principalId>`、个人 `telegram-personal:<botId>`，统计与回收都按 provider 过滤，两个账号各算各的、消息不串。一个边界要记住：两侧各持有一份 `{ ...DEFAULT }` **可变副本**（为的是测试能用小阈值把回收逼出来），所以共享的是"模块初始化时的那组数字"，运行期改一侧不会传导到另一侧 |
 | **上游过载 / 限流自动重试进度** | `im/shared/turnRetryNotice.ts`（`turnRetryNotice`） | 非终止 error 翻成渠道进度的**文案与判定**两侧真跑这一份：只认过载（`(auto-retry N/M)` + `upstream-overload` / 529）、终态 429 外层重投、以及 Auto 档审阅器不可用。Pi / Claude / Codex 过载重试都走「模型服务繁忙，正在自动重试（N/M）」；其它非终止 error（普通 5xx、未分类供应商抖动）保持静默。个人侧 `turnRunner`、官方侧 `turnPresenter` 都读这一份。**载体怎么发**不在这里——个人是过程消息原地编辑；官方私聊默认普通进度消息，开启 `TELEGRAM_DM_DRAFT_ENABLED` 时使用草稿，见第三节 |
 | **工具循环与输出上限终态的渠道文案** | `im/shared/turnRetryNotice.ts`（`terminalErrorText`） | `reason=tool_use_loop_detected` 的终态事件统一按受限 `toolLoop` 生成渠道可读说明；`reason=output-limit` 共用「回复可能不完整，可发送下一条消息继续」提示；个人侧 `turnRunner` 与官方侧 `hook-control/turnObserver` 都复用这份映射，原始 `loopHint` / `missing_required_field` 等内部分类只留在本地错误上下文，不外发。 |
-| **Auto 审阅的引用证据**（用户本条回复／引用的消息与附件数） | 投影与上限：`packages/maker-shared/src/autoReviewIntent.ts` 的 `projectAutoReviewUserReferences`；两侧映射：`im/shared/autoReviewReferences.ts` | 两侧都把宿主盖章的引用事实放进 `MAIN_OWNED_SEND_CONTEXT.autoReviewReferences`，由 maker-core 挂到当前消息的审阅意图上，审阅器以独立低信任块呈现，不算用户原话、不构成授权。**数据来源各不相同**：个人只取 adapter 的 `prepareAgentTurnText` 实际交给模型的回复投影（`replyContext`；飞书被注入扫描拦下时就是占位，模型没看到的回复审阅器也看不到），附件数取本条附件（`im/shared/turnRunner.ts`，纯图引用为「[图片]」占位）；官方由 `hook-control/dispatcher.ts` 在展示截短（只留最早 20 条）之前从服务端原始 `source.threadContext` 取回复目标（触发消息带 `replyToMessageId` 时按它找父消息、找不到不猜，否则取排除当前请求后的最后一条），连同实际送达附件数交给 `hook-control/session-runner.ts`。服务端在被引消息没有文字时不下发 threadContext、且附件不区分自带与引用，所以官方纯图引用只剩「本条带 N 张图」 |
+| **Auto 审阅的引用证据**（用户本条回复／引用的消息与附件数） | 投影与上限：`packages/maker-shared/src/autoReviewIntent.ts` 的 `projectAutoReviewUserReferences`；两侧映射：`im/shared/autoReviewReferences.ts` | 两侧都把宿主盖章的引用事实放进 `MAIN_OWNED_SEND_CONTEXT.autoReviewReferences`，由 maker-core 挂到当前消息的审阅意图上，审阅器以独立低信任块呈现，不算用户原话、不构成授权。**数据来源各不相同**：个人只取 adapter 的 `prepareAgentTurnText` 实际交给模型的回复投影（`replyContext`；飞书被注入扫描拦下时就是占位，模型没看到的回复审阅器也看不到），附件数取本条附件（`im/shared/turnRunner.ts`，纯图引用为「[图片]」占位）；官方由 `hook-control/dispatcher.ts` 在展示截短（只留最早 20 条）之前从服务端原始 `source.threadContext` 取回复目标（触发消息带 `replyToMessageId` 时按它找父消息、找不到不猜，否则取排除当前请求后的最后一条），连同实际送达附件数交给 `hook-control/session-runner.ts`。配套服务端修复后，无可读正文也下发原消息 ID 与缺失占位；附件仍不区分自带与引用，数量只反映本条实际提供的附件（生产是否部署需单独核验） |
 
 官方成功终稿的客户端发布有 **120 秒交接期限**（2026-10-27）：从 `publishFinal`
 开始计时，包含在途进度、终稿分段与过程消息清理。期限内沿用共享发送判据；超时关闭

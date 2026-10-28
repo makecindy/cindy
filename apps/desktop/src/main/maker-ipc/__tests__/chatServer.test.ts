@@ -380,6 +380,31 @@ describe('Chat Server result delivery and refresh', () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}`, 'PATCH', expect.objectContaining({ name: 'Draft', expectedRevision: 7 }));
   });
+  // Unit: renderer filtering alone left older servers callable with bot targets.
+  // Exercise production manage with a nonhuman/left target and the legacy bot-owner
+  // recovery path; assertions cover rejected writes and the delegated HTTP identity.
+  it.each(['bot', 'integration', 'left', 'human', 'legacy'] as const)('validates the ownership transfer recipient (%s) before sending', async mode => {
+    const targetId = mode === 'legacy' ? selfId : botId;
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: mode === 'legacy' ? 'admin' : 'owner' },
+        { id: botId, kind: mode === 'bot' || mode === 'legacy' ? 'bot' : mode === 'integration' ? 'integration' : 'human',
+          ownerActorId: mode === 'legacy' ? selfId : botId, state: mode === 'left' ? 'left' : 'joined', role: mode === 'legacy' ? 'owner' : 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const requestsStart = fixture.requests.length;
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'transfer', actorId: targetId } });
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/transfer` && method === 'POST');
+    if (mode === 'human' || mode === 'legacy') {
+      expect(result).toEqual({ ok: true });
+      expect(writes).toEqual([[`/conversations/${roomId}/transfer`, 'POST', { actorId: targetId, operationId: expect.any(String) }]]);
+      expect(fixture.requests.slice(requestsStart).find(r => r.url.endsWith('/transfer'))?.actor).toBe(mode === 'legacy' ? botId : selfId);
+    } else {
+      expect(result).toEqual({ ok: false, errorCode: mode === 'left' ? 'MEMBER_NOT_FOUND' : 'HUMAN_OWNER_REQUIRED' });
+      expect(writes).toEqual([]);
+    }
+  });
   // Group avatar regression: exercise the production manage entry, real image
   // validation and HTTP payload, with only the network/image decoder faked.
   it.each(['set', 'reset', 'keep', 'invalid', 'unsupported', 'upload-failure', 'account-change'] as const)(
@@ -1087,11 +1112,15 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', 'RUNTIME_ERROR'],
-  ])('settles the lane preparation failure %s without dispatching or exposing details', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', 'RUNTIME_ERROR', 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'RUNTIME_ERROR', '[REMOTE_AGENT_BUSY] private preparation details'],
+  ])('settles the lane preparation failure %s without dispatching or exposing details', async (errorCode, failureCode, message) => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private preparation details' }));
+    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode, message }));
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).not.toHaveBeenCalled();
     expect(deps.abortLane).not.toHaveBeenCalled();
@@ -1140,6 +1169,8 @@ describe('Chat Server result delivery and refresh', () => {
 
   it.each([
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
+    ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private credential', 'REMOTE_DEVICE_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private credential', 'REMOTE_TOTAL_LIMIT'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
@@ -1701,21 +1732,27 @@ describe('Chat Server result delivery and refresh', () => {
     expect(retry).toMatchObject({ ok: true, executionFailures: [], hasMore: true });
   });
 
-  it('keeps the specific local failure on an older server and clears the notice after retry', async () => {
+  // #6835: unit readback must retain local limit reasons when an older server normalizes unknown codes.
+  it.each([
+    [undefined, 'IMAGE_INPUT_UNSUPPORTED', 'IMAGE_INPUT_UNSUPPORTED'],
+    ['RUNTIME_ERROR', 'REMOTE_DEVICE_LIMIT', 'REMOTE_DEVICE_LIMIT'],
+    ['RUNTIME_ERROR', 'REMOTE_TOTAL_LIMIT', 'REMOTE_TOTAL_LIMIT'],
+    ['AUTH_REQUIRED', 'REMOTE_DEVICE_LIMIT', 'AUTH_REQUIRED'],
+  ] as const)('keeps specific local failures with server code %s and clears them on retry', async (serverCode, localCode, expectedCode) => {
     await start();
-    await service.settleLaneTurn({ ...terminal, outcome: 'error', failureCode: 'IMAGE_INPUT_UNSUPPORTED' });
+    await service.settleLaneTurn({ ...terminal, outcome: 'error', failureCode: localCode });
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     let status = 'failed';
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.includes('/messages?')) return { body: [source] };
       if (route.includes('/execution-failures?')) return { status: 404, body: { code: 'NOT_FOUND' } };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status }] };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status, failure_code: serverCode }] };
       return response(route);
     });
     const failed = await service.getGroup(roomId);
     if (!failed.ok) throw new Error('group missing');
-    expect(projectBotGroupExecutionFailures(failed.group.messages, failed.group.executionFailures)[1]).toMatchObject({ runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' });
+    expect(projectBotGroupExecutionFailures(failed.group.messages, failed.group.executionFailures)[1]).toMatchObject({ runtimeFailureCode: expectedCode });
     status = 'queued';
     const retrying = await service.getGroup(roomId);
     if (!retrying.ok) throw new Error('group missing');

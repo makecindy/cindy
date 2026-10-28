@@ -202,7 +202,24 @@ it('lets a companion owner manage a group owned by their companion', async () =>
   expect(screen.getByRole('button', { name: key('configureCapabilities') })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /My name/ }));
   expect(screen.getByRole('button', { name: key('transfer') })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'me' } }));
   await waitFor(() => expect(mocks.ownedBots).toHaveBeenCalled());
+});
+// Unit: the real settings UI previously offered every non-owner as a recipient.
+// Human-owner rule (2026-10-28): a bot member must have no transfer action;
+// a human member must still be transferable through the confirmation and IPC.
+it('offers ownership transfer only to human members', async () => {
+  const value = group(true);
+  value.members[0]!.role = 'owner';
+  value.members[1]!.role = 'member';
+  value.members.push({ ...value.members[0]!, actorId: 'peer', botId: 'peer', name: 'Peer', isSelf: false, isOwned: false, role: 'member' });
+  render(<MemoryRouter><ChatGroupSettings group={value} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Partner/ }));
+  expect(screen.queryByRole('button', { name: key('transfer') })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Peer/ }));
+  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'peer' } }));
 });
 it('labels reply and speaking modes with the same words as the local group settings', () => {
   render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), replyMode: 'all', speakingMode: 'auto' }} /></MemoryRouter>);

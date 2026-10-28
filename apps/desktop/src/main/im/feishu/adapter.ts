@@ -411,6 +411,8 @@ export function buildFeishuAdapter(
         chatId: lane.chatId,
         ...(chatName ? { chatName } : {}),
         ...(event.speaker?.id ? { senderId: event.speaker.id } : {}),
+        // 群里认出主人只能靠这一句: 发言人只有 open_id, 模型无从自行核对。
+        ...(event.speaker?.isOwner === true ? { senderIsOwner: true } : {}),
         toolsHint,
       };
     },

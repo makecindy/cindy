@@ -233,7 +233,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
             </button>
             {open && <div className="space-y-3 pl-11 pb-2">
               {member.nickname && member.nickname !== member.displayName && <p className="text-12 text-[var(--text-secondary)]">{member.displayName}</p>}
-              {owner && member.role !== 'owner' && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void confirmed({ type: 'transfer', actorId }, t(key('transferTitle'), { name: member.name }), t(key('transferHint')))}>{t(key('transfer'))}</Button>}
+              {owner && member.actorKind === 'human' && member.role !== 'owner' && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void confirmed({ type: 'transfer', actorId }, t(key('transferTitle'), { name: member.name }), t(key('transferHint')))}>{t(key('transfer'))}</Button>}
               {manageable && <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="secondary" disabled={busy} onClick={() => void mutate({ type: 'member', actorId, action: 'role', role: member.role === 'admin' ? 'member' : 'admin' })}>
                   {t(key(member.role === 'admin' ? 'removeAdmin' : 'makeAdmin'))}</Button>

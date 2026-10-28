@@ -6417,6 +6417,8 @@ export function ghostManifestToAuthorFormat(manifest: GhostManifest): Record<str
  *     当前 Agent tool-call 带严格在途 callId 时复用 Agent 授权；其它调用
  *     须声明 network 域名详单。凭证只按声明注入,意识永不经手。
  *   - pick-request:pick 槽——请主机弹系统级选文件夹窗口(用户亲选即授权)。
+ *   - model-picker-request:打开宿主统一模型选择器，返回 PluginTaskRoute；无需能力声明，
+ *     不修改任何默认或执行任务。协议见 shared/pluginModelPicker.ts 与 FORGE_GUIDE §4.0.3a。
  *   - preview-request:preview 槽——请主机在右侧栏内置浏览器开预览标签页
  *     (URL 必须命中身份卡 preview.hosts 白名单)。
  *   - schedule-request:agent 槽 schedule 加档——请主机**打开自动化创建面板并预填**

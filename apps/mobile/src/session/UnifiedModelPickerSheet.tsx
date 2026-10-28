@@ -69,6 +69,10 @@ function createFavoriteUid(): string {
 }
 
 export interface UnifiedMobilePickerOptions {
+  /** Request-owned edits, including favorites, never change persisted preferences. */
+  preferenceScope?: 'request';
+  /** Editing a selected row can update a draft without submitting the selection. */
+  onConfigure?: UnifiedMobilePickerOptions['onSelect'];
   currentSelection?: Pick<
     ModelPickerSheetProps,
     | "agentKind"
@@ -187,7 +191,7 @@ export function UnifiedModelPickerSheet(
     p.visible,
     p.providers,
   );
-  const prefs = useMobileModelPreferences(p.unified.scope, p.visible);
+  const prefs = useMobileModelPreferences(p.unified.scope, p.visible, p.unified.preferenceScope === 'request');
   useDraftModelMemoryVersion();
   useSessionModelMirrorVersion();
   const [query, setQuery] = useState("");
@@ -893,7 +897,7 @@ export function UnifiedModelPickerSheet(
       void transact(async (isCurrent) => {
         if (
           row.selected &&
-          !(await p.unified.onSelect(
+          !(await (p.unified.onConfigure ?? p.unified.onSelect)(
             ...(boundRoute(row, config) ?? [config, { deviceId: remoteDevice.deviceId }]),
           ))
         )
@@ -918,7 +922,8 @@ export function UnifiedModelPickerSheet(
     // 被控电脑自己的组那一项(任务归它、此刻在组里别的电脑上运行)里的行同样留在那台。
     const apply = (next: MobileModelConfiguration) => {
       const routed = boundRoute(row, next);
-      return routed ? p.unified.onSelect(...routed) : p.unified.onSelect(next);
+      const configure = p.unified.onConfigure ?? p.unified.onSelect;
+      return routed ? configure(...routed) : configure(next);
     };
     void transact(async (isCurrent) => {
       const previousConfig =
@@ -1070,7 +1075,7 @@ export function UnifiedModelPickerSheet(
       title={
         favoriteEdit
           ? t("models.unified.editFavorite")
-          : (row?.entry.displayName ?? t("models.picker.title"))
+          : (row?.entry.displayName ?? p.title ?? t("models.picker.title"))
       }
       testID={p.testID ?? "modelSheet"}
       query={query}

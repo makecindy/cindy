@@ -49,6 +49,7 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
@@ -153,6 +154,7 @@ export interface UnifiedModelPanelProps {
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
   modelMemory?: ModelMemoryAccessors;
+  preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
   agentFastModeCapable: (agent: AgentKind) => boolean;
   /** 价格 / 折扣查询。**modelId 传该引擎的 wire id**(报价表按 wire id 索引)。 */
@@ -387,6 +389,7 @@ export function UnifiedModelPanel({
   fastMode = false,
   selectedEffort,
   modelMemory,
+  preferenceStore,
   agentFastModeCapable,
   priceOf,
   providerLabel,
@@ -451,6 +454,7 @@ export function UnifiedModelPanel({
     if (homeFavoriteItems) requestProviderShareFavoriteRegions(providerShareFavoriteRegionsOf(homeFavoriteItems));
   }, [homeFavoriteItems]);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
+    : preferenceStore ? preferenceStore.favorites.items
     : isSharedProvider ? sharedFavorites.items
     : remoteSources ? agentDeviceFavorites.items
     : deviceId ? remoteFavorites.items : storedFavorites;
@@ -466,6 +470,7 @@ export function UnifiedModelPanel({
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。远程 Agent 的档位记忆
   // 是另一份 store,版本号并进 memoryVersion。
   const enginePrefsVersion = useModelEnginePrefsVersion();
+  const getEngineOverride = preferenceStore?.engines.get ?? getModelEngineOverride;
   const memoryVersion = useProviderModelMemoryVersion() + useAgentDeviceModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
@@ -677,7 +682,7 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
@@ -730,6 +735,7 @@ export function UnifiedModelPanel({
       agentFastModeCapable,
       effectiveRail,
       enginePrefsVersion,
+      getEngineOverride,
       fastMode,
       isLiveRow,
       liveEngineAgent,
@@ -773,7 +779,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -784,6 +790,7 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       enginePrefsVersion,
+      getEngineOverride,
       liveEngineAgent,
       selected.modelId,
       selected.providerId,
@@ -1042,7 +1049,8 @@ export function UnifiedModelPanel({
     optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
-    favoriteStore: isSharedProvider
+    engineStore: preferenceStore?.engines,
+    favoriteStore: preferenceStore ? preferenceStore.favorites.store : isSharedProvider
       ? sharedFavorites.store
       : remoteSources ? agentDeviceFavorites.store : deviceId ? remoteFavorites.store : undefined,
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
@@ -1088,7 +1096,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),

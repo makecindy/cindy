@@ -335,7 +335,7 @@ function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string 
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
-  const { compactDetail: _compactDetail, ...snapshot } = activity;
+  const { compactDetail: _compactDetail, summaryFormat: _summaryFormat, ...snapshot } = activity;
   return {
     ...snapshot,
     workflow: snapshot.workflow ? { ...snapshot.workflow } : null,
@@ -1935,6 +1935,7 @@ export class AgentIslandService {
       interactionKind: s.interactionKind,
       // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
       compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
+      summaryFormat: 'plain-text',
       workingPhase: s.workingPhase,
     }));
   }
