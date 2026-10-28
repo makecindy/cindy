@@ -4796,6 +4796,19 @@ interface ElectronAPI {
     ) => void,
   ) => () => void;
 
+  /** 「额度恢复后已自动切回原路线」的会话级瞬态提示（不落库）。 */
+  onSessionUsageLimitReverted: (
+    cb: (
+      data: {
+        sessionId: string;
+        fromModel: string;
+        toModel: string;
+        at: number;
+      },
+      ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => void,
+  ) => () => void;
+
   // ── 首登轻量数据迁移(mToc) — 老 userData → Cindy 一次性复制迁移弹窗 ──
   legacyMigration: {
     /** 订阅弹窗阶段推送。payload: { phase } */

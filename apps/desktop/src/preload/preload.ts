@@ -683,6 +683,9 @@ const fanOutUsageMessageTurnCost = createIpcFanOut('usage:message-turn-cost');
 // per-message 维度: turn 结束检测到模型被上游降级 / 替换时推标记(AssistantMessage
 // 渲染降级提示行)。payload: { sessionId, clientId, modelMismatch: { selected, actual } }。
 const fanOutUsageMessageModelMismatch = createIpcFanOut('usage:message-model-mismatch');
+// 会话级:额度恢复后自动切回原路线时推一条瞬态提示(不落库)。
+// payload: { sessionId, fromModel, toModel, at }。
+const fanOutSessionUsageLimitReverted = createIpcFanOut('maker:session-usage-limit-reverted');
 // FeiShu Bot：状态变化 + 冲突检测 + 注册流程 push channel。
 const fanOutFeishuBotStatusChange = createIpcFanOut('feishuBot:status-change');
 const fanOutFeishuBotConflict = createIpcFanOut('feishuBot:conflict');
@@ -5739,6 +5742,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUsageMessageTurnCost: fanOutUsageMessageTurnCost,
   /** 订阅单条消息的模型降级标记推送。payload: { sessionId, clientId, modelMismatch }。 */
   onUsageMessageModelMismatch: fanOutUsageMessageModelMismatch,
+  /** 订阅「额度恢复后已自动切回原路线」的会话级瞬态提示。payload: { sessionId, fromModel, toModel, at }。 */
+  onSessionUsageLimitReverted: fanOutSessionUsageLimitReverted,
 
   // ── 首登轻量数据迁移(mToc):老 userData → Cindy 的一次性复制迁移 ──
   // main 在 ensureReady 前推送弹窗阶段;renderer 全局弹窗组件消费。

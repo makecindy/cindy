@@ -1032,6 +1032,11 @@ export const MAKER_PUSH = {
    */
   SESSION_BACKGROUND_ACTIVITY_CHANGED: 'maker:session-background-activity-changed',
   /**
+   * 额度恢复后已自动切回原路线。payload = { sessionId, fromModel, toModel, at }。
+   * 只驱动会话内的一条**瞬态**提示（不落库、不进历史），用于解释模型为什么自己变了。
+   */
+  SESSION_USAGE_LIMIT_REVERTED: 'maker:session-usage-limit-reverted',
+  /**
    * Scheduler (Phase 4) — 单一 channel 承载 'fired' / 'completed' / 'failed' / 'changed'
    * 4 个事件类型；renderer 按 payload.type 分支。
    */

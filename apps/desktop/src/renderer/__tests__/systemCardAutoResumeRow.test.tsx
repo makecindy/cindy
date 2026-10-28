@@ -237,3 +237,21 @@ describe('SystemCard auto-resume 行', () => {
     expect(slot?.querySelector('svg')).toBeNull();
   });
 });
+
+describe('SystemCard 额度回切提示行', () => {
+  it('带两个模型名 → 一行低调提示，写清从哪个切回哪个', () => {
+    render(
+      <SystemCard
+        cardType="usage-limit-revert"
+        data={{ fromModel: 'deepseek-v4-flash', toModel: 'gpt-6.1-sol', at: 0 }}
+      />,
+    );
+    const row = screen.getByRole('status');
+    expect(row.textContent).toContain('额度已恢复，已自动从 deepseek-v4-flash 切回 gpt-6.1-sol');
+  });
+
+  it('缺模型名（旧载荷）→ 退回通用文案，不渲染半截句子', () => {
+    render(<SystemCard cardType="usage-limit-revert" data={{ at: 0 }} />);
+    expect(screen.getByRole('status').textContent).toContain('额度已恢复，已自动切回原模型');
+  });
+});

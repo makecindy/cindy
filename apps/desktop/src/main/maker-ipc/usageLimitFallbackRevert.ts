@@ -100,6 +100,16 @@ export interface UsageLimitFallbackRevertDeps {
     expected: { failedAtMs: number; attempts: number },
     next: SessionUsageLimitFallbackEpisode,
   ): Promise<boolean>;
+  /**
+   * 回切**成功后**通知宿主（前台只广播一条瞬态提示，不落库）。
+   * 参数就是这次真的换掉的那两个模型，供会话内提示解释「模型为什么自己变了」。
+   */
+  notifyReverted?(event: {
+    sessionId: string;
+    fromModel: string;
+    toModel: string;
+    at: number;
+  }): void;
   now(): number;
   log: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -254,6 +264,13 @@ export function createUsageLimitFallbackRevert(
         toProviderId: policy.source.providerId,
         toModel: policy.source.model,
         attempts: episode.attempts + 1,
+      });
+      // 告诉会话：模型是自己变回去的。只发瞬态提示，不落任何历史。
+      deps.notifyReverted?.({
+        sessionId,
+        fromModel: episode.targetRoute.model,
+        toModel: policy.source.model,
+        at: deps.now(),
       });
       return 'reverted';
     }

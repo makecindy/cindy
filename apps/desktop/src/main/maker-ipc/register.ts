@@ -20114,6 +20114,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       clearSessionUsageLimitFallbackEpisode(sessionId, expected),
     claimAttempt: (sessionId, expected, next) =>
       claimSessionUsageLimitFallbackEpisodeAttempt(sessionId, expected, next),
+    // 回切成功：只广播一条会话级瞬态提示，让用户知道模型是自己变回去的。
+    // 不写消息表、不插 agent_switch 边界（那会污染交接/fork 的判据）。
+    notifyReverted: ({ sessionId, fromModel, toModel, at }) => {
+      broadcastToAllWindows(
+        MAKER_PUSH.SESSION_USAGE_LIMIT_REVERTED,
+        { sessionId, fromModel, toModel, at },
+        captureDataOwnerBroadcastScope(),
+      );
+    },
     now: () => Date.now(),
     log,
   });

@@ -136,6 +136,7 @@ function harness(options: {
       return true;
     },
   );
+  const notifyReverted = vi.fn();
   const deps: UsageLimitFallbackRevertDeps = {
     readEpisodes: () => [...state.episodes.values()],
     readProfiles: async (sessionId) => {
@@ -156,10 +157,19 @@ function harness(options: {
     writeEpisode,
     clearEpisode,
     claimAttempt,
+    notifyReverted,
     now: () => state.now,
     log: { info: vi.fn(), warn: vi.fn() },
   };
-  return { deps, applySourceSelection, writeEpisode, clearEpisode, claimAttempt, state };
+  return {
+    deps,
+    applySourceSelection,
+    writeEpisode,
+    clearEpisode,
+    claimAttempt,
+    notifyReverted,
+    state,
+  };
 }
 
 describe('usage-limit fallback revert (episode accounting)', () => {
@@ -203,7 +213,7 @@ describe('usage-limit fallback revert (episode accounting)', () => {
   });
 
   it('到期且切成功 → 用 policy.source 的完整组合切回，并清掉 episode', async () => {
-    const { deps, applySourceSelection, clearEpisode } = harness({
+    const { deps, applySourceSelection, clearEpisode, notifyReverted } = harness({
       episodes: [
         {
           sessionId: 's1',
@@ -222,7 +232,33 @@ describe('usage-limit fallback revert (episode accounting)', () => {
     });
     // 收尾用 CAS 清（只有仍是自己那一份才删），不是无条件 write(null)。
     expect(clearEpisode).toHaveBeenCalledWith('s1', expect.objectContaining({ attempts: 1 }));
+    // 会话提示只在真的换成功时发一次，带的就是这次换掉的两个模型。
+    expect(notifyReverted).toHaveBeenCalledTimes(1);
+    expect(notifyReverted).toHaveBeenCalledWith({
+      sessionId: 's1',
+      fromModel: targetRoute.model,
+      toModel: source.model,
+      at: T0,
+    });
     expect(result.reverted).toBe(1);
+  });
+
+  it('没切成 / 没轮到它的时候不发会话提示', async () => {
+    const deferred = harness({ applyResult: { deferred: true } });
+    await createUsageLimitFallbackRevert(deferred.deps).sweep();
+    expect(deferred.notifyReverted).not.toHaveBeenCalled();
+
+    const notDue = harness({
+      episodes: [
+        {
+          sessionId: 's1',
+          policy,
+          episode: episode({ knownResetAtMs: T0 + 60 * MIN, nextEligibleAtMs: T0 }),
+        },
+      ],
+    });
+    await createUsageLimitFallbackRevert(notDue.deps).sweep();
+    expect(notDue.notifyReverted).not.toHaveBeenCalled();
   });
 
   it('失败后 attempts 递增、退避翻倍，用完预算就清 episode 不再试', async () => {
