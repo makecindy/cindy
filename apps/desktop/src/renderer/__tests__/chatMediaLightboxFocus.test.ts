@@ -97,6 +97,18 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     expect(host).toBe(document.body.querySelector('[data-model3d-viewer]'));
     // host-irrelevant controls are off; the SDK's own info / settings / toolbar stay on
     expect(options.ui).toMatchObject({ import: false, export: false, panorama: false });
+    // colours come from the lightbox toolbar token family (same values in Light and Dark),
+    // never from literals, so the viewer follows the design system
+    expect(options.theme).toEqual({
+      primary: 'var(--lightbox-toolbar-fg-hover)',
+      text: 'var(--lightbox-toolbar-fg-hover)',
+      panelBg: 'var(--lightbox-toolbar-hover-bg)',
+      controlBg: 'var(--lightbox-toolbar-hover-bg)',
+      border: 'var(--lightbox-toolbar-border)',
+      background: 'transparent',
+      monochromeIcons: true,
+    });
+    expect(JSON.stringify(options.theme)).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
     expect((viewerLoad.mock.calls[0] as unknown[])[1]).toEqual({ fileName: 'f.glb' });
     expect(viewerDispose).not.toHaveBeenCalled();
     unmount();

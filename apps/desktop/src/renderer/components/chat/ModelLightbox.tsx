@@ -160,10 +160,32 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
         if (cancelled) return;
         viewer = sdk.createModelViewer(host, {
           locale,
-          // 弹窗自带半透明遮罩背景,viewport 背景留透明;导入 / 导出 / 全景是宿主
-          // 不需要的入口(模型来源由聊天决定),关掉避免出现无意义的按钮。
-          theme: { background: 'transparent' },
-          ui: { import: false, export: false, panorama: false, emptyHint: false },
+          // 颜色全部取 lightbox 工具栏那一族 token(图片预览浮在遮罩上的控件用的同一套,
+          // 明暗两种模式取值相同:面板与控件用白 10% 的浅底,叠在黑色遮罩上比纯黑底更通透,
+          // 面板上的控件再叠一层形成层次;白 20% 描边、白色前景),不在这里写字面量。
+          // 次要文字 / 悬停 / 分隔线的浅色由前景色按透明度派生;强调色也用前景白,
+          // 选中态靠白色描边与文字表达,不引入额外的强调色。viewport 背景透明,
+          // 让弹窗自己的 --overlay-lightbox 遮罩透出来。导入 / 导出 / 全景是宿主不需要
+          // 的入口(模型来源由聊天决定),关掉避免出现无意义的按钮。
+          theme: {
+            primary: 'var(--lightbox-toolbar-fg-hover)',
+            text: 'var(--lightbox-toolbar-fg-hover)',
+            panelBg: 'var(--lightbox-toolbar-hover-bg)',
+            controlBg: 'var(--lightbox-toolbar-hover-bg)',
+            border: 'var(--lightbox-toolbar-border)',
+            background: 'transparent',
+            // 视角 / 投影图标是自带紫色细节的双色图,变量改不了色;选中态也用纯白,与前景色一致
+            monochromeIcons: true,
+          },
+          // loadingOverlay 关掉:加载态由下面这一个居中的 spinner 统一承担(覆盖 SDK 动态导入 +
+          // 读字节 + 解析全过程),避免库自带的加载层叠成两个 loading。
+          ui: {
+            import: false,
+            export: false,
+            panorama: false,
+            emptyHint: false,
+            loadingOverlay: false,
+          },
           onLoadError: fail,
         });
         await viewer.load(model.blob, { fileName: model.fileName });
@@ -280,8 +302,10 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
       {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click opens a pointer context menu for the model canvas. */}
       <div
         style={{
-          width: 'min(92vw, 1280px)',
-          height: 'min(88vh, 860px)',
+          // 查看器的侧栏按容器高度自适应(库的紧凑档位),这里只需给足空间、保留点击
+          // 遮罩关闭的边缘。
+          width: 'min(94vw, 1280px)',
+          height: 'min(92vh, 860px)',
           position: 'relative',
           zIndex: 1,
         }}
@@ -313,7 +337,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
               top: '50%',
               left: '50%',
               transform: 'translate(-50%, -50%)',
-              color: 'rgba(255,255,255,0.85)',
+              color: 'var(--lightbox-toolbar-fg)',
               pointerEvents: 'none',
               display: 'flex',
               alignItems: 'center',
