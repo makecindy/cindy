@@ -3151,6 +3151,14 @@ function scheduleRefresh(token: string): void {
 const RUNTIME_REFRESH_RETRY_MS = 60_000;
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250] as const;
+/**
+ * 冷启动瞬时失败(断网 / DNS 未就绪 / 5xx)的退避序列,共 7 次请求、约 60s 窗口。
+ * 开机自启常早于 Wi-Fi 就绪,默认的 [1s, 2s](约 4s 内 3 次)会在网络恢复前就放弃并以
+ * 未登录启动。ERR_INTERNET_DISCONNECTED / ERR_NAME_NOT_RESOLVED 的请求没有到达服务端,
+ * 重试不会重放已轮换的 token。20s 启动闸超时后流程仍在后台继续,迟到成功会正常广播
+ * 登录态(见 COLD_START_AUTH_GATE_TIMEOUT_MS),不会让 splash 多阻塞。
+ */
+const COLD_START_REFRESH_TRANSIENT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000] as const;
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000] as const;
 const REPLACEMENT_INTEGRATION_RELOAD_RETRY_DELAYS_MS = [250, 1000, 3000] as const;
 
@@ -3392,6 +3400,7 @@ async function runAuthRefreshWithReplacementRetry(
     realm: AuthRegion;
     withTransientRetry: boolean;
     rateLimitDelayMs?: number;
+    retryDelaysMs?: readonly number[];
     onFailure?: (info: RefreshFailureInfo) => void;
   },
 ): Promise<{
@@ -3409,6 +3418,7 @@ async function runAuthRefreshWithReplacementRetry(
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
+          retryDelaysMs: opts.retryDelaysMs,
           onFailure: opts.onFailure,
         }
       : undefined,
@@ -4841,6 +4851,7 @@ async function runColdStartRefreshFlow(
       realm: storedRealm,
       withTransientRetry: true,
       rateLimitDelayMs: 0,
+      retryDelaysMs: COLD_START_REFRESH_TRANSIENT_RETRY_DELAYS_MS,
       onFailure: ({ attempt, status, code, definitive, willRetry }) =>
         log.warn(
           `cold-start refresh attempt ${attempt} failed status=${status} code=${code ?? '<none>'} definitive=${definitive} transientWillRetry=${willRetry}`,
