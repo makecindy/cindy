@@ -349,6 +349,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
+import { useSessionUsageLimitFallback } from '@/hooks/useSessionUsageLimitFallback';
 import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
@@ -1392,6 +1393,8 @@ export function ChatInput({
   const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // 任务级额度备用路线：只有已建任务可配（策略按任务保存），草稿传 null 不发 IPC。
+  const usageLimitFallback = useSessionUsageLimitFallback(sessionId ?? null);
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
@@ -9873,6 +9876,7 @@ export function ChatInput({
                   {!sessionModelLoading && <ModelSelector
                     providersOverride={sshCodexHostId ? sshCodexProviders.providers : undefined}
                     providersOverrideState={sshCodexHostId ? sshCodexProviders : undefined}
+                    usageLimitFallback={sessionId ? usageLimitFallback : null}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
                     // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着

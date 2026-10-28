@@ -1,7 +1,7 @@
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { localizedModelName } from '@/lib/modelDisplayNames';
-import { Star, Zap } from 'lucide-react';
+import { ChevronDown, Star, TriangleAlert, Zap } from 'lucide-react';
 import { SpeedIcon } from './SpeedIcon';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
@@ -19,10 +19,45 @@ import {
 import type { Effort } from '@/lib/userPreferences.types';
 import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import type {
+  SessionUsageLimitFallbackState,
+  SessionUsageLimitFallbackTarget,
+} from '@/hooks/useSessionUsageLimitFallback';
 
 import { ModelHarnessPicker } from './ModelHarnessPicker';
 import { EffortSlider } from '@/components/ui/effort-slider';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
+
+/**
+ * 占位：等用户确认实际界面后定稿，之后换 i18n。
+ * 本文件之外不要新增同一批文案的副本。
+ */
+const COPY = {
+  label: '额度用尽时改用',
+  unset: '不启用',
+  empty: '同引擎下没有其他可用模型',
+  staleHint: '已失效：这条备用路线绑定的模型已不是任务当前使用的组合，不会再触发。',
+  reset: '重设',
+  error: '没有保存：',
+  sectionLabel: '额度用尽时的备用模型',
+} as const;
+
+/** 额度备用候选：同一引擎下、目录里已加载的模型（由面板注入，不发额外请求）。 */
+export interface UsageLimitFallbackCandidate {
+  providerId: string;
+  /** 真正发给模型的 wire id（与主进程目录查找、会话 model 同一口径）。 */
+  modelId: string;
+  displayName: string;
+  sourceLabel: string;
+}
+
+function fallbackCandidateKey(candidate: { providerId: string; modelId: string }): string {
+  return `${candidate.providerId}::${candidate.modelId}`;
+}
+
+/** RadioGroup 的「不启用」哨兵值（空串在 Radix 里容易被当成未选）。 */
+const FALLBACK_NONE = '__none__';
+
 
 /** 底栏三态(等高,切态不改变浮层高度 —— 规格 §1.3「高度恒定」)。 */
 export type ModelConfigFlyoutState = 'recommended' | 'customized' | 'favorite';
@@ -48,6 +83,14 @@ export interface ModelConfigFlyoutProps {
   onResetToRecommended: () => void;
   onAddFavorite: () => void;
   onRemoveFavorite: () => void;
+  /**
+   * 任务级额度备用路线（已建任务才有）。null / 缺省 = 不画这一区：
+   * 新任务草稿、设置类入口与远程目录浏览都没有可写的目标。
+   * 由上层注入，本组件不调 hook —— 它同时给非任务场景渲染。
+   */
+  usageLimitFallback?: SessionUsageLimitFallbackState | null;
+  /** 同引擎下的候选（面板已加载的目录）。空数组 = 只能显示「没有其他可用模型」。 */
+  usageLimitFallbackCandidates?: readonly UsageLimitFallbackCandidate[];
 }
 
 /**
@@ -80,6 +123,8 @@ export function ModelConfigFlyout({
   onResetToRecommended,
   onAddFavorite,
   onRemoveFavorite,
+  usageLimitFallback = null,
+  usageLimitFallbackCandidates = [],
 }: ModelConfigFlyoutProps) {
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
@@ -93,6 +138,44 @@ export function ModelConfigFlyout({
   const codexDefaultContext = config.engine === 'codex';
   const codexContext = codexDefaultContext ? contextLimit.codexContext ?? null : null;
   const starred = state === 'favorite' || justFavorited;
+
+  // 额度备用路线：已存目标按候选表反查展示名；存着但已不在候选里的（失效/被隐藏/目录变了）
+  // 退回显示 model id —— 至少能对上是哪一条，失效提示另有单独一行。
+  const fallbackTarget: SessionUsageLimitFallbackTarget | null = usageLimitFallback?.target ?? null;
+  const fallbackSelectedKey = fallbackTarget
+    ? fallbackCandidateKey({ providerId: fallbackTarget.providerId, modelId: fallbackTarget.model })
+    : FALLBACK_NONE;
+  const fallbackSelected = fallbackTarget
+    ? usageLimitFallbackCandidates.find(
+        (candidate) => fallbackCandidateKey(candidate) === fallbackSelectedKey,
+      ) ?? null
+    : null;
+  const fallbackTargetLabel = fallbackTarget
+    ? fallbackSelected
+      ? `${localizedModelName(fallbackSelected.displayName, t)} · ${fallbackSelected.sourceLabel}`
+      : fallbackTarget.model
+    : COPY.unset;
+
+  const applyFallbackValue = (value: string) => {
+    if (!usageLimitFallback) return;
+    if (value === FALLBACK_NONE) {
+      void usageLimitFallback.clearTarget();
+      return;
+    }
+    const candidate = usageLimitFallbackCandidates.find(
+      (item) => fallbackCandidateKey(item) === value,
+    );
+    if (!candidate) return;
+    void usageLimitFallback.setTarget({
+      providerId: candidate.providerId,
+      model: candidate.modelId,
+    });
+  };
+  // 重设 = 用已存目标再写一次：主进程按任务当时的实际组合重记来源，写完成 stale 自然消失。
+  const resetFallback = () => {
+    if (!usageLimitFallback?.target) return;
+    void usageLimitFallback.setTarget(usageLimitFallback.target);
+  };
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;
   const priceRows =
@@ -307,6 +390,85 @@ export function ModelConfigFlyout({
           )}
           {priceFootnote && (
             <div className="text-11 leading-[1.5] text-[var(--text-tertiary)]">{priceFootnote}</div>
+          )}
+        </div>
+      )}
+
+      {usageLimitFallback && (
+        // 任务级额度备用路线：排在 Fast 之后、状态底栏（收藏 / 恢复推荐）之前。
+        // 草稿、设置类入口与远程目录浏览不传这个 prop，整区不画。
+        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2.5 text-12">
+          {usageLimitFallback.stale && (
+            <div className="mb-1.5 flex items-start gap-1.5 leading-[1.5] text-[var(--warning-fg)]">
+              <TriangleAlert size={12} className="mt-[2px] shrink-0" aria-hidden />
+              <span className="min-w-0 flex-1">{COPY.staleHint}</span>
+              <button
+                type="button"
+                disabled={disabled || usageLimitFallback.loading}
+                onClick={resetFallback}
+                className="shrink-0 underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {COPY.reset}
+              </button>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="shrink-0 text-[var(--text-secondary)]">{COPY.label}</span>
+            {usageLimitFallbackCandidates.length === 0 ? (
+              <span
+                className="min-w-0 truncate text-[var(--text-tertiary)]"
+                title={COPY.empty}
+              >
+                {COPY.empty}
+              </span>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={disabled || usageLimitFallback.loading}
+                    aria-label={COPY.sectionLabel}
+                    title={fallbackTargetLabel}
+                    className={cn(
+                      'flex h-7 min-w-0 max-w-[220px] items-center gap-1 rounded-full border px-2.5 text-12 transition-colors',
+                      'border-[var(--model-dropdown-border)] hover:bg-[var(--model-item-hover)]',
+                      fallbackTarget
+                        ? 'text-[var(--model-item-text)]'
+                        : 'text-[var(--text-tertiary)]',
+                      (disabled || usageLimitFallback.loading) && 'cursor-not-allowed opacity-50',
+                    )}
+                  >
+                    <span className="truncate">{fallbackTargetLabel}</span>
+                    <ChevronDown size={12} className="shrink-0 opacity-60" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuRadioGroup
+                    value={fallbackSelectedKey}
+                    onValueChange={applyFallbackValue}
+                  >
+                    <DropdownMenuRadioItem value={FALLBACK_NONE}>
+                      {COPY.unset}
+                    </DropdownMenuRadioItem>
+                    {usageLimitFallbackCandidates.map((candidate) => (
+                      <DropdownMenuRadioItem
+                        key={fallbackCandidateKey(candidate)}
+                        value={fallbackCandidateKey(candidate)}
+                      >
+                        {localizedModelName(candidate.displayName, t)}
+                        <span className="ml-1 opacity-60">· {candidate.sourceLabel}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+          {usageLimitFallback.error && (
+            <div className="mt-1 leading-[1.5] text-[var(--error-fg)]" role="alert">
+              {COPY.error}
+              {usageLimitFallback.error}
+            </div>
           )}
         </div>
       )}
