@@ -1493,6 +1493,7 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import {
+  matchesUsageLimitFallbackSource,
   type SessionUsageLimitFallback,
   type UsageLimitFallbackRoute,
 } from './sessionUsageLimitFallback.js';
@@ -3191,6 +3192,44 @@ export function tryGetBotDelegationService(): BotDelegationService | null {
 
 export function tryGetBotDirectMessageService(): BotDirectMessageService | null {
   return botDirectMessageServiceHolder;
+}
+
+/** 任务级额度备用路线的目标组合；只换来源与模型，Harness 在写入时固定。 */
+export interface UsageLimitFallbackTarget {
+  providerId: string;
+  model: string;
+}
+
+export type UsageLimitFallbackGetResult =
+  | { ok: true; target: UsageLimitFallbackTarget | null; stale: boolean }
+  | { ok: false; errorCode: 'NOT_FOUND'; message: string };
+
+export type UsageLimitFallbackSetResult =
+  | { ok: true; target: UsageLimitFallbackTarget | null }
+  | {
+      ok: false;
+      errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+      message: string;
+    };
+
+/**
+ * renderer 入口只做参数收窄与结果翻译：业务仍住在 registerMakerIpc 里——
+ * 读取走同一个 store + 运行时快照，写入直接交给 sessionControlService.setSessionRuntime，
+ * 与 MCP 控制面（set_session_runtime）同一条校验与门禁，不另立第二套。
+ */
+export interface UsageLimitFallbackCommands {
+  get(sessionId: string): Promise<UsageLimitFallbackGetResult>;
+  set(
+    sessionId: string,
+    target: UsageLimitFallbackTarget | null,
+  ): Promise<UsageLimitFallbackSetResult>;
+}
+
+let usageLimitFallbackCommandsHolder: UsageLimitFallbackCommands | null = null;
+
+/** 取任务级额度备用路线的 renderer 命令, host ready 前返 null(调用方翻成 HOST_NOT_READY)。 */
+export function tryGetUsageLimitFallbackCommands(): UsageLimitFallbackCommands | null {
+  return usageLimitFallbackCommandsHolder;
 }
 
 function createBridgeWorkerLabel(task: string): string {
@@ -18044,6 +18083,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       } catch (err) {
         return orcaModelDiscoveryFailure(err, Boolean(executionDeviceId));
       }
+    },
+  };
+
+  // ─── 任务级额度备用路线的 renderer 入口 ────────────────────────────────
+  // 读取用同一份 store + 运行时快照；写入交给 sessionControlService，与 MCP 控制面
+  // (set_session_runtime.usage_limit_fallback) 完全同一条校验、门禁与错误码。
+  usageLimitFallbackCommandsHolder = {
+    get: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) {
+        return {
+          ok: false as const,
+          errorCode: 'NOT_FOUND' as const,
+          message: `session ${sessionId} not found`,
+        };
+      }
+      const policy = readSessionUsageLimitFallback(sessionId);
+      return {
+        ok: true as const,
+        target: policy?.target ?? null,
+        // 策略按「配置时那一组来源+模型」锚定；任务被换到别处后不再命中，界面据此提示失效。
+        stale: policy ? !matchesUsageLimitFallbackSource(policy, profiles.effective) : false,
+      };
+    },
+    set: async (sessionId, target) => {
+      const result = await sessionControlService.setSessionRuntime({
+        targetSessionId: sessionId,
+        patch: { usageLimitFallback: target },
+      });
+      if (!result.ok) {
+        return { ok: false as const, errorCode: result.errorCode, message: result.message };
+      }
+      return { ok: true as const, target: result.usageLimitFallback ?? null };
     },
   };
 
