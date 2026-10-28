@@ -3401,6 +3401,12 @@ async function runAuthRefreshWithReplacementRetry(
     withTransientRetry: boolean;
     rateLimitDelayMs?: number;
     retryDelaysMs?: readonly number[];
+    /**
+     * 每次真正发请求前求值;返回 true 则不再请求、按「未到达服务端的瞬时失败」返回。
+     * refresh 是 token-rotating 端点:流程已被手动登录 / 登出取代时,延迟的重试若仍发出,
+     * 成功会消耗掉旧账号的 token 而结果又被丢弃,把旧账号的保险库凭证留成失效态。
+     */
+    shouldAbort?: () => boolean;
     onFailure?: (info: RefreshFailureInfo) => void;
   },
 ): Promise<{
@@ -3413,7 +3419,10 @@ async function runAuthRefreshWithReplacementRetry(
   rejectedTokens: readonly string[];
 }> {
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
-    doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
+    doRefresh: (refreshToken) =>
+      opts.shouldAbort?.()
+        ? Promise.resolve<AuthRefreshResult>({ ok: false, status: 0, data: null as unknown as AuthRefreshResult['data'] })
+        : requestAuthRefresh(refreshToken, opts.realm),
     readLatestStoredTokens: () => readStoredRefreshTokenCandidates(opts.realm),
     transientRetry: opts.withTransientRetry
       ? {
@@ -4852,6 +4861,8 @@ async function runColdStartRefreshFlow(
       withTransientRetry: true,
       rateLimitDelayMs: 0,
       retryDelaysMs: COLD_START_REFRESH_TRANSIENT_RETRY_DELAYS_MS,
+      // 重试窗口拉长后可能越过 20s 启动闸:用户此时已能手动登录,延迟的请求前必须复核代际。
+      shouldAbort: () => epochChanged('before-refresh-attempt'),
       onFailure: ({ attempt, status, code, definitive, willRetry }) =>
         log.warn(
           `cold-start refresh attempt ${attempt} failed status=${status} code=${code ?? '<none>'} definitive=${definitive} transientWillRetry=${willRetry}`,
