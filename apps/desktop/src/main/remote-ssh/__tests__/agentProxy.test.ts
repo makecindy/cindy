@@ -76,7 +76,7 @@ interface ExecCall {
 }
 
 /** 最小 RemoteHost fake: 记录 exec, cat/rm marker + pkill 走脚本内容断言。 */
-function makeFakeHost(opts: { marker?: string | null } = {}) {
+function makeFakeHost(opts: { marker?: string | null; preamble?: string } = {}) {
   const state = {
     marker: opts.marker ?? null,
     execCalls: [] as ExecCall[],
@@ -97,7 +97,9 @@ function makeFakeHost(opts: { marker?: string | null } = {}) {
     async exec(cmd: string, execOpts?: { input?: string }) {
       state.execCalls.push({ cmd, input: execOpts?.input });
       if (cmd.includes('cat "') && cmd.includes('agent-proxy.env')) {
-        return { stdout: state.marker ?? '', stderr: '', exitCode: 0, signal: null };
+        const begin = cmd.match(/__CINDY_AGENT_PROXY_MARKER_[a-f0-9]+_BEGIN__/)![0];
+        const end = cmd.match(/__CINDY_AGENT_PROXY_MARKER_[a-f0-9]+_END__/)![0];
+        return { stdout: `${opts.preamble ?? ''}\n${begin}\n${state.marker ?? ''}\n${end}\n`, stderr: '', exitCode: 0, signal: null };
       }
       if (cmd.includes('cat > "') && cmd.includes('agent-proxy.env')) {
         state.marker = (execOpts?.input ?? '').trim();
@@ -212,6 +214,54 @@ describe('getRemoteAgentProxyEnv', () => {
 });
 
 describe('reconcileCodexAgentProxyEnv', () => {
+  // PR #7184: real reconcile entry, unit tier. The previous fake omitted shell
+  // startup output, hiding false read failures and banner-induced marker drift.
+  it.each([null, buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim()])(
+    'reads a complete marker after a shell banner without changing matching state (%s)', async marker => {
+      if (marker) setSshHostAgentProxy('test-host', TUNNEL_PREF);
+      const { host, state } = makeFakeHost({ marker, preamble: 'Welcome to the server\n' });
+      await expect(reconcileCodexAgentProxyEnv(host)).resolves.toEqual({ markerChanged: false, daemonRestarted: false });
+      expect(state.execCalls).toHaveLength(1);
+      expect(state.marker).toBe(marker);
+      expect(state.pkillCount).toBe(0);
+    },
+  );
+
+  // Real ready-path regression: a bastion diagnostic must never trigger rm/pkill.
+  it.each([
+    { stdout: 'No PTY requested.\n', exitCode: 0 },
+    { exitCode: 1 },
+    { exitCode: null },
+    { exitCode: 0, truncated: true },
+  ])('rejects an unverified marker read before any remote mutation (%j)', async result => {
+    const { host, state } = makeFakeHost();
+    const originalExec = host.exec.bind(host);
+    const exec = vi.spyOn(host, 'exec').mockImplementationOnce(async (...args) => ({
+      ...await originalExec(...args), ...result,
+    }));
+    await expect(reconcileCodexAgentProxyEnv(host)).rejects.toThrow('Cannot read remote proxy configuration.');
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(state.marker).toBeNull();
+    expect(state.pkillCount).toBe(0);
+  });
+
+  it.each([
+    { name: 'command echo', rewrite: (_stdout: string, cmd: string) => `Command rejected: ${cmd}\n` },
+    { name: 'missing footer', rewrite: (stdout: string) => stdout.replace(/\n__CINDY_AGENT_PROXY_MARKER_\w+_END__\n$/, '') },
+    { name: 'different request', rewrite: (stdout: string) => stdout.replace(/MARKER_([a-f0-9]+)/g, 'MARKER_stale') },
+  ])('rejects $name without mutating a remote marker', async ({ rewrite }) => {
+    const { host, state } = makeFakeHost({ marker: 'existing configuration' });
+    const originalExec = host.exec.bind(host);
+    const exec = vi.spyOn(host, 'exec').mockImplementationOnce(async (cmd, opts) => {
+      const result = await originalExec(cmd, opts);
+      return { ...result, stdout: rewrite(result.stdout, cmd as string) };
+    });
+    await expect(reconcileCodexAgentProxyEnv(host)).rejects.toThrow('Cannot read remote proxy configuration.');
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(state.marker).toBe('existing configuration');
+    expect(state.pkillCount).toBe(0);
+  });
+
   it('no-ops when the marker already matches the desired content (tunnel mode)', async () => {
     setSshHostAgentProxy('test-host', TUNNEL_PREF);
     const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
@@ -547,6 +597,10 @@ describe('reconcile × tunnel keeper 集成 (事务边界, R2 review P1/P3)', ()
       return this.status;
     }
     onStatus() {
+      return () => {};
+    }
+    onInteractiveAuthentication(listener: (expiresAt: number | null) => void) {
+      listener(null);
       return () => {};
     }
     async connect() {

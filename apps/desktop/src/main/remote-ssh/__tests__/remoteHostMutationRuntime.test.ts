@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   invalidateMcpEndpoint: vi.fn(),
   dbLimit: vi.fn(),
   logWarn: vi.fn(),
+  assertTrusted: vi.fn(),
 }));
 
 vi.mock('../../logger.js', async (importOriginal) => {
@@ -70,7 +71,7 @@ vi.mock('@cindy/maker-remote-ssh', async (importOriginal) => {
 });
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
-  assertTrustedAppRendererEvent: vi.fn(),
+  assertTrustedAppRendererEvent: mocks.assertTrusted,
 }));
 
 vi.mock('../../localDb/client/current.js', () => ({
@@ -188,7 +189,7 @@ let initialListResult: {
 
 beforeAll(async () => {
   mocks.readSshConfigDetailed.mockResolvedValue(failedRead());
-  registerRemoteSshIpc();
+  registerRemoteSshIpc(() => null);
   initialListResult = await handler(REMOTE_SSH_INVOKE.LIST)({});
   mocks.readSshConfigDetailed.mockResolvedValue(successfulRead([]));
   await handler(REMOTE_SSH_INVOKE.RELOAD_CONFIG)({});
@@ -204,6 +205,7 @@ beforeEach(async () => {
   mocks.invalidateMcpEndpoint.mockReset();
   mocks.dbLimit.mockReset().mockResolvedValue([]);
   mocks.logWarn.mockReset();
+  mocks.assertTrusted.mockReset();
   await getRemoteSshPool().hydrate([]);
   mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(
     getRemoteSshPool().list().map((snapshot) => snapshot.config),
@@ -211,6 +213,30 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  // Existing read-only IPC now has an explicit PTY route. The production
+  // handlers must keep the default exec path and reject untrusted/invalid
+  // transport requests before the new shell capability is invoked (unit).
+  it.each([REMOTE_SSH_INVOKE.STAT_REMOTE_PATH, REMOTE_SSH_INVOKE.LIST_REMOTE_DIR])(
+    'validates the new PTY read-only route at %s', async channel => {
+      await getRemoteSshPool().hydrate([host('worker-dir')]);
+      const remote = getRemoteSshPool().get('worker-dir')!;
+      const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+      const stdout = channel === REMOTE_SSH_INVOKE.STAT_REMOTE_PATH ? 'dir /root\n' : 'OK /root\nD project\n';
+      const exec = vi.spyOn(remote, 'exec').mockResolvedValue({ stdout, stderr: '', exitCode: 0, signal: null });
+      const execPty = vi.spyOn(remote, 'execPty').mockResolvedValue({ stdout, stderr: '', exitCode: 0, signal: null, stderrMerged: true });
+      try {
+        mocks.assertTrusted.mockImplementationOnce(() => { throw new Error('PERMISSION_DENIED'); });
+        await expect(handler(channel)({}, { id: 'worker-dir', path: '~', transport: 'pty' })).rejects.toThrow('PERMISSION_DENIED');
+        await expect(handler(channel)({}, { id: 'worker-dir', path: '~', transport: 'invalid' })).rejects.toThrow('Invalid command transport');
+        expect(execPty).not.toHaveBeenCalled();
+        await expect(handler(channel)({}, { id: 'worker-dir', path: '~', transport: 'pty' })).resolves.toMatchObject({ resolvedPath: '/root' });
+        expect(execPty).toHaveBeenCalledOnce();
+        expect(exec).not.toHaveBeenCalled();
+        await expect(handler(channel)({}, { id: 'worker-dir', path: '~' })).resolves.toMatchObject({ resolvedPath: '/root' });
+        expect(exec).toHaveBeenCalledOnce();
+      } finally { status.mockRestore(); exec.mockRestore(); execPty.mockRestore(); }
+    },
+  );
   it.each(['\n', '\r', '\r\n'])('rejects injected protocol lines before remote execution (%j)', async (separator) => {
     await getRemoteSshPool().hydrate([host('worker-dir')]);
     const remote = getRemoteSshPool().get('worker-dir')!;

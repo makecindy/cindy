@@ -43,6 +43,7 @@ export function registerSshExecTool(
       '在已配置的 SSH 主机上执行一条命令并返回 {stdout, stderr, exitCode}。' +
       '自动使用已配置的认证方式（ssh-agent / key），命令按原样在远端 shell 执行，无需本地转义。' +
       '注意：当前为直连，不支持 ~/.ssh/config 的 ProxyJump/ProxyCommand 跳板——仅跳板可达的主机会连接失败。' +
+      'JumpServer 等拒绝非 PTY 命令的入口可显式选 transport=pty，经交互 Shell 使用 Bash 执行一次；远端需要 Bash。保留终端回显，等待回显后单独发送回车；已指定资产的直连配置不需要输入 p，也不安装远端 Agent。PTY 模式 stderr 合并到 stdout，命令客户端限 64KiB，转义后的命令与环境总长度限 256KiB；服务器可能无法及时回显长命令，未收到尾部回显不会发送回车。不接受非空 input（避免输入进入终端审计和进程参数），stdin 为 EOF；不支持远程项目或二进制流。' +
       'exitCode 非 0 会如实返回（不算工具错误），由你判断语义。' +
       `默认超时 ${DEFAULT_TIMEOUT_MS / 1000}s（可调，上限 ${MAX_TIMEOUT_MS / 1000}s）；` +
       '更长的任务请 `nohup <cmd> > /tmp/task.log 2>&1 &` 后台跑，再用本工具轮询日志。',
@@ -57,9 +58,13 @@ export function registerSshExecTool(
         .max(MAX_TIMEOUT_MS)
         .optional()
         .describe(`超时毫秒数，默认 ${DEFAULT_TIMEOUT_MS}`),
-      input: z.string().optional().describe('写入远端命令 stdin 的内容（可选）'),
+      input: z.string().optional().describe('写入远端命令 stdin 的内容（可选，仅 exec 支持非空 input）'),
+      transport: z.enum(['exec', 'pty']).optional().describe('默认 exec；拒绝非 PTY 的堡垒机直连入口选 pty。不会自动重放命令。'),
     },
-    handler: async ({ host, command, cwd, timeoutMs, input }) => {
+    handler: async ({ host, command, cwd, timeoutMs, input, transport }) => {
+      if (transport === 'pty' && input) {
+        return errorPayload('INVALID_ARGS', 'PTY 模式不支持非空 input，以免输入进入终端审计或进程参数；当前主机支持普通 exec 时可使用 exec 的 stdin。');
+      }
       let pool;
       try {
         pool = await deps.getPool();
@@ -78,7 +83,11 @@ export function registerSshExecTool(
         if (!remote) {
           return errorPayload('HOST_NOT_FOUND', `主机 "${hostId}" 已从连接池移除，用 ssh_list_hosts 重新确认。`);
         }
-        const result = await remote.exec(wrapCwd(command, cwd), {
+        if (transport === 'pty' && !remote.execPty) {
+          return errorPayload('SSH_CONNECT_FAILED', '当前客户端尚不支持 PTY 命令通道。');
+        }
+        const execute = transport === 'pty' ? remote.execPty! : remote.exec;
+        const result = await execute.call(remote, wrapCwd(command, cwd), {
           input,
           timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
           label: `cindy_ssh:ssh_exec(${hostId})`,
@@ -92,6 +101,7 @@ export function registerSshExecTool(
           signal: result.signal,
           stdout: stdout.text,
           stderr: stderr.text,
+          ...(result.stderrMerged ? { stderrMerged: true, transport: 'pty' } : {}),
           ...(stdout.truncated ? { stdoutTruncated: true } : {}),
           ...(stderr.truncated ? { stderrTruncated: true } : {}),
           // 源头字节 cap 生效 = 命令被提前终止,输出不完整,exitCode 不可信。

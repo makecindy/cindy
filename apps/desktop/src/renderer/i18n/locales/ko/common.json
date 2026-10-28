@@ -1691,6 +1691,22 @@
       "bots": "파트너"
     },
     "remote": {
+      "authentication": {
+        "interrupted": "SSH 연결이 끊어졌습니다. 다시 연결해 주세요.",
+        "errors": {
+          "required": "이 컴퓨터에서 SSH 인증을 완료하세요.",
+          "cancelled": "SSH 인증을 취소했습니다. 준비되면 다시 연결하세요.",
+          "timeout": "SSH 인증 시간이 초과되었습니다. 다시 연결하세요.",
+          "failed": "SSH 인증을 완료하지 못했습니다. 다시 연결하세요."
+        },
+        "title": "SSH 인증",
+        "description": "서버에서 요청한 인증 코드 또는 기타 인증 정보를 입력하세요. 입력한 정보는 이번 연결에만 사용되며 저장되거나 채팅 기록에 추가되지 않습니다.",
+        "serverPrompt": "서버 메시지",
+        "response": "인증 정보 {{number}}",
+        "submit": "인증 후 연결",
+        "expired": "인증 요청이 종료되었습니다. 다시 연결하세요.",
+        "deliveryFailed": "인증 정보를 제출하지 못했습니다. 다시 연결하세요."
+      },
       "title": "원격 머신",
       "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}} 로 인증",

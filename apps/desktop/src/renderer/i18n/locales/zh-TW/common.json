@@ -1691,6 +1691,22 @@
       "bots": "伙伴"
     },
     "remote": {
+      "authentication": {
+        "interrupted": "SSH 連線已中斷，請重新連線。",
+        "errors": {
+          "required": "請在這台電腦上完成 SSH 身分驗證。",
+          "cancelled": "已取消 SSH 身分驗證。需要連線時可重試。",
+          "timeout": "SSH 身分驗證已逾時，請重新連線。",
+          "failed": "SSH 身分驗證未完成，請重新連線。"
+        },
+        "title": "SSH 身分驗證",
+        "description": "在此填寫伺服器要求的驗證碼或其他認證資訊。輸入僅用於本次連線，不會儲存或進入對話記錄。",
+        "serverPrompt": "伺服器提示",
+        "response": "認證資訊 {{number}}",
+        "submit": "驗證並連線",
+        "expired": "此認證請求已結束，請重新連線。",
+        "deliveryFailed": "認證資訊未能提交，請重新連線。"
+      },
       "title": "遠端機器",
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",

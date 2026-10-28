@@ -1720,6 +1720,22 @@
       "bots": "Teammates"
     },
     "remote": {
+      "authentication": {
+        "interrupted": "The SSH connection was interrupted. Please reconnect.",
+        "errors": {
+          "required": "Complete SSH authentication on this computer.",
+          "cancelled": "SSH authentication was cancelled. Connect again when ready.",
+          "timeout": "SSH authentication timed out. Connect again.",
+          "failed": "SSH authentication could not be completed. Connect again."
+        },
+        "title": "SSH authentication",
+        "description": "Enter the code or other authentication information requested by the server. Your input is used only for this connection and is not saved or added to chat history.",
+        "serverPrompt": "Server prompt",
+        "response": "Authentication response {{number}}",
+        "submit": "Verify and connect",
+        "expired": "This authentication request has ended. Connect again.",
+        "deliveryFailed": "Your authentication response could not be submitted. Connect again."
+      },
       "title": "Remote machines",
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",

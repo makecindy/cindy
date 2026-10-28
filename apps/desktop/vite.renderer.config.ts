@@ -339,6 +339,9 @@ const rendererConfig = {
       ...TIPTAP_AND_PROSEMIRROR_OPTIMIZE_EXCLUDES,
       ...CODEMIRROR_OPTIMIZE_EXCLUDES,
       ...INTERNAL_PURE_PACKAGE_EXCLUDES,
+      // Browser-safe SSH challenge helpers have no dependencies even though
+      // their parent package does. Keep their exports fresh during HMR.
+      '@cindy/maker-remote-ssh/keyboard-interactive',
     ],
     // The diff highlighter runs in a lazily-created module Worker. Explicitly
     // include its dependency so the first Review/Diff render does not trigger

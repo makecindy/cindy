@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { interactiveAuthenticationReason, SSH_INTERACTIVE_CONNECTION_INTERRUPTED_MESSAGE } from '@cindy/maker-remote-ssh/keyboard-interactive';
 /**
  * RemoteSection — Settings → Remote tab.
  *
@@ -105,7 +106,10 @@ function HostRow({
   const subtitle = keyMismatch
     ? t('settings.remote.hostKey.explanation', { host: keyMismatch.host })
     : snap.lastError && snap.status === 'failed'
-    ? snap.lastError
+    ? interactiveAuthenticationReason(snap.lastError)
+      ? t('settings.remote.authentication.errors.' + interactiveAuthenticationReason(snap.lastError))
+      : snap.lastError === SSH_INTERACTIVE_CONNECTION_INTERRUPTED_MESSAGE
+        ? t('settings.remote.authentication.interrupted') : snap.lastError
     : `${snap.config.user}@${snap.config.hostname}:${snap.config.port}${via}`;
 
   return (
@@ -1090,7 +1094,8 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       if (ipc?.code === 'SSH_HOST_KEY_MISMATCH') {
         toast.error(t('settings.remote.hostKey.title'));
       } else if (ipc?.code === 'SSH_AUTH_FAILED') {
-        toast.error(ipc.message);
+        const reason = interactiveAuthenticationReason(ipc.message);
+        toast.error(reason ? t('settings.remote.authentication.errors.' + reason) : ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),
         // NOT a network/host failure. Show the actual path + how to fix it so

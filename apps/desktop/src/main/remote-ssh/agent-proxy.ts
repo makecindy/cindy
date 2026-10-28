@@ -35,6 +35,7 @@
  *     session start 的 reconcile 都会补刀), 不 mid-turn 杀 daemon。
  */
 
+import { randomBytes } from 'node:crypto';
 import type { HostConfig, RemoteHost } from '@cindy/maker-remote-ssh';
 import { REMOTE_AGENT_PROXY_ENV_PATH, REMOTE_INSTALL_ROOT } from '@cindy/maker-remote-ssh';
 
@@ -245,11 +246,25 @@ export async function getRemoteAgentProxyEnvUppercase(
 /* ============================== codex daemon env marker ============================== */
 
 async function readRemoteMarker(host: RemoteHost): Promise<string | null> {
+  const nonce = randomBytes(16).toString('hex');
+  const begin = `__CINDY_AGENT_PROXY_MARKER_${nonce}_BEGIN__`;
+  const end = `__CINDY_AGENT_PROXY_MARKER_${nonce}_END__`;
   const result = await host.exec(
-    `bash -c 'cat "${REMOTE_AGENT_PROXY_ENV_PATH}" 2>/dev/null || true'`,
-    { timeoutMs: 10_000, label: 'read-agent-proxy-marker' },
+    `bash -c 'printf "\\n%s\\n" "${begin}"; if [ -e "${REMOTE_AGENT_PROXY_ENV_PATH}" ]; then cat "${REMOTE_AGENT_PROXY_ENV_PATH}" 2>/dev/null || exit 1; fi; printf "\\n%s\\n" "${end}"'`,
+    { timeoutMs: 10_000, maxOutputBytes: 64 * 1024, label: 'read-agent-proxy-marker' },
   );
-  const content = result.stdout.trim();
+  // A bastion can return diagnostics with exit=0 without executing the command.
+  // Shell startup banners may precede the frame. Bound the entire response and
+  // require this request's complete frame; an echoed command is not a frame.
+  const prefix = `\n${begin}\n`;
+  const suffix = `\n${end}\n`;
+  const start = result.stdout.indexOf(prefix);
+  const contentStart = start + prefix.length;
+  const finish = result.stdout.indexOf(suffix, contentStart);
+  if (result.exitCode !== 0 || result.truncated || start < 0 || finish < 0) {
+    throw new Error('Cannot read remote proxy configuration.');
+  }
+  const content = result.stdout.slice(contentStart, finish).trim();
   return content ? content : null;
 }
 

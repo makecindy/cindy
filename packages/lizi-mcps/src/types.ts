@@ -469,7 +469,10 @@ export interface SshRemoteHostLike {
     signal: string | null;
     /** maxOutputBytes 生效时为 true——输出不完整且命令被提前终止。 */
     truncated?: boolean;
+    stderrMerged?: boolean;
   }>;
+  /** Optional audited PTY-shell command capability supplied by Desktop. */
+  execPty?: SshRemoteHostLike['exec'];
 }
 
 /** ConnectionPool 子集。 */

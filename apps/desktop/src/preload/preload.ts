@@ -1,4 +1,5 @@
 import type { VoiceConversationApi } from '../shared/voiceConversation';
+import type { SshAuthenticationRequest } from '../shared/sshAuthentication';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
@@ -5043,6 +5044,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 连接管理 + OpenSSH config 发现；Cindy 新主机写独立 managed Include 文件。
   // `host.config.id` 即 ssh alias, 与 OpenSSH `Host` 声明同名.
   remoteSsh: {
+    getPendingAuthentication: (): Promise<SshAuthenticationRequest[]> =>
+      ipcRenderer.invoke('maker:remote-ssh:authentication-pending'),
+    answerAuthentication: async (requestId: string, answers: string[] | null): Promise<{ accepted: boolean }> => {
+      // ContextBridge may freeze copied arguments; clear our own mutable copy.
+      const responses = answers === null ? null : [...answers];
+      try { return await ipcRenderer.invoke('maker:remote-ssh:authentication-answer', requestId, responses); }
+      finally { responses?.fill(''); }
+    },
+    onAuthenticationRequest: (callback: (request: SshAuthenticationRequest) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, request: SshAuthenticationRequest) => callback(request);
+      ipcRenderer.on('maker:remote-ssh:authentication-request', listener);
+      return () => ipcRenderer.removeListener('maker:remote-ssh:authentication-request', listener);
+    },
+    onAuthenticationDismissed: (callback: (requestId: string) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, requestId: string) => callback(requestId);
+      ipcRenderer.on('maker:remote-ssh:authentication-dismissed', listener);
+      return () => ipcRenderer.removeListener('maker:remote-ssh:authentication-dismissed', listener);
+    },
     list: (): Promise<{
       hosts: Array<{
         config: {
@@ -5165,10 +5184,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     statRemotePath: (
       id: string,
       path: string,
+      transport?: 'exec' | 'pty',
     ): Promise<{
       kind: 'dir' | 'file' | 'missing';
       resolvedPath: string;
-    }> => ipcRenderer.invoke('maker:remote-ssh:stat-remote-path', { id, path }),
+    }> => ipcRenderer.invoke('maker:remote-ssh:stat-remote-path', { id, path, transport }),
 
     mkdirPRemote: (
       id: string,
@@ -5188,10 +5208,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listRemoteDir: (
       id: string,
       path: string,
+      transport?: 'exec' | 'pty',
     ): Promise<{
       resolvedPath: string;
       entries: Array<{ name: string; kind: 'dir' | 'symlink' }>;
-    }> => ipcRenderer.invoke('maker:remote-ssh:list-remote-dir', { id, path }),
+    }> => ipcRenderer.invoke('maker:remote-ssh:list-remote-dir', { id, path, transport }),
 
     onInstallProgress: fanOutRemoteSshInstallProgress,
     onSilentInstallStatus: fanOutRemoteSshSilentInstallStatus,

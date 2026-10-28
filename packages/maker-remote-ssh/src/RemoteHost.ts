@@ -22,7 +22,16 @@ import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetai
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
 import { resolveAuth } from './credentials.js';
+import { execPtyShell } from './ptyExec.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
+import {
+  InteractiveAuthenticationError, isInteractiveAuthenticationMessage,
+  INTERACTIVE_AUTH_TIMEOUT_MS, INTERACTIVE_AUTH_MAX_ROUNDS,
+  SSH_READY_TIMEOUT_MS,
+  INTERACTIVE_AUTH_MAX_ANSWER_LENGTH, validInteractiveChallenge,
+  SSH_INTERACTIVE_CONNECTION_INTERRUPTED_MESSAGE,
+  type KeyboardInteractiveHandler,
+} from './keyboardInteractive.js';
 
 export interface RemoteHostDeps {
   logger: {
@@ -37,9 +46,10 @@ export interface RemoteHostDeps {
    * ConnectionPool injects one built from its `knownHostsPath`.
    */
   hostKeys?: HostKeyStore;
+  /** Trusted host UI. Never receives keys; returns answers only to this attempt. */
+  keyboardInteractive?: KeyboardInteractiveHandler;
 }
 
-const READY_TIMEOUT_MS = 20_000;
 const KEEPALIVE_INTERVAL_MS = 30_000;
 const KEEPALIVE_COUNT_MAX = 3;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -80,6 +90,8 @@ export interface ExecResult {
   signal: string | null;
   /** true when `maxOutputBytes` kicked in — output is partial and the command was torn down early. */
   truncated?: boolean;
+  /** A PTY has a single output stream; stderr is included in stdout. */
+  stderrMerged?: boolean;
 }
 
 export interface ExecStreamOpts {
@@ -224,7 +236,8 @@ export function isAuthFailure(msg: string): boolean {
     // 降级成"可重试的连接失败"。与 authFailureHint 的三种文案一一对应,
     // 改 hint 措辞时必须同步这里(有 invariant 单测拦截)。
     lower.includes('has no key the remote accepts') ||
-    lower.includes('was rejected by the remote')
+    lower.includes('was rejected by the remote') ||
+    isInteractiveAuthenticationMessage(msg)
   );
 }
 
@@ -363,6 +376,9 @@ export class RemoteHost {
   private events = new EventEmitter();
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
+  private readonly keyboardInteractive?: KeyboardInteractiveHandler;
+  private cancelInteractiveAttempt: (() => void) | null = null;
+  private interactiveAuthenticationExpiresAt: number | null = null;
   /**
    * Set by the host-key verifier when it rejects a connect, so onError can
    * surface an actionable message instead of ssh2's opaque handshake error.
@@ -383,6 +399,7 @@ export class RemoteHost {
     this.cfg = config;
     this.log = deps.logger;
     this.hostKeys = deps.hostKeys;
+    this.keyboardInteractive = deps.keyboardInteractive;
   }
 
   get config(): HostConfig {
@@ -426,6 +443,19 @@ export class RemoteHost {
     return () => this.events.off('status', listener);
   }
 
+  /** Process-local input deadline only; never exposes prompts or answers in snapshots. */
+  onInteractiveAuthentication(listener: (expiresAt: number | null) => void): () => void {
+    this.events.on('authentication-input', listener);
+    listener(this.interactiveAuthenticationExpiresAt);
+    return () => { this.events.off('authentication-input', listener); };
+  }
+
+  private setInteractiveAuthenticationDeadline(expiresAt: number | null): void {
+    if (this.interactiveAuthenticationExpiresAt === expiresAt) return;
+    this.interactiveAuthenticationExpiresAt = expiresAt;
+    this.events.emit('authentication-input', expiresAt);
+  }
+
   /**
    * Open the connection. Idempotent — if already ready/connecting, returns
    * the in-flight promise. Throws on definitive failure (auth, network).
@@ -466,6 +496,7 @@ export class RemoteHost {
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
     this.connectionEpoch += 1;
+    this.cancelInteractiveAttempt?.();
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
     if (this.client) {
@@ -630,6 +661,14 @@ export class RemoteHost {
         resolve(wrapChannel(channel));
       });
     });
+  }
+
+  /** Explicit one-shot command over a bastion's audited interactive shell. */
+  execPty(cmd: string, options?: ExecOpts): Promise<ExecResult> {
+    const client = this.requireReady();
+    const epoch = this.connectionEpoch;
+    return execPtyShell(client, cmd, options, () =>
+      this.client === client && this.connectionEpoch === epoch && this.status === 'ready');
   }
 
   // ── remote TCP forwarding (ssh -R) ────────────────────────────────────────
@@ -1232,12 +1271,16 @@ export class RemoteHost {
     const attemptHostKeyId = hostKeyId(attemptConfig.hostname, attemptConfig.port);
     const client = new Client();
     this.client = client;
+    let hostVerified = false;
 
     const connectConfig: ConnectConfig = {
       host: attemptConfig.hostname,
       port: attemptConfig.port,
       username: attemptConfig.user,
-      readyTimeout: READY_TIMEOUT_MS,
+      // Own the deadline only when a human-input handler is available. Handshake
+      // still gets 20s; a verified challenge temporarily gets two minutes.
+      readyTimeout: this.keyboardInteractive ? 0 : SSH_READY_TIMEOUT_MS,
+      tryKeyboard: true,
       keepaliveInterval: KEEPALIVE_INTERVAL_MS,
       keepaliveCountMax: KEEPALIVE_COUNT_MAX,
       // TOFU host key check — without this ssh2 trusts any presented key (MITM).
@@ -1247,7 +1290,10 @@ export class RemoteHost {
           return;
         }
         void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt).then(
-          (valid) => verify(isCurrentAttempt() ? valid : false),
+          (valid) => {
+            hostVerified = isCurrentAttempt() && valid;
+            verify(hostVerified);
+          },
           () => verify(false),
         );
       },
@@ -1265,9 +1311,38 @@ export class RemoteHost {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let becameReady = false;
+      const inputController = new AbortController();
+      let inputPending = false;
+      let inputRounds = 0;
+      let readyTimer: ReturnType<typeof setTimeout> | undefined;
+      const cancelInput = () => {
+        if (readyTimer) clearTimeout(readyTimer);
+        inputController.abort();
+        // An old client's late close/error must not clear a newer attempt's input.
+        if (this.cancelInteractiveAttempt === cancelAttempt) {
+          this.cancelInteractiveAttempt = null;
+          this.setInteractiveAuthenticationDeadline(null);
+        }
+      };
+      const cancelAttempt = () => {
+        cancelInput();
+        if (!settled) { settled = true; reject(cancelledError()); }
+      };
+      this.cancelInteractiveAttempt = cancelAttempt;
+      const deadline = (ms: number, interactive = false) => {
+        if (readyTimer) clearTimeout(readyTimer);
+        readyTimer = setTimeout(() => {
+          onError(interactive ? new InteractiveAuthenticationError('timeout')
+            : new Error('Timed out while waiting for SSH connection'));
+          client.end();
+        }, ms);
+        readyTimer.unref?.();
+      };
 
       const onReady = () => {
         if (settled) return;
+        cancelInput();
         if (!isCurrentAttempt()) {
           settled = true;
           try { client.end(); } catch { /* stale client is already closing */ }
@@ -1276,6 +1351,7 @@ export class RemoteHost {
         }
         settled = true;
         this.lastError = undefined;
+        becameReady = true;
         this.lastAuthLabel = auth.label;
         this.reconnectAttempts = 0;
         this.setStatus('ready');
@@ -1287,6 +1363,13 @@ export class RemoteHost {
       };
 
       const onError = (err: Error) => {
+        // A failed attempt may still emit errors as its transport closes.
+        if (settled && !becameReady) return;
+        // Server/dependency messages during interactive auth may echo input.
+        if (!settled && inputRounds > 0 && !(err instanceof InteractiveAuthenticationError)) {
+          err = new InteractiveAuthenticationError('failed');
+        }
+        cancelInput();
         if (!isCurrentAttempt()) {
           if (!settled) {
             settled = true;
@@ -1296,7 +1379,9 @@ export class RemoteHost {
         }
         if (settled) {
           // Post-ready error — feed into reconnect path, not the connect promise.
-          this.handlePostReadyError(err);
+          // A server can echo a previously entered answer even after ready.
+          // Keep a neutral connection error so ordinary reconnect still works.
+          this.handlePostReadyError(inputRounds > 0 ? new Error(SSH_INTERACTIVE_CONNECTION_INTERRUPTED_MESSAGE) : err);
           return;
         }
         settled = true;
@@ -1307,6 +1392,7 @@ export class RemoteHost {
         // subtitle + connect-failure toast both surface this verbatim.
         this.lastError = this.hostKeyError
           ? this.hostKeyError
+          : err instanceof InteractiveAuthenticationError ? err.message
           : isAuthFailure(err.message)
             ? authFailureHint(attemptConfig)
             : err.message;
@@ -1316,6 +1402,10 @@ export class RemoteHost {
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = new Error(this.lastError);
+        if (err instanceof InteractiveAuthenticationError) {
+          Object.assign(rejectErr, { code: err.code, reason: err.reason });
+          this.lastAuthError = rejectErr;
+        }
         if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
@@ -1323,6 +1413,7 @@ export class RemoteHost {
       };
 
       const onClose = () => {
+        cancelInput();
         if (!isCurrentAttempt()) {
           if (!settled) {
             settled = true;
@@ -1355,8 +1446,52 @@ export class RemoteHost {
       client.on('ready', onReady);
       client.on('error', onError);
       client.on('close', onClose);
+      client.on('keyboard-interactive', (name, instructions, _language, prompts, finish) => {
+        if (settled || !isCurrentAttempt() || inputController.signal.aborted) return;
+        const fail = (reason: ConstructorParameters<typeof InteractiveAuthenticationError>[0]) => {
+          onError(new InteractiveAuthenticationError(reason));
+          client.end();
+        };
+        // ssh2 must finish host verification before a server can request input.
+        // Keep that boundary explicit so no unverified endpoint can show a form.
+        if (!hostVerified || inputPending || ++inputRounds > INTERACTIVE_AUTH_MAX_ROUNDS
+          || !validInteractiveChallenge(name, instructions, prompts)) { fail('failed'); return; }
+        // RFC 4256 permits zero-prompt informational rounds; there is no input.
+        if (prompts.length === 0) { finish([]); return; }
+        if (!this.keyboardInteractive) { fail('required'); return; }
+        inputPending = true;
+        deadline(INTERACTIVE_AUTH_TIMEOUT_MS, true);
+        this.setInteractiveAuthenticationDeadline(Date.now() + INTERACTIVE_AUTH_TIMEOUT_MS);
+        void (async () => {
+          let answers: string[] | null = null;
+          try {
+            answers = await this.keyboardInteractive!({
+              host: { id: attemptConfig.id, hostname: attemptConfig.hostname,
+                port: attemptConfig.port, user: attemptConfig.user },
+              name, instructions, prompts: prompts.map(p => ({ prompt: p.prompt, echo: p.echo === true })),
+            }, inputController.signal);
+            if (settled || !isCurrentAttempt() || inputController.signal.aborted) return;
+            if (answers === null) { fail('cancelled'); return; }
+            if (!Array.isArray(answers) || answers.length !== prompts.length
+              || !answers.every(a => typeof a === 'string' && a.length <= INTERACTIVE_AUTH_MAX_ANSWER_LENGTH)) {
+              fail('failed'); return;
+            }
+            inputPending = false;
+            deadline(SSH_READY_TIMEOUT_MS);
+            this.setInteractiveAuthenticationDeadline(null);
+            finish(answers);
+          } catch (error) {
+            // Dependency errors may contain an answer. Only local fixed copy escapes.
+            if (!settled && isCurrentAttempt() && !inputController.signal.aborted)
+              fail(error instanceof InteractiveAuthenticationError ? error.reason : 'failed');
+          } finally {
+            if (Array.isArray(answers)) answers.fill('');
+          }
+        })();
+      });
 
       try {
+        if (this.keyboardInteractive) deadline(SSH_READY_TIMEOUT_MS);
         client.connect(connectConfig);
       } catch (err) {
         onError(err as Error);
@@ -1436,6 +1571,7 @@ export class RemoteHost {
         // doConnect already set status=failed and recorded lastError.
         // If we still have attempts left, schedule again.
         if (this.userDisconnected || this.hostKeyError) return;
+        if (this.lastError && isInteractiveAuthenticationMessage(this.lastError)) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
         } else {

@@ -34,6 +34,7 @@
 
 import {
   effectiveAuthenticationFingerprint,
+  isInteractiveAuthenticationMessage,
   type HostConfig,
   type RemoteHost,
 } from '@cindy/maker-remote-ssh';
@@ -66,13 +67,15 @@ export interface TunnelKeeperDeps {
 const RETRY_BACKOFF_MS = [3_000, 5_000, 10_000, 20_000, 30_000, 60_000];
 /** 连续 arm 失败达到该次数后尝试一次残留监听清理。 */
 const STALE_CLEANUP_AFTER_FAILURES = 2;
-/** ensureTunnelUp 缺省等待上限。 */
+/** Short network/forwarding window; only actual local input extends default waiters. */
 const DEFAULT_ENSURE_UP_TIMEOUT_MS = 20_000;
 
 interface Waiter {
   resolve: (v: { remotePort: number }) => void;
   reject: (e: Error) => void;
-  timer: NodeJS.Timeout;
+  timer: NodeJS.Timeout | null;
+  timeoutMs: number;
+  followAuthentication: boolean;
 }
 
 interface Entry {
@@ -84,6 +87,8 @@ interface Entry {
   remotePort: number;
   conn: RemoteHost;
   offStatus: () => void;
+  offAuthentication: () => void;
+  inputExpiresAt: number | null;
   desired: boolean;
   paused: boolean;
   cycleRunning: boolean;
@@ -172,7 +177,7 @@ function isCurrent(entry: Entry): boolean {
 function settleWaiters(entry: Entry, err: Error | null): void {
   const ws = entry.waiters.splice(0);
   for (const w of ws) {
-    clearTimeout(w.timer);
+    if (w.timer) clearTimeout(w.timer);
     if (err) w.reject(err);
     else w.resolve({ remotePort: entry.remotePort });
   }
@@ -218,6 +223,8 @@ export function ensureTunnelForHost(
       remotePort: pref.remotePort,
       conn,
       offStatus: () => {},
+      offAuthentication: () => {},
+      inputExpiresAt: null,
       desired: true,
       paused: false,
       cycleRunning: false,
@@ -231,6 +238,13 @@ export function ensureTunnelForHost(
     };
     created.offStatus = conn.onStatus((snap) => handleConnStatus(created, snap.status, snap.lastError));
     entries.set(mainHost.id, created);
+    created.offAuthentication = conn.onInteractiveAuthentication(expiresAt => {
+      if (!isCurrent(created) || created.inputExpiresAt === expiresAt) return;
+      created.inputExpiresAt = expiresAt;
+      for (const waiter of created.waiters) {
+        if (waiter.followAuthentication) armWaiter(created, waiter);
+      }
+    });
     entry = created;
   }
   entry.desired = true;
@@ -259,6 +273,7 @@ export async function stopTunnelForHost(hostId: string): Promise<void> {
   entry.desired = false;
   clearRetry(entry);
   entry.offStatus();
+  entry.offAuthentication();
   settleWaiters(entry, new Error('agent-proxy tunnel torn down'));
   // 状态清空在 disconnect **之前**同步推送: rebuild 场景新 entry 随后创建
   // 并推 connecting/active, 若把 null 推迟到 disconnect 完成后, 迟到的
@@ -290,7 +305,7 @@ export function getTunnelKeeperState(hostId: string): TunnelKeeperState | null {
  */
 export function ensureTunnelUp(
   mainHost: RemoteHost,
-  timeoutMs = DEFAULT_ENSURE_UP_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<{ remotePort: number }> {
   ensureTunnelForHost(mainHost);
   const entry = entries.get(mainHost.id);
@@ -301,18 +316,31 @@ export function ensureTunnelUp(
     return Promise.resolve({ remotePort: entry.remotePort });
   }
   return new Promise<{ remotePort: number }>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const idx = entry.waiters.findIndex((w) => w.timer === timer);
-      if (idx >= 0) entry.waiters.splice(idx, 1);
-      reject(
-        new Error(
-          `agent-proxy tunnel not ready within ${timeoutMs}ms (${entry.state.phase}${entry.state.lastError ? `: ${entry.state.lastError}` : ''})`,
-        ),
-      );
-    }, timeoutMs);
-    timer.unref?.();
-    entry.waiters.push({ resolve, reject, timer });
+    const waiter: Waiter = {
+      resolve, reject, timer: null,
+      timeoutMs: timeoutMs ?? DEFAULT_ENSURE_UP_TIMEOUT_MS,
+      followAuthentication: timeoutMs === undefined,
+    };
+    entry.waiters.push(waiter);
+    armWaiter(entry, waiter);
   });
+}
+
+function armWaiter(entry: Entry, waiter: Waiter): void {
+  if (waiter.timer) clearTimeout(waiter.timer);
+  // Use the existing round's absolute deadline, including for late joiners.
+  // Explicit timeouts are hard caller limits and are never rescheduled.
+  const delay = waiter.followAuthentication && entry.inputExpiresAt !== null
+    ? Math.max(0, entry.inputExpiresAt - Date.now()) : waiter.timeoutMs;
+  waiter.timer = setTimeout(() => {
+    const idx = entry.waiters.indexOf(waiter);
+    if (idx < 0) return;
+    entry.waiters.splice(idx, 1);
+    waiter.reject(new Error(
+      `agent-proxy tunnel not ready within ${delay}ms (${entry.state.phase}${entry.state.lastError ? `: ${entry.state.lastError}` : ''})`,
+    ));
+  }, delay);
+  waiter.timer.unref?.();
 }
 
 // ── 保活循环 ────────────────────────────────────────────────────────────────
@@ -347,6 +375,13 @@ function handleConnStatus(entry: Entry, status: string, lastError?: string): voi
   if (status === 'failed') {
     // RemoteHost 内部 5 次重连耗尽 — 本模块接管无上限退避。
     setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError });
+    if (lastError && isInteractiveAuthenticationMessage(lastError)) {
+      entry.paused = true;
+      entry.kickPending = false;
+      clearRetry(entry);
+      settleWaiters(entry, new Error(lastError));
+      return;
+    }
     scheduleRetry(entry);
     return;
   }
@@ -396,6 +431,13 @@ async function runCycle(entry: Entry): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError: msg });
+      if (isInteractiveAuthenticationMessage(msg)) {
+        entry.paused = true;
+        entry.kickPending = false;
+        clearRetry(entry);
+        settleWaiters(entry, new Error(msg));
+        return;
+      }
       scheduleRetry(entry);
       return;
     }

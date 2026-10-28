@@ -40,6 +40,7 @@ export function errorPayload(
 }
 
 export type SshErrorCode =
+  | 'INVALID_ARGS'
   | 'HOST_NOT_FOUND'
   | 'AMBIGUOUS_HOST'
   | 'SSH_AUTH_FAILED'

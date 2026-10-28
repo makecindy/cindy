@@ -131,6 +131,7 @@ import { prepareRemoteAgentInstall } from './codex-install-lifecycle.js';
 import { getRemoteCodexLiveTurnChecker } from '../maker-host/remote-session-start-ensure.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { RemoteHostHydrationQueue } from './hydration-queue.js';
+import { registerSshAuthenticationIpc, requestSshAuthentication } from './authentication-prompt.js';
 
 export { redactSshSensitiveText };
 
@@ -308,6 +309,7 @@ function getPool(): ConnectionPool {
     pool = new ConnectionPool({
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
+      keyboardInteractive: requestSshAuthentication,
     });
   }
   return pool;
@@ -1119,9 +1121,10 @@ function patchSshHostPrefOrThrow(
   }
 }
 
-export function registerRemoteSshIpc(): void {
+export function registerRemoteSshIpc(getWindow: () => BrowserWindow | null): void {
   if (registered) return;
   registered = true;
+  registerSshAuthenticationIpc(getWindow);
 
   // Wire pool status → renderer broadcast (once, at registration time).
   // ready 转换时顺带应用 agent-proxy 愿望 (建隧道 + codex env 对账): 这是
@@ -1150,7 +1153,7 @@ export function registerRemoteSshIpc(): void {
       if (host) broadcastStatus(host.snapshot());
     },
     createTunnelHost: (cfg) =>
-      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore() }),
+      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore(), keyboardInteractive: requestSshAuthentication }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 
@@ -1946,13 +1949,13 @@ export function registerRemoteSshIpc(): void {
   // read-remote-file / delete-remote-path / rename-remote-path when added).
   // Don't bake "for session create" semantics into them.
 
-  ipcMain.handle(REMOTE_SSH_INVOKE.STAT_REMOTE_PATH, async (_event, args: unknown) => {
+  ipcMain.handle(REMOTE_SSH_INVOKE.STAT_REMOTE_PATH, async (event, args: unknown) => {
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
     const inputPath = requireString(obj.path, 'path');
     const host = requireConnectedHost(id);
     try {
-      return await statRemotePath(host, inputPath);
+      return await statRemotePath(pickCommandTransport(event, obj, host), inputPath);
     } catch (err) {
       throwIpcError('SSH_EXEC_FAILED', `stat remote path failed: ${String((err as Error).message ?? err)}`);
     }
@@ -1997,13 +2000,13 @@ export function registerRemoteSshIpc(): void {
   // dialog's folder browser. We list ONLY directory children (and symlinks
   // to dirs) — the picker only ever picks a folder, so files would be
   // dead clicks.
-  ipcMain.handle(REMOTE_SSH_INVOKE.LIST_REMOTE_DIR, async (_event, args: unknown) => {
+  ipcMain.handle(REMOTE_SSH_INVOKE.LIST_REMOTE_DIR, async (event, args: unknown) => {
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
     const inputPath = requireString(obj.path, 'path');
     const host = requireConnectedHost(id);
     try {
-      return await listRemoteDir(host, inputPath);
+      return await listRemoteDir(pickCommandTransport(event, obj, host), inputPath);
     } catch (err) {
       throwIpcError('SSH_REMOTE_LS_FAILED', `list remote dir failed: ${String((err as Error).message ?? err)}`);
     }
@@ -2100,6 +2103,21 @@ export async function probeRemoteWorkingDirectory(hostId: string, inputPath: str
   return result.resolvedPath;
 }
 
+function pickCommandTransport(
+  event: Parameters<typeof assertTrustedAppRendererEvent>[0],
+  obj: Record<string, unknown>,
+  host: RemoteHost,
+): Pick<RemoteHost, 'exec'> {
+  if (obj.transport === undefined || obj.transport === 'exec') return host;
+  assertTrustedAppRendererEvent(event);
+  if (obj.transport !== 'pty') throwIpcError('INVALID_PARAMS', 'Invalid command transport');
+  if (typeof obj.path !== 'string' || obj.path.length > 4096) {
+    throwIpcError('INVALID_PARAMS', 'Remote path is too long');
+  }
+  // A PTY opens a second connection leg to the selected asset before the probe.
+  return { exec: (command, options) => host.execPty(command, { ...options, timeoutMs: 30_000 }) };
+}
+
 /**
  * stat-remote-path — POSIX-bash-driven stat that also expands a leading `~`
  * or `~/...` to `$HOME` safely (no `eval`, no command injection).
@@ -2117,7 +2135,7 @@ export async function probeRemoteWorkingDirectory(hostId: string, inputPath: str
  * time it's compared/concatenated.
  */
 async function statRemotePath(
-  host: RemoteHost,
+  host: Pick<RemoteHost, 'exec'>,
   inputPath: string,
 ): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> {
   if (/[\r\n\0]/.test(inputPath)) throw new Error('Remote path contains unsupported control characters');
@@ -2244,7 +2262,7 @@ printf '%s\\n' "$abs"
  * script body — so a path like `; rm -rf /` is just a literal arg.
  */
 async function listRemoteDir(
-  host: RemoteHost,
+  host: Pick<RemoteHost, 'exec'>,
   inputPath: string,
 ): Promise<{ resolvedPath: string; entries: Array<{ name: string; kind: 'dir' | 'symlink' }> }> {
   const script = `

@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { HostConfig } from '@cindy/maker-remote-ssh';
+import { InteractiveAuthenticationError } from '@cindy/maker-remote-ssh';
 
 import {
   disposeAllTunnels,
@@ -37,6 +38,8 @@ interface StatusSnap {
 class FakeTunnelConn {
   status = 'disconnected';
   listeners = new Set<(snap: StatusSnap) => void>();
+  inputListeners = new Set<(expiresAt: number | null) => void>();
+  inputExpiresAt: number | null = null;
   armCalls: Array<Record<string, unknown>> = [];
   execCalls: string[] = [];
   armFailuresRemaining = 0;
@@ -49,6 +52,15 @@ class FakeTunnelConn {
   onStatus(cb: (snap: StatusSnap) => void) {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
+  }
+  onInteractiveAuthentication(cb: (expiresAt: number | null) => void) {
+    this.inputListeners.add(cb);
+    cb(this.inputExpiresAt);
+    return () => { this.inputListeners.delete(cb); };
+  }
+  emitInput(expiresAt: number | null) {
+    this.inputExpiresAt = expiresAt;
+    for (const cb of this.inputListeners) cb(expiresAt);
   }
   emitStatus(status: string, lastError?: string) {
     this.status = status;
@@ -144,6 +156,133 @@ afterEach(async () => {
 });
 
 describe('agent-proxy tunnel keeper', () => {
+  it.each(['cancelled', 'timeout', 'failed'] as const)('stops retrying and rejects waiters immediately when interactive authentication is %s', async reason => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const error = new InteractiveAuthenticationError(reason);
+    const connect = vi.fn(async () => { throw error; });
+    h.setupConn = conn => { conn.connect = connect; };
+    const result = ensureTunnelUp(h.mainHost as any);
+    await expect(result).rejects.toThrow(error.message);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(getTunnelKeeperState('test-host')).toMatchObject({ phase: 'error' });
+  });
+
+  // PR #7184: real ensureTunnelUp, unit tier with fake time. A single 30s wait
+  // missed valid multi-round authentication taking longer than the old 160s cap.
+  it('waits through six authentication rounds and server replies before arming', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    let complete!: () => void;
+    h.setupConn = conn => { conn.connect = async () => {
+      await new Promise<void>(resolve => { complete = resolve; }); conn.status = 'ready';
+    }; };
+    const result = ensureTunnelUp(h.mainHost as any);
+    const settled = vi.fn();
+    void result.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(19_000);
+    for (let round = 0; round < 6; round++) {
+      h.conns[0]!.emitInput(Date.now() + 120_000);
+      await vi.advanceTimersByTimeAsync(119_000);
+      h.conns[0]!.emitInput(null);
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(settled).not.toHaveBeenCalled();
+    }
+    complete();
+    await expect(result).resolves.toEqual({ remotePort: 45000 });
+  });
+
+  // PR #7184: the previous 900s blanket budget blocked sessions even when no
+  // input was pending. Unit tier, real ensureTunnelUp with virtual time.
+  it.each(['handshake', 'connect-error', 'forward-busy'] as const)(
+    'keeps the default twenty-second deadline for %s without input', async failure => {
+      vi.useFakeTimers();
+      const h = makeHarness();
+      h.setupConn = conn => {
+        if (failure === 'handshake') conn.connect = async () => {
+          conn.emitStatus('authenticating');
+          await new Promise<void>(() => {});
+        };
+        if (failure === 'connect-error') conn.connect = async () => { throw new Error('Connection refused'); };
+        if (failure === 'forward-busy') conn.armFailuresRemaining = Infinity;
+      };
+      const result = ensureTunnelUp(h.mainHost as any);
+      const settled = vi.fn();
+      void result.then(settled, settled);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toHaveBeenCalledTimes(1);
+      await expect(result).rejects.toThrow(/agent-proxy tunnel not ready within/);
+    },
+  );
+
+  it('restores the short forwarding deadline as soon as input is submitted', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    let complete!: () => void;
+    h.setupConn = conn => {
+      conn.connect = async () => {
+        conn.emitInput(Date.now() + 120_000);
+        await new Promise<void>(resolve => { complete = resolve; });
+        conn.emitInput(null);
+        conn.status = 'ready';
+      };
+      conn.armFailuresRemaining = Infinity;
+    };
+    const result = ensureTunnelUp(h.mainHost as any);
+    const settled = vi.fn();
+    void result.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).not.toHaveBeenCalled();
+    complete();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledTimes(1);
+    await expect(result).rejects.toThrow(/agent-proxy tunnel not ready within/);
+  });
+
+  it('uses the current input deadline for late joiners and honors explicit shorter limits', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    h.setupConn = conn => { conn.connect = async () => {
+      conn.emitInput(Date.now() + 120_000);
+      await new Promise<void>(() => {});
+    }; };
+    const first = ensureTunnelUp(h.mainHost as any);
+    const firstSettled = vi.fn();
+    void first.then(firstSettled, firstSettled);
+    await vi.advanceTimersByTimeAsync(90_000);
+    const late = ensureTunnelUp(h.mainHost as any);
+    const lateSettled = vi.fn();
+    void late.then(lateSettled, lateSettled);
+    const explicit = ensureTunnelUp(h.mainHost as any, 5_000);
+    const explicitRejected = expect(explicit).rejects.toThrow(/within 5000ms/);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await explicitRejected;
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(firstSettled).not.toHaveBeenCalled();
+    expect(lateSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(firstSettled).toHaveBeenCalledTimes(1);
+    expect(lateSettled).toHaveBeenCalledTimes(1);
+    await expect(first).rejects.toThrow(/agent-proxy tunnel not ready within/);
+    await expect(late).rejects.toThrow(/agent-proxy tunnel not ready within/);
+    await stopTunnelForHost('test-host');
+    expect(h.conns[0]!.inputListeners.size).toBe(0);
+  });
+
+  it.each([undefined, 50])('still times out a stalled connection (override: %s)', async timeoutMs => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    h.setupConn = conn => { conn.connect = () => new Promise<void>(() => {}); };
+    const result = ensureTunnelUp(h.mainHost as any, timeoutMs);
+    const rejected = expect(result).rejects.toThrow(/agent-proxy tunnel not ready within/);
+    if (timeoutMs === undefined) await vi.runAllTimersAsync();
+    else await vi.advanceTimersByTimeAsync(timeoutMs);
+    await rejected;
+    expect(h.conns[0]!.armCalls).toHaveLength(0);
+  });
   it('connects the dedicated conn, arms the fixed port and reports active', async () => {
     const h = makeHarness();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
