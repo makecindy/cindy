@@ -2937,7 +2937,7 @@ interface ElectronAPI {
       ) => void,
     ) => () => void;
   };
-  showOpenDirectoryDialog: () => Promise<{ canceled: boolean; path?: string }>;
+  showOpenDirectoryDialog: (options?: { registerProject?: boolean }) => Promise<{ canceled: boolean; path?: string }>;
   openExternal: (url: string) => Promise<{ success: boolean }>;
   openChatGPTApp: () => Promise<{ success: boolean }>;
 

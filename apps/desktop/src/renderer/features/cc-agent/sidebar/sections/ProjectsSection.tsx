@@ -339,6 +339,7 @@ function ProjectsSectionContent({
   onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
@@ -1172,6 +1173,7 @@ function ProjectsSectionContent({
         allKnownProjects={allKnownProjects}
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
+        onCreateProject={onCreateProject}
         fold={
           hasMainListContent && foldState !== null
             ? {

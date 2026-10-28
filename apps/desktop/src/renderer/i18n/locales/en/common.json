@@ -13436,6 +13436,7 @@
       },
       "projects": "Projects",
       "newProject": "New project",
+      "addProjectFolder": "Add project folder",
       "createProjectFailed": "Failed to create project",
       "selectFolderFailed": "Could not select folder. Try again.",
       "projectsToggleExpand": "Expand all project sessions",

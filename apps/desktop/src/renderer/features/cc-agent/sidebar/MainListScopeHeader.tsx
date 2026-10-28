@@ -12,6 +12,7 @@ import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
+import { SidebarAddProjectAction } from './SidebarAddProjectAction';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
@@ -33,11 +34,13 @@ export function MainListScopeHeader({
   dialogueCount = 0,
   hasRemoteDevices,
   fold = null,
+  onCreateProject,
 }: {
   filter: UseSidebarFilterReturn;
   allKnownProjects: ProjectNodeData[];
   dialogueCount?: number;
   hasRemoteDevices: boolean;
+  onCreateProject?: () => void | Promise<void>;
   fold?: {
     label: string;
     Icon: LucideIcon;
@@ -53,6 +56,7 @@ export function MainListScopeHeader({
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
         <div className="flex items-center gap-0.5 -mt-px">
+          {onCreateProject ? <SidebarAddProjectAction onCreateProject={onCreateProject} /> : null}
           {fold ? (
             <div className={HEADER_HOVER_ACTION_CLASS}>
               <Tip text={fold.label} side="bottom">

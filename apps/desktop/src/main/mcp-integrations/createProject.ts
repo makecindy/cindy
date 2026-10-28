@@ -25,14 +25,11 @@ export interface LocalProjectContext {
   assertCurrent: () => void;
 }
 
-/** All project operations use one captured account and validate the calling local task. */
-export async function withLocalProjectContext<T extends object>(
-  callerSessionId: string,
-  run: (context: LocalProjectContext) => Promise<ControlResult<T, string>>,
-): Promise<ControlResult<T, string>> {
+/** Capture before opening a picker; writes must stay bound to this account. */
+export function captureLocalProjectContext(): LocalProjectContext {
   const client = tryGetDbClient();
   if (!client || isAppSessionBoundaryPending())
-    return fail('HOST_NOT_READY', 'Cindy project storage is not ready.');
+    throwIpcError('PRECONDITION_FAILED', 'Cindy project storage is not ready.');
   const owner = getActiveDataOwnerPushStamp();
   const isCurrent = () => {
     const current = getActiveDataOwnerPushStamp();
@@ -45,6 +42,26 @@ export async function withLocalProjectContext<T extends object>(
   };
   const assertCurrent = () => {
     if (!isCurrent()) throwIpcError('PRECONDITION_FAILED', 'The active Cindy account changed.');
+  };
+  return { client, owner, assertCurrent };
+}
+
+/** All project operations validate the calling local task. */
+export async function withLocalProjectContext<T extends object>(
+  callerSessionId: string,
+  run: (context: LocalProjectContext) => Promise<ControlResult<T, string>>,
+): Promise<ControlResult<T, string>> {
+  const client = tryGetDbClient();
+  if (!client || isAppSessionBoundaryPending())
+    return fail('HOST_NOT_READY', 'Cindy project storage is not ready.');
+  const { owner, assertCurrent } = captureLocalProjectContext();
+  const isCurrent = () => {
+    try {
+      assertCurrent();
+      return true;
+    } catch {
+      return false;
+    }
   };
   try {
     const [caller] = await client.drizzle
@@ -135,6 +152,38 @@ export async function validateExistingLocalProjectDirectory(workingDir: string) 
   return validateLocalProjectDirectory(physicalDirectory);
 }
 
+/** Shared registration for the native picker and the Agent project tool. No task is created. */
+export async function registerLocalProjectDirectory(
+  context: LocalProjectContext,
+  workingDir: string,
+) {
+  const directory = validateLocalProjectDirectory(workingDir);
+  if (!directory.ok) return directory;
+  const { client, owner, assertCurrent } = context;
+  assertCurrent();
+  const physicalDirectory = await validateExistingLocalProjectDirectory(directory.workingDir);
+  if (!physicalDirectory.ok) return physicalDirectory;
+  assertCurrent();
+  if (!(await upsertRecentWorkdir(directory.workingDir, Date.now(), process.platform, client)))
+    return fail('INTERNAL', 'Could not register the project directory.');
+  assertCurrent();
+  await restoreLocalProjectVisibility(directory.workingDir, owner);
+  assertCurrent();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(window)) continue;
+    try {
+      window.webContents.send(
+        'local-db:recent-workdirs:changed',
+        { path: directory.workingDir },
+        owner,
+      );
+    } catch (error) {
+      log.warn('project registered but window refresh failed', { error: String(error) });
+    }
+  }
+  return directory;
+}
+
 /** Register only: filesystem creation and task execution remain separate agent actions. */
 export async function createProject({
   callerSessionId,
@@ -145,28 +194,7 @@ export async function createProject({
 }) {
   const directory = validateLocalProjectDirectory(workingDir);
   if (!directory.ok) return directory;
-  return withLocalProjectContext(callerSessionId, async ({ client, owner, assertCurrent }) => {
-    const physicalDirectory = await validateExistingLocalProjectDirectory(directory.workingDir);
-    if (!physicalDirectory.ok) return physicalDirectory;
-    assertCurrent();
-    if (!(await upsertRecentWorkdir(directory.workingDir, Date.now(), process.platform, client))) {
-      return fail('INTERNAL', 'Could not register the project directory.');
-    }
-    assertCurrent();
-    await restoreLocalProjectVisibility(directory.workingDir, owner);
-    assertCurrent();
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (!isTrustedAppRendererWindow(window)) continue;
-      try {
-        window.webContents.send(
-          'local-db:recent-workdirs:changed',
-          { path: directory.workingDir },
-          owner,
-        );
-      } catch (error) {
-        log.warn('project registered but window refresh failed', { error: String(error) });
-      }
-    }
-    return directory;
-  });
+  return withLocalProjectContext(callerSessionId, (context) =>
+    registerLocalProjectDirectory(context, directory.workingDir),
+  );
 }

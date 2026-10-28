@@ -13382,6 +13382,7 @@
       },
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
+      "addProjectFolder": "프로젝트 폴더 추가",
       "createProjectFailed": "프로젝트 생성 실패",
       "selectFolderFailed": "폴더를 선택하지 못했습니다. 다시 시도해 주세요.",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",

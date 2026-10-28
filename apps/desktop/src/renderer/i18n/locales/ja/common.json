@@ -13382,6 +13382,7 @@
       },
       "projects": "プロジェクト",
       "newProject": "新規プロジェクト",
+      "addProjectFolder": "プロジェクトフォルダーを追加",
       "createProjectFailed": "プロジェクトの作成に失敗しました",
       "selectFolderFailed": "フォルダーを選択できませんでした。もう一度お試しください。",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",

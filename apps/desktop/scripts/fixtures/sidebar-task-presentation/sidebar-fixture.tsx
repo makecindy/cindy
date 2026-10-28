@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { SidebarAddProjectAction } from '../../../src/renderer/features/cc-agent/sidebar/SidebarAddProjectAction';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import type { ProjectNode } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import type { SidebarTaskInput } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskPresentation';
@@ -67,6 +68,19 @@ function List(p: SidebarTaskInput) {
     </>
   );
 }
+function ProjectHeader() {
+  const [calls, setCalls] = React.useState(0);
+  return (
+    <div className="flex items-center justify-between py-2 pl-3" data-project-picker-calls={calls}>
+      <span className="text-sm text-[var(--text-secondary)]">全部任务</span>
+      <SidebarAddProjectAction
+        onCreateProject={async () => {
+          setCalls((value) => value + 1);
+        }}
+      />
+    </div>
+  );
+}
 mountPage({
   host: () => ({}),
   render: ({ data }) => {
@@ -84,7 +98,7 @@ mountPage({
           height: '100vh',
         }}
       >
-        <div style={{ padding: 12 }}>全部任务</div>
+        <ProjectHeader />
         <v.Section
           Original={List}
           projects={pinnedProject ? [normalProject] : [normalProject, diagnosticProject]}

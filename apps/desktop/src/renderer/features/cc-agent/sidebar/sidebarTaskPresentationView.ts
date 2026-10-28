@@ -325,6 +325,7 @@ export function createSidebarTaskPresentation(R: typeof React, runtime: Runtime)
         ),
       onExpandAll: () => setInnerCollapsed(new Set()),
       pinnedEntries: [],
+      onCreateProject: undefined,
     };
     return R.createElement(
       R.Fragment,
