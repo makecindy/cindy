@@ -604,7 +604,7 @@ const REMOTE_AGENT_PDF_MAX_BYTES = 32 * 1024 * 1024;
  */
 let _lastBridgeForForcedFresh: CodexHttpBridge | null = null;
 /** getMaker() 首次构造时发起的自定义 MCP 初始加载 promise，供 bootstrap 在注册会话 IPC 前 await。 */
-let _initialCustomMcpRefresh: Promise<void> | undefined;
+let _initialCustomMcpRefresh: Promise<boolean> | undefined;
 type CodexLocalCredentialChangeGuard = Awaited<
   ReturnType<CodexAgent['beginLocalHostCredentialChange']>
 >;

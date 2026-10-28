@@ -47,7 +47,7 @@ function bridge() {
   return { ...deps, invoke: (operation: string, key: string, value?: string) => handlers.get(`safe-storage-${operation}`)!({}, key, value) };
 }
 
-describe('generic safeStorage companion boundary', () => {
+describe('generic safeStorage Main-only credential boundary', () => {
   it.each([
     ['read', null], ['store', false], ['remove', { success: false, error: 'invalid key' }],
   ])('denies %s before resolving a path, touching the vault or changing stored data', async (operation, result) => {
@@ -60,11 +60,15 @@ describe('generic safeStorage companion boundary', () => {
     // writes/deletes must not corrupt either old or chunked environment files.
     const original = Buffer.from('fixture:{"env":{"KEY":"fixture-private-token"}}').toString('base64');
     fs.writeFileSync(file, original);
-    for (const variant of [key, key.toUpperCase(), 'bot_environment_future_format', 'bot_environment_',
-      MCP_APP_REVISION_KEY_STORAGE_KEY, MCP_APP_REVISION_KEY_STORAGE_KEY.toUpperCase()]) {
+    const mcpKey = customMcpSecretStorageKey('fixture-mcp');
+    const deniedKeys = [key, key.toUpperCase(), 'bot_environment_future_format', 'bot_environment_',
+      MCP_APP_REVISION_KEY_STORAGE_KEY, MCP_APP_REVISION_KEY_STORAGE_KEY.toUpperCase(),
+      mcpKey, mcpKey.toUpperCase(), 'mcp_token_',
+      'mcp_bundle_t_fixture', 'MCP_BUNDLE_H_FIXTURE', 'mcp_bundle_'];
+    for (const variant of deniedKeys) {
       expect(await api.invoke(String(operation), variant, 'replacement')).toEqual(result);
     }
-    expect(api.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(6);
+    expect(api.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(deniedKeys.length);
     expect(api.resolveOwnerScopedSecretStorageKey).not.toHaveBeenCalled();
     expect(api.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled();
     expect(api.safeStorage.decryptString).not.toHaveBeenCalled();
@@ -74,7 +78,7 @@ describe('generic safeStorage companion boundary', () => {
   });
 
   it.each(['api_key', customProviderSecretStorageKey('fixture-provider', 'codex'),
-    customMcpSecretStorageKey('fixture-mcp'), providerOAuthStorageKey('fixture-oauth')])('preserves ordinary Renderer credential operations for %s', async key => {
+    providerOAuthStorageKey('fixture-oauth')])('preserves ordinary Renderer credential operations for %s', async key => {
     const api = bridge();
     expect(await api.invoke('store', key, 'fixture-ordinary-token')).toBe(true);
     expect(await api.invoke('read', key)).toBe('fixture-ordinary-token');

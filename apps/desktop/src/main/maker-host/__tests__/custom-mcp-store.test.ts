@@ -25,7 +25,7 @@ const CREATE_SQL = `
     name TEXT NOT NULL,
     transport TEXT NOT NULL,
     url TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}',
+    headers TEXT NOT NULL DEFAULT '{}', credential_format INTEGER NOT NULL DEFAULT 0, credential_ref TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL

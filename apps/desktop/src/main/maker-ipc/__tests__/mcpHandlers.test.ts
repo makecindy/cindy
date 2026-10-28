@@ -1,3 +1,4 @@
+import { commitCustomMcp } from '../../localDb/worker/opHandlers/customMcpTx.js';
 /**
  * mcp:custom:* IPC handlers —— 内存 db + IpcHarness 直接 invoke handler body。
  */
@@ -27,11 +28,22 @@ import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-crede
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () => null }));
+vi.mock('../../appSessionState.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../appSessionState.js')>(),
+  activeOwnerScopeKey: () => 'test-user:1',
+  getActiveAppSession: () => ({ dataOwnerId: 'test-user', generation: 1, mode: 'cloud' }),
+  isAppSessionBoundaryPending: () => false,
+}));
+vi.mock('../../secrets/customMcpCredentials.js', () => ({
+  hasLegacyMcpToken: () => false, readLegacyMcpToken: () => null,
+  readMcpCredentials: () => ({ token: '', headers: {} }),
+  writeMcpCredentials: () => null,
+}));
 
 const CREATE_SQL = `
   CREATE TABLE custom_mcp_servers (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL, url TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}', sort_order INTEGER NOT NULL DEFAULT 0,
+    headers TEXT NOT NULL DEFAULT '{}', credential_format INTEGER NOT NULL DEFAULT 0, credential_ref TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX idx_custom_mcp_servers_sort_order ON custom_mcp_servers (sort_order);
@@ -56,9 +68,7 @@ function mountDb(): void {
     query: async () => [],
     queryOne: async () => undefined,
     exec: async (sql, params = []) => dbHandle.prepare(sql).run(...params),
-    tx: async () => {
-      throw new Error('tx not used');
-    },
+    tx: async (_name: string, input: unknown) => commitCustomMcp(dbHandle, input as Parameters<typeof commitCustomMcp>[1]),
     drizzle: drizzle(dbHandle, { schema }),
     vecAvailable: false,
     dispose: async () => {},
@@ -116,16 +126,13 @@ describe('mcp:custom:* CRUD handlers', () => {
       });
       const harness = new IpcHarness();
       registerMcpHandlers(harness, deps);
-      const rawList = await listCustomMcpServers();
+      const rawList = (await listCustomMcpServers()).map(server => expect.objectContaining({ ...server, headers: Object.fromEntries(Object.keys(server.headers).map(name => [name, ''])) }));
       expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).toEqual({ servers: rawList });
       expect(deps.listMcpServers).not.toHaveBeenCalled();
 
       const result = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST, { agentKind });
       expect(deps.listMcpServers).toHaveBeenCalledWith({ agentKind });
-      expect(result).toEqual({ agentKind, servers: rawList.map((server) => ({
-        // Registered custom MCPs now use the Main-owned Apps facade for every harness.
-        ...server, available: ['mytools', 'local-http', 'events', 'public-http'].includes(server.id),
-      })) });
+      expect(result).toEqual({ agentKind, servers: configs.map(server => expect.objectContaining({ ...server, headers: Object.fromEntries(Object.keys(server.headers).map(name => [name, ''])), available: ['mytools', 'local-http', 'events', 'public-http'].includes(server.id) })) });
     },
   );
 

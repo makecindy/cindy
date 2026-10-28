@@ -165,7 +165,7 @@ function parseHeaders(raw: string): Record<string, string> {
   return out;
 }
 
-function rowToConfig(row: typeof customMcpServers.$inferSelect): CustomMcpConfig {
+export function customMcpConfigFromRow(row: typeof customMcpServers.$inferSelect): CustomMcpConfig {
   return {
     id: row.id,
     name: row.name,
@@ -184,7 +184,7 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
     .select()
     .from(customMcpServers)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
-  return rows.map(rowToConfig);
+  return rows.map(customMcpConfigFromRow);
 }
 
 /** Secret-free generation markers for freezing a Bot task's MCP capability set. */
@@ -214,7 +214,7 @@ export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
 export async function getCustomMcpServer(id: string): Promise<CustomMcpConfig | null> {
   const db = getDbClient().drizzle;
   const row = await db.select().from(customMcpServers).where(eq(customMcpServers.id, id)).get();
-  return row ? rowToConfig(row) : null;
+  return row ? customMcpConfigFromRow(row) : null;
 }
 
 /** 该 id 是否已存在。 */

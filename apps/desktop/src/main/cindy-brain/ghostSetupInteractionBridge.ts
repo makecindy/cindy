@@ -430,7 +430,7 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
   const kind = (request as { kind?: unknown }).kind;
   return (
-    kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
+    kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm' || kind === 'mcp_setup'
   );
 }
 
@@ -444,7 +444,7 @@ function projectDesktopOnlyConfirmation(request: Record<string, unknown>): Recor
   // Preserve only the known kind so mobile can render its existing read-only
   // guidance. Drafts, file paths, previews, identities, and the real id stay
   // on the controlled Desktop.
-  return { kind: request.kind, requestId: projectDesktopOnlyConfirmationRequestId(requestId) };
+  return { kind: request.kind === 'mcp_setup' ? 'ghost_grant_confirm' : request.kind, requestId: projectDesktopOnlyConfirmationRequestId(requestId) };
 }
 
 /**

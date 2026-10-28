@@ -6664,7 +6664,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     mcpApps: (sessionId: string, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
-    // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
+    updateMcpSetup: (input: import('../shared/mcpSetup').McpSetupDraftUpdate): Promise<import('../shared/mcpSetup').McpSetupSnapshot> => ipcRenderer.invoke('mcp:setup:update', input),
+    submitMcpSetup: (input: import('../shared/mcpSetup').McpSetupSubmission): Promise<import('../shared/mcpSetup').McpSetupSnapshot> => ipcRenderer.invoke('mcp:setup:submit', input),
+    cancelMcpSetup: (input: { requestId: string; expectedRevision: number }): Promise<import('../shared/mcpSetup').McpSetupSnapshot | null> => ipcRenderer.invoke('mcp:setup:cancel', input),
+    retryMcpSetupActivation: (input: { requestId: string; expectedRevision: number }): Promise<import('../shared/mcpSetup').McpSetupSnapshot> => ipcRenderer.invoke('mcp:setup:activate', input),
+    // 本机 MCP 配置和凭证由 Main 一次接收并加密保存，列表不回传秘密。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
     ): Promise<import('../shared/customMcp').CustomMcpListResult> =>
@@ -6672,10 +6676,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ? ipcRenderer.invoke('maker:mcp:custom:list')
         : ipcRenderer.invoke('maker:mcp:custom:list', context),
     createCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/mcpSetup').CustomMcpMutation,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
     updateCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/mcpSetup').CustomMcpMutation,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config),
     deleteCustomMcpServer: (mcpId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:mcp:custom:delete', mcpId),

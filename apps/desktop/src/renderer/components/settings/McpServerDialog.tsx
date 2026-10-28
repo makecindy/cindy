@@ -1,18 +1,5 @@
-/**
- * McpServerDialog —— 自定义 MCP 服务器「新建 / 编辑」表单弹窗。
- *
- * 结构参照 ProviderConnectionDialog:显示名称 + transport(http/sse)分段 + 端点 URL +
- * 可选 bearer token + 可选请求头(增删行)。
- *
- * 「MCP id」内部句柄由显示名 slug 派生 + 去重,对用户隐藏(= agent 侧 mcpServers[name],
- * 不能含 . 或 /)。配置经 maker IPC 入 localDb;token 经 safeStorage 存(见 lib/customMcpServers)。
- * 编辑态回填后清空 token 会清除，回填前空值保留;id 不可改。颜色全走主题 token。
- *
- * 说明:transport 仅远程 http/sse。token 在 Claude 端合成 Authorization: Bearer;
- * Codex 端只支持 Bearer 型鉴权,用户自定义的非 Bearer header 仅 Claude 生效。
- */
-
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+/** Settings and conversation setup share the same form; secrets stay in local component state. */
+import { useCallback, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Plus, Sparkles, Trash2 } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -24,17 +11,18 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
-import {
-  createCustomMcpServer,
-  readCustomMcpToken,
-  updateCustomMcpServer,
-} from '@/lib/customMcpServers';
+import { createCustomMcpServer, updateCustomMcpServer } from '@/lib/customMcpServers';
 
+import type { CustomMcpMutation, CustomMcpSummary, McpSetupDraft } from '@/../shared/mcpSetup';
 import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../shared/customMcp';
 
 interface McpServerDialogProps {
-  initial?: CustomMcpConfig;
+  initial?: CustomMcpConfig & Partial<CustomMcpSummary>;
+  proposal?: McpSetupDraft;
+  embedded?: boolean;
+  submit?: (input: CustomMcpMutation) => Promise<void>;
+  canCancel?: boolean;
+  deviceName?: string;
   /** 已占用的全部 MCP id;新建自动生成 id 时避让。 */
   existingIds?: string[];
   onSaved: () => void;
@@ -45,6 +33,7 @@ interface HeaderRow {
   name: string;
   value: string;
   _key: number;
+  savedName?: string;
 }
 
 /**
@@ -72,21 +61,37 @@ function uniqueId(name: string, existing: ReadonlySet<string>): string {
   return `${base}-${i}`;
 }
 
-export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpServerDialogProps) {
+export function McpServerDialog({
+  initial,
+  proposal,
+  embedded,
+  submit,
+  canCancel,
+  deviceName,
+  existingIds,
+  onSaved,
+  onClose,
+}: McpServerDialogProps) {
   const { t } = useTranslation();
   const editing = !!initial;
 
-  const [name, setName] = useState(initial?.name ?? '');
-  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'http');
-  const [url, setUrl] = useState(initial?.url ?? '');
+  const [name, setName] = useState(initial?.name ?? proposal?.name ?? '');
+  const [transport, setTransport] = useState<McpTransport>(
+    initial?.transport ?? proposal?.transport ?? 'http',
+  );
+  const [url, setUrl] = useState(initial?.url ?? proposal?.url ?? '');
+  const [urlEdited, setUrlEdited] = useState(false);
   const [token, setToken] = useState('');
-  const [hasToken, setHasToken] = useState(false);
+  const hasToken = initial?.hasToken === true;
+  const [clearToken, setClearToken] = useState(false);
   const headerKeyRef = useRef(0);
   const [headers, setHeaders] = useState<HeaderRow[]>(() => {
     const initRows =
       initial && Object.keys(initial.headers).length > 0
-        ? Object.entries(initial.headers).map(([n, v]) => ({ name: n, value: v }))
-        : [{ name: '', value: '' }];
+        ? Object.keys(initial.headers).map((n) => ({ name: n, value: '', savedName: n }))
+        : proposal?.headerNames.length
+          ? proposal.headerNames.map((name) => ({ name, value: '' }))
+          : [{ name: '', value: '' }];
     return initRows.map((r) => ({ ...r, _key: headerKeyRef.current++ }));
   });
   const [saving, setSaving] = useState(false);
@@ -99,25 +104,8 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
   );
   const [errors, setErrors] = useState<{ name?: string; url?: string }>({});
   const close = () => {
-    if (!savingRef.current) onClose();
+    if (!savingRef.current || canCancel) onClose();
   };
-
-  // 编辑态:回填已存 token(让 token 框「能看」/可核对,据此点亮「已保存」徽标)。
-  useEffect(() => {
-    if (!editing || !initial) return;
-    let cancelled = false;
-    void (async () => {
-      const k = await readCustomMcpToken(initial.id);
-      if (cancelled) return;
-      if (k) {
-        setHasToken(true);
-        setToken(k);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [editing, initial]);
 
   const handleSave = useCallback(async () => {
     if (savingRef.current) return;
@@ -129,6 +117,15 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       const u = new URL(trimmedUrl);
       if (u.protocol !== 'http:' && u.protocol !== 'https:')
         nextErrors.url = t('settings.mcp.errors.urlInvalid');
+      if (embedded && (u.username || u.password || u.search || u.hash))
+        nextErrors.url = t('settings.mcp.setup.errors.INVALID_CONFIG');
+      if (
+        embedded &&
+        u.protocol === 'http:' &&
+        !['localhost', '[::1]'].includes(u.hostname) &&
+        !/^127\./.test(u.hostname)
+      )
+        nextErrors.url = t('settings.mcp.setup.errors.INSECURE_ENDPOINT');
     } catch {
       nextErrors.url = t('settings.mcp.errors.urlInvalid');
     }
@@ -146,30 +143,39 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
     }
     const configId =
       editing && initial ? initial.id : uniqueId(trimmedName, new Set(existingIds ?? []));
-    const config: CustomMcpConfig = {
+    const config: CustomMcpMutation = {
       id: configId,
       name: trimmedName,
       transport,
       url: trimmedUrl,
       headers: headerMap,
+      expectedRevision: initial?.revision,
+      keepUrl: initial?.urlRedacted && !urlEdited,
+      keepHeaderNames: headers
+        .filter((h) => h.savedName === h.name.trim() && !h.value)
+        .map((h) => h.savedName!),
     };
     savingRef.current = true;
     setSaving(true);
     try {
-      if (editing) {
-        // clearToken=true：只有在 token 已加载（hasToken=true）且字段被清空时才撤销鉴权；
-        // 若 token 字段为空但 hasToken=false（async 回填尚未完成），则保留已存 token。
-        const clearToken = hasToken && !token.trim();
+      if (submit) {
+        const pending = submit({ ...config, token, tokenAction: 'replace' });
+        setToken('');
+        setHeaders((rows) => rows.map((row) => ({ ...row, value: '' })));
+        await pending;
+      } else if (editing) {
         await updateCustomMcpServer(config, token, clearToken);
         toast.success(t('settings.mcp.toast.updated'));
       } else {
         await createCustomMcpServer(config, token);
         toast.success(t('settings.mcp.toast.created'));
       }
+      setToken('');
       onSaved();
-    } catch (e) {
-      const ipc = extractIpcError(e);
-      toast.error(ipc?.message ?? t('settings.mcp.toast.saveFailed'));
+    } catch {
+      toast.error(t('settings.mcp.toast.saveFailed'));
+      setToken('');
+      setHeaders((rows) => rows.map((row) => ({ ...row, value: '' })));
       savingRef.current = false;
       setSaving(false);
     }
@@ -179,7 +185,10 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
     url,
     transport,
     token,
-    hasToken,
+    clearToken,
+    submit,
+    embedded,
+    urlEdited,
     headers,
     editing,
     initial,
@@ -191,6 +200,285 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
   const tokenPlaceholder = hasToken
     ? t('settings.mcp.fields.tokenEditPlaceholder')
     : t('settings.mcp.fields.tokenPlaceholder');
+
+  const Title = embedded ? 'h2' : Dialog.Title;
+  const Description = embedded ? 'p' : Dialog.Description;
+  const contents = (
+    <>
+      <div className="flex shrink-0 items-center gap-2.5 p-4">
+        <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />
+        <Title className="text-18 font-semibold text-[var(--settings-section-title)]">
+          {editing ? t('settings.mcp.dialog.editTitle') : t('settings.mcp.dialog.createTitle')}
+        </Title>
+      </div>
+      <fieldset
+        disabled={saving}
+        className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1"
+      >
+        <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
+          {t('settings.mcp.dialog.desc')}
+        </Description>
+        {embedded && (
+          <div className="space-y-1 text-12 text-[var(--text-secondary)]">
+            <p>{t('settings.mcp.setup.scope', { device: deviceName })}</p>
+            <p>{t('settings.mcp.setup.localOnly')}</p>
+          </div>
+        )}
+        <FormField
+          id={`${id}-name`}
+          label={t('settings.mcp.fields.name')}
+          required
+          error={errors.name}
+          reserveFeedback
+        >
+          {(control) => (
+            <SettingsTextInput
+              {...control}
+              inputRef={nameRef}
+              surface="ivory"
+              value={name}
+              onChange={(value) => {
+                setName(value);
+                setErrors((prev) => ({ ...prev, name: undefined }));
+              }}
+              placeholder={t('settings.mcp.fields.namePlaceholder')}
+            />
+          )}
+        </FormField>
+        <fieldset className="flex min-w-0 flex-col gap-2">
+          <legend className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
+            {t('settings.mcp.fields.transport')}
+          </legend>
+          <div className="flex flex-wrap gap-2">
+            {/*
+                  transport 是紧凑互斥设置,走共享分段控件(DESIGN.md §4 Settings
+                  segmented controls):单一 Tab 停靠点、方向键 / Home / End 与 RTL
+                  键盘行为由控件自带,不再用独立 Button 自造第二套选中态(review P2)。
+                */}
+            <SegmentedControl
+              aria-label={t('settings.mcp.fields.transport')}
+              value={transport}
+              onValueChange={(value) => {
+                setTransport(value);
+                if (embedded) {
+                  setToken('');
+                  setHeaders((rows) => rows.map((row) => ({ ...row, value: '' })));
+                }
+              }}
+              options={MCP_TRANSPORTS.map((tp) => ({
+                value: tp,
+                label: <span className="uppercase">{tp}</span>,
+              }))}
+            />
+          </div>
+        </fieldset>
+        <div className="flex flex-col gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--surface)] p-4">
+          <FormField
+            id={`${id}-url`}
+            label={t('settings.mcp.fields.url')}
+            required
+            error={errors.url}
+            reserveFeedback
+          >
+            {(control) => (
+              <SettingsTextInput
+                {...control}
+                surface="ivory"
+                value={url}
+                onChange={(value) => {
+                  setUrl(value);
+                  setUrlEdited(true);
+                  if (embedded) {
+                    setToken('');
+                    setHeaders((rows) => rows.map((row) => ({ ...row, value: '' })));
+                  }
+                  setErrors((prev) => ({ ...prev, url: undefined }));
+                }}
+                placeholder={t('settings.mcp.fields.urlPlaceholder')}
+              />
+            )}
+          </FormField>
+          {initial?.urlRedacted && !urlEdited && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('settings.mcp.setup.preservedUrl')}
+            </p>
+          )}
+          {embedded && (
+            <p className="break-all text-12 text-[var(--text-secondary)]">
+              {(() => {
+                try {
+                  const value = new URL(url);
+                  return value.username || value.password || value.search || value.hash
+                    ? ''
+                    : value.href;
+                } catch {
+                  return '';
+                }
+              })()}
+            </p>
+          )}
+          {embedded && url.startsWith('http:') && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('settings.mcp.setup.loopback')}
+            </p>
+          )}
+          <FormField
+            id={`${id}-token`}
+            label={t('settings.mcp.fields.token')}
+            hint={t('settings.mcp.fields.tokenHelp')}
+            labelAction={
+              hasToken &&
+              !clearToken && (
+                <span className="flex items-center gap-1 rounded-full bg-[var(--settings-btn-secondary-bg)] px-2 py-0.5 text-11 font-medium text-[var(--settings-section-desc)]">
+                  <Check size={11} />
+                  {t('settings.mcp.fields.tokenSaved')}
+                </span>
+              )
+            }
+          >
+            {(control) => (
+              <SettingsTextInput
+                {...control}
+                surface="ivory"
+                value={token}
+                onChange={(value) => {
+                  setToken(value);
+                  setClearToken(false);
+                }}
+                placeholder={tokenPlaceholder}
+                secret
+                secretTipContentClassName="z-[10001]"
+              />
+            )}
+          </FormField>
+          {hasToken && !clearToken && (
+            <Button
+              variant="secondary"
+              className="self-start"
+              onClick={() => {
+                setClearToken(true);
+                setToken('');
+              }}
+            >
+              {t('settings.mcp.setup.clearToken')}
+            </Button>
+          )}
+          <fieldset className="flex min-w-0 flex-col gap-2">
+            <legend className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
+              {t('settings.mcp.fields.headers')}
+            </legend>
+            {headers.map((h, i) => (
+              <div key={h._key} className="flex min-w-0 items-center gap-2">
+                <FormField
+                  id={`${id}-header-${h._key}-name`}
+                  label={`${t('settings.mcp.fields.headerNamePlaceholder')} ${i + 1}`}
+                  hideLabel
+                  className="flex-1"
+                >
+                  {(control) => (
+                    <SettingsTextInput
+                      {...control}
+                      surface="ivory"
+                      value={h.name}
+                      onChange={(value) =>
+                        setHeaders((prev) =>
+                          prev.map((row) => (row._key === h._key ? { ...row, name: value } : row)),
+                        )
+                      }
+                      placeholder={t('settings.mcp.fields.headerNamePlaceholder')}
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  id={`${id}-header-${h._key}-value`}
+                  label={`${t('settings.mcp.fields.headerValuePlaceholder')} ${i + 1}`}
+                  hideLabel
+                  className="flex-1"
+                >
+                  {(control) => (
+                    <SettingsTextInput
+                      {...control}
+                      surface="ivory"
+                      secret
+                      value={h.value}
+                      onChange={(value) =>
+                        setHeaders((prev) =>
+                          prev.map((row) => (row._key === h._key ? { ...row, value } : row)),
+                        )
+                      }
+                      placeholder={
+                        h.savedName === h.name && !h.value
+                          ? t('settings.mcp.setup.keepHeader')
+                          : t('settings.mcp.fields.headerValuePlaceholder')
+                      }
+                    />
+                  )}
+                </FormField>
+                <Tip text={t('settings.mcp.fields.removeRow')} contentClassName="z-[10001]">
+                  <Button
+                    variant="secondary"
+                    className="w-9 px-0"
+                    size="lg"
+                    aria-label={`${t('settings.mcp.fields.removeRow')} ${i + 1}`}
+                    onClick={() => {
+                      const next = headers[i + 1] ?? headers[i - 1];
+                      setHeaders((prev) => prev.filter((row) => row._key !== h._key));
+                      requestAnimationFrame(() => {
+                        (next
+                          ? document.getElementById(`${id}-header-${next._key}-name`)
+                          : addHeaderRef.current
+                        )?.focus();
+                      });
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </Button>
+                </Tip>
+              </div>
+            ))}
+            <Button
+              ref={addHeaderRef}
+              variant="secondary"
+              className="gap-1.5 self-start"
+              onClick={() => {
+                const key = headerKeyRef.current++;
+                setHeaders((prev) => [...prev, { name: '', value: '', _key: key }]);
+                requestAnimationFrame(() =>
+                  document.getElementById(`${id}-header-${key}-name`)?.focus(),
+                );
+              }}
+            >
+              <Plus size={14} />
+              {t('settings.mcp.fields.addHeader')}
+            </Button>
+          </fieldset>
+        </div>
+      </fieldset>
+      <div className="flex shrink-0 flex-wrap justify-end gap-2.5 p-4">
+        <Button
+          variant="secondary"
+          size="lg"
+          disabled={saving && !canCancel}
+          onClick={close}
+          palette="confirmation"
+        >
+          {t('settings.mcp.cancel')}
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
+          loading={saving}
+          disabled={saving}
+          onClick={() => void handleSave()}
+          palette="confirmation"
+          className="min-w-[96px]"
+        >
+          {t('settings.mcp.save')}
+        </Button>
+      </div>
+    </>
+  );
+  if (embedded) return <div className="flex min-w-0 flex-col">{contents}</div>;
 
   return (
     <Dialog.Root
@@ -220,216 +508,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
           }}
           onPointerDownOutside={(event) => event.preventDefault()}
         >
-          <div className="flex shrink-0 items-center gap-2.5 p-4">
-            <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />
-            <Dialog.Title className="text-18 font-semibold text-[var(--settings-section-title)]">
-              {editing ? t('settings.mcp.dialog.editTitle') : t('settings.mcp.dialog.createTitle')}
-            </Dialog.Title>
-          </div>
-          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1">
-            <Dialog.Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
-              {t('settings.mcp.dialog.desc')}
-            </Dialog.Description>
-            <FormField
-              id={`${id}-name`}
-              label={t('settings.mcp.fields.name')}
-              required
-              error={errors.name}
-              reserveFeedback
-            >
-              {(control) => (
-                <SettingsTextInput
-                  {...control}
-                  inputRef={nameRef}
-                  surface="ivory"
-                  value={name}
-                  onChange={(value) => {
-                    setName(value);
-                    setErrors((prev) => ({ ...prev, name: undefined }));
-                  }}
-                  placeholder={t('settings.mcp.fields.namePlaceholder')}
-                />
-              )}
-            </FormField>
-            <fieldset className="flex min-w-0 flex-col gap-2">
-              <legend className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
-                {t('settings.mcp.fields.transport')}
-              </legend>
-              <div className="flex flex-wrap gap-2">
-                {/*
-                  transport 是紧凑互斥设置,走共享分段控件(DESIGN.md §4 Settings
-                  segmented controls):单一 Tab 停靠点、方向键 / Home / End 与 RTL
-                  键盘行为由控件自带,不再用独立 Button 自造第二套选中态(review P2)。
-                */}
-                <SegmentedControl
-                  aria-label={t('settings.mcp.fields.transport')}
-                  value={transport}
-                  onValueChange={setTransport}
-                  options={MCP_TRANSPORTS.map((tp) => ({
-                    value: tp,
-                    label: <span className="uppercase">{tp}</span>,
-                  }))}
-                />
-              </div>
-            </fieldset>
-            <div className="flex flex-col gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--surface)] p-4">
-              <FormField
-                id={`${id}-url`}
-                label={t('settings.mcp.fields.url')}
-                required
-                error={errors.url}
-                reserveFeedback
-              >
-                {(control) => (
-                  <SettingsTextInput
-                    {...control}
-                    surface="ivory"
-                    value={url}
-                    onChange={(value) => {
-                      setUrl(value);
-                      setErrors((prev) => ({ ...prev, url: undefined }));
-                    }}
-                    placeholder={t('settings.mcp.fields.urlPlaceholder')}
-                  />
-                )}
-              </FormField>
-              <FormField
-                id={`${id}-token`}
-                label={t('settings.mcp.fields.token')}
-                hint={t('settings.mcp.fields.tokenHelp')}
-                labelAction={
-                  hasToken && (
-                    <span className="flex items-center gap-1 rounded-full bg-[var(--settings-btn-secondary-bg)] px-2 py-0.5 text-11 font-medium text-[var(--settings-section-desc)]">
-                      <Check size={11} />
-                      {t('settings.mcp.fields.tokenSaved')}
-                    </span>
-                  )
-                }
-              >
-                {(control) => (
-                  <SettingsTextInput
-                    {...control}
-                    surface="ivory"
-                    value={token}
-                    onChange={setToken}
-                    placeholder={tokenPlaceholder}
-                    secret
-                    secretTipContentClassName="z-[10001]"
-                  />
-                )}
-              </FormField>
-              <fieldset className="flex min-w-0 flex-col gap-2">
-                <legend className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
-                  {t('settings.mcp.fields.headers')}
-                </legend>
-                {headers.map((h, i) => (
-                  <div key={h._key} className="flex min-w-0 items-center gap-2">
-                    <FormField
-                      id={`${id}-header-${h._key}-name`}
-                      label={`${t('settings.mcp.fields.headerNamePlaceholder')} ${i + 1}`}
-                      hideLabel
-                      className="flex-1"
-                    >
-                      {(control) => (
-                        <SettingsTextInput
-                          {...control}
-                          surface="ivory"
-                          value={h.name}
-                          onChange={(value) =>
-                            setHeaders((prev) =>
-                              prev.map((row) =>
-                                row._key === h._key ? { ...row, name: value } : row,
-                              ),
-                            )
-                          }
-                          placeholder={t('settings.mcp.fields.headerNamePlaceholder')}
-                        />
-                      )}
-                    </FormField>
-                    <FormField
-                      id={`${id}-header-${h._key}-value`}
-                      label={`${t('settings.mcp.fields.headerValuePlaceholder')} ${i + 1}`}
-                      hideLabel
-                      className="flex-1"
-                    >
-                      {(control) => (
-                        <SettingsTextInput
-                          {...control}
-                          surface="ivory"
-                          value={h.value}
-                          onChange={(value) =>
-                            setHeaders((prev) =>
-                              prev.map((row) => (row._key === h._key ? { ...row, value } : row)),
-                            )
-                          }
-                          placeholder={t('settings.mcp.fields.headerValuePlaceholder')}
-                        />
-                      )}
-                    </FormField>
-                    <Tip
-                      text={t('settings.mcp.fields.removeRow')}
-                      contentClassName="z-[10001]"
-                    >
-                      <Button
-                        variant="secondary"
-                        className="w-9 px-0"
-                        size="lg"
-                        aria-label={`${t('settings.mcp.fields.removeRow')} ${i + 1}`}
-                        onClick={() => {
-                          const next = headers[i + 1] ?? headers[i - 1];
-                          setHeaders((prev) => prev.filter((row) => row._key !== h._key));
-                          requestAnimationFrame(() => {
-                            (next
-                              ? document.getElementById(`${id}-header-${next._key}-name`)
-                              : addHeaderRef.current
-                            )?.focus();
-                          });
-                        }}
-                      >
-                        <Trash2 size={16} />
-                      </Button>
-                    </Tip>
-                  </div>
-                ))}
-                <Button
-                  ref={addHeaderRef}
-                  variant="secondary"
-                  className="gap-1.5 self-start"
-                  onClick={() => {
-                    const key = headerKeyRef.current++;
-                    setHeaders((prev) => [...prev, { name: '', value: '', _key: key }]);
-                    requestAnimationFrame(() =>
-                      document.getElementById(`${id}-header-${key}-name`)?.focus(),
-                    );
-                  }}
-                >
-                  <Plus size={14} />
-                  {t('settings.mcp.fields.addHeader')}
-                </Button>
-              </fieldset>
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-wrap justify-end gap-2.5 p-4">
-            <Button
-              variant="secondary"
-              size="lg"
-              disabled={saving}
-              onClick={close}
-              palette="confirmation"
-            >
-              {t('settings.mcp.cancel')}
-            </Button>
-            <Button
-              variant="primary"
-              size="lg"
-              loading={saving}
-              onClick={() => void handleSave()}
-              palette="confirmation"
-              className="min-w-[96px]"
-            >
-              {t('settings.mcp.save')}
-            </Button>
-          </div>
+          {contents}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

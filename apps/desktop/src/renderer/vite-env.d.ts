@@ -5822,11 +5822,15 @@ interface ElectronAPI {
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
     ) => Promise<import('../shared/customMcp').CustomMcpListResult>;
+    updateMcpSetup: (input: import('../shared/mcpSetup').McpSetupDraftUpdate) => Promise<import('../shared/mcpSetup').McpSetupSnapshot>;
+    submitMcpSetup: (input: import('../shared/mcpSetup').McpSetupSubmission) => Promise<import('../shared/mcpSetup').McpSetupSnapshot>;
+    cancelMcpSetup: (input: { requestId: string; expectedRevision: number }) => Promise<import('../shared/mcpSetup').McpSetupSnapshot | null>;
+    retryMcpSetupActivation: (input: { requestId: string; expectedRevision: number }) => Promise<import('../shared/mcpSetup').McpSetupSnapshot>;
     createCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/mcpSetup').CustomMcpMutation,
     ) => Promise<{ ok: true }>;
     updateCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
+      config: import('../shared/mcpSetup').CustomMcpMutation,
     ) => Promise<{ ok: true }>;
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */

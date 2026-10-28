@@ -2078,8 +2078,10 @@ export const customMcpServers = sqliteTable(
     transport: text('transport').notNull(),
     /** 远程 MCP 端点 URL（http(s)）。 */
     url: text('url').notNull(),
-    /** 额外请求头 JSON：'{"X-Foo":"bar"}'。不含鉴权 token（走 safeStorage）。反序列化失败兜底 {}。 */
+    /** 旧格式保留请求头 JSON；加密格式仅存名称与空值，值在 Main 的凭证文件中。 */
     headers: text('headers').notNull().default('{}'),
+    credentialFormat: integer('credential_format').notNull().default(0),
+    credentialRef: text('credential_ref'),
     /** 列表展示排序（升序）。 */
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: integer('created_at').notNull(),
@@ -2089,6 +2091,13 @@ export const customMcpServers = sqliteTable(
     idxSortOrder: index('idx_custom_mcp_servers_sort_order').on(t.sortOrder),
   }),
 );
+
+export const customMcpSetupReceipts = sqliteTable('custom_mcp_setup_receipts', {
+  operationId: text('operation_id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  serverId: text('server_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
 
 /**
  * 右侧栏 Tab 持久化 —— per-session 多 Tab 容器(对标 Codex in-app browser sidebar)。

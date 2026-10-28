@@ -1,3 +1,4 @@
+import type { McpSetupSnapshot } from '../../shared/mcpSetup';
 /**
  * useCCAgentChat — thin subscription layer over `makerChatStore`.
  * ---------------------------------------------------------------------------
@@ -283,6 +284,7 @@ interface UseCCAgentChatReturn {
   pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
   /** 代输入: current step snapshot (structure only; values stay in the card). */
   pendingInputHandoff: InputHandoffSnapshot | null;
+  pendingMcpSetup: McpSetupSnapshot | null;
   /** ghost_grant_confirm: Respond to the pending ghost file-grant confirm card */
   respondToGhostGrantConfirm: (
     result: { confirmed: true; allowDirs?: boolean } | { confirmed: false },
@@ -937,6 +939,7 @@ export function useCCAgentChat(
     pendingGhostGrantConfirm: lightState.pendingGhostGrantConfirm,
     pendingRemoteDesktopConfirmation: lightState.pendingRemoteDesktopConfirmation,
     pendingInputHandoff: lightState.pendingInputHandoff,
+    pendingMcpSetup: lightState.pendingMcpSetup,
     respondToGhostGrantConfirm,
     planViewerState: lightState.planViewerState,
     setPlanViewerState,

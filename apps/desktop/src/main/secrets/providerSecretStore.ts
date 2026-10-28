@@ -115,6 +115,7 @@ function secretDir(): string {
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
+  'mcp_bundle_',
   'bot_environment_',
   'byok_cache_',
   CUSTOM_MCP_SECRET_PREFIX,

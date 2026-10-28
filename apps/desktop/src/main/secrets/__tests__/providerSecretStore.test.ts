@@ -153,7 +153,7 @@ describe('providerSecrets registry', () => {
     expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('voice-asr'))).toBe(false);
     expect(isRendererAccessibleSafeStorageKey('VOICE_INPUT_ASR_API_KEY')).toBe(false);
     expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('xd'))).toBe(true);
-    expect(isRendererAccessibleSafeStorageKey(customMcpSecretStorageKey('example'))).toBe(true);
+    expect(isRendererAccessibleSafeStorageKey(customMcpSecretStorageKey('example'))).toBe(false);
   });
 
   it('keeps the Gemini API key behind its dedicated main-only IPC boundary', () => {

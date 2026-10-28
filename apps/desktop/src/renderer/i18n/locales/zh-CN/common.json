@@ -7716,9 +7716,9 @@
         "urlPlaceholder": "https://example.com/mcp",
         "token": "Bearer Token(可选)",
         "tokenPlaceholder": "填入鉴权 token",
-        "tokenEditPlaceholder": "留空将删除已存 token",
+        "tokenEditPlaceholder": "留空保留已存令牌",
         "tokenSaved": "已保存",
-        "tokenHelp": "用于鉴权：Claude 会作为 Authorization: Bearer 头发送；Codex 仅支持 Bearer 型鉴权。",
+        "tokenHelp": "由本机 Cindy 添加 Authorization: Bearer 请求头。",
         "headers": "请求头(可选)",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
@@ -7740,6 +7740,41 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
+      },
+      "setup": {
+        "clearToken": "清除已存令牌",
+        "keepHeader": "留空保留已存值",
+        "localOnly": "凭证仅交给本机 Cindy，用于此地址的连接验证和加密保存，不会发送到消息中。",
+        "nextTask": "已保存，Agent 下次启动时可用。",
+        "activationPending": "配置已保存，运行环境尚未刷新。可重试生效，无需重新创建。",
+        "dismiss": "关闭",
+        "states": {
+          "verifying": "正在验证连接…",
+          "committing": "正在加密保存…",
+          "saved": "MCP 服务器已保存",
+          "cancelled": "已取消配置",
+          "expired": "配置已过期，请重新发起。"
+        },
+        "errors": {
+          "INVALID_CONFIG": "请检查名称、地址和请求头。地址不能包含用户名、密码或查询参数。",
+          "INSECURE_ENDPOINT": "请使用 HTTPS 地址，或本机回环 HTTP 地址。",
+          "AUTH_REJECTED": "服务拒绝了凭证，请重新填写后重试。",
+          "CONNECT_TIMEOUT": "连接验证超时，请检查服务后重试。",
+          "TLS_FAILED": "无法验证服务器证书，请检查服务配置。",
+          "PROTOCOL_MISMATCH": "未能完成 MCP 协议验证，请检查地址和传输方式。",
+          "REDIRECT_REQUIRES_REVIEW": "服务请求跳转到其他地址。请核对目标后重新发起配置。",
+          "RESPONSE_LIMIT": "服务器响应过大，验证已停止。",
+          "SECRET_STORE_UNAVAILABLE": "本机加密存储不可用，配置未保存。请恢复系统密钥存储后重试。",
+          "SECRET_UNREADABLE": "无法读取已存凭证，请替换凭证后重试。",
+          "CONFIG_CONFLICT": "配置已发生变化，请重新打开后重试。",
+          "SAVE_FAILED": "未能确认保存结果，请在设置中查看后重试。",
+          "OWNER_CHANGED": "账号已切换，请在当前账号重新发起配置。",
+          "REQUEST_EXPIRED": "配置已过期，请重新发起。"
+        },
+        "scope": "保存到「{{device}}」的当前账号",
+        "loopback": "HTTP 连接仅用于本机服务，未使用 TLS。",
+        "preservedUrl": "原地址包含隐藏信息。未编辑地址时保留原值；编辑后使用新地址。",
+        "retryActivation": "重试生效"
       }
     },
     "contacts": {

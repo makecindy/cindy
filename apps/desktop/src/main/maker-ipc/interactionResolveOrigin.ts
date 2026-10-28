@@ -36,6 +36,7 @@ export function assertResolveInteractionOrigin(
     kind === 'issue_confirm' ||
     kind === 'rename_sessions_confirm' ||
     kind === 'ghost_grant_confirm'
+    || kind === 'mcp_setup'
   ) {
     throwIpcError(
       'PERMISSION_DENIED',

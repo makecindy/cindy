@@ -71,7 +71,7 @@ it('preserves create ID, transport, trimmed headers and raw token arguments', as
   });
   fireEvent.click(save());
   await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-  expect(api.create).toHaveBeenCalledWith({ ...initial, id: 'custom_example-2' }, ' token ');
+  expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ ...initial, id: 'custom_example-2', keepHeaderNames: [] }), ' token ');
 });
 
 it('blocks duplicate submit, Cancel, Escape and outside only while saving, then recovers after failure', async () => {
@@ -102,25 +102,18 @@ it('blocks duplicate submit, Cancel, Escape and outside only while saving, then 
   expect(api.update).toHaveBeenCalledTimes(2);
 });
 
-it('retains existing token when saved before hydration and clears only after a loaded token is emptied', async () => {
-  let hydrate!: (value: string) => void;
-  api.read.mockReturnValue(
-    new Promise<string>((resolve) => {
-      hydrate = resolve;
-    }),
-  );
+it('keeps saved credentials without reading them back and requires an explicit token clear', async () => {
   api.update.mockRejectedValueOnce(new Error('Retry'));
-  render(<McpServerDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+  render(<McpServerDialog initial={{ ...initial, hasToken: true, revision: 12 }} onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect(api.read).not.toHaveBeenCalled();
+  expect(field('token').value).toBe('');
+  expect(screen.getByPlaceholderText('settings.mcp.setup.keepHeader')).toHaveProperty('value', '');
   fireEvent.click(save());
   await waitFor(() => expect(api.error).toHaveBeenCalled());
-  expect(api.update).toHaveBeenLastCalledWith(initial, '', false);
-  await act(async () => hydrate('example-secret'));
-  expect(field('token').type).toBe('password');
-  fireEvent.click(screen.getByRole('button', { name: 'settings.apiKey.showKey' }));
-  expect(field('token').type).toBe('text');
-  change('token', '');
+  expect(api.update).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 12, keepHeaderNames: ['X-Test'] }), '', false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.setup.clearToken' }));
   fireEvent.click(save());
-  await waitFor(() => expect(api.update).toHaveBeenLastCalledWith(initial, '', true));
+  await waitFor(() => expect(api.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: initial.id }), '', true));
 });
 
 it('keeps header IDs through row deletion and restores the opening control focus on close', async () => {
@@ -151,7 +144,7 @@ it('raises secret eye and remove-row tooltips above the z-10000 modal overlay', 
   // 弹窗内必须把提示抬到 z-[10001](review P2)。Radix Tooltip 1.2 的
   // role="tooltip" 挂在 Content 内的 sr-only 副本上,带 z class 的可见层
   // 是它的父节点(Popper.Content)。
-  const eye = screen.getByRole('button', { name: 'settings.apiKey.showKey' });
+  const eye = screen.getAllByRole('button', { name: 'settings.apiKey.showKey' })[0];
   await user.hover(eye);
   const eyeTip = await screen.findByRole('tooltip');
   expect(eyeTip.textContent).toBe('settings.apiKey.showKey');

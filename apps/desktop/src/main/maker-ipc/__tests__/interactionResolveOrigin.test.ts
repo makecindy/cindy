@@ -36,6 +36,7 @@ describe('resolve interaction source boundary', () => {
     { kind: 'issue_confirm', confirmed: true },
     { kind: 'rename_sessions_confirm', confirmed: true },
     { kind: 'ghost_grant_confirm', confirmed: true },
+    { kind: 'mcp_setup', confirmed: true },
   ])('rejects remote Desktop-only $kind decisions', (decision) => {
     expect(() => fromDeviceLink(decision)).toThrow(
       '[PERMISSION_DENIED] desktop-only confirmations must be completed on the controlled Desktop',
@@ -53,6 +54,7 @@ describe('resolve interaction source boundary', () => {
     { kind: 'issue_confirm', confirmed: true },
     { kind: 'rename_sessions_confirm', confirmed: true },
     { kind: 'ghost_grant_confirm', confirmed: true },
+    { kind: 'mcp_setup', confirmed: true },
   ])('keeps the same $kind decision available to the trusted local Renderer', (decision) => {
     expect(isDeviceLinkInvoke()).toBe(false);
     expect(() => assertResolveInteractionOrigin(decision)).not.toThrow();

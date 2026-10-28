@@ -7716,9 +7716,9 @@
         "urlPlaceholder": "https://example.com/mcp",
         "token": "Bearer トークン(任意)",
         "tokenPlaceholder": "認証トークンを入力",
-        "tokenEditPlaceholder": "空欄で保存済みトークンを削除",
+        "tokenEditPlaceholder": "空欄で保存済みトークンを保持",
         "tokenSaved": "保存済み",
-        "tokenHelp": "認証に使用:Claude は Authorization: Bearer ヘッダーとして送信します。Codex は Bearer 認証のみ対応します。",
+        "tokenHelp": "このコンピューターの Cindy が Authorization: Bearer ヘッダーを追加します。",
         "headers": "ヘッダー(任意)",
         "headerNamePlaceholder": "ヘッダー名",
         "headerValuePlaceholder": "値",
@@ -7740,6 +7740,41 @@
         "title": "「{{name}}」を削除しますか?",
         "message": "削除すると、新しいセッションではこの MCP が読み込まれなくなります。",
         "confirm": "削除"
+      },
+      "setup": {
+        "clearToken": "保存済みトークンを削除",
+        "keepHeader": "空欄で保存済みの値を保持",
+        "localOnly": "認証情報はこのコンピューターの Cindy だけに渡され、このアドレスの接続確認と暗号化保存に使用されます。メッセージには送信されません。",
+        "nextTask": "保存しました。次の Agent セッションから利用できます。",
+        "activationPending": "保存済みですが、実行環境は未更新です。サーバーを作り直さずに有効化を再試行できます。",
+        "dismiss": "閉じる",
+        "states": {
+          "verifying": "接続を確認中…",
+          "committing": "暗号化して保存中…",
+          "saved": "MCP サーバーを保存しました",
+          "cancelled": "設定をキャンセルしました",
+          "expired": "有効期限が切れました。新しいカードをリクエストしてください。"
+        },
+        "errors": {
+          "INVALID_CONFIG": "名前、アドレス、ヘッダーを確認してください。URL にユーザー情報やクエリを含めることはできません。",
+          "INSECURE_ENDPOINT": "HTTPS またはループバック HTTP を使用してください。",
+          "AUTH_REJECTED": "認証が拒否されました。認証情報を再入力してください。",
+          "CONNECT_TIMEOUT": "接続確認がタイムアウトしました。サーバーを確認して再試行してください。",
+          "TLS_FAILED": "サーバー証明書を検証できません。設定を確認してください。",
+          "PROTOCOL_MISMATCH": "MCP の確認に失敗しました。アドレスと通信方式を確認してください。",
+          "REDIRECT_REQUIRES_REVIEW": "リダイレクトが要求されました。接続先を確認して設定をやり直してください。",
+          "RESPONSE_LIMIT": "サーバーの応答が上限を超えました。",
+          "SECRET_STORE_UNAVAILABLE": "暗号化保存を利用できません。保存されていません。システムの認証情報ストアを復旧して再試行してください。",
+          "SECRET_UNREADABLE": "保存済みの認証情報を読み取れません。置き換えて再試行してください。",
+          "CONFIG_CONFLICT": "設定が変更されました。開き直して再試行してください。",
+          "SAVE_FAILED": "保存結果を確認できません。設定を確認してから再試行してください。",
+          "OWNER_CHANGED": "アカウントが変わりました。現在のアカウントで設定をやり直してください。",
+          "REQUEST_EXPIRED": "有効期限が切れました。新しいカードをリクエストしてください。"
+        },
+        "scope": "「{{device}}」の現在のアカウントに保存",
+        "loopback": "HTTP はローカルサービス専用で、TLS を使用しません。",
+        "preservedUrl": "元のアドレスには非表示の情報があります。アドレスを編集するまで元の値を保持します。",
+        "retryActivation": "有効化を再試行"
       }
     },
     "contacts": {

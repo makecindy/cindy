@@ -4,38 +4,37 @@
  *   - MCP_CUSTOM_LIST（只读：列出当前账号的自定义 MCP）。
  *   - MCP_CUSTOM_CREATE / UPDATE / DELETE（CRUD）。
  *
- * bearer token **不经这些 handler**：renderer 用通用 safe-storage IPC 写 `mcp_token_<id>`，
- * delete 时同样由 renderer 经通用 safe-storage-remove 清 token。
+ * 凭证仅经本机可信 Renderer 的窄 IPC 交给 Main；加密完成后再原子保存配置引用。
+ * 列表只返回存在性与请求头名称，通用 safe-storage IPC 不开放 MCP 凭证。
  *
  * 副作用（CRUD 成功后刷新两个 agent 的 mcpProviders 数组 + 广播 MCP_CHANGED）经 deps 注入，
  * handler body 可脱 Electron 用 IpcHarness + 内存 db 直接 invoke 单测（规则 14）。
  */
 
 import { z } from 'zod';
+import { deleteMcpConfig, listMcpSummaries, saveMcpConfig } from '../maker-host/custom-mcp-config-service.js';
+import type { CustomMcpMutation } from '../../shared/mcpSetup.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import {
-  createCustomMcpServer,
   customMcpServerExists,
-  deleteCustomMcpServer,
-  listCustomMcpServers,
-  updateCustomMcpServer,
   validateCustomMcpConfig,
-  type CustomMcpConfig,
 } from '../maker-host/custom-mcp-store.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 export interface McpHandlerDeps {
+  assertLocal?(event: unknown): void;
   /** Same registered runtime catalog used by Bot capability tools and hydration. */
   listMcpServers(context: { agentKind: CustomMcpListContext['agentKind']; remoteHostId?: string }): ReturnType<NonNullable<BotProfileRuntimeDeps['listMcpServers']>>;
   resolveBotContext(sessionId: string, chain?: BotModelRoute[]): Promise<{
     agentKind: CustomMcpListContext['agentKind']; remoteHostId?: string;
   } | null>;
   /** CRUD 成功后刷新 agent mcpProviders 数组（生产 = refreshCustomMcpProviders）。 */
-  refreshProviders(): Promise<void>;
+  refreshProviders(): Promise<void | boolean>;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send MCP_CHANGED）。 */
   broadcastChanged(): void;
   /**
@@ -47,7 +46,7 @@ export interface McpHandlerDeps {
    * codexEnvironment 缓存 + dispose app-server（与 slack 变更同款,best-effort，busy 会话软重启失败
    * 登记空闲重试而不阻塞 CRUD）。测试可省略。
    */
-  invalidateCodex?(): Promise<void>;
+  invalidateCodex?(): Promise<void | boolean>;
   /**
    * 内置 MCP server 名（生产 = getBuiltinMcpServerNames）。自定义 MCP 撞上这些名字时
    * 会在装配层顶替内置 server 并继承其审批信任，因此创建 / 更新阶段直接拒收。
@@ -69,7 +68,7 @@ const listContextSchema = z.object({
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 
-export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
+export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps) {
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');
@@ -78,7 +77,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       ? await deps.resolveBotContext(input.botSessionId, input.modelChain)
       : input ? { agentKind: input.agentKind } : undefined;
     if (input?.botSessionId && !runtime) throwIpcError('NOT_FOUND', 'Canonical Bot task not found');
-    const servers = await listCustomMcpServers();
+    const servers = await listMcpSummaries();
     if (!runtime) return { servers };
     const { agentKind } = runtime;
     const catalog = await deps.listMcpServers(runtime);
@@ -89,45 +88,52 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   });
 
   // CRUD 成功后统一收尾：刷新 provider 数组 + 广播 + 失效 Codex app-server。
-  async function afterChange(): Promise<void> {
-    await deps.refreshProviders();
+  async function afterChange(): Promise<boolean> {
+    const scope = activeOwnerScopeKey();
+    let refreshed = await deps.refreshProviders() !== false;
+    if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
     deps.broadcastChanged();
     // Codex 失效放最后：即使它慢 / 抛错(busy 会话),UI 列表与 Claude 侧已即时生效。
     // 生产实现自身 best-effort;这里再包一层,保证 CRUD 结果不被 Codex 重启失败带崩。
     try {
-      await deps.invalidateCodex?.();
+      if (await deps.invalidateCodex?.() === false) refreshed = false;
     } catch {
+      refreshed = false;
       /* best-effort:Codex 失效失败不影响 CRUD 已落库的结果 */
     }
+    return refreshed;
   }
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+    deps.assertLocal?.(_event);
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
-    const config = input as CustomMcpConfig;
+    const config = input as CustomMcpMutation;
     if (await customMcpServerExists(config.id)) {
       throwIpcError('ALREADY_EXISTS', `custom mcp '${config.id}' already exists`);
     }
-    await createCustomMcpServer(config);
+    await saveMcpConfig(config, true, { reservedIds: deps.getReservedMcpIds?.() });
     await afterChange();
     return { ok: true };
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
+    deps.assertLocal?.(_event);
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
-    const config = input as CustomMcpConfig;
-    const updated = await updateCustomMcpServer(config.id, config);
-    if (!updated) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
+    const config = input as CustomMcpMutation;
+    if (!await customMcpServerExists(config.id)) throwIpcError('NOT_FOUND', 'Custom MCP not found');
+    await saveMcpConfig(config, false, { reservedIds: deps.getReservedMcpIds?.() });
     await afterChange();
     return { ok: true };
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (_event, mcpId: unknown) => {
+    deps.assertLocal?.(_event);
     if (typeof mcpId !== 'string' || mcpId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
-    await deleteCustomMcpServer(mcpId);
+    await deleteMcpConfig(mcpId);
     await afterChange();
     return { ok: true };
   });
@@ -138,4 +144,5 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     await afterChange();
     return { ok: true };
   });
+  return afterChange;
 }

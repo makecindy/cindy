@@ -71,6 +71,7 @@ import {
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
+import { getCustomMcpSetupService } from '../maker-host/custom-mcp-setup-service.js';
 import {
   listWorkdirsForHistory,
   listSessionsForHistory,
@@ -1201,6 +1202,21 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // submit_github_issue: 官方反馈提交(确认卡片 → serverApiFetch)。
       // holder 同样是延迟查找，registerMakerIpc 里 init。
       githubIssue: (req) => submitGithubIssueForSession(req),
+      mcpSetup: {
+        request: async (ctx, proposal) => {
+          const { getMakerIfReady } = await import('../maker-host/index.js');
+          const maker = getMakerIfReady();
+          if (!ctx.sessionId || !ctx.sessionInstanceId || maker?.getSession(ctx.sessionId)?.instanceId !== ctx.sessionInstanceId) throw new Error('OWNER_CHANGED');
+          const service = getCustomMcpSetupService();
+          if (!service) throw new Error('MCP_SETUP_UNAVAILABLE');
+          return service.request(ctx.sessionId, proposal);
+        },
+        status: async (ctx, operationId) => {
+          const { getMakerIfReady } = await import('../maker-host/index.js');
+          if (!ctx.sessionId || getMakerIfReady()?.getSession(ctx.sessionId)?.instanceId !== ctx.sessionInstanceId) throw new Error('OWNER_CHANGED');
+          return getCustomMcpSetupService()?.status(ctx.sessionId, operationId) ?? null;
+        },
+      },
     },
     // cindy_orca: 多 worker 协同 team 工具集。创建权限由 Main handler 实时校验。
     orca: {

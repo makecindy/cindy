@@ -7747,9 +7747,9 @@
         "urlPlaceholder": "https://example.com/mcp",
         "token": "Bearer token (optional)",
         "tokenPlaceholder": "Enter auth token",
-        "tokenEditPlaceholder": "Leave blank to remove the saved token",
+        "tokenEditPlaceholder": "Leave blank to keep the saved token",
         "tokenSaved": "Saved",
-        "tokenHelp": "Used for auth: Claude sends it as an Authorization: Bearer header; Codex only supports Bearer auth.",
+        "tokenHelp": "Cindy adds an Authorization: Bearer header on this computer.",
         "headers": "Headers (optional)",
         "headerNamePlaceholder": "Header name",
         "headerValuePlaceholder": "Value",
@@ -7771,6 +7771,41 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
+      },
+      "setup": {
+        "clearToken": "Clear saved token",
+        "keepHeader": "Leave blank to keep saved value",
+        "localOnly": "Credentials go only to Cindy on this computer to verify this address and save them encrypted. They are never sent as messages.",
+        "nextTask": "Saved. Available the next time the Agent starts.",
+        "activationPending": "Saved; runtime refresh is pending. Retry activation without creating another server.",
+        "dismiss": "Dismiss",
+        "states": {
+          "verifying": "Verifying connection…",
+          "committing": "Saving encrypted credentials…",
+          "saved": "MCP server saved",
+          "cancelled": "Setup cancelled",
+          "expired": "Setup expired. Request a new card."
+        },
+        "errors": {
+          "INVALID_CONFIG": "Check the name, endpoint and headers. URLs must not include user info or query parameters.",
+          "INSECURE_ENDPOINT": "Use HTTPS or loopback HTTP.",
+          "AUTH_REJECTED": "The server rejected the credentials. Enter them again and retry.",
+          "CONNECT_TIMEOUT": "Verification timed out. Check the server and retry.",
+          "TLS_FAILED": "Could not verify the server certificate. Check its configuration.",
+          "PROTOCOL_MISMATCH": "MCP verification failed. Check the endpoint and transport.",
+          "REDIRECT_REQUIRES_REVIEW": "The server requested a redirect. Review the destination and request a new setup.",
+          "RESPONSE_LIMIT": "The server response exceeded the verification limit.",
+          "SECRET_STORE_UNAVAILABLE": "Encrypted storage is unavailable. Nothing was saved. Restore the system credential store and retry.",
+          "SECRET_UNREADABLE": "Saved credentials are unreadable. Replace them and retry.",
+          "CONFIG_CONFLICT": "The configuration changed. Reopen it and retry.",
+          "SAVE_FAILED": "Could not confirm the save. Check Settings before retrying.",
+          "OWNER_CHANGED": "The account changed. Request setup again with the current account.",
+          "REQUEST_EXPIRED": "Setup expired. Request a new card."
+        },
+        "scope": "Saved for the current account on “{{device}}”",
+        "loopback": "HTTP is limited to local services and does not use TLS.",
+        "preservedUrl": "The original endpoint contains hidden information. It is preserved until you edit the endpoint.",
+        "retryActivation": "Retry activation"
       }
     },
     "contacts": {

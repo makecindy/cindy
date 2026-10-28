@@ -53,6 +53,34 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Unit: real MCP discovery/call path, for each harness; no credential argument is accepted.
+  it.each(['claude-code', 'codex', 'pi'] as const)('offers a metadata-only MCP setup handoff to %s', async agentKind => {
+    const receipt = { operationId: '00000000-0000-4000-8000-000000000001', status: 'awaiting_user' };
+    const request = vi.fn(async () => receipt), status = vi.fn(async () => ({ ...receipt, status: 'saved', serverId: 'custom_demo' }));
+    let descendant = false;
+    const server = createXdtHelperMcpServer({ mcpSetup: { request, status } }, {
+      agentKind, workingDir: '/repo', getSessionContext: () => ({ agentKind, workingDir: '/repo', sessionId: 'task', sessionInstanceId: 'instance', mcpCallerKind: descendant ? 'descendant' : 'root' }),
+    });
+    const client = new Client({ name: 'mcp-setup-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'auth' } }));
+      const tools = catalog.tools as Array<{ name: string; inputSchema: { properties: object; additionalProperties: boolean } }>;
+      const setup = tools.find(tool => tool.name === 'request_mcp_setup')!;
+      expect(Object.keys(setup.inputSchema.properties)).toEqual(['name', 'url', 'transport']);
+      expect(setup.inputSchema.additionalProperties).toBe(false);
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: setup.name, args: { name: 'Demo', url: 'https://example.test/mcp', transport: 'sse' } } }))).toMatchObject({ ok: true, ...receipt });
+      expect(request).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'task', sessionInstanceId: 'instance' }), { name: 'Demo', url: 'https://example.test/mcp', transport: 'sse' });
+      const rejected = await client.callTool({ name: 'call_tool', arguments: { name: setup.name, args: { token: 'test-invalid-token' } } });
+      expect(JSON.stringify(rejected)).not.toContain('test-invalid-token'); expect(request).toHaveBeenCalledOnce();
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_mcp_setup_status', args: { operation_id: receipt.operationId } } }))).toMatchObject({ ok: true, status: 'saved', serverId: 'custom_demo' });
+      descendant = true;
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: setup.name, args: {} } }))).toMatchObject({ ok: false });
+      expect(request).toHaveBeenCalledOnce();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
     const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
     const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {

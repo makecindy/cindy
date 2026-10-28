@@ -103,6 +103,21 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it('preserves populated legacy MCP rows on upgrade and replays idempotently', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)');
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
+      db.prepare('INSERT INTO custom_mcp_servers (id,name,transport,url,headers,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+        .run('custom_legacy', 'Legacy', 'http', 'http://localhost:1234/mcp', '{"X-Test-Key":"test-invalid-header"}', 3, 10, 20);
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 135 });
+      const row = db.prepare('SELECT * FROM custom_mcp_servers').get();
+      expect(row).toEqual({ id: 'custom_legacy', name: 'Legacy', transport: 'http', url: 'http://localhost:1234/mcp', headers: '{"X-Test-Key":"test-invalid-header"}', sort_order: 3, created_at: 10, updated_at: 20, credential_format: 0, credential_ref: null });
+      expect(tableExists(db, 'custom_mcp_setup_receipts')).toBe(true);
+      expect(runMigrationReplay(db, { drizzleDir: drizzleDir() }).applied).toHaveLength(0);
+      expect(db.prepare('SELECT * FROM custom_mcp_servers').get()).toEqual(row);
+    } finally { cleanup(); }
+  });
   it.each(['missing', 'legacy', 'partial'])('replays remote report persistence with %s Worker schema', (shape) => {
     const { db, cleanup } = createTempDb();
     try {
@@ -111,8 +126,9 @@ describeMigrationReplay('migration replay', () => {
       if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136]);
       expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
@@ -139,6 +155,7 @@ describeMigrationReplay('migration replay', () => {
         .run('subject', 'manual', 'plugin', 'Plugin', 100);
       db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')
         .run('legacy-tool', 'subject', 0, 100, 'run');
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
       runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 131 });
       expect(db.prepare('SELECT call_id,subject_id,occurred_at,entry_kind FROM plugin_usage_events').all()).toEqual([
         { call_id: 'legacy-tool', subject_id: 'subject', occurred_at: 100, entry_kind: 'tool' },
@@ -195,6 +212,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, pinned_at INTEGER, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Visible', 'active', NULL, 1), ('b', 'Pinned', 'archived', 5, 2);");
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 125 });
       expect(result.applied.map((migration) => migration.seq)[0]).toBe(126);
       expect(columnNames(db, 'sessions')).toContain('hidden_at');
@@ -212,8 +230,9 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Loud', 'active', 1), ('b', 'Archived', 'archived', 2);");
       db.exec("CREATE TABLE plugin_usage_events (call_id TEXT PRIMARY KEY)");
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([130, 131, 132, 133, 134, 135]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([130, 131, 132, 133, 134, 135, 136]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
       expect(db.prepare('SELECT id, notifications_muted FROM sessions ORDER BY id').all()).toEqual([
@@ -562,6 +581,7 @@ describeMigrationReplay('migration replay', () => {
           (64, '0064_amusing_white_tiger.sql', 'ef297d4140b49cb3f6e87d58ea76e7f5a427fc6b3857a02210b9108650dcab23', 1064);
       `);
 
+      db.exec(readFileSync(path.join(drizzleDir(), '0068_gifted_ser_duncan.sql'), 'utf-8'));
       const result = runMigrationReplay(db, {
         drizzleDir: drizzleDir(),
         currentVersion: 73,

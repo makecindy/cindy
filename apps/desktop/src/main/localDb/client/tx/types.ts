@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'customMcp.commit'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
@@ -1389,6 +1390,7 @@ export interface MediaSpendArgs {
 }
 
 export type DbTxArgsByName = {
+  'customMcp.commit': import('../../worker/opHandlers/customMcpTx.js').CustomMcpCommit;
   'usage.recordMediaSpend': MediaSpendArgs;
   'authorization.readProjection': { sessionId: string; leadId: string };
   'codex.importMessages': CodexImportMessagesArgs;
@@ -1482,6 +1484,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'customMcp.commit': { revision: number };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;

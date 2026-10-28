@@ -19,14 +19,7 @@
 
 /** 供应商密钥的稳定标识。新增供应商时在此扩展。 */
 export type ProviderSecretId =
-  | 'xd'
-  | 'mivo'
-  | 'brave'
-  | 'tavily'
-  | 'xai'
-  | 'voice-asr'
-  | 'gemini'
-  | 'openai-images';
+  'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr' | 'gemini' | 'openai-images';
 
 /** The dedicated builtin key bridge and its UI must expose the same supported IDs. */
 export function isBuiltinApiKeyProviderId(providerId: unknown): providerId is ProviderSecretId {
@@ -107,11 +100,13 @@ export const CUSTOM_PROVIDER_HEADER_SECRET_PREFIX = 'provider_headers_';
 export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean {
   const normalized = storageKey.toLowerCase();
   return (
-    !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(normalized)
-    && !normalized.startsWith(CUSTOM_PROVIDER_HEADER_SECRET_PREFIX)
+    !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(normalized) &&
+    !normalized.startsWith(CUSTOM_PROVIDER_HEADER_SECRET_PREFIX) &&
     // Imported environments contain private credentials/checkpoints. All generic
     // read/store/remove calls must leave this entire namespace to Main.
-    && !normalized.startsWith('bot_environment_')
+    !normalized.startsWith('bot_environment_') &&
+    !normalized.startsWith('mcp_token_') &&
+    !normalized.startsWith('mcp_bundle_')
   );
 }
 
@@ -241,13 +236,18 @@ function ghostSecretAliasOwner(ghostId: string, allowMivoAlias: boolean): string
   return ghostId;
 }
 
-export function ghostSecretStorageKey(ghostId: string, secretKey: string, allowMivoAlias = false): string {
+export function ghostSecretStorageKey(
+  ghostId: string,
+  secretKey: string,
+  allowMivoAlias = false,
+): string {
   assertSafeKeyPart(ghostId, 'ghostId');
   assertSafeKeyPart(secretKey, 'secretKey');
   const aliasOwner = ghostSecretAliasOwner(ghostId, allowMivoAlias);
-  const alias = ghostId === 'xd-mivo' && !allowMivoAlias
-    ? undefined
-    : GHOST_SECRET_STORAGE_ALIASES[aliasOwner]?.[secretKey];
+  const alias =
+    ghostId === 'xd-mivo' && !allowMivoAlias
+      ? undefined
+      : GHOST_SECRET_STORAGE_ALIASES[aliasOwner]?.[secretKey];
   if (alias) return alias;
   return `${GHOST_SECRET_PREFIX}${ghostId}_${secretKey}`;
 }

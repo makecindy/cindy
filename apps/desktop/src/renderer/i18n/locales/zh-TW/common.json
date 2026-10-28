@@ -7716,9 +7716,9 @@
         "urlPlaceholder": "https://example.com/mcp",
         "token": "Bearer Token(可選)",
         "tokenPlaceholder": "填入鑑權 token",
-        "tokenEditPlaceholder": "留空將刪除已存 token",
+        "tokenEditPlaceholder": "留空保留已存權杖",
         "tokenSaved": "已儲存",
-        "tokenHelp": "用於鑑權：Claude 會作為 Authorization: Bearer 頭髮送；Codex 僅支援 Bearer 型鑑權。",
+        "tokenHelp": "由本機 Cindy 新增 Authorization: Bearer 請求標頭。",
         "headers": "請求頭(可選)",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
@@ -7740,6 +7740,41 @@
         "title": "刪除 “{{name}}”？",
         "message": "刪除後新建或重啟的 Agent 會話將不再載入該 MCP。",
         "confirm": "刪除"
+      },
+      "setup": {
+        "clearToken": "清除已存權杖",
+        "keepHeader": "留空保留已存值",
+        "localOnly": "憑證僅交給本機 Cindy，用於此位址的連線驗證和加密儲存，不會傳送到訊息中。",
+        "nextTask": "已儲存，Agent 下次啟動時可用。",
+        "activationPending": "設定已儲存，執行環境尚未重新整理。可重試生效，無需重新建立。",
+        "dismiss": "關閉",
+        "states": {
+          "verifying": "正在驗證連線…",
+          "committing": "正在加密儲存…",
+          "saved": "MCP 伺服器已儲存",
+          "cancelled": "已取消設定",
+          "expired": "設定已過期，請重新發起。"
+        },
+        "errors": {
+          "INVALID_CONFIG": "請檢查名稱、位址和請求標頭。位址不能包含使用者資訊或查詢參數。",
+          "INSECURE_ENDPOINT": "請使用 HTTPS 位址，或本機回環 HTTP 位址。",
+          "AUTH_REJECTED": "服務拒絕了憑證，請重新填寫後重試。",
+          "CONNECT_TIMEOUT": "連線驗證逾時，請檢查服務後重試。",
+          "TLS_FAILED": "無法驗證伺服器憑證，請檢查服務設定。",
+          "PROTOCOL_MISMATCH": "未能完成 MCP 協定驗證，請檢查位址和傳輸方式。",
+          "REDIRECT_REQUIRES_REVIEW": "服務要求重新導向。請核對目的地後重新設定。",
+          "RESPONSE_LIMIT": "伺服器回應過大，驗證已停止。",
+          "SECRET_STORE_UNAVAILABLE": "本機加密儲存不可用，設定未儲存。請恢復系統憑證儲存後重試。",
+          "SECRET_UNREADABLE": "無法讀取已存憑證，請替換憑證後重試。",
+          "CONFIG_CONFLICT": "設定已變更，請重新開啟後重試。",
+          "SAVE_FAILED": "未能確認儲存結果，請在設定中查看後重試。",
+          "OWNER_CHANGED": "帳號已切換，請在目前帳號重新設定。",
+          "REQUEST_EXPIRED": "設定已過期，請重新發起。"
+        },
+        "scope": "儲存到「{{device}}」的目前帳號",
+        "loopback": "HTTP 連線僅用於本機服務，未使用 TLS。",
+        "preservedUrl": "原位址包含隱藏資訊。未編輯位址時保留原值；編輯後使用新位址。",
+        "retryActivation": "重試生效"
       }
     },
     "contacts": {

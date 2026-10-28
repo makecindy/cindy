@@ -87,16 +87,19 @@ export class CustomMcpProvider implements McpProvider {
   private readonly tokenReader: (id: string) => string | null;
   readonly supportsApps: boolean;
   private readonly appProxy?: (read: () => AppServerConfig, context: McpProviderContext) => McpServer;
+  private readonly readAppConfig?: () => AppServerConfig;
 
-  constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null, appProxy?: CustomMcpProvider['appProxy']) {
+  constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null, appProxy?: CustomMcpProvider['appProxy'], readAppConfig?: () => AppServerConfig) {
     this.config = config;
     this.name = config.id;
     this.tokenReader = tokenReader;
     this.appProxy = appProxy;
+    this.readAppConfig = readAppConfig;
     this.supportsApps = Boolean(appProxy);
   }
 
   appServerConfig(): AppServerConfig {
+    if (this.readAppConfig) return this.readAppConfig();
     return { id: this.config.id, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
   }
 

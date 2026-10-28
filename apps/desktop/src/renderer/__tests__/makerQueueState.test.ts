@@ -128,6 +128,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   ...overrides,
   pendingRemoteDesktopConfirmation: overrides.pendingRemoteDesktopConfirmation ?? null,
   pendingInputHandoff: overrides.pendingInputHandoff ?? null,
+  pendingMcpSetup: overrides.pendingMcpSetup ?? null,
   pendingRemoteDesktopConfirmationQueue:
     overrides.pendingRemoteDesktopConfirmationQueue ?? [],
 });

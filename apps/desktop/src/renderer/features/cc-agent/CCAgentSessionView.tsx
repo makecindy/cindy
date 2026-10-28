@@ -1,3 +1,5 @@
+import { dismissMcpSetupResult } from '@/lib/makerChatStore';
+import { McpSetupPrompt } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
@@ -1904,6 +1906,7 @@ function CCAgentSessionContent({
     pendingGhostGrantConfirm,
     pendingRemoteDesktopConfirmation,
     pendingInputHandoff,
+    pendingMcpSetup,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -4367,7 +4370,7 @@ function CCAgentSessionContent({
   useEffect(() => { if (!voiceModeAvailable) setVoiceModeOpen(false); }, [voiceModeAvailable]);
   const voiceModeBlocked = Boolean(pendingPermission || pendingPlanReview
     || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm
-    || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation || pendingInputHandoff || sessionBinding.attached
+    || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation || pendingInputHandoff || (pendingMcpSetup?.status !== 'saved' && pendingMcpSetup) || sessionBinding.attached
     || remoteHandoffPreparing || cindyMakeInputLocked || queuePaused);
   // Silence is only idle once the existing task/queue/background indicators are
   // quiet too. Voice exit never calls the task's stop or stopAll actions.
@@ -5679,7 +5682,7 @@ function CCAgentSessionContent({
                       pendingRenameSessionsConfirm ||
                       pendingGhostGrantConfirm ||
                       pendingRemoteDesktopConfirmation ||
-                      pendingInputHandoff
+                      pendingInputHandoff || pendingMcpSetup
                     )
                   }
                   className="mb-0"
@@ -5901,7 +5904,7 @@ function CCAgentSessionContent({
               {!readOnly && botChatIdentity?.canonicalChat && botChatIdentity.id === 'cindy-default' && !isStreaming && !agentStatus.isRunning && !shareSelectionBlocked
                 && !pendingPlanReview && !pendingPermission && !pendingAskUser && !pendingPluginSetup
                 && !pendingIssueConfirm && !pendingRenameSessionsConfirm && !pendingGhostGrantConfirm
-                && !pendingRemoteDesktopConfirmation && !pendingInputHandoff && followUpInvitationSession === sessionId && (
+                && !pendingRemoteDesktopConfirmation && !pendingInputHandoff && (!pendingMcpSetup || pendingMcpSetup.status === 'saved') && followUpInvitationSession === sessionId && (
                 remoteDeviceId
                   ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
                   : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
@@ -5917,7 +5920,7 @@ function CCAgentSessionContent({
                     pendingRenameSessionsConfirm ||
                     pendingGhostGrantConfirm ||
                     pendingRemoteDesktopConfirmation ||
-                    pendingInputHandoff
+                    pendingInputHandoff || pendingMcpSetup
                   )
                 }
                 placeholder={
@@ -6000,6 +6003,8 @@ function CCAgentSessionContent({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingMcpSetup && sessionId && !remoteDeviceId ? (
+                  <McpSetupPrompt key={pendingMcpSetup.requestId} snapshot={pendingMcpSetup} onDismiss={() => dismissMcpSetupResult(sessionId)} />
                 ) : pendingInputHandoff && sessionId && !isSharedTaskPeer(remoteDeviceId ?? '') ? (
                   <InputHandoffCard
                     key={pendingInputHandoff.requestId}

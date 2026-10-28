@@ -25,6 +25,12 @@ vi.mock('../../maker-host/custom-mcp-store.js', async () => {
   };
 });
 
+vi.mock('../../maker-host/custom-mcp-config-service.js', () => ({
+  captureMcpOwner: () => ({ assertOwner: () => {} }),
+  listMcpRecords: async () => (await storeMock.listCustomMcpServers()).map((config: CustomMcpConfig) => ({ ...config, headers: JSON.stringify(config.headers), credentialFormat: 0, credentialRef: null, updatedAt: 1, createdAt: 1, sortOrder: 0 })),
+  resolveMcpCredentials: () => ({ token: '', headers: {} }),
+}));
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomMcpToken: () => null,
 }));

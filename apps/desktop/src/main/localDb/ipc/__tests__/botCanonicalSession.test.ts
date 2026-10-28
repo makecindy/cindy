@@ -184,6 +184,11 @@ vi.mock('../../../git-snapshot/projectGitBootstrap.js', () => ({
 vi.mock('../../../maker-host/git-safety-settings-store.js', () => ({
   readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }),
 }));
+vi.mock('../../../maker-host/custom-mcp-config-service.js', () => ({
+  captureMcpOwner: () => ({ assertOwner: () => {} }),
+  listMcpRecords: async () => h.customMcpConfigs.map(config => ({ ...config, headers: JSON.stringify(config.headers), credentialFormat: 0, credentialRef: null, updatedAt: 1, createdAt: 1, sortOrder: 0 })),
+  resolveMcpCredentials: () => ({ token: '', headers: {} }),
+}));
 vi.mock('../../../maker-host/custom-mcp-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.js')>(),
   listCustomMcpServers: async () => h.customMcpConfigs,

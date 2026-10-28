@@ -1,3 +1,4 @@
+import { registerCustomMcpSetupHandlers, assertMcpLocalRenderer } from './customMcpSetupHandlers.js';
 import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
@@ -1173,6 +1174,9 @@ import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgrou
 import { registerProviderHandlers } from './providerHandlers.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
+import { CustomMcpSetupService, getCustomMcpSetupService, setCustomMcpSetupService } from '../maker-host/custom-mcp-setup-service.js';
+import { type McpSetupSnapshot } from '../../shared/mcpSetup.js';
+import { onAppSessionInvalidated } from '../appSessionState.js';
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
@@ -3472,7 +3476,7 @@ function notifyInputHandoffOwner(sessionId: string, snapshot: InputHandoffSnapsh
   })();
 }
 let inputHandoffContinuation:
-  | ((sessionId: string, requestId: string, message: string) => Promise<void>)
+  | ((sessionId: string, requestId: string, message: string, assertCurrent?: () => void) => Promise<void>)
   | null = null;
 initInputHandoffService({
   broadcast: (channel, payload) => {
@@ -3655,7 +3659,8 @@ type RecoverableInteractionSnapshot =
   | IssueConfirmInteractionSnapshot
   | RenameSessionsConfirmInteractionSnapshot
   | GhostGrantConfirmInteractionSnapshot
-  | InputHandoffSnapshot;
+  | InputHandoffSnapshot
+  | McpSetupSnapshot;
 
 type PendingInteractionSnapshotEntry = {
   request: RecoverableInteractionSnapshot;
@@ -3684,6 +3689,7 @@ function getPendingInteractionsForSession(sessionId: string): PendingInteraction
     ...ghostGrantConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...ghostSetupInteractionBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...(getInputHandoffService()?.pendingSnapshots(sessionId) ?? []).map(({ request }) => ({ request })),
+    ...(getCustomMcpSetupService()?.pendingSnapshots(sessionId) ?? []),
   );
   return out;
 }
@@ -3755,6 +3761,7 @@ function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string)
 
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
   return (
+    (getCustomMcpSetupService()?.pendingSnapshots().some(({ request }) => request.requestId === requestId) ?? false) ||
     issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId) ||
     renameSessionsConfirmBridge
       .pendingSnapshots()
@@ -3964,6 +3971,7 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
 }
 
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+  getCustomMcpSetupService()?.cleanupForSession(sessionId);
   cleanupPendingAgentInteractionsForSession(sessionId, reason);
   taskActionConfirmBridge.cleanupForSession(sessionId, reason === 'session_closed' ? 'session_closed' : 'session_aborted');
   // Desktop-only 确认只跟随真实会话终止/中止清理。权威 NO_ACTIVE_TURN 的
@@ -7930,7 +7938,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
-  registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+  const afterCustomMcpChange = registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    assertLocal: assertMcpLocalRenderer,
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
@@ -7947,7 +7956,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: async () => {
       const ownerScopeKey = activeOwnerScopeKey();
-      await refreshCodexMcpEnvironment({
+      const refreshed = await refreshCodexMcpEnvironment({
         restartCodex: restartCodexAfterAuthModeChange,
         shutdownCodexEnvironment,
         onDeferred: () => {
@@ -7960,9 +7969,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Pi 的 MCP bridge 同样按首个会话冻结 server 集合:自定义 MCP 增删改后必须 invalidate,
       // 否则新 Pi 会话仍暴露已删/已禁用的工具、拿不到新启用的工具(codex review P1)。
       // 与 codex 分支独立(不依赖 codexRestarted),下一次 startSession lazy 重建。
-      invalidatePiEnvironment();
+      if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) invalidatePiEnvironment();
+      return refreshed.codexMcpRefreshed;
     },
   });
+  const mcpSetup = new CustomMcpSetupService({
+    broadcast: (sessionId, request) => {
+      broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, { sessionId, request });
+      if (['saved', 'cancelled', 'expired'].includes(request.status)) broadcastToAllWindows(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId, requestId: request.requestId, reason: 'resolved', resolvedAs: 'allow' });
+    },
+    changed: afterCustomMcpChange,
+    executionKey: (sessionId) => {
+      const session = maker.getSession(sessionId);
+      return session ? session.instanceId + ':' + session.getTurnGeneration() : undefined;
+    },
+    complete: async (sessionId, snapshot, assertCurrent) => {
+      if (!inputHandoffContinuation || !maker.getSession(sessionId)) return;
+      const message = '[MCP setup ended] ' + JSON.stringify({ operationId: snapshot.operationId, status: snapshot.status, serverId: snapshot.serverId, errorCode: snapshot.errorCode, activation: snapshot.activation });
+      await inputHandoffContinuation(sessionId, snapshot.operationId, message, assertCurrent);
+    },
+  });
+  setCustomMcpSetupService(mcpSetup);
+  onAppSessionInvalidated(() => mcpSetup.invalidate());
+  registerCustomMcpSetupHandlers(createElectronIpcHandlerRegistry(), mcpSetup);
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。
   const handleClaudeAutoClassifierUnavailable = createClaudeAutoPermissionFallbackCoordinator({
@@ -13026,13 +13055,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 代输入 ended: hidden metadata-only continuation, mirroring the bot
   // authorization resume. A deterministic client id keeps delivery idempotent.
-  inputHandoffContinuation = async (sessionId, requestId, message) => {
+  inputHandoffContinuation = async (sessionId, requestId, message, assertCurrent) => {
     await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
+    assertCurrent?.();
     const result = await dispatchBotSessionMessage({
       targetSessionId: sessionId,
       message,
       persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
       clientId: `input-handoff-result:${requestId}`,
+      authorizationGuard: assertCurrent ? {
+        validate: async () => { assertCurrent(); },
+        assertCurrent,
+      } : undefined,
     });
     if (!result.ok) throw new Error(`Input handoff continuation not accepted: ${result.errorCode}`);
   };

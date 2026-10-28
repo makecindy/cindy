@@ -592,3 +592,13 @@ describe('parseGhostSetupInlineSubmit', () => {
     ).toBeNull();
   });
 });
+
+it('projects MCP setup as an existing read-only desktop notice without its draft or real capability', () => {
+  const requestId = createDesktopOnlyConfirmationRequestId();
+  const request = { kind: 'mcp_setup', requestId, operationId: 'private-operation', draft: { url: 'https://private.test/mcp', headerNames: ['X-Private'] }, deviceName: 'private-device' };
+  const remote = projectInteractionRequestForRemote(request)!;
+  expect(remote).toEqual({ kind: 'ghost_grant_confirm', requestId: expect.stringMatching(/^desktop-confirm-/) });
+  const serialized = JSON.stringify(remote);
+  for (const privateValue of [requestId, 'private-operation', 'private.test', 'X-Private', 'private-device']) expect(serialized).not.toContain(privateValue);
+  expect(projectInteractionDismissedForRemote({ requestId })).toEqual({ requestId: remote.requestId });
+});

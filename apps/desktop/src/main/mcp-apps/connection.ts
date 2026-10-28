@@ -18,12 +18,15 @@ import {
 type AppServerNotification = Notification;
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { MCP_APPS_EXTENSION } from './protocol.js';
+import { createMcpFetch } from '../mcp-integrations/custom-mcp-fetch.js';
 
 export interface AppServerConfig {
   id: string;
   url: string;
   transport: 'http' | 'sse';
   headers?: Record<string, string>;
+  secure?: boolean;
+  responseLimit?: number;
 }
 
 /** Credentials and the MCP client always stay in Main, never in a View. */
@@ -69,6 +72,8 @@ export class AppConnection {
   private client?: Client;
   private connecting?: Promise<Client>;
   private closed = false;
+  private network?: ReturnType<typeof createMcpFetch>;
+  get safeErrorCode(): string | undefined { return this.network?.errorCode(); }
   private readonly listeners = new Set<(message: AppServerNotification) => void>();
   get isClosed(): boolean {
     return this.closed;
@@ -90,16 +95,22 @@ export class AppConnection {
       this.client = client;
       const requestInit = { headers: this.config.headers };
       const url = new URL(this.config.url);
+      this.network ??= this.config.secure ? createMcpFetch(this.config.url, this.config.responseLimit, this.config.responseLimit !== undefined) : undefined;
+      const requestFetch = this.network?.fetch ?? fetch;
       const transport =
         this.config.transport === 'sse'
           ? new SSEClientTransport(url, {
               requestInit,
+              fetch: requestFetch,
               eventSourceInit: {
-                fetch: (input, init) =>
-                  fetch(input, { ...init, headers: { ...this.config.headers, ...init?.headers } }),
+                fetch: (input, init) => {
+                  const headers = new Headers(this.config.headers);
+                  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+                  return requestFetch(input, { ...init, headers });
+                },
               },
             })
-          : new StreamableHTTPClientTransport(url, { requestInit });
+          : new StreamableHTTPClientTransport(url, { requestInit, fetch: requestFetch });
       // A transport loss retires only this attempt. A later independent request
       // may connect again; requests already sent are never replayed here.
       const retire = () => {
@@ -156,18 +167,19 @@ export class AppConnection {
     });
   }
 
-  async tools(signal?: AbortSignal): Promise<Tool[]> {
+  async tools(signal?: AbortSignal, limits = { pages: 100, tools: 10_000 }): Promise<Tool[]> {
     const client = await this.getClient(signal);
     const tools: Tool[] = [];
     let cursor: string | undefined;
     const seen = new Set<string>();
+    let pages = 0;
     do {
       const page = await client.listTools(cursor ? { cursor } : undefined, { signal });
       tools.push(...page.tools);
       cursor = page.nextCursor;
       if (cursor && seen.has(cursor)) throw new Error('MCP_APP_INVALID_PAGINATION');
       if (cursor) seen.add(cursor);
-      if (seen.size > 100 || tools.length > 10_000) throw new Error('MCP_APP_TOOL_LIST_TOO_LARGE');
+      if (++pages > limits.pages || tools.length > limits.tools || cursor && pages >= limits.pages) throw new Error('MCP_APP_TOOL_LIST_TOO_LARGE');
     } while (cursor);
     return tools;
   }
@@ -175,7 +187,7 @@ export class AppConnection {
   async close(): Promise<void> {
     this.closed = true;
     this.listeners.clear();
-    await this.client?.close();
+    await Promise.all([this.client?.close(), this.network?.close()]);
   }
 
   listen(listener: (message: AppServerNotification) => void): () => void {

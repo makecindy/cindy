@@ -1,3 +1,4 @@
+import type { McpSetupSnapshot } from '../../shared/mcpSetup';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
@@ -2764,6 +2765,7 @@ export interface SessionChatState {
    * turn ending; only a Host dismissal or authoritative snapshot retires it.
    */
   pendingInputHandoff: InputHandoffSnapshot | null;
+  pendingMcpSetup: McpSetupSnapshot | null;
   /** rename_sessions_confirm: 批量改名写入前的确认卡片; null when none. */
   pendingRenameSessionsConfirm: PendingRenameSessionsConfirm | null;
   /** ghost_grant_confirm: ghost_call 过户 workdir 外文件的确认卡片; null when none. */
@@ -2983,6 +2985,7 @@ export type SessionChatLightState = Pick<
   | 'pendingPlanReview'
   | 'pendingIssueConfirm'
   | 'pendingInputHandoff'
+  | 'pendingMcpSetup'
   | 'pendingRenameSessionsConfirm'
   | 'pendingGhostGrantConfirm'
   | 'pendingRemoteDesktopConfirmation'
@@ -3057,6 +3060,7 @@ function createInitialState(): SessionChatState {
     pendingPlanReview: null,
     pendingIssueConfirm: null,
     pendingInputHandoff: null,
+    pendingMcpSetup: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
     pendingRemoteDesktopConfirmation: null,
@@ -3143,6 +3147,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingPlanReview: null,
   pendingIssueConfirm: null,
   pendingInputHandoff: null,
+    pendingMcpSetup: null,
   pendingRenameSessionsConfirm: null,
   pendingGhostGrantConfirm: null,
   pendingRemoteDesktopConfirmation: null,
@@ -3754,6 +3759,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingInputHandoff ||
+    (s.pendingMcpSetup && ['awaiting_user', 'verifying', 'committing'].includes(s.pendingMcpSetup.status)) ||
     s.pendingRenameSessionsConfirm ||
     s.pendingGhostGrantConfirm ||
     s.pendingRemoteDesktopConfirmation ||
@@ -6741,6 +6747,9 @@ export function handleStreamEvent(
       if (state.pendingPermission?.requestId === data.requestId) {
         return { ...state, pendingPermission: null };
       }
+      if (state.pendingMcpSetup?.requestId === data.requestId) {
+        return state.pendingMcpSetup.status === 'saved' ? state : { ...state, pendingMcpSetup: null };
+      }
       if (state.pendingInputHandoff?.requestId === data.requestId) {
         return { ...state, pendingInputHandoff: null };
       }
@@ -7189,6 +7198,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingPlanReview: null,
     pendingIssueConfirm: null,
     pendingInputHandoff: null,
+    pendingMcpSetup: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
     pendingRemoteDesktopConfirmation: null,
@@ -8587,7 +8597,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         kind !== 'issue_confirm' &&
         kind !== 'rename_sessions_confirm' &&
         kind !== 'ghost_grant_confirm' &&
-        kind !== 'input_handoff') ||
+        kind !== 'input_handoff' && kind !== 'mcp_setup') ||
       typeof request.requestId !== 'string' ||
       request.requestId.length === 0
     ) {
@@ -8638,6 +8648,18 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             confirmation,
           ],
         };
+      });
+      return;
+    }
+
+    if (request.kind === 'mcp_setup') {
+      if (ingress.remoteDeviceId || remoteSnapshotDeviceId) return;
+      // Main owns this metadata-only card. No credential values enter this store.
+      const parsed = request as unknown as McpSetupSnapshot;
+      if (typeof parsed.revision !== 'number' || !parsed.draft || typeof parsed.draft.url !== 'string') return;
+      setState(sessionId, s => {
+        if (s.pendingMcpSetup?.requestId === parsed.requestId && s.pendingMcpSetup.revision > parsed.revision) return s;
+        return { ...s, pendingMcpSetup: parsed };
       });
       return;
     }
@@ -9984,6 +10006,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingPlanReview: state.protectedAskUser ? null : state.pendingPlanReview,
     pendingIssueConfirm: state.pendingIssueConfirm,
     pendingInputHandoff: state.pendingInputHandoff,
+    pendingMcpSetup: state.pendingMcpSetup,
     pendingRenameSessionsConfirm: state.pendingRenameSessionsConfirm,
     pendingGhostGrantConfirm: state.pendingGhostGrantConfirm,
     pendingRemoteDesktopConfirmation: state.pendingRemoteDesktopConfirmation,
@@ -10036,6 +10059,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingPlanReview === b.pendingPlanReview &&
     a.pendingIssueConfirm === b.pendingIssueConfirm &&
     a.pendingInputHandoff === b.pendingInputHandoff &&
+    a.pendingMcpSetup === b.pendingMcpSetup &&
     a.pendingRenameSessionsConfirm === b.pendingRenameSessionsConfirm &&
     a.pendingGhostGrantConfirm === b.pendingGhostGrantConfirm &&
     a.pendingRemoteDesktopConfirmation === b.pendingRemoteDesktopConfirmation &&
@@ -10627,8 +10651,10 @@ function reconcilePendingInteractions(
       const authoritativePlanIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       const authoritativeInputHandoffIds = new Set<string>();
+      const authoritativeMcpSetupIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
+        if (request?.kind === 'mcp_setup' && typeof request.requestId === 'string') authoritativeMcpSetupIds.add(request.requestId);
         if (request?.kind === 'input_handoff' && typeof request.requestId === 'string') {
           authoritativeInputHandoffIds.add(request.requestId);
         }
@@ -10687,6 +10713,7 @@ function reconcilePendingInteractions(
           ? state.pendingPermission : null;
         // Terminal snapshots are not listed by the Host; keep them for their
         // short visual grace until the dismissal push arrives.
+        const nextMcpSetup = state.pendingMcpSetup && (state.pendingMcpSetup.status === 'saved' || authoritativeMcpSetupIds.has(state.pendingMcpSetup.requestId)) ? state.pendingMcpSetup : null;
         const nextInputHandoff = state.pendingInputHandoff &&
           (state.pendingInputHandoff.terminal === true ||
             authoritativeInputHandoffIds.has(state.pendingInputHandoff.requestId))
@@ -10746,6 +10773,7 @@ function reconcilePendingInteractions(
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
           nextInputHandoff === state.pendingInputHandoff &&
+          nextMcpSetup === state.pendingMcpSetup &&
           nextCommand === state.pluginSetupCommandInFlight &&
           promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
           !remoteQueueChanged
@@ -10763,6 +10791,7 @@ function reconcilePendingInteractions(
           lastExpandedPlanViewerState: nextPlanReview ? state.lastExpandedPlanViewerState : 'expanded',
           pendingPermission: nextPermission,
           pendingInputHandoff: nextInputHandoff,
+          pendingMcpSetup: nextMcpSetup,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -16813,6 +16842,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       pendingPlanReview: null,
       pendingIssueConfirm: null,
       pendingInputHandoff: null,
+    pendingMcpSetup: null,
       pendingRemoteDesktopConfirmation: null,
       pendingRemoteDesktopConfirmationQueue: [],
       pendingQueue: s.pendingQueue.filter((item) =>
@@ -19943,4 +19973,8 @@ if (import.meta.hot) {
     }
     __teardownGlobalListeners();
   });
+}
+
+export function dismissMcpSetupResult(sessionId: string): void {
+  setState(sessionId, state => state.pendingMcpSetup?.status === 'saved' ? { ...state, pendingMcpSetup: null } : state);
 }

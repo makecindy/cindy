@@ -1,4 +1,5 @@
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
+import { commitCustomMcp, type CustomMcpCommit } from './customMcpTx.js';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
@@ -71,6 +72,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'customMcp.commit':
+      return commitCustomMcp(db, txArgs as CustomMcpCommit);
     case 'chatCache.execute':
       return runChatCacheTransaction(db, txArgs as ChatCacheTransaction);
     case 'usage.recordMediaSpend':

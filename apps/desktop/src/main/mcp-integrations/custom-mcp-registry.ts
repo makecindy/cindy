@@ -18,10 +18,11 @@ import type { McpProvider } from '@cindy/maker-core';
 
 import {
   isUnsafeMcpServerId,
-  listCustomMcpServers,
+  customMcpConfigFromRow,
   validateCustomMcpConfig,
 } from '../maker-host/custom-mcp-store.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
+import { captureMcpOwner, listMcpRecords, resolveMcpCredentials } from '../maker-host/custom-mcp-config-service.js';
 import { CustomMcpProvider } from './custom-mcp-provider.js';
 import { createAppServerProxy } from '../mcp-apps/serverProxy.js';
 import { registerAppServer, resetAppServers, clearAppServerConfigs } from '../mcp-apps/runtime.js';
@@ -71,12 +72,14 @@ export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
  * 读 DB → 重建 CustomMcpProvider[] → 原地更新每个已注册数组
  * (移除旧 CustomMcpProvider,追加新的)。任何一步失败只 warn,不抛。
  */
-export async function refreshCustomMcpProviders(): Promise<void> {
+export async function refreshCustomMcpProviders(): Promise<boolean> {
   let providers: CustomMcpProvider[] = [];
   // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
   const skippedNames = new Set<string>();
   try {
-    const configs = await listCustomMcpServers();
+    const owner = captureMcpOwner();
+    const records = await listMcpRecords(owner);
+    const configs = records.map(customMcpConfigFromRow);
     const reservedIds = getBuiltinMcpServerNames();
     providers = configs.flatMap((config) => {
       const validation = validateCustomMcpConfig(config, reservedIds);
@@ -91,14 +94,21 @@ export async function refreshCustomMcpProviders(): Promise<void> {
         skippedNames.add(serverName);
         return [];
       }
-      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy);
+      const row = records.find(record => record.id === config.id);
+      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy, row ? () => {
+        owner.assertOwner();
+        const credentials = resolveMcpCredentials(row);
+        const headers = { ...credentials.headers };
+        if (credentials.token && !Object.keys(headers).some(name => name.toLowerCase() === 'authorization')) headers.Authorization = 'Bearer ' + credentials.token;
+        return { id: config.id, url: config.url, transport: config.transport, headers, secure: row.credentialFormat === 1 };
+      } : undefined);
       return [provider];
     });
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return;
+    return false;
   }
   // Saved endpoint changes revoke open Views, while existing Agent calls retain their snapshot.
   clearAppServerConfigs();
@@ -145,4 +155,5 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     skipped: skippedNames.size,
     arrays: registeredArrays.length,
   });
+  return true;
 }
