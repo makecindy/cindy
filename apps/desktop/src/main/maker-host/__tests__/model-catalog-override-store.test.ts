@@ -10,6 +10,8 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { MAX_OVERRIDE_ENTRIES_PER_SECTION } from '../model-plane/localCatalogOverrides.js';
+
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-catalog-overrides-test-'));
 const owner = { current: 'owner-a' };
 
@@ -21,8 +23,14 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
 }));
 
-const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides } =
-  await import('../model-catalog-override-store.js');
+const {
+  MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+  ModelCatalogOverrideLossError,
+  readModelCatalogOverrides,
+  readModelCatalogImageInput,
+  setModelCatalogImageInput,
+  readModelCatalogThinkingDivergence,
+} = await import('../model-catalog-override-store.js');
 
 const patchEntry = { base: { name: 'Renamed' } };
 
@@ -32,6 +40,167 @@ function writeOwnerFile(value: unknown): string {
   fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
   return file;
 }
+
+describe('model-catalog-override-store / 图片输入能力声明', () => {
+  const target = { providerId: 'opencode-go', modelId: 'mimo-v2.6-flash' };
+  const key = 'opencode-go:mimo-v2.6-flash';
+
+  it('写入 true/false 落到 base patch，读回 isCustomized 区分「跟随目录」与「显式声明」', async () => {
+    owner.current = 'owner-image-write';
+    expect(readModelCatalogImageInput(target)).toEqual({ value: null, isCustomized: false });
+
+    await setModelCatalogImageInput(target, true);
+    expect(readModelCatalogOverrides().patches[key]?.base?.supportsImageInput).toBe(true);
+    expect(readModelCatalogImageInput(target)).toEqual({ value: true, isCustomized: true });
+
+    await setModelCatalogImageInput(target, false);
+    expect(readModelCatalogImageInput(target)).toEqual({ value: false, isCustomized: true });
+  });
+
+  it('条目限定了 agents 时把目标引擎并进名单，让声明真正生效', async () => {
+    // 目录合并按 agents 过滤，读回却不检查 —— 不并进 pi 就会「显示已声明、运行期不生效」。
+    owner.current = 'owner-image-agents';
+    writeOwnerFile({
+      version: 1,
+      patches: { [key]: { agents: ['codex'], base: { name: 'Mimo' } } },
+    });
+
+    await setModelCatalogImageInput({ ...target, agent: 'pi' }, true);
+    expect(readModelCatalogOverrides().patches[key]?.agents).toEqual(['codex', 'pi']);
+  });
+
+  it('已有条目无 agents 限制时不加名单', async () => {
+    owner.current = 'owner-image-no-agents';
+    writeOwnerFile({ version: 1, patches: { [key]: { base: { name: 'Mimo' } } } });
+
+    await setModelCatalogImageInput({ ...target, agent: 'pi' }, true);
+    expect(readModelCatalogOverrides().patches[key]?.agents).toBeUndefined();
+  });
+
+  it('写入后条目数超上限时拒绝保存，不留下会被下次读取丢弃的条目', async () => {
+    owner.current = 'owner-image-limit';
+    const full: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_OVERRIDE_ENTRIES_PER_SECTION; i++) full[`p:model-${i}`] = { base: {} };
+    writeOwnerFile({ version: 1, patches: full });
+
+    await expect(
+      setModelCatalogImageInput({ providerId: 'p', modelId: 'one-more' }, true),
+    ).rejects.toThrow(/上限/);
+    // 文件没被改动：原有 1024 条仍完整
+    expect(Object.keys(readModelCatalogOverrides().patches)).toHaveLength(
+      MAX_OVERRIDE_ENTRIES_PER_SECTION,
+    );
+  });
+
+  it('value=null 删除该键回到跟随目录，条目空掉时整条删除', async () => {
+    owner.current = 'owner-image-reset';
+    await setModelCatalogImageInput(target, true);
+    await setModelCatalogImageInput(target, null);
+    expect(readModelCatalogOverrides().patches[key]).toBeUndefined();
+    expect(readModelCatalogImageInput(target)).toEqual({ value: null, isCustomized: false });
+  });
+
+  it('只动 supportsImageInput：同条目其它字段与其它条目原样保留', async () => {
+    owner.current = 'owner-image-preserve';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        [key]: {
+          agents: ['pi'],
+          base: { name: 'Mimo', contextWindow: 128_000 },
+          perAgent: { pi: { maxOutput: 8_192 } },
+        },
+        'openai:gpt-6': { base: { name: 'Renamed' } },
+      },
+    });
+
+    await setModelCatalogImageInput(target, true);
+    const entry = readModelCatalogOverrides().patches[key]!;
+    expect(entry.base).toEqual({
+      name: 'Mimo',
+      contextWindow: 128_000,
+      supportsImageInput: true,
+    });
+    expect(entry.perAgent).toEqual({ pi: { maxOutput: 8_192 } });
+    expect(entry.agents).toEqual(['pi']);
+    expect(readModelCatalogOverrides().patches['openai:gpt-6']).toEqual({ base: { name: 'Renamed' } });
+
+    // 复位后条目里仍留着用户自己写的字段，不能被一并删掉。
+    await setModelCatalogImageInput(target, null);
+    expect(readModelCatalogOverrides().patches[key]).toEqual({
+      agents: ['pi'],
+      base: { name: 'Mimo', contextWindow: 128_000 },
+      perAgent: { pi: { maxOutput: 8_192 } },
+    });
+  });
+
+  it('providerId 里的冒号经 encodeURIComponent 转义，不与 modelId 的分隔符混淆', async () => {
+    owner.current = 'owner-image-escape';
+    await setModelCatalogImageInput({ providerId: 'a:b', modelId: 'm' }, true);
+    expect(readModelCatalogOverrides().patches['a%3Ab:m']?.base?.supportsImageInput).toBe(true);
+  });
+
+  it('一行多个引擎 id 一起写（桥接两端 id 不同，只写一边运行期读不到）', async () => {
+    owner.current = 'owner-image-row';
+    await setModelCatalogImageInput(
+      [
+        { providerId: 'openai', modelId: 'gpt-5.6-sol' },
+        { providerId: 'openai', modelId: 'chatgpt/gpt-5.6-sol' },
+      ],
+      true,
+    );
+    const patches = readModelCatalogOverrides().patches;
+    expect(patches['openai:gpt-5.6-sol']?.base?.supportsImageInput).toBe(true);
+    expect(patches['openai:chatgpt/gpt-5.6-sol']?.base?.supportsImageInput).toBe(true);
+  });
+
+  it('清掉 perAgent 里残留的 supportsImageInput，并让读取按 agent 算有效值', async () => {
+    // perAgent 会遮蔽 base：不清的话 UI（读 base）显示已声明、运行期（按合并语义）仍拒收。
+    owner.current = 'owner-image-peragent';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        [key]: { agents: ['pi'], perAgent: { pi: { supportsImageInput: false } } },
+      },
+    });
+    // 未写入前：读 pi 的有效值仍是显式声明（不假装「跟随目录」）。
+    expect(readModelCatalogImageInput({ ...target, agent: 'pi' })).toEqual({
+      value: false,
+      isCustomized: true,
+    });
+
+    await setModelCatalogImageInput({ ...target, agent: 'pi' }, true);
+    expect(readModelCatalogOverrides().patches[key]?.perAgent).toBeUndefined();
+    expect(readModelCatalogImageInput({ ...target, agent: 'pi' })).toEqual({
+      value: true,
+      isCustomized: true,
+    });
+  });
+
+  it('手改文件里会被 sanitize 丢弃的 patches 条目：拒绝写入而不是静默删掉', async () => {
+    owner.current = 'owner-image-lossy';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        // 未知字段 → 整条被 sanitize 隔离；写盘会把 patches 整段换成清洗后的快照。
+        'openai:typo-model': { base: { name: 'Typo', unknownField: 1 } },
+      },
+    });
+
+    await expect(setModelCatalogImageInput(target, true)).rejects.toThrow(/无法保留/);
+    // 独立错误类型让 IPC 层能把它映射成可执行的 PRECONDITION_FAILED（而不是笼统的 INTERNAL）。
+    await expect(setModelCatalogImageInput(target, true)).rejects.toBeInstanceOf(
+      ModelCatalogOverrideLossError,
+    );
+    // 文件没被动过：那条手改还在（修好后下一次写入自动恢复）。
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, owner.current, 'model-catalog-overrides.json'), 'utf8'),
+    ) as { patches: Record<string, unknown> };
+    expect(raw.patches['openai:typo-model']).toEqual({
+      base: { name: 'Typo', unknownField: 1 },
+    });
+  });
+});
 
 describe('model-catalog-override-store', () => {
   it('读取显式 v1 文件', () => {
@@ -104,5 +273,50 @@ describe('model-catalog-override-store', () => {
     expect(readModelCatalogOverrides().patches).toEqual({});
     expect(fs.statSync(oversized).size).toBeGreaterThan(MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES);
     expect(fs.existsSync(oversized)).toBe(true);
+  });
+
+  it('readModelCatalogThinkingDivergence 把「同集合不同默认档」报成分叉', () => {
+    // 手改文件留下的分裂：两侧档位集合相同、默认档不同。diverged 不置位的话，
+    // 抽屉的「重选当前项」会被同值 no-op 挡掉，默认档的分叉永远修不掉。
+    owner.current = 'owner-thinking-diverged-default';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        'prov:model': {
+          agents: ['pi', 'codex'],
+          perAgent: {
+            pi: { efforts: ['low', 'max'], defaultEffort: 'low' },
+            codex: { efforts: ['low', 'max'], defaultEffort: 'max' },
+          },
+        },
+      },
+    });
+    expect(
+      readModelCatalogThinkingDivergence([
+        { providerId: 'prov', modelId: 'model', agent: 'pi' },
+        { providerId: 'prov', modelId: 'model', agent: 'codex' },
+      ]),
+    ).toEqual({ diverged: true });
+
+    // 默认档一致时不算分叉（集合相同 + 默认档相同）。
+    owner.current = 'owner-thinking-consistent';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        'prov:model': {
+          agents: ['pi', 'codex'],
+          perAgent: {
+            pi: { efforts: ['low', 'max'], defaultEffort: 'low' },
+            codex: { efforts: ['low', 'max'], defaultEffort: 'low' },
+          },
+        },
+      },
+    });
+    expect(
+      readModelCatalogThinkingDivergence([
+        { providerId: 'prov', modelId: 'model', agent: 'pi' },
+        { providerId: 'prov', modelId: 'model', agent: 'codex' },
+      ]),
+    ).toEqual({ diverged: false });
   });
 });

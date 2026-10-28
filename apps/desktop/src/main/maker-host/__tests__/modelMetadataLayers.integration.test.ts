@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { deriveAvailableModels } from '../catalog-to-descriptors.js';
+import { resolveSendToSessionExecutionConfig } from '../../maker-ipc/sendToSessionExecutionConfig.js';
+import type { OrcaWorkerProviderRoutingContext } from '../../maker-ipc/orcaWorkerCreationService.js';
+
 it('isolates excess additions and duplicate tags without discarding valid local overrides', () => {
   const model = (n: number) => ({
     id: 'local-' + n,
@@ -451,6 +455,76 @@ describe('metadata layers through the active catalog', () => {
     });
     expect(getActiveCatalog().providers.find((p) => p.id === 'xd')?.models.codex).toHaveLength(1);
   });
+  it('clears the main-side valid: none gate once the user declares the effort tiers', () => {
+    // issue #5762 的实报路径：自定义供应商手填模型 ID、不配任何推理选项。此时 efforts 只是
+    // 占位空表，任何显式档位都被 main 准入按 `effort "…" not supported … valid: none` 拒掉。
+    // 用户在本 PR 的「思考」档位多选里声明真实档位后，同一份目录投影出去的 efforts 必须
+    // 非空 —— store 侧（modelCatalogThinkingOverride）与准入侧（sendToSessionExecutionConfig）
+    // 各有一半测试，中间的 active-catalog → descriptor → effortMetaByModel 投影此前无人看守，
+ // 任一侧回归都会让用户在真机上重新撞 valid: none 而单测全绿。
+    const runtime = { baseUrl: 'https://relay.example/v1', models: [{ id: 'hand-filled', name: 'Hand filled' }] };
+    setCustomProviders([
+      buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { pi: runtime } }),
+    ]);
+    const available = () => deriveAvailableModels(getActiveCatalog(), 'pi');
+    // 与 orcaProviderRoutingContext 同一构造：准入真正读的是 effortMetaByModel，
+    // 不是 availableModels 上的 efforts（见 sendToSessionExecutionConfig 的 routeEffortMeta）。
+    const routing = (): OrcaWorkerProviderRoutingContext => ({
+      availability: {
+        'claude-code': [],
+        codex: [],
+        pi: [{
+          id: 'relay',
+          name: 'Relay',
+          models: available().map((m) => m.id),
+          fastModels: [],
+          effortMetaByModel: Object.fromEntries(
+            available().map((m) => [
+              m.id,
+              {
+                efforts: m.efforts,
+                defaultEffort: m.defaultEffort,
+                ...(m.effortsUnknown === true ? { effortsUnknown: true } : {}),
+              },
+            ]),
+          ),
+        }],
+      },
+      resolveDefaultProviderIdForModel: () => 'relay',
+    });
+    const submit = () =>
+      resolveSendToSessionExecutionConfig({
+        source: {
+          agentKind: 'pi',
+          model: 'hand-filled',
+          effort: 'high',
+          fastMode: false,
+          providerId: 'relay',
+        },
+        overrides: { effort: 'high' },
+        availableModels: available(),
+        providerRouting: routing(),
+        hasCindyAiApiKey: true,
+      });
+
+    // 基线：占位空表 → 显式 high 被拒（本 issue 的报错原文）。
+    const before = submit();
+    expect(before).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(before.ok === false && before.message).toContain(
+      'effort "high" not supported by model "hand-filled". valid: none',
+    );
+
+    // 声明真实档位后，同一份投影出的 efforts 非空，显式档位原样放行。
+    setLocalCatalogOverrides(
+      sanitizeModelCatalogOverrides({
+        version: 1,
+        patches: { 'relay:hand-filled': { base: { efforts: ['high'] } } },
+      }).overrides,
+    );
+    expect(available().find((m) => m.id === 'hand-filled')?.efforts).toEqual(['high']);
+    expect(submit()).toMatchObject({ ok: true, config: { effort: 'high', model: 'hand-filled' } });
+  });
+
   it('keeps explicit custom Pi values above force and inherits public metadata for an unknown supplier', () => {
     const r = registry();
     setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry: r });
