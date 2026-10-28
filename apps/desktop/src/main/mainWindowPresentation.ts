@@ -34,7 +34,12 @@ export interface PresentMainWindowOptions {
   nativeWayland: boolean;
 }
 
-/** Use the resolved Ozone backend, not the session type: `--ozone-platform=x11` runs on XWayland. */
+/**
+ * Use the resolved Ozone backend, not the session type: `--ozone-platform=x11` runs on XWayland.
+ * Electron 42 resolves the default `--ozone-platform-hint=auto` and writes the chosen backend
+ * back to this switch, so it reads `wayland` on a Wayland session even when launched without
+ * flags (verified on Ubuntu 24.04 GNOME, #6240).
+ */
 export function isLinuxNativeWayland(platform: NodeJS.Platform, ozonePlatform: string): boolean {
   return platform === 'linux' && ozonePlatform.trim().toLowerCase() === 'wayland';
 }
