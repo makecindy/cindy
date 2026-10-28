@@ -44,6 +44,9 @@ export function useSessionUsageLimitFallback(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  /** 写入是异步的：回来时要确认任务没被换掉，否则旧任务的目标会显示到新任务上。 */
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -86,17 +89,21 @@ export function useSessionUsageLimitFallback(
     };
   }, [sessionId]);
 
-  const applyMutation = useCallback((result: SessionUsageLimitFallbackMutation): boolean => {
-    if (!mountedRef.current) return result.ok;
-    if (!result.ok) {
-      setError(result.message);
-      return false;
-    }
-    setTargetState(result.target);
-    // 写入时的来源就是当前组合，所以刚写完一定不是失效态。
-    setStale(false);
-    return true;
-  }, []);
+  const applyMutation = useCallback(
+    (result: SessionUsageLimitFallbackMutation, forSessionId: string): boolean => {
+      // 写入期间切了任务：这次结果属于上一个任务，不能回写当前 state。
+      if (!mountedRef.current || sessionIdRef.current !== forSessionId) return result.ok;
+      if (!result.ok) {
+        setError(result.message);
+        return false;
+      }
+      setTargetState(result.target);
+      // 写入时的来源就是当前组合，所以刚写完一定不是失效态。
+      setStale(false);
+      return true;
+    },
+    [],
+  );
 
   const setTarget = useCallback(
     async (next: SessionUsageLimitFallbackTarget): Promise<boolean> => {
@@ -105,7 +112,7 @@ export function useSessionUsageLimitFallback(
       setError(null);
       try {
         const result = await window.electronAPI.maker.sessionUsageLimitFallbackSet(sessionId, next);
-        return applyMutation(result);
+        return applyMutation(result, sessionId);
       } catch (cause) {
         if (mountedRef.current) setError(readErrorMessage(cause));
         return false;
@@ -122,7 +129,7 @@ export function useSessionUsageLimitFallback(
     setError(null);
     try {
       const result = await window.electronAPI.maker.sessionUsageLimitFallbackClear(sessionId);
-      return applyMutation(result);
+      return applyMutation(result, sessionId);
     } catch (cause) {
       if (mountedRef.current) setError(readErrorMessage(cause));
       return false;
