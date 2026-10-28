@@ -486,9 +486,42 @@ JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。�
 FCM data 消息与显式开启的前台服务都通过同一通知入口，按账号／消息去重。预览关闭时本机再次去除内容与
 发送者头像。群通知使用 MessagingStyle；伙伴回复有发送者时也使用 Person。普通任务仍沿用原通知。
 
+从收件箱构造的 `RemoteMessage` 只有 data；Expo 的 `NotificationsHandler` 在前台刻意跳过
+`RemoteNotificationContent.isDataOnly`。可见 `chat-message` 经 `ChatMessagingDelegate` 包为
+`ChatNotificationContent`，委托原内容全部字段并实现独立 Parcel 往返，保留原 trigger、频道和点击数据，
+使现有 JS 当前群／话题抑制规则真正运行；不伪造 FCM notification 字段，不把普通静默数据改成提醒。
+阅读判定在收到通知时同时核对 `AppState.currentState === active` 与当前群／话题，后台保留的导航路径
+不能当作正在阅读，即使原生此刻仍按前台分发。回归见 `pushRegistrationModel.test.ts`。
+原生集成回归入口为 Android 生成工程的 `:cindy-chat-notifications:testReleaseUnitTest`，
+`ChatDeliveryTest` 穿过真实 Expo receiver／handler，覆盖前台、后台、预览、去重、收件人和点击数据的
+Parcel 往返；使用 Robolectric 的 SDK/JVM 初始化，属于原生 integration，不能用 JS mock 单测替代，
+首次需下载测试 SDK。它不等同卓易通设备送达验收，不能由缺少 `constructed` 计数推断系统未展示。
+
 后台连接声明 `specialUse` 前台服务，持续显示运行通知和停止按钮；没有开机启动、隐藏重启或凭证落盘。
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。
+
+启动、回前台及令牌刷新时，`ChatBackgroundBridge` 重新读取系统通知权限；保存的开关不能代替授权，
+权限不足时停止连接，授权请求仍由设置页发起。开关或预览偏好更新会使在途令牌读取失效，避免用户关闭
+连接后被迟到结果重新启动。Android 回到 active 时窗口可能尚未获得焦点，桥在窗口获得焦点时再尝试启动，
+沿用原生前台启动条件，不增加后台定时重启。回归见 `chatBackgroundBridge.test.tsx` 与 `pushNotificationsRealm.test.ts`。
+这条不依赖 Google 的连接只消费 Chat Server 群消息收件箱；普通任务完成、出错、等待回复仍依赖原有
+远程推送。没有可用 FCM 时，开启后台群消息连接不代表普通任务完成提醒也已可用；卓易通的送达和后台
+存活仍须用真实设备验证。
+
+常驻通知只证明前台服务启动，不证明 Chat 鉴权或收件箱读取成功。原生连接等待 `ready` 最多 15 秒，
+超时取消该连接并复用原有退避，不重启应用或 Device Link。设置中的本地诊断导出会附带当前进程的
+通知状态：JS 启动门、连接阶段、最近一次收件箱读取时间／行数／HTTP 状态、系统总开关、消息频道
+importance，以及接收拒绝／重复／交给 Expo／构建通知的计数。`constructed` 不是系统横幅送达证据。
+状态只在内存保留，切换通知身份时清空；没有消息正文、账号／消息 ID、端点、令牌或原始异常。
+只有用户主动导出的临时文件包含此快照，不加入自动上报白名单。旧原生包没有诊断方法时导出仍可用。
+
+伙伴主私聊必须与群聊分别验收：主力电脑在线时手机使用 `/sessions/<id>?deviceId=…`，离线查看才用
+`/companions/cloud/<actorId>`；`/companions/direct/<threadId>` 是伙伴间私信，不能据其名称判断主私聊。
+当前主私聊最终回复经 Desktop `companion-cloud/mirror.ts` 的 `/conversations/<id>/import` 同步，
+按 `cloud-companions.md` §4 的合同不产生通知。原生支持 `conversationKind: direct` 的样式不代表
+这些静默导入已进入 `/push/inbox`。若要用同一收件箱提醒实时回复，需先定义与历史补传分离、可去重且
+遵守读位／隐私的实时通知合同；不能把全部 import 改成新消息发送来制造提醒。
 
 本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；按冷更门由指定把关人明确
 批准。上线顺序为服务端兼容接口／通道配置、各端原生包，再验证 token 注册、前后台、拒绝权限、预览关闭、

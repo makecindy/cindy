@@ -15,6 +15,7 @@ import {
   type DevServerEnvironment,
 } from '@/config/devServerEnvironment';
 import Notifications from './nativeNotifications';
+import { recordChatForegroundDecision } from './chatNotificationDiagnostics';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -261,6 +262,13 @@ export function isPushSupported(): boolean {
 }
 
 const pushPreferenceListeners = new Set<(signedOut?: boolean) => void>();
+let localSessionNotifications = false;
+export function usesLocalSessionNotifications() { return localSessionNotifications; }
+function setLocalSessionNotifications(enabled: boolean) {
+  if (localSessionNotifications === enabled) return;
+  localSessionNotifications = enabled;
+  for (const listener of pushPreferenceListeners) listener();
+}
 export function subscribePushPreferences(listener: (signedOut?: boolean) => void) {
   pushPreferenceListeners.add(listener); return () => { pushPreferenceListeners.delete(listener); };
 }
@@ -278,6 +286,7 @@ export async function readPushEnabled(): Promise<boolean> {
 }
 
 export async function writePushEnabled(enabled: boolean): Promise<void> {
+  if (!enabled) setLocalSessionNotifications(false);
   await AsyncStorage.setItem(PUSH_ENABLED_KEY, enabled ? '1' : '0');
   for (const listener of pushPreferenceListeners) listener();
 }
@@ -287,7 +296,10 @@ export function configureForegroundNotificationBehavior(isReading: (path: string
   Notifications.setNotificationHandler({
     handleNotification: async notification => {
       const route = parseNotificationResponseDeepLink({ notification });
-      const show = !!route?.startsWith('/companions/groups/') && !isReading(route);
+      const chat = !!route && (route.startsWith('/companions/groups/') || route.startsWith('/sessions/'));
+      const reading = !!route && chat && isReading(route);
+      const show = chat && !reading;
+      recordChatForegroundDecision(!route ? 'invalid-route' : !chat ? 'other-route' : reading ? 'reading' : 'allowed');
       return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
     },
   });
@@ -357,7 +369,18 @@ async function syncPushRegistrationInternal(
   try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
   catch (error) {
     if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
-    if (Platform.OS === 'android') return 'local-only';
+    if (Platform.OS === 'android') {
+      // Revoke a previous FCM registration before selecting live local delivery;
+      // two independent transports cannot deduplicate old payloads without event IDs.
+      const registered = await readPushRealms(PUSH_REGISTERED_KEY, stateScope);
+      if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+      if (registered.has(realm)) {
+        await mutatePushTokens(opts.apiFetch, realm, 'DELETE', pushDeleteBody(null));
+        if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+        await removePushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
+      }
+      return 'local-only';
+    }
     throw error;
   }
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
@@ -409,9 +432,11 @@ export function syncPushRegistration(opts: {
   apiFetch: AuthedApiFetch;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
-  return runPushMutation(() =>
-    syncPushRegistrationInternal(opts, lifecycleGeneration),
-  );
+  return runPushMutation(async () => {
+    const result = await syncPushRegistrationInternal(opts, lifecycleGeneration);
+    if (lifecycleGeneration === pushLifecycleGeneration) setLocalSessionNotifications(result === 'local-only');
+    return result;
+  });
 }
 
 /**
@@ -451,6 +476,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  setLocalSessionNotifications(false);
   for (const listener of pushPreferenceListeners) listener(true);
   // 不进入 pushMutationTail：当前 tail 可能正在 apiFetch → terminal handler →
   // clearLocalSession → 本函数。等待 tail 会形成自等待死锁。

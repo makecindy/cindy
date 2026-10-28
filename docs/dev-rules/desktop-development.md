@@ -53,6 +53,10 @@ pnpm restart:desktop:remote -- --shared
 失败时把 `code` / `message` 交给用户。若有 `next=` 且用户没有点名必须共享，
 可以执行那条 next 命令重试。不要给启动命令接会吞退出码的管道。
 
+源码启动分两段限时：Forge 编译最多 300 秒；Electron 入口开始执行后，窗口、认证与
+数据库共同就绪仍限 120 秒。编译完成标记本身不是 ready，重复标记不能延长运行期限；
+超时仍保留 abandoned 标记，迟到的进程不得复活已失败的启动记录。
+
 Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows）窗口里运行。macOS 上
 该窗口的输出同时写入当前 checkout 的 `apps/desktop/logs/dev-terminal.log`（每次启动覆盖，
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。

@@ -5,7 +5,7 @@
  * locally cached image files via standard `<img src>` requests.
  *
  * Two-step registration:
- *   1. imageSchemePrivilege — collected by bootstrap-electron.ts into the
+ *   1. imageSchemePrivilege — collected by protocolPrivileges.ts into the
  *      SINGLE registerSchemesAsPrivileged() call (the API replaces the whole
  *      list on every call, so per-module calls would wipe each other out).
  *      Must be registered BEFORE app.whenReady().
@@ -13,27 +13,18 @@
  *      the actual file-serving handler.
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { imageSchemePrivilege } from './protocolPrivileges.js';
 import * as imageCacheStore from './imageCacheStore';
 
 import { createLogger } from './logger';
 
 const log = createLogger('imageProtocol');
 
-const SCHEME = 'xdt-image';
+const SCHEME = imageSchemePrivilege.scheme;
 
-/** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */
-export const imageSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** Privilege entry for the one-shot registerSchemesAsPrivileged at the index.ts entry. */
+export { imageSchemePrivilege };
 
 export function registerImageProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {

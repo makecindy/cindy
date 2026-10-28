@@ -5,7 +5,7 @@
  * locally cached video files via standard `<video src>` elements.
  *
  * Two-step registration like imageProtocol:
- *   1. videoSchemePrivilege — collected by bootstrap-electron.ts into the
+ *   1. videoSchemePrivilege — collected by protocolPrivileges.ts into the
  *      single registerSchemesAsPrivileged() call (before app.whenReady()).
  *   2. registerVideoProtocolHandler() — must run AFTER app.whenReady().
  *
@@ -21,27 +21,18 @@
  * we can switch the slice path to a node stream.
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { videoSchemePrivilege } from './protocolPrivileges.js';
 import * as videoCacheStore from './videoCacheStore';
 
 import { createLogger } from './logger';
 
 const log = createLogger('videoProtocol');
 
-const SCHEME = 'xdt-video';
+const SCHEME = videoSchemePrivilege.scheme;
 
-/** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */
-export const videoSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** Privilege entry for the one-shot registerSchemesAsPrivileged at the index.ts entry. */
+export { videoSchemePrivilege };
 
 /** Parse `Range: bytes=START-END` (single range only). Returns null when the
  *  header is absent or malformed — caller falls back to a full 200 response.

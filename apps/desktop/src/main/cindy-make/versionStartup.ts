@@ -681,8 +681,8 @@ async function recoverOriginalAfterReady(profile: string): Promise<true> {
  * Called after dev profile resolution, before the database, single-instance lock and main windows.
  *
  * Every path that returns false continues into bootstrap-electron, whose module top level
- * registers privileged schemes and the 'ready' listener; both require Electron not to be ready
- * yet. Those paths therefore never yield to the event loop: registry reads are synchronous,
+ * installs runtime handlers. Pure scheme declarations already ran in index.ts;
+ * the initializer accepts an already-ready Electron app. Registry reads remain synchronous,
  * the personal-version self-check hashes synchronously, and registry writes are deferred to
  * finishCindyVersionStartup(). Only paths that end in app.exit() may await real I/O.
  */

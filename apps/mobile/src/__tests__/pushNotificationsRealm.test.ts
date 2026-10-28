@@ -13,6 +13,7 @@ const devEnvironmentState = vi.hoisted(() => ({
   active: 'dev' as 'dev' | 'release',
 }));
 const mocks = vi.hoisted(() => ({
+  platform: { OS: 'ios' },
   asyncGetItem: vi.fn(async (key: string) => store.get(key) ?? null),
   loadMobileEndpointsForRealm: vi.fn(async (_realm: 'cn' | 'global') => ({})),
   getPermissionsAsync: vi.fn(),
@@ -41,7 +42,7 @@ vi.mock('expo-notifications', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: mocks.platform,
 }));
 
 vi.mock('@/config/env', () => ({
@@ -61,6 +62,7 @@ vi.mock('@/config/devServerEnvironment', () => ({
 
 import {
   configureForegroundNotificationBehavior,
+  usesLocalSessionNotifications,
   retryPendingUnregister,
   syncPushRegistration,
   unregisterPushTokenBestEffort,
@@ -117,6 +119,7 @@ describe('push notification realm routing', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.platform.OS = 'ios';
     store.clear();
     envState.activeRealm = 'cn';
     envState.buildRegion = 'cn';
@@ -132,6 +135,52 @@ describe('push notification realm routing', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  // Production registration entry; the Android local-only branch had no
+  // coverage here. Minimal input: granted permission + rejected FCM token.
+  // Unit tier protects the Google-independent chat opt-in without weakening
+  // the existing iOS task-push registration/realm assertions below.
+  it('allows local-only Android notifications when Google push is unavailable', async () => {
+    mocks.platform.OS = 'android';
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('FCM_UNAVAILABLE'));
+    const apiFetch = vi.fn();
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(store.has(REGISTERED_KEY)).toBe(false);
+    expect(usesLocalSessionNotifications()).toBe(true);
+  });
+  it('revokes an older Google registration before selecting local task delivery, and disables it at logout', async () => {
+    mocks.platform.OS = 'android';
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('FCM_UNAVAILABLE'));
+    setStoredRealms(REGISTERED_KEY, ['cn']);
+    const apiFetch = vi.fn(async (_path: string, _options: { method?: string }) => undefined as never);
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(apiFetch.mock.calls.map(([path, options]) => [path, options.method])).toEqual([
+      ['/api/device-link/push-token', 'DELETE'], ['/v1/push-token', 'DELETE'],
+    ]);
+    await unregisterPushTokenBestEffort(null);
+    expect(usesLocalSessionNotifications()).toBe(false);
+  });
+
+  it('keeps Android notification permission denial distinct from unavailable Google push', async () => {
+    mocks.platform.OS = 'android';
+    mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'denied', canAskAgain: false });
+    const apiFetch = vi.fn();
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('permission-denied');
+    expect(mocks.getDevicePushTokenAsync).not.toHaveBeenCalled();
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('registers Android task and chat push endpoints when an FCM token is available', async () => {
+    mocks.platform.OS = 'android';
+    mocks.getDevicePushTokenAsync.mockResolvedValueOnce({ data: 'fixture-fcm-token' });
+    const apiFetch = vi.fn().mockResolvedValue({});
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual(['/api/device-link/push-token', '/v1/push-token']);
+    for (const [, options] of apiFetch.mock.calls) {
+      expect(options.body).toEqual({ token: 'fixture-fcm-token', platform: 'android', provider: 'fcm', appVariant: 'cn', preview: true });
+    }
   });
 
   it('向当前会话区域注册，但推送构建线仍保持安装包区域', async () => {

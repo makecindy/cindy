@@ -4,6 +4,8 @@ import {
   NOTIFY_BODY_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
+  MOBILE_NOTIFICATION_CHANNEL,
+  isScopedPeer,
   type NotifyCategory,
   type NotifyPayload,
   type NotifySender,
@@ -158,4 +160,30 @@ export class MobileNotifyDeduper {
       if (now - at >= this.windowMs) this.lastSentAt.delete(key);
     }
   }
+}
+/** Same-account, explicitly subscribed receivers only; disconnected history is never queued. */
+export function sendLiveMobileNotification(options: {
+  notification: import('@cindy/device-link').NotifyPayload;
+  sourceEventId?: string;
+  sourceDeviceId: string;
+  now: number;
+  targets: readonly { deviceId: string; subscriptionId?: string; subscribed: boolean; capable: boolean }[];
+  send(deviceId: string, channel: string, payload: import('@cindy/device-link').MobileLocalNotification): void;
+}): boolean {
+  if (options.notification.category !== 'session-done' || !options.sourceEventId) return false;
+  const eventId = createHash('sha256').update(JSON.stringify([
+    options.sourceDeviceId, options.notification.collapseId, options.sourceEventId,
+  ])).digest('hex');
+  let sent = false;
+  for (const target of options.targets) {
+    if (!target.subscribed || !target.capable || isScopedPeer(target.deviceId) || !target.subscriptionId) continue;
+    try {
+      options.send(target.deviceId, MOBILE_NOTIFICATION_CHANNEL, {
+        ...options.notification, category: 'session-done', eventId, createdAt: options.now,
+        subscriptionId: target.subscriptionId,
+      });
+      sent = true;
+    } catch { /* A congested peer must not prevent delivery to other receivers. */ }
+  }
+  return sent;
 }

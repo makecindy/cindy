@@ -1,6 +1,7 @@
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
-import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
+import { registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
+import { initializeAtElectronReady } from './protocolPrivileges.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
 import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
@@ -363,11 +364,10 @@ import {
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { BRAND_IDENTITY, legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
-import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
-import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
-import { modelSchemePrivilege, registerModelProtocolHandler } from './modelProtocol';
+import { registerImageProtocolHandler } from './imageProtocol';
+import { registerVideoProtocolHandler } from './videoProtocol';
+import { registerModelProtocolHandler } from './modelProtocol';
 import {
-  cindyMediaSchemePrivilege,
   registerCindyMediaProtocolHandler,
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
@@ -435,11 +435,10 @@ import {
 } from './cindy-media/draftUrlRegistry';
 import { loadAllQueueSnapshotPayloads } from './localDb/agentInputQueueSnapshots';
 import {
-  remoteMediaSchemePrivilege,
   registerRemoteMediaProtocolHandler,
 } from './device-link/remoteMediaProtocol';
-import { localFileSchemePrivilege, registerLocalFileProtocolHandler } from './localFileProtocol';
-import { audioFileSchemePrivilege, registerAudioFileProtocolHandler } from './audioFileProtocol';
+import { registerLocalFileProtocolHandler } from './localFileProtocol';
+import { registerAudioFileProtocolHandler } from './audioFileProtocol';
 import {
   buildSystemPathBlocklist,
   getSensitiveMediaBlocklist,
@@ -450,7 +449,6 @@ import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './op
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
-import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
@@ -2637,7 +2635,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
 });
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
-// MUST run before app.whenReady(), and MUST be a SINGLE call:
+// index.ts registers the declarations before any startup await, in a SINGLE call:
 // registerSchemesAsPrivileged replaces the whole privileged-scheme list every
 // time it runs, so per-module calls silently wipe each other — only the last
 // caller's scheme keeps its privileges. That exact bug shipped once (xdt-model
@@ -2656,21 +2654,8 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
 //                     只认自己安装目录;docs/dev-rules/plugin-security-and-authoring.md)
 //   cindy-media:      媒体总仓字节仓取件窗口(内容寻址 blob;新写入媒体的
 //                     统一协议,历史 xdt-* 协议只读兼容)
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: 'cindy-desktop-capture',
-    privileges: { standard: true, secure: true, supportFetchAPI: true },
-  },
-  imageSchemePrivilege,
-  videoSchemePrivilege,
-  localFileSchemePrivilege,
-  audioFileSchemePrivilege,
-  modelSchemePrivilege,
-  remoteMediaSchemePrivilege,
-  cindyGhostSchemePrivilege,
-  cindyMediaSchemePrivilege,
-  mcpAppSchemePrivilege,
-]);
+// Pure declarations are now registered in index.ts before asynchronous instance
+// registration. Handler installation below still waits for Electron readiness.
 
 import started from 'electron-squirrel-startup';
 
@@ -3727,7 +3712,9 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
 //     提前 attach 才能接住
 watchCindyVersionStartupResult();
-if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
+// Packaged smoke owns only its scratch profile. Never change the user's OS
+// default URL application while checking an uninstalled test package.
+if (!isCindyPersonalRuntime() && !parseSmokeArgs().enabled) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleIncomingDeepLink(url, 'open-url');
@@ -9122,7 +9109,7 @@ function cleanupLegacyDevShortcut(): Promise<void> {
   });
 }
 
-app.on('ready', async () => {
+void initializeAtElectronReady(app, async () => {
 
   // Smoke-test flag short-circuit: skip all normal init paths.
   const smoke = parseSmokeArgs();
@@ -10633,8 +10620,8 @@ function gitSafetyWire() {
 /**
  * bootstrapElectron - exported entry point for dynamic import from index.ts.
  * The Electron startup code above runs as module top-level side effects when
- * this module is dynamically imported. This function exists only to satisfy
- * the import contract; actual boot sequence is initiated by app.on("ready").
+ * this module is dynamically imported. The initializer uses whenReady(), so an
+ * asynchronous startup barrier cannot make it miss Electron's ready event.
  */
 export async function bootstrapElectron(): Promise<void> {
   // Side effects already in motion from module-level code above.

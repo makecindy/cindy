@@ -32,8 +32,25 @@ class ChatConnectionService : Service() {
     @Volatile private var configuration: ChatConnection? = null
     @Volatile var running = false; private set
     @Volatile var refreshRequested: (() -> Unit)? = null
-    internal fun configure(value: ChatConnection) { configuration = value }
-    fun clear() { configuration = null }
+    @Volatile internal var appForeground = true
+    private var instance: ChatConnectionService? = null
+    private var relayConfiguration: SessionRelayConfiguration? = null
+    private var relayBackground = false
+    internal fun configureRelay(value: SessionRelayConfiguration?) {
+      relayConfiguration = value
+      instance?.updateRelay()
+    }
+    internal fun setRelayBackground(value: Boolean) {
+      relayBackground = value && !appForeground
+      instance?.updateRelay()
+    }
+    internal fun receiveSession(context: android.content.Context, owner: String, device: String, payload: JSONObject) {
+      val relay = relayConfiguration ?: return
+      if (configuration?.owner != owner || relay.owner != owner || device !in relay.targets) return
+      SessionDelivery.receive(context, owner, device, payload)
+    }
+    internal fun configure(value: ChatConnection) { configuration = value; instance?.updateRelay() }
+    fun clear() { configuration = null; relayConfiguration = null; relayBackground = false; instance?.relay?.stop() }
     private const val CHANNEL = "chat-background"
     private const val ID = 7041
     private const val STOP = "app.cindy.notifications.STOP"
@@ -43,6 +60,15 @@ class ChatConnectionService : Service() {
   private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
     .callTimeout(25, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
   private var socket: WebSocket? = null
+  private val relay by lazy { SessionRelay(this, handler, http) { config ->
+    !stopped && relayBackground && !appForeground && configuration?.owner == config.owner
+      && relayConfiguration?.owner == config.owner
+  } }
+  private fun updateRelay() {
+    val config = relayConfiguration
+    if (config != null && configuration?.owner == config.owner) SessionDelivery.identity(this, config.owner)
+    if (config != null && relayBackground && !appForeground) relay.update(config) else relay.stop()
+  }
   @Volatile private var active: ChatConnection? = null
   @Volatile private var stopped = false
   private var retry = 1000L
@@ -58,7 +84,15 @@ class ChatConnectionService : Service() {
       handler.postDelayed({
         drainPending = false
         active?.takeIf { current(it) }?.let { config ->
-          executor.execute { try { drain(config) } catch (_: Exception) { socket?.close(1000, "Reconnect") } }
+          executor.execute {
+            try { drain(config) }
+            catch (error: Exception) {
+              if (current(config)) {
+                if (error !is ChatInboxHttpException) ChatDiagnostics.inbox("failed")
+                socket?.close(1000, "Reconnect")
+              }
+            }
+          }
         }
       }, 2000)
     }
@@ -70,11 +104,12 @@ class ChatConnectionService : Service() {
       val next = configuration
       if (next == null) { stopSelf(); return }
       if (next != active) executor.execute { connect(next) }
+      updateRelay()
       handler.postDelayed(this, 60000)
     }
   }
   override fun onBind(intent: Intent?): IBinder? = null
-  override fun onCreate() { super.onCreate(); running = true }
+  override fun onCreate() { super.onCreate(); running = true; instance = this }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == STOP) {
       getSharedPreferences("cindy-chat-background", MODE_PRIVATE).edit().putBoolean("paused", true).apply()
@@ -95,11 +130,15 @@ class ChatConnectionService : Service() {
       .addAction(0, config.stopLabel, stop).build()
     ServiceCompat.startForeground(this, ID, notification,
       if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
+    updateRelay()
     handler.removeCallbacks(refresh); handler.post(refresh)
     return START_NOT_STICKY
   }
   override fun onDestroy() {
+    ChatDiagnostics.connection("stopped")
     stopped = true; running = false; active = null; clear()
+    relay.stop(); instance = null
+    SessionDelivery.identity(this, "")
     handler.removeCallbacksAndMessages(null); socket?.cancel(); socket = null
     http.dispatcher.cancelAll(); executor.shutdownNow()
     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -109,8 +148,10 @@ class ChatConnectionService : Service() {
   private fun get(config: ChatConnection, path: String): String {
     check(current(config))
     http.newCall(Request.Builder().url(config.base + "/v1" + path).header("Authorization", "Bearer ${config.token}").header("Accept-Language", config.language).build()).execute().use { response ->
+      check(current(config))
+      if (!response.isSuccessful) ChatDiagnostics.inbox("http-error", status = response.code)
       if (response.code == 401) handler.post { refreshRequested?.invoke() }
-      check(response.isSuccessful) { "CHAT_REQUEST_FAILED" }
+      if (!response.isSuccessful) throw ChatInboxHttpException()
       val body = response.body ?: throw Exception("CHAT_EMPTY_RESPONSE")
       // Bound responses independently of Content-Length, including chunked bodies.
       val output = java.io.ByteArrayOutputStream()
@@ -125,14 +166,28 @@ class ChatConnectionService : Service() {
       return String(bytes, Charsets.UTF_8)
     }
   }
+  private class ChatInboxHttpException : Exception()
   private fun connect(config: ChatConnection) {
     if (stopped || configuration?.owner != config.owner) return
     val old = active; active = config; socket?.cancel()
+    ChatDiagnostics.connection("connecting")
     if (old?.owner != config.owner) { cursor = Instant.now().minusSeconds(60).toString(); cursorId = "00000000-0000-0000-0000-000000000000" }
     val request = Request.Builder().url(config.base.replaceFirst("https:", "wss:") + "/v1/ws").build()
     socket = http.newWebSocket(request, object : WebSocketListener() {
+      @Volatile private var authenticated = false
+      @Volatile private var timedOut = false
+      private val deadline = Runnable {
+        if (current(config) && !authenticated) {
+          timedOut = true; ChatDiagnostics.connection("auth-timeout")
+          // An open socket without a ready frame otherwise leaves the ongoing
+          // notification up forever. Cancel invokes the existing bounded backoff.
+          socket?.cancel()
+        }
+      }
+      init { handler.postDelayed(deadline, 15000) }
       override fun onOpen(ws: WebSocket, response: Response) {
         if (!current(config)) { ws.cancel(); return }
+        ChatDiagnostics.connection("authenticating")
         ws.send(JSONObject().put("type", "auth").put("token", config.token).toString())
       }
       override fun onMessage(ws: WebSocket, text: String) {
@@ -143,13 +198,20 @@ class ChatConnectionService : Service() {
             val frame = JSONObject(text)
             when (frame.optString("type")) {
               "ready" -> {
-                check(frame.getString("actorId") == config.actor)
+                if (frame.getString("actorId") != config.actor) {
+                  ChatDiagnostics.connection("actor-mismatch")
+                  ws.close(1000, "Reconnect"); return@execute
+                }
+                authenticated = true; handler.removeCallbacks(deadline)
+                ChatDiagnostics.connection("ready")
                 // A compacted actor scope responds with scope_error/head; the inbox is the
                 // durable source, so neither a fresh connection nor replay can lose notices.
                 ws.send(JSONObject().put("type", "subscribe").put("scope", "actor:${config.actor}").put("after", "0").toString())
                 retry = 1000; scheduleDrain()
               }
               "changes" -> {
+                if (frame.optString("scope") != "actor:${config.actor}") return@execute
+                ChatDiagnostics.count("changeFrames")
                 scheduleDrain()
                 ws.send(JSONObject().put("type", "ack").put("scope", frame.getString("scope")).put("cursor", frame.getString("cursor")).toString())
               }
@@ -160,13 +222,23 @@ class ChatConnectionService : Service() {
                   ws.send(JSONObject().put("type", "subscribe").put("scope", "actor:${config.actor}").put("after", head).toString())
                 } else ws.close(1000, "Reconnect")
               }
-              "error" -> ws.close(1000, "Reconnect")
+              "error" -> { ChatDiagnostics.connection("server-error"); ws.close(1000, "Reconnect") }
             }
-          } catch (_: Exception) { ws.close(1000, "Reconnect") }
+          } catch (_: Exception) { ChatDiagnostics.connection("protocol-error"); ws.close(1000, "Reconnect") }
         }
       }
-      override fun onClosed(ws: WebSocket, code: Int, reason: String) = reconnect(config)
-      override fun onFailure(ws: WebSocket, error: Throwable, response: Response?) = reconnect(config)
+      override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+        handler.removeCallbacks(deadline)
+        if (current(config)) { ChatDiagnostics.connection("closed"); reconnect(config) }
+      }
+      override fun onFailure(ws: WebSocket, error: Throwable, response: Response?) {
+        handler.removeCallbacks(deadline)
+        if (current(config)) {
+          if (authenticated) ChatDiagnostics.connection("disconnected")
+          else if (!timedOut) ChatDiagnostics.connection("auth-or-connect-failed")
+          reconnect(config)
+        }
+      }
     })
   }
   private fun reconnect(config: ChatConnection) {
@@ -178,6 +250,7 @@ class ChatConnectionService : Service() {
     for (page in 0 until 10) {
       val query = okhttp3.HttpUrl.Builder().scheme("https").host("cursor.invalid").addQueryParameter("after", cursor).addQueryParameter("afterId", cursorId).build().encodedQuery
       val rows = JSONArray(get(config, "/push/inbox?$query"))
+      ChatDiagnostics.inbox("ok", rows.length(), 200)
       for (i in 0 until rows.length()) {
         if (!current(config)) return
         val row = rows.getJSONObject(i); val payload = row.getJSONObject("payload")

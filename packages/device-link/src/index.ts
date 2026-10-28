@@ -76,3 +76,4 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./pluginPages.js";
+export * from './mobileNotifications.js';

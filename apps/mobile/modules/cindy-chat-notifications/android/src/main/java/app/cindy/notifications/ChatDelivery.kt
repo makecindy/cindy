@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Parcel
+import android.os.Parcelable
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -17,6 +19,10 @@ import expo.modules.notifications.service.delegates.FirebaseMessagingDelegate
 import expo.modules.notifications.service.interfaces.PresentationDelegate
 import expo.modules.notifications.notifications.model.Notification
 import expo.modules.notifications.notifications.model.NotificationBehaviorRecord
+import expo.modules.notifications.notifications.model.NotificationRequest
+import expo.modules.notifications.notifications.model.RemoteNotificationContent
+import expo.modules.notifications.notifications.model.triggers.FirebaseNotificationTrigger
+import expo.modules.notifications.notifications.interfaces.INotificationContent
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -25,18 +31,21 @@ object ChatDelivery {
   private const val STORE = "cindy-chat-notification-ids"
   @Synchronized fun identity(context: Context, actor: String) {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    if (prefs.getString("actor", "") != actor) prefs.edit().clear().putString("actor", actor).apply()
+    if (prefs.getString("actor", "") != actor) {
+      ChatDiagnostics.reset()
+      prefs.edit().clear().putString("actor", actor).apply()
+    }
   }
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
-    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { ChatDiagnostics.count("invalid"); return }
     if (body.optString("category") == "chat-message") {
       val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
       val actor = prefs.getString("actor", "") ?: ""
-      if (actor.isEmpty() || body.optString("recipientId") != actor) return
-      val id = data["tag"] ?: return
-      if (!id.matches(Regex("[a-fA-F0-9-]{36}"))) return
+      if (actor.isEmpty() || body.optString("recipientId") != actor) { ChatDiagnostics.count("wrongRecipient"); return }
+      val id = data["tag"] ?: ""
+      if (!id.matches(Regex("[a-fA-F0-9-]{36}"))) { ChatDiagnostics.count("invalid"); return }
       val ids = try { JSONArray(prefs.getString("ids", "[]")) } catch (_: Exception) { JSONArray() }
-      if ((0 until ids.length()).any { ids.optString(it) == id }) return
+      if ((0 until ids.length()).any { ids.optString(it) == id }) { ChatDiagnostics.count("duplicates"); return }
       val next = JSONArray()
       for (i in maxOf(0, ids.length() - 255) until ids.length()) next.put(ids.getString(i))
       next.put(id)
@@ -47,7 +56,34 @@ object ChatDelivery {
       body.remove("sender"); body.remove("senderName"); body.remove("body")
       display["body"] = body.toString(); display["message"] = ""
     }
-    FirebaseMessagingDelegate(context).onMessageReceived(RemoteMessage.Builder("cindy").setData(display).build())
+    ChatDiagnostics.count("dispatched")
+    ChatMessagingDelegate(context).onMessageReceived(RemoteMessage.Builder("cindy").setData(display).build())
+  }
+}
+
+/** These authenticated inbox/FCM chat payloads are visible notifications, not silent data tasks.
+ * Expo intentionally skips RemoteNotificationContent.isDataOnly in its foreground handler.
+ * Keep every content field and the original trigger/response, but classify visible chat content
+ * separately so the existing JS reading/privacy policy runs instead of being bypassed by Expo.
+ */
+internal class ChatMessagingDelegate(context: Context) : FirebaseMessagingDelegate(context) {
+  override fun createNotificationRequest(identifier: String, content: INotificationContent,
+    notificationTrigger: FirebaseNotificationTrigger): NotificationRequest {
+    val visible = if (content is RemoteNotificationContent && content.isDataOnly
+      && content.body?.optString("category") in setOf("chat-message", "session-done")) ChatNotificationContent(content) else content
+    return super.createNotificationRequest(identifier, visible, notificationTrigger)
+  }
+}
+
+/** No new persistence: this content crosses Expo's existing notification/response Parcel boundary. */
+internal class ChatNotificationContent(private val source: RemoteNotificationContent) : INotificationContent by source {
+  override fun writeToParcel(destination: Parcel, flags: Int) { destination.writeParcelable(source, flags) }
+  companion object {
+    @JvmField val CREATOR: Parcelable.Creator<ChatNotificationContent> = object : Parcelable.Creator<ChatNotificationContent> {
+      override fun createFromParcel(source: Parcel) = ChatNotificationContent(
+        requireNotNull(source.readParcelable<RemoteNotificationContent>(RemoteNotificationContent::class.java.classLoader)))
+      override fun newArray(size: Int): Array<ChatNotificationContent?> = arrayOfNulls(size)
+    }
   }
 }
 
@@ -60,6 +96,8 @@ class ChatNotificationsService : NotificationsService() {
   override fun getPresentationDelegate(context: Context): PresentationDelegate = object : ExpoPresentationDelegate(context) {
     override suspend fun createNotification(notification: Notification, notificationBehavior: NotificationBehaviorRecord?): android.app.Notification {
       val original = super.createNotification(notification, notificationBehavior)
+      // Constructed by Expo; this is not proof that Android displayed a banner.
+      ChatDiagnostics.count("constructed")
       val content = notification.notificationRequest.content
       val data = content.body ?: return original
       val chat = data.optString("category") == "chat-message"
@@ -73,7 +111,7 @@ class ChatNotificationsService : NotificationsService() {
       val text = (content.text ?: "").removePrefix("$name: ")
       return NotificationCompat.Builder(context, original)
         .setCategory(NotificationCompat.CATEGORY_MESSAGE).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-        .setOnlyAlertOnce(true)
+        .setOnlyAlertOnce(chat)
         .setStyle(NotificationCompat.MessagingStyle(Person.Builder().setName("Cindy").build())
           .setConversationTitle(if (group) content.title else null).setGroupConversation(group)
           .addMessage(text, notification.originDate.time.takeIf { it > 0 } ?: System.currentTimeMillis(), person)).build()

@@ -535,7 +535,7 @@ describe('notificationService — channels 分发', () => {
     });
 
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ localDelivery: false }));
     await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
       .rejects.toThrow('invalid session event payload');
   });

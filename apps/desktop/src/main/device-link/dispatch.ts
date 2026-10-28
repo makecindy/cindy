@@ -21,6 +21,8 @@ import {
   PROVIDER_SHARE_GUEST_RUNNING_FIELD,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   isListMessagePush,
+  isMobileNotificationTopic,
+  MOBILE_NOTIFICATION_CAPABILITY,
   mapMessageBodies,
   messageRecord,
   MESSAGE_BODY_FORMAT,
@@ -2886,7 +2888,7 @@ function handleLinkOpen(
     client.sendLinkAccept(src, requestId, {
       appVersion: app.getVersion(),
       allowlistHash: computeAllowlistHash(),
-      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MOBILE_NOTIFICATION_CAPABILITY],
     });
   } catch (err) {
     // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),
@@ -4085,6 +4087,7 @@ function safeJsonStringify(value: unknown): string | null {
 function isRemoteSubscriptionTopic(value: unknown): value is Topic {
   if (typeof value !== 'string') return false;
   if (value === 'sessions') return true;
+  if (isMobileNotificationTopic(value)) return true;
   if (value.startsWith('session:')) return value.length > 'session:'.length;
   return parseFsWatchTopic(value) !== null;
 }

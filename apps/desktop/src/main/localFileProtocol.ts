@@ -41,12 +41,13 @@
  * 依赖它;非法 Range 回 416。
  *
  * Two-step registration mirrors imageProtocol.ts:
- *   1. localFileSchemePrivilege — collected by bootstrap-electron.ts into the
+ *   1. localFileSchemePrivilege — collected by protocolPrivileges.ts into the
  *      single registerSchemesAsPrivileged() call (before app.whenReady())
  *   2. registerLocalFileProtocolHandler() — after app.whenReady()
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { localFileSchemePrivilege } from './protocolPrivileges.js';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -57,7 +58,7 @@ import { createLogger } from './logger';
 
 const log = createLogger('localFileProtocol');
 
-const SCHEME = 'xdt-file';
+const SCHEME = localFileSchemePrivilege.scheme;
 
 // Sensitive-directory confinement (credentials / OS internals / browser
 // profiles): the lazily-cached blocklist singleton lives in filePathPolicy so
@@ -152,20 +153,8 @@ function streamBody(filePath: string, opts?: { start: number; end: number }): Re
   return Readable.toWeb(createReadStream(filePath, opts)) as unknown as ReadableStream;
 }
 
-/** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */
-export const localFileSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    // protocol.handle 的流式 Response 不依赖 stream 特权(仓内先例:
-    // remoteMediaProtocol 以 stream:false 服务 <video> 206 流)。
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** Privilege entry for the one-shot registerSchemesAsPrivileged at the index.ts entry. */
+export { localFileSchemePrivilege };
 
 export function registerLocalFileProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {

@@ -884,6 +884,50 @@ test("desktop readiness timeout leaves an abandoned tombstone for late Electron 
 	}
 });
 
+// Value: real readiness waiter; regression on LPT027461: the serial build took
+// ~105s, leaving ~15s for the unchanged window/auth/DB gate. Existing tests start
+// after compilation. Minimal case: build > runtime budget, then genuine ready.
+// Tier: unit (fake clock/poll, unique temporary status file, no real delay).
+test("desktop build time is bounded separately without weakening runtime readiness", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-startup-phases-"));
+	const file = path.join(dir, "status.json");
+	let now = 0;
+	try {
+		fs.writeFileSync(file, '{"state":"pending"}');
+		await waitForDesktopStartup(file, 100, {
+			buildTimeoutMs: 300,
+			now: () => now,
+			pause: async () => {
+				now += 50;
+				if (now === 150) fs.writeFileSync(file, '{"state":"pending","runtimeStartedAt":150}');
+				if (now === 200) fs.writeFileSync(file, '{"state":"ready","runtimeStartedAt":150}');
+			},
+		});
+		assert.equal(now, 200);
+		assert.equal(fs.existsSync(file), false);
+	} finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
+
+test("desktop runtime and build both expire; repeated runtime markers cannot reset the budget", async () => {
+	for (const runtime of [false, true]) {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-startup-expire-"));
+		const file = path.join(dir, "status.json");
+		let now = 0;
+		try {
+			fs.writeFileSync(file, '{"state":"pending"}');
+			await assert.rejects(waitForDesktopStartup(file, 100, {
+				buildTimeoutMs: 300, now: () => now,
+				pause: async () => {
+					now += 50;
+					if (runtime) fs.writeFileSync(file, JSON.stringify({state: 'pending', runtimeStartedAt: now}));
+				},
+			}), /did not finish (?:build|window\/auth\/database startup)/);
+			assert.equal(now, runtime ? 150 : 300);
+			assert.equal(readDesktopStartupStatus(file).state, 'abandoned');
+		} finally { fs.rmSync(dir, {recursive: true, force: true}); }
+	}
+});
+
 test("structured startup failures keep their actionable reason", () => {
 	assert.equal(
 		formatDesktopStartupFailure({

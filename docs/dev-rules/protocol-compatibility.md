@@ -1,5 +1,37 @@
 # 跨端协议兼容
 
+## 无 Google 的实时任务与伙伴回复提醒
+
+同账号控制端声明 `mobile-local-notifications-v1`，并显式订阅
+`notifications:<本次 UUID>` 后，执行电脑可经既有 relay `push` 发送
+`device-link:mobile-notification`。只在真实成功收尾时产生，沿用现有通知服务的最终回复、
+委派／静默策略及稳定回复标识；事件 ID 混入执行电脑与任务合并键。不从活动快照、
+群历史或伙伴私聊 `/import` 补造事件，不发送流式片段。无稳定标识的旧事件仍只走既有
+APNs/FCM，不将 collapseId 当作每轮去重 ID。
+
+通知帧携带接收端本次订阅 UUID；只给当前明确订阅且声明能力的同账号设备发送，
+不使用断线记忆／离线广播队列。新订阅丢弃旧 UUID，Android 另保存最多 256 个事件 ID。
+共享任务／供应商访客无此订阅权限。旧控制端不接收此帧；旧执行端不声明能力，新手机
+不订阅。没有 relay/server 新消息类型、持久收件箱或账号模型变更。
+
+Android 无 FCM 时，在用户开启既有可见后台连接的范围内，将同一已认证 Device Link
+socket 从 UI 客户端交给原生的只读通知接收器；先关闭前一端，再连接后一端，返回前台时
+原生生命周期先停后台 socket。它只建立同账号控制链、订阅通知，不调用任务执行／写入
+接口，不声明可靠传输能力，不复制完整 JS 业务客户端。账号／区域、全局关闭、后台停止
+均清除内存凭证及连接。正常心跳与有界退避沿 relay 合同；没有轮询、唤醒锁、开机或隐藏
+重启。FCM 可用时仍走原有路径；切换至本地路径前先撤销本设备旧 token 注册。
+
+两端须配套升级，执行电脑须允许既有同账号远控且未撤销手机。断线或系统结束进程期间
+的任务提醒不补发，不能声称强杀必达；群聊原生收件箱保持独立。点击保留 canonical
+`/sessions/<id>?deviceId=<执行电脑>` 与伙伴资源参数，离线展示复用现有任务／云端回退，
+不创建另一份可执行私聊消息。原生改动须随冷更交付，不能单独 OTA 到旧包。
+
+恢复故障半径：单个 peer 拒绝／离线只移除该 peer，不触发全局重连；物理 relay 断线
+才重建这个后台 socket 并重新建立各 peer 的新订阅，Chat socket 不重建，任务／命令
+不重放。回归入口为 `mobileNotify.test.ts`、`subscriptionsTopicLifecycle.test.ts`、
+`localSessionNotificationsBridge.test.tsx` 与原生 `ChatDeliveryTest`；真实卓易通前后台、
+长时连接和配套桌面版本仍须单列验收。
+
 ## 接受已保存的伙伴模型
 
 既有 `local-db:bots:update` 可选接收 `acceptSavedModelSelectionVersion`（读取到的正整数

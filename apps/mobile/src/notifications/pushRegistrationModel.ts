@@ -131,6 +131,28 @@ export function notificationRecoveryRoute(deepLink: string, responseKey: string)
   return `${pathname}?${query.toString()}${fragment}`;
 }
 
+/** Resolve a companion click after its home computer has gone offline, without sending input.
+ * Unknown availability, failed reads or a changed home keep the canonical task/device route.
+ */
+export async function resolveNotificationDestination(route: string, deps: {
+  computer(deviceId: string): Promise<{ online: boolean; name: string } | undefined>;
+  companion(botId: string): Promise<{ id: string; homeDeviceId: string | null; name: string } | undefined>;
+}): Promise<string> {
+  const [path, query] = route.split('?');
+  const params = new URLSearchParams(query);
+  const device = params.get('deviceId'); const bot = params.get('resourceId');
+  if (!path?.startsWith('/sessions/') || !device || !bot || params.get('resourceCollectionId') !== 'teammates'
+    || params.get('resourceKind') !== 'bot') return route;
+  try {
+    const computer = await deps.computer(device);
+    if (computer?.online !== false) return route;
+    const actor = await deps.companion(bot);
+    if (!actor || actor.homeDeviceId !== device) return route;
+    const target = new URLSearchParams({ botId: bot, deviceId: device, deviceName: computer.name, title: actor.name });
+    return `/companions/cloud/${encodeURIComponent(actor.id)}?${target}`;
+  } catch { return route; }
+}
+
 /**
  * 从 expo-notifications 的点击响应中解析任务深链。
  *
@@ -155,4 +177,13 @@ export function parseNotificationResponseDeepLink(response: unknown): string | n
   const trigger = requestRecord.trigger;
   if (!trigger || typeof trigger !== 'object') return null;
   return parseNotificationPayloadDeepLink((trigger as Record<string, unknown>).payload);
+}
+
+/** A retained navigation path in the background is not an actively read conversation. */
+export function notificationConversationIsReading(route: string, visible: { pathname: string; threadRootId?: string; deviceId?: string }, appState: string | null): boolean {
+  if (appState !== 'active') return false;
+  const [path, query] = route.split('?');
+  if (path?.startsWith('/sessions/') && new URLSearchParams(query).get('deviceId') !== visible.deviceId) return false;
+  const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
+  return visible.pathname === path && visible.threadRootId === thread;
 }

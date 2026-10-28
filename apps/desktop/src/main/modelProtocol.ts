@@ -5,7 +5,7 @@
  * the renderer to load locally cached 3D model files (GLB today).
  *
  * Same two-step shape as imageProtocol / videoProtocol:
- *   1. modelSchemePrivilege — collected by bootstrap-electron.ts into the
+ *   1. modelSchemePrivilege — collected by protocolPrivileges.ts into the
  *      single registerSchemesAsPrivileged() call (BEFORE app.whenReady())
  *   2. registerModelProtocolHandler() — AFTER  app.whenReady()
  *
@@ -17,29 +17,20 @@
  * .glb up front and parses, no seeking — so we always serve 200 + full body.
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { modelSchemePrivilege } from './protocolPrivileges.js';
 import * as modelCacheStore from './modelCacheStore';
 
 import { createLogger } from './logger';
 
 const log = createLogger('modelProtocol');
 
-const SCHEME = 'xdt-model';
+const SCHEME = modelSchemePrivilege.scheme;
 
-/** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap.
+/** Privilege entry for the one-shot registerSchemesAsPrivileged at the index.ts entry.
  *  supportFetchAPI is load-bearing here: <model-viewer> pulls its src via
  *  fetch(), not an <img>/<video> element load. */
-export const modelSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+export { modelSchemePrivilege };
 
 export function registerModelProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {

@@ -114,6 +114,9 @@ import {
   runSessionProjectionSnapshotSingleFlight,
 } from '@/device-link/sessionSnapshotSingleFlight';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
+import { dispatchLocalSessionFrame } from '@/notifications/localSessionFrames';
+import ChatNotificationsNative from '../../modules/cindy-chat-notifications/src';
+import { MOBILE_NOTIFICATION_CAPABILITY, MOBILE_NOTIFICATION_CHANNEL, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1 } from '@cindy/device-link';
 import {
   DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL,
   type MobileGoalStatusPayload,
@@ -207,6 +210,8 @@ export interface DeviceLinkContextValue {
    */
   readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[] }>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
+  /** Light observer: no permanent open-link intent or legacy active-control banner. */
+  openNotificationLink?(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
@@ -245,6 +250,7 @@ const recoveryDiagnostics = new WeakMap<DeviceLinkClient, ReturnType<typeof crea
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  MOBILE_NOTIFICATION_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -560,6 +566,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     allowProbe = false,
     refreshSettled = false,
     pendingReplyRecovery = false,
+    notificationOnly = false,
   ) => {
     const connectionEpoch = connectionEpochRef.current;
     const releaseGeneration = backgroundReleaseGenerationRef.current;
@@ -588,7 +595,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
       deviceId,
-      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
+      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery, notificationOnly),
       { retainSuccessful: true, refreshSettled },
     );
   }, []);
@@ -1404,11 +1411,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
-      stop: () => client.stop(),
-      connect: () => client.connectNow('appstate-active', {
-        overrideCongestionCooldown: true,
-        keepInFlightAttempt: true,
-      }),
+      stop: () => {
+        client.stop();
+        void ChatNotificationsNative?.setSessionRelayBackground?.(true).catch(() => undefined);
+      },
+      connect: () => {
+        // One authenticated device has one relay socket. Close the native receiver
+        // before the UI reconnects; native activity lifecycle also cancels late handoffs.
+        void (ChatNotificationsNative?.setSessionRelayBackground?.(false) ?? Promise.resolve()).catch(() => undefined).then(() => {
+          if (clientRef.current !== client || AppState.currentState !== 'active') return;
+          client.connectNow('appstate-active', { overrideCongestionCooldown: true, keepInFlightAttempt: true });
+        });
+      },
       graceMs: BACKGROUND_STOP_GRACE_MS,
       releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
@@ -1581,6 +1595,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     [sendOpenLinkOnce],
   );
 
+  const openNotificationLink = useCallback((deviceId: string) =>
+    sendOpenLinkOnce(requireClient(clientRef.current), deviceId, false, false, false, true).request,
+  [sendOpenLinkOnce]);
+
   const closeLink = useCallback((deviceId: string) => {
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
@@ -1689,6 +1707,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     getPresenceAvailability,
     readDeviceList,
     openLink,
+    openNotificationLink,
     reopenLink,
     closeLink,
     invoke,
@@ -1707,6 +1726,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     invoke,
     lastPresenceSnapshot,
     openLink,
+    openNotificationLink,
     reopenLink,
     presenceVersion,
     status,
@@ -1775,6 +1795,7 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === MOBILE_NOTIFICATION_CHANNEL) { dispatchLocalSessionFrame(env); return; }
   recordDeviceLinkPush(push.channel, push.payload);
   dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {
@@ -2077,8 +2098,9 @@ function sendOpenLinkWithAccessHandling(
   allowProbe = false,
   preSend?: () => void,
   pendingReplyRecovery = false,
+  notificationOnly = false,
 ): Promise<LinkAcceptPayload> {
-  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend, pendingReplyRecovery));
+  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend, pendingReplyRecovery, notificationOnly));
 }
 
 async function sendOpenLink(
@@ -2087,6 +2109,7 @@ async function sendOpenLink(
   allowProbe = false,
   preSend?: () => void,
   pendingReplyRecovery = false,
+  notificationOnly = false,
 ): Promise<LinkAcceptPayload> {
   preSend?.();
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
@@ -2105,7 +2128,7 @@ async function sendOpenLink(
       controllerName: mobileDeviceName(),
       protocolVersion: PROTOCOL_VERSION,
       appVersion: Constants.expoConfig?.version ?? '0.0.0',
-      capabilities: CONTROLLER_CAPABILITIES,
+      capabilities: notificationOnly ? [...CONTROLLER_CAPABILITIES, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : CONTROLLER_CAPABILITIES,
     });
     // link-accept 只证明链路层活着,不证明 invoke 路径健康(review P1):事故形态
     // 正是 link-open 在被控端 IPC/DB 路径之外应答正常、invoke 全部挂死——若凭

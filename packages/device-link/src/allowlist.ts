@@ -47,6 +47,7 @@ import {
   COMPANION_CLOUD_TARGETS_CHANNEL,
 } from './companionCloud.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
+import { MOBILE_NOTIFICATION_CHANNEL } from './mobileNotifications.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -745,6 +746,7 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
  * 命中这些 channel 的事件才会经 link 转发给控制端。
  */
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
+  MOBILE_NOTIFICATION_CHANNEL,
   'maker:bot-delegation:changed',
   // 伙伴自主跟进状态变化（payload 只有 { botIds? }，节流 ≤1 次/秒），控制端据此重读「一眼」。
   'maker:bot-autonomy:changed',

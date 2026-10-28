@@ -8,7 +8,7 @@
     </service>
     <service android:name=".ChatConnectionService" android:exported="false" android:foregroundServiceType="specialUse">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-        android:value="User-enabled real-time chat delivery over an authenticated connection when Google push is unavailable; visible ongoing notification with a stop action." />
+        android:value="User-enabled real-time chat and task completion delivery over authenticated connections when Google push is unavailable; visible ongoing notification with a stop action." />
     </service>
     <receiver android:name=".ChatNotificationsService" android:exported="false">
       <intent-filter android:priority="10"><action android:name="expo.modules.notifications.NOTIFICATION_EVENT" /></intent-filter>

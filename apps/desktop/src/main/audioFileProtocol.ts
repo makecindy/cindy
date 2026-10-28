@@ -40,12 +40,13 @@
  * extension whitelist + isFile() check already cover the attack surface.
  *
  * Two-step registration mirrors imageProtocol / localFileProtocol:
- *   1. audioFileSchemePrivilege — collected by bootstrap-electron.ts into the
+ *   1. audioFileSchemePrivilege — collected by protocolPrivileges.ts into the
  *      single registerSchemesAsPrivileged() call (before app.whenReady())
  *   2. registerAudioFileProtocolHandler() — after app.whenReady()
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { audioFileSchemePrivilege } from './protocolPrivileges.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -54,7 +55,7 @@ import { createLogger } from './logger';
 
 const log = createLogger('audioFileProtocol');
 
-const SCHEME = 'xdt-audio';
+const SCHEME = audioFileSchemePrivilege.scheme;
 
 const AUDIO_EXT_WHITELIST = new Set([
   '.mp3',
@@ -76,18 +77,8 @@ const MIME_BY_EXT: Record<string, string> = {
 
 const WIN_ABS_RE = /^[A-Za-z]:[\\/]/;
 
-/** Privilege entry for the one-shot registerSchemesAsPrivileged in bootstrap. */
-export const audioFileSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** Privilege entry for the one-shot registerSchemesAsPrivileged at the index.ts entry. */
+export { audioFileSchemePrivilege };
 
 export type RangeParseResult =
   | { kind: 'range'; start: number; end: number }

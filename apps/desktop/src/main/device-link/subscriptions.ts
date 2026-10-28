@@ -14,6 +14,7 @@
  */
 
 import type { Topic } from '@cindy/device-link';
+import { MOBILE_NOTIFICATION_CAPABILITY, MOBILE_NOTIFICATION_TOPIC_PREFIX, isMobileNotificationTopic } from '@cindy/device-link';
 import type { HistoryPageShape } from '../localDb/ipc/historyViewReader';
 
 /** legacy 老控制端(link-open)订阅的「全部」topic 标记。 */
@@ -343,6 +344,16 @@ export function getControllersForTopic(topic: Topic): string[] {
 export function controllerSupports(deviceId: string, capability: string): boolean {
   return registry.get(deviceId)?.capabilities.has(capability) === true
     || rememberedCapabilitiesByController.get(deviceId)?.has(capability) === true;
+}
+
+/** Current, explicit leases only: never restore a notification subscription from history. */
+export function getMobileNotificationReceivers() {
+  return [...registry].flatMap(([deviceId, entry]) => {
+    const topic = [...entry.topics].filter(isMobileNotificationTopic).at(-1);
+    return topic ? [{ deviceId, subscribed: true,
+      capable: entry.capabilities.has(MOBILE_NOTIFICATION_CAPABILITY),
+      subscriptionId: topic.slice(MOBILE_NOTIFICATION_TOPIC_PREFIX.length) }] : [];
+  });
 }
 
 function isControlTopic(t: StoredTopic): boolean {

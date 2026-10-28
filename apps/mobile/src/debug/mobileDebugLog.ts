@@ -2,6 +2,7 @@
 export type MobileDebugScope =
   | "auth"
   | "network"
+  | "notifications"
   | "device-link"
   | "recovery"
   | "lifecycle"

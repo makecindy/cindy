@@ -19,7 +19,7 @@ import { readRemoteDeviceFile } from './fileAccess';
  *
  * 失败语义:取件/流式失败回 5xx,renderer 媒体占位 + 可重试,不阻断会话。
  */
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
 import fs from 'node:fs/promises';
 
 import { createLogger } from '../logger';
@@ -477,17 +477,7 @@ export async function fetchRemoteMediaImageBytes(
   return { buffer, mimeType };
 }
 
-export const remoteMediaSchemePrivilege: CustomScheme = {
-  scheme: REMOTE_MEDIA_SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+export { remoteMediaSchemePrivilege } from '../protocolPrivileges.js';
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 

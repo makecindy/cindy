@@ -1,4 +1,5 @@
 import type { Topic } from '@cindy/device-link';
+import { isMobileNotificationTopic } from '@cindy/device-link';
 
 export interface RehydratePlan {
   deviceId: string;
@@ -109,6 +110,7 @@ export class DeviceLinkTopicRegistry {
 export function normalizeDeviceLinkTopics(topics: readonly string[]): Topic[] {
   return topics.filter((topic): topic is Topic =>
     topic === 'sessions'
+    || isMobileNotificationTopic(topic)
     || topic.startsWith('session:')
     // 文件浏览的目录变更订阅(被控端 watch 引擎由该 topic 的订阅/释放驱动)。
     || topic.startsWith('fs-watch:'));

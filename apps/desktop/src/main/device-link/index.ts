@@ -149,6 +149,7 @@ import {
 import { onVoiceInputDictionaryChanged } from '../voice-input/VoiceInputDataStore';
 import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subscriptionRefcount';
 import { getControllersForTopic } from './subscriptions';
+import { getMobileNotificationReceivers } from './subscriptions';
 import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
@@ -165,6 +166,7 @@ import {
   MobileNotifyDeduper,
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
+  sendLiveMobileNotification,
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
@@ -2128,6 +2130,8 @@ export function sendMobileSessionNotify(payload: {
   detail?: string;
   fallbackBody?: string;
   eventId?: string;
+  /** Remote mirrors must let the execution host publish canonical live notices. */
+  localDelivery?: boolean;
   /** 伙伴主任务的 Bot id；让手机按伙伴聊天打开通知。 */
   teammateBotId?: string;
   teammateAvatar?: NotifySender['avatar'];
@@ -2163,8 +2167,7 @@ export function sendMobileSessionNotify(payload: {
   }
   const now = Date.now();
   if (!mobileNotifyDeduper.shouldSend(payload.sessionId, payload.kind, now, payload.eventId)) return false;
-  const sent = client.sendNotify(
-    buildSessionNotifyPayload({
+  const notification = buildSessionNotifyPayload({
       sessionId: payload.sessionId,
       title: payload.title,
       kind: payload.kind,
@@ -2174,8 +2177,14 @@ export function sendMobileSessionNotify(payload: {
       imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
-    }),
-  );
+    });
+  const local = sendLiveMobileNotification({ notification, sourceEventId: payload.eventId,
+    sourceDeviceId: selfDeviceId, now,
+    targets: payload.localDelivery !== false && client.getStatus() === 'online' ? getMobileNotificationReceivers() : [],
+    send: (deviceId, channel, value) => client?.sendPush(deviceId, channel, value),
+  });
+  const remote = client.sendNotify(notification);
+  const sent = local || remote;
   if (sent) {
     mobileNotifyDeduper.recordSent(payload.sessionId, payload.kind, now, payload.eventId);
     log.debug(`mobile notify sent: session=${payload.sessionId.slice(0, 8)} kind=${payload.kind}`);

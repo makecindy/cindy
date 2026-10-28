@@ -41,6 +41,7 @@ import {
   useDeviceLink,
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
+import { LocalSessionNotificationsBridge } from '@/notifications/LocalSessionNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -376,6 +377,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        <LocalSessionNotificationsBridge />
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />

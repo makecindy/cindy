@@ -2,9 +2,12 @@ import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { useChatClient } from '@/chat/useChatServer';
+import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
-import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
+import { notificationConversationIsReading, notificationRecoveryRoute, parseNotificationResponseDeepLink, resolveNotificationDestination } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,
   isPushSupported,
@@ -29,11 +32,15 @@ type NotificationResponse = Parameters<
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
+  const chat = useChatClient();
+  const chatRef = useRef(chat); chatRef.current = chat;
+  const navigationGeneration = useRef(0);
+  useEffect(() => () => { navigationGeneration.current++; }, []);
   const router = useRouter();
   const pathname = usePathname();
-  const { threadRootId } = useGlobalSearchParams<{ threadRootId?: string }>();
-  const visibleChat = useRef({ pathname, threadRootId });
-  visibleChat.current = { pathname, threadRootId };
+  const { threadRootId, deviceId } = useGlobalSearchParams<{ threadRootId?: string; deviceId?: string }>();
+  const visibleChat = useRef({ pathname, threadRootId, deviceId });
+  visibleChat.current = { pathname, threadRootId, deviceId };
   const routerRef = useRef(router);
   routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
@@ -51,11 +58,8 @@ export function PushNotificationsBridge() {
 
   useEffect(() => {
     if (!isPushSupported()) return;
-    configureForegroundNotificationBehavior(route => {
-      const [path, query] = route.split('?');
-      const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
-      return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
-    });
+    configureForegroundNotificationBehavior(route =>
+      notificationConversationIsReading(route, visibleChat.current, AppState.currentState));
   }, []);
 
   // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
@@ -98,7 +102,22 @@ export function PushNotificationsBridge() {
     const { initialized, isAuthenticated } = authStateRef.current;
     if (!initialized || !isAuthenticated) return; // 待 auth 就绪后由下方 effect 重放
     pendingDeepLinkRef.current = null;
-    routerRef.current.push(target as never);
+    const generation = ++navigationGeneration.current;
+    const owner = getMobileAuthOwner();
+    const client = chatRef.current;
+    let timer: ReturnType<typeof setTimeout>;
+    const resolved = resolveNotificationDestination(target, {
+      computer: async deviceId => {
+        const { devices } = await apiFetchRef.current<{ devices: { deviceId: string; online: boolean; name: string }[] }>(
+          '/api/device-link/devices', { baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 1500 });
+        return devices.find(device => device.deviceId === deviceId);
+      },
+      companion: async botId => (await client.client.actors()).find(actor => actor.kind === 'bot' && actor.externalId === botId),
+    });
+    void Promise.race([resolved, new Promise<string>(resolve => { timer = setTimeout(() => resolve(target), 1500); })])
+      .then(route => {
+        if (generation === navigationGeneration.current && isMobileAuthOwnerCurrent(owner) && client.current()) routerRef.current.push(route as never);
+      }).finally(() => clearTimeout(timer));
   }, []);
 
   // 通知点击路由:后台点击经 response listener,冷启动 / 回前台经 last response 补偿

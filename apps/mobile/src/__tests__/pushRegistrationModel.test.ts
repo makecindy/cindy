@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPushTokenRegistrationBody,
   notificationRecoveryRoute,
+  notificationConversationIsReading,
   parseNotificationDeepLink,
   parseNotificationResponseDeepLink,
   resolvePushAppVariant,
+  resolveNotificationDestination,
 } from '@/notifications/pushRegistrationModel';
 
 describe('resolvePushAppVariant', () => {
@@ -145,4 +147,42 @@ describe('parseNotificationResponseDeepLink', () => {
   it('非对象响应返回 null', () => {
     expect(parseNotificationResponseDeepLink(null)).toBeNull();
   });
+});
+
+// Unit: the real bridge uses this predicate at delivery time, not when it mounts.
+// bot-group-chat.md §10 suppresses only an actively read conversation. Existing
+// deep-link tests never covered a retained route after AppState becomes background.
+// Minimal failure: matching group/thread + background, while native dispatch still uses foreground.
+describe('notificationConversationIsReading', () => {
+  it('matches the canonical task device as well as its session, and never suppresses background delivery', () => {
+    const route = '/sessions/same-session?deviceId=desktop-1';
+    const visible = { pathname: '/sessions/same-session', deviceId: 'desktop-1' };
+    expect(notificationConversationIsReading(route, visible, 'active')).toBe(true);
+    expect(notificationConversationIsReading(route, { ...visible, deviceId: 'desktop-2' }, 'active')).toBe(false);
+    expect(notificationConversationIsReading(route, visible, 'background')).toBe(false);
+  });
+  const path = '/companions/groups/30000000-0000-4000-8000-000000000003';
+  it.each([['active', true], ['background', false], ['inactive', false], [null, false]] as const)(
+    'suppresses a matching visible route only with active AppState (%s)', (state, expected) => {
+      expect(notificationConversationIsReading(path, { pathname: path }, state)).toBe(expected);
+    });
+  it('keeps another group or another thread eligible while active', () => {
+    expect(notificationConversationIsReading(`${path}?threadRootId=50000000-0000-4000-8000-000000000005`, { pathname: path }, 'active')).toBe(false);
+    expect(notificationConversationIsReading(path, { pathname: '/companions' }, 'active')).toBe(false);
+  });
+});
+
+// Unit: the notification click resolver preserves canonical source identity and only
+// uses the existing read-only cloud route when current roster/home evidence agrees.
+it('opens an offline companion cloud conversation without redirecting ordinary tasks or changed homes', async () => {
+  const route = '/sessions/main?deviceId=desktop&resourceCollectionId=teammates&resourceId=bot&resourceKind=bot';
+  const deps = { computer: async () => ({ online: false, name: 'Home computer' }),
+    companion: async () => ({ id: 'cloud-actor', homeDeviceId: 'desktop', name: 'Ztw' }) };
+  const resolved = await resolveNotificationDestination(route, deps);
+  expect(resolved).toBe('/companions/cloud/cloud-actor?botId=bot&deviceId=desktop&deviceName=Home+computer&title=Ztw');
+  expect(await resolveNotificationDestination('/sessions/task?deviceId=desktop', deps)).toBe('/sessions/task?deviceId=desktop');
+  expect(await resolveNotificationDestination(route, { ...deps, computer: async () => ({ online: true, name: 'Home' }) })).toBe(route);
+  expect(await resolveNotificationDestination(route, { ...deps, computer: async () => ({ online: undefined as unknown as boolean, name: 'Old host' }) })).toBe(route);
+  expect(await resolveNotificationDestination(route, { ...deps, companion: async () => ({ id: 'other', homeDeviceId: 'new-home', name: 'Ztw' }) })).toBe(route);
+  expect(await resolveNotificationDestination(route, { ...deps, computer: async () => { throw new Error('offline'); } })).toBe(route);
 });

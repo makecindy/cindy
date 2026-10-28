@@ -4,6 +4,7 @@ import * as Sharing from "expo-sharing";
 import { AppState } from "react-native";
 import { mobileDebugLog, setMobileDebugSink } from "./mobileDebugLog";
 import { serializeMobileDebugRecord } from "./mobileDebugRecord";
+import { readChatNotificationDiagnostics } from "../notifications/chatNotificationDiagnostics";
 import {
   appendMobileDebugFile,
   clearMobileDebugFiles,
@@ -217,6 +218,9 @@ export async function exportDiagnostics(): Promise<void> {
       throw new Error("sharing unavailable");
     file = new File(Paths.cache, `cindy-mobile-debug-${Date.now()}.ndjson`);
     copyMobileDebugFiles(file);
+    file.write(serializeMobileDebugRecord("info", "notifications", [
+      "notification-snapshot", await readChatNotificationDiagnostics(),
+    ]), { append: true });
     await Sharing.shareAsync(file.uri, {
       mimeType: "text/plain",
       UTI: "public.plain-text",
