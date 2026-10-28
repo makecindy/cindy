@@ -17,6 +17,12 @@ export interface MobileKeyboardState {
   /** 窗口底部实际被遮挡的高度，交互式收起时不等于键盘自身高度。 */
   height: number;
   visible: boolean;
+  /**
+   * 键盘事件原样上报的 endCoordinates.screenY。iOS 即键盘顶边；Android 是「窗口可见区底边」
+   * ——缩窗时等于键盘顶边，未缩窗（edge-to-edge）时退化为窗口底边，只能按
+   * session/sheetKeyboardAvoidance.ts 的约定使用。隐藏时为 null。
+   */
+  screenY: number | null;
   /** 事件先配置动画再更新布局；卡片切换据此让出同一次布局的动画控制权。 */
   transition: RefObject<{ event: KeyboardEvent; startedAt: number } | null>;
 }
@@ -124,7 +130,7 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
       ? Math.max(0, Math.min(frame.height, viewport.height - frame.screenY))
       : 0
     : Math.max(0, frame.height);
-  return { height, visible: height > 0, transition };
+  return { height, visible: height > 0, screenY: frame ? frame.screenY : null, transition };
 }
 
 function readKeyboardSnapshot(enabled: boolean) {

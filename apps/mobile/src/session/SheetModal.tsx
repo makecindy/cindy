@@ -35,6 +35,7 @@ import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration } from '@/theme/tokens';
+import { computeAndroidSheetKeyboardLift } from '@/session/sheetKeyboardAvoidance';
 
 export interface SheetModalProps {
   /** Single-level, unconditional dismissal only. Nested Back / unsaved draft veto keeps the compatibility shell. */
@@ -76,9 +77,19 @@ function CompatibleSheetModal({
 }: SheetModalProps) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const { height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const geometry = useAdaptiveWindow();
   const [contentHeight, setContentHeight] = useState(geometry.height);
+  // 窗口探针:铺满 Modal、不受本组件 padding 影响。只用它判断系统是否真的为 IME 让出了空间
+  // (MIUI 上 Dimensions/screenY 会随键盘变化但窗口并未让位)。按窗口尺寸分组记录基线,
+  // 旋转/分屏/折叠后旧基线作废。
+  const [windowProbeHeight, setWindowProbeHeight] = useState(geometry.height);
+  const windowBaseline = useRef({ width: 0, height: 0, content: 0 });
+  // 只按窗口宽度分组:IME 弹起会改变高度(adjustResize 设备),按高度分组会把基线换成
+  // 键盘弹起后的高度、误判成「系统没让位」而双重避让;旋转/并排分屏都会改变宽度。
+  const windowBaselineHeight = windowBaseline.current.width === windowWidth
+    ? windowBaseline.current.content
+    : windowProbeHeight;
   // 背板淡入 + 面板滑入共用一条 progress;关闭淡出/滑出播完后再卸载 Modal。
   // sheet 是重浮层:入场 motionDuration.enter / 退场 exit(§14.4);减弱动态效果(含未查询到的
   // 首帧)时长为 0,直接到位。
@@ -89,11 +100,25 @@ function CompatibleSheetModal({
     onClosed,
   });
   // Closed sheets (including each message's action menu) must not subscribe.
-  // Keep avoidance through the exit animation; Android uses native resize.
-  const keyboard = useMobileKeyboardState(keyboardAvoiding && (visible || mounted) && Platform.OS !== 'android');
-  const { region, floating } = modalLayout(geometry, keyboard.height);
+  // Keep avoidance through the exit animation. iOS 走 KAV;Android 只在系统没有为 IME 缩窗时
+  // 补让出差值(edge-to-edge 下 adjustResize 不再缩窗),判定见 sheetKeyboardAvoidance。
+  const keyboard = useMobileKeyboardState(keyboardAvoiding && (visible || mounted));
+  const androidKeyboardLift = Platform.OS === 'android'
+    ? computeAndroidSheetKeyboardLift({
+        imeHeight: keyboard.height,
+        systemBarBottom: geometry.insets.bottom,
+        contentHeight: windowProbeHeight,
+        baselineContentHeight: windowBaselineHeight,
+      })
+    : 0;
+  // iOS 的 keyboard.height 就是实际遮挡高度;Android 只把系统没让出的差值交给浮窗定位,
+  // 避免与 adjustResize 重复避让。
+  const keyboardOcclusion = Platform.OS === 'android' ? androidKeyboardLift : keyboard.height;
+  const { region, floating } = modalLayout(geometry, keyboardOcclusion);
   const displaced = floating || geometry.regions.length > 0 || geometry.barEdge !== 'none'
     || geometry.insets.left > 0 || geometry.insets.right > 0;
+  // 独立窗口(折叠屏分区 / 悬浮窗)由 region 定位,不再叠加整层让位(与 KAV 的 !displaced 一致)。
+  const keyboardLift = Platform.OS === 'android' && !displaced ? androidKeyboardLift : 0;
 
   // 快速重开的高度残留窗口:拖拽下拉 dismiss 会让 SheetSurface 内部 heightAnim 停在低位;
   // 若用户在 ~120ms 淡出播完前重新打开,children 一直没卸载,面板会卡在残高。
@@ -155,6 +180,17 @@ function CompatibleSheetModal({
       visible={mounted}
     >
       <GestureHandlerRootView style={styles.gestureRoot}>
+      {/* 窗口探针:不受本组件让位 padding 影响,只用于判断系统是否真的为 IME 让出了空间。 */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={event => {
+        const measured = event.nativeEvent.layout.height;
+        const baseline = windowBaseline.current;
+        if (baseline.width !== windowWidth) {
+          windowBaseline.current = { width: windowWidth, height: windowHeight, content: measured };
+        } else if (measured > baseline.content) {
+          baseline.content = measured;
+        }
+        setWindowProbeHeight(measured);
+      }} />
       <Animated.View style={backdropStyle}>
         <BlurBackdrop />
         <Pressable
@@ -169,10 +205,13 @@ function CompatibleSheetModal({
           KeyboardAvoidingView(behavior='height')会与之对同一键盘反复调整高度,在 Modal 里
           触发每帧 relayout 的布局回环 → 整窗持续重绘闪烁(用户 2026-07 报「+」/模型选择弹层
           键盘开着时一直闪;logcat 实测键盘不开合、但 MainActivity 每帧重绘)。故 Android 直接
-          用 content、不套 KAV;iOS(adjustResize 不适用)仍需 KAV 走 padding 避让。 */}
+          用 content、不套 KAV;iOS(adjustResize 不适用)仍需 KAV 走 padding 避让。
+          edge-to-edge 下系统不再为 IME 缩窗,adjustResize 让不出高度,这里按
+          sheetKeyboardAvoidance 的实测差值把整层底部让给键盘(只补系统没让出的部分,
+          缩窗设备上为 0,不会与 adjustResize 叠加)。 */}
       <View pointerEvents="box-none" style={displaced ? {
         position: 'absolute', left: region.x, top: region.y, width: region.width, height: region.height,
-      } : styles.keyboardLayer}>
+      } : keyboardLift > 0 ? [styles.keyboardLayer, { paddingBottom: keyboardLift }] : styles.keyboardLayer}>
         <KeyboardAvoidingView
           enabled={keyboardAvoiding && !displaced && Platform.OS !== 'android'}
           behavior={keyboardAvoidingBehavior}
