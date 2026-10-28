@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => fallback ?? key,
+    i18n: { language: 'en' },
+  }),
 }));
 
 vi.mock('@/hooks/useRemoteMediaUrl', () => ({
@@ -20,32 +23,104 @@ vi.mock('@/hooks/useRemoteMediaUrl', () => ({
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
+// ModelLightbox now hosts the mivo-model-viewer SDK. Mock the SDK loader and the byte
+// reader so these tests exercise the real lightbox (focus, close, failure handling,
+// lifecycle) without WebGL or IPC.
+const viewerLoad = vi.fn(async () => undefined);
+const viewerDispose = vi.fn();
+const createModelViewer = vi.fn(() => ({ load: viewerLoad, dispose: viewerDispose }));
+vi.mock('@/lib/model3d/modelViewerSdk', () => ({
+  loadModelViewerSdk: vi.fn(async () => ({ createModelViewer })),
+}));
+const readModel3DBlob = vi.fn(async () => ({
+  blob: new Blob([new Uint8Array([1, 2, 3])]),
+  fileName: 'f.glb',
+}));
+vi.mock('@/lib/model3d/readModel3DBlob', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/model3d/readModel3DBlob')>()),
+  readModel3DBlob: (...args: unknown[]) => (readModel3DBlob as (...a: unknown[]) => unknown)(...args),
+}));
+
 import { ChatImageView } from '../components/chat/ChatImageView';
 import { ModelLightbox } from '../components/chat/ModelLightbox';
 import { toast } from '@/lib/toast';
 
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.clearAllMocks();
+  viewerLoad.mockImplementation(async () => undefined);
+});
 
 describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () => {
-  // ModelLightbox's 2026-06 scheme regression: the custom element reports a
-  // parse/load error, but its poster must stay usable and the user gets a
-  // toast. Existing focus tests never dispatch that event. Reuse the real
-  // lightbox unit harness, with fake time to detect delayed unwanted closure.
+  // ModelLightbox's 2026-06 scheme regression: the viewer fails to load the model, but the
+  // lightbox must stay open (poster / right-click menu still usable) and the user gets a
+  // toast. Silent failure used to look like a frozen 2D image.
   it('reports a model load error and keeps the preview open', async () => {
     vi.useFakeTimers();
+    viewerLoad.mockRejectedValueOnce(new Error('parse failed'));
     const onClose = vi.fn();
     const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
     render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose }));
-    const viewer = document.body.querySelector('model-viewer')!;
-    expect(viewer).not.toBeNull();
+    const host = document.body.querySelector('[data-model3d-viewer]')!;
+    expect(host).not.toBeNull();
     await act(async () => {
-      fireEvent.error(viewer);
       await vi.advanceTimersByTimeAsync(300);
     });
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
     expect(onClose).not.toHaveBeenCalled();
-    expect(viewer.isConnected).toBe(true);
-    expect(viewer.getAttribute('src')).toBe(url);
+    expect(host.isConnected).toBe(true);
+  });
+
+  it('tells the user when a model is too large to preview, without closing', async () => {
+    vi.useFakeTimers();
+    const { Model3DTooLargeError } = await import('@/lib/model3d/readModel3DBlob');
+    readModel3DBlob.mockRejectedValueOnce(new Model3DTooLargeError(200 * 1024 * 1024, 128 * 1024 * 1024));
+    const onClose = vi.fn();
+    render(React.createElement(ModelLightbox, { source: { kind: 'local', absPath: '/work/huge.fbx' }, onClose }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('This 3D model is too large to preview');
+    expect(createModelViewer).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('loads the bytes into the SDK viewer with a file name, and disposes it on unmount', async () => {
+    const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
+    const { unmount } = render(
+      React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose: vi.fn() }),
+    );
+    await waitFor(() => expect(viewerLoad).toHaveBeenCalledTimes(1));
+    expect(readModel3DBlob).toHaveBeenCalledWith({ kind: 'blob', url }, expect.objectContaining({}));
+    const [host, options] = createModelViewer.mock.calls[0] as unknown as [HTMLElement, Record<string, any>];
+    expect(host).toBe(document.body.querySelector('[data-model3d-viewer]'));
+    // host-irrelevant controls are off; the SDK's own info / settings / toolbar stay on
+    expect(options.ui).toMatchObject({ import: false, export: false, panorama: false });
+    expect((viewerLoad.mock.calls[0] as unknown[])[1]).toEqual({ fileName: 'f.glb' });
+    expect(viewerDispose).not.toHaveBeenCalled();
+    unmount();
+    expect(viewerDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not create a viewer for a lightbox closed before the bytes arrive', async () => {
+    let resolveBytes: (v: { blob: Blob; fileName: string }) => void = () => undefined;
+    readModel3DBlob.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveBytes = resolve as typeof resolveBytes; }),
+    );
+    const { unmount } = render(
+      React.createElement(ModelLightbox, {
+        source: { kind: 'local', absPath: '/work/a.obj' },
+        onClose: vi.fn(),
+      }),
+    );
+    unmount();
+    await act(async () => {
+      resolveBytes({ blob: new Blob([new Uint8Array([1])]), fileName: 'a.obj' });
+      await Promise.resolve();
+    });
+    expect(createModelViewer).not.toHaveBeenCalled();
+    expect(viewerDispose).not.toHaveBeenCalled();
   });
 
   it('Enter 打开图片预览:焦点进入 lightbox,Esc 延迟关闭后回到触发器', async () => {
@@ -102,9 +177,8 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: 'Enter' });
-    // 真实 ModelLightbox:portal 内出现 <model-viewer>(jsdom 不升级自定义
-    // 元素,但节点在场)。
-    const modelViewer = document.body.querySelector('model-viewer');
+    // 真实 ModelLightbox:portal 内出现 SDK 查看器的容器节点。
+    const modelViewer = document.body.querySelector('[data-model3d-viewer]');
     expect(modelViewer).not.toBeNull();
 
     // 焦点进入 lightbox(FocusScope 挂载焦点落在 overlay 根)。
@@ -116,7 +190,7 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     expect(document.activeElement).not.toBe(trigger);
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
-    expect(document.body.querySelector('model-viewer')).toBeNull();
+    expect(document.body.querySelector('[data-model3d-viewer]')).toBeNull();
     expect(screen.getByRole('button', { name: 'model-preview.png' })).toBeTruthy();
   });
 });

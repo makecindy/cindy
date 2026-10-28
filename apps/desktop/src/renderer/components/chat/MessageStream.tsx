@@ -366,6 +366,7 @@ import {
   collectGhostCardGalleryImages,
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
+import { Model3DCard } from './Model3DCard';
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
@@ -2750,6 +2751,14 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
                 modelFile={m.modelFile}
                 sessionId={sessionId}
               />
+            </div>
+          );
+        }
+        // 没有预览图的 3D 模型:模型卡片(缩略图 + 点击打开 3D 查看器)。
+        if (m.kind === 'model' && m.modelFile) {
+          return (
+            <div key={mediaKey} className="flex flex-col gap-1.5">
+              <Model3DCard source={{ kind: 'blob', url: m.modelFile.url }} />
             </div>
           );
         }

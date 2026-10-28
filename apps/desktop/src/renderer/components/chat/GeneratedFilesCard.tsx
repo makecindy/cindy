@@ -66,6 +66,7 @@ import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
+import { Model3DCardContent } from './Model3DCard';
 import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
 
 function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
@@ -307,11 +308,6 @@ function GeneratedFileChip({
         await downloadRemoteChatEntry(remoteOrigin, fileCtx.workingDir, file.path);
         return;
       }
-      // FBX 无应用内预览且 openPath 有误导弹窗风险(正文链接同款取舍)→ 定位。
-      if (/\.fbx$/i.test(file.path)) {
-        void window.electronAPI.showItemInFolder({ filePath: file.path });
-        return;
-      }
       setModelLightboxPath(file.path);
       return;
     }
@@ -334,6 +330,9 @@ function GeneratedFileChip({
   const botImage = presentation === 'bot-primary' && localKind === 'image-local';
   const botHtml = presentation === 'bot-primary' && isHtmlFilePath(file.path);
   const botFile = presentation === 'bot-primary' && !artifact && !botImage && !botHtml;
+  // 本地 3D 模型文件显示成缩略图卡片(缩略图由渲染进程按需生成);远程文件的
+  // 字节取不到,保持原来的文件条目,点击仍走下载。
+  const modelCard = localKind === 'model-local' && !remoteOrigin && !artifact;
   const localBotThumbnail = botImage ? toLocalFileUrl(file.path) : null;
   const rewrittenBotThumbnail = localBotThumbnail
     ? rewriteToRemoteMediaOrigin(
@@ -366,14 +365,14 @@ function GeneratedFileChip({
         className={cn(
           CHAT_FOCUS_CLASS,
           CHAT_COLOR_TRANSITION_CLASS,
-          artifact || presentation === 'bot-primary'
+          artifact || presentation === 'bot-primary' || modelCard
             ? [
                 pending
                   ? 'block overflow-hidden'
                   : 'group block cursor-pointer overflow-hidden',
                 'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left',
                 pending ? undefined : 'hover:border-[var(--text-tertiary)]',
-                artifact ? 'w-full max-w-[420px]' : 'min-w-0 flex-1 basis-[220px]',
+                artifact || modelCard ? 'w-full max-w-[420px]' : 'min-w-0 flex-1 basis-[220px]',
               ]
             : cn(
                 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)]',
@@ -406,6 +405,12 @@ function GeneratedFileChip({
               </span>
             </span>
           </>
+        ) : modelCard ? (
+          <Model3DCardContent
+            source={{ kind: 'local', absPath: file.path }}
+            fileName={file.name}
+            enabled={!pending}
+          />
         ) : botImage ? (
           <>
             {/* pending 期间不挂 src:复核落地前这路径的内容未经确认,先出

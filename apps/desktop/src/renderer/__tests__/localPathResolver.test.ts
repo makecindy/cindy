@@ -85,6 +85,18 @@ describe('classifyMarkdownHref', () => {
     expect(classifyMarkdownHref('assets/scene.GLB')).toBe('model-local');
   });
 
+  it('returns model-local for every recognised 3D format, including text-based ones', () => {
+    // .obj / .dae / .stl(ascii) / .ply(ascii) are text underneath; the model check must win
+    for (const ext of ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae', '3mf', '3ds']) {
+      expect(classifyMarkdownHref(`/abs/part.${ext}`)).toBe('model-local');
+      expect(classifyMarkdownHref(`assets/Part.${ext.toUpperCase()}`)).toBe('model-local');
+    }
+  });
+
+  it('does not treat a ZIP resource pack as a 3D model', () => {
+    expect(classifyMarkdownHref('/abs/pack.zip')).not.toBe('model-local');
+  });
+
   it('returns model-local for .gltf — model check must beat the text fallback', () => {
     // .gltf 底层是 JSON;若 model 分支排在 text 判定之后会被 'text-local' 抢走。
     expect(classifyMarkdownHref('/abs/scene.gltf')).toBe('model-local');

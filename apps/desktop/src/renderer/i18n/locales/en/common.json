@@ -12447,6 +12447,7 @@
       "openModelFailed": "Failed to open model",
       "modelLoading": "Loading 3D model…",
       "modelLoadFailed": "Failed to load 3D model",
+      "modelTooLarge": "This 3D model is too large to preview",
       "videoCopied": "Video copied",
       "copyVideo": "Copy video",
       "revealVideo": "Reveal video in folder",

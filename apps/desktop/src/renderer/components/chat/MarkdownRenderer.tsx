@@ -1412,19 +1412,13 @@ async function activateResolvedLocalTarget(
     if (cachePath) setLightboxSrc(toLocalFileUrl(cachePath));
     return;
   }
-  // 3D 模型:.glb/.gltf → 应用内 ModelLightbox;.fbx → Finder 定位。
-  // FBX 不做应用内预览(model-viewer 只认 glTF;three.js 自渲的 Phong 观感
-  // 与 GLB 差异大反而误导),也不能丢给 openPath——macOS「预览」不认 FBX
-  // 会弹"文件已损坏"的误导弹窗,定位到文件让用户拖进 DCC 才是本意。
+  // 3D 模型:所有识别的格式(GLB / glTF / OBJ / FBX / STL / PLY / DAE / 3MF / 3DS)
+  // 都在应用内 ModelLightbox 打开,字节经主进程 readModelFileBytes 读取。
   if (target.localKind === 'model') {
     if (remoteOrigin) {
-      // 3D 远程本期不做(xdt-model:// 无远程管线):下载到本地并在文件管理器
-      // 定位,不误开本机同路径文件。
+      // 3D 远程本期不做(没有远程字节管线):下载到本地并在文件管理器定位,
+      // 不误开本机同路径文件。
       await downloadRemoteChatEntry(remoteOrigin, ctx.workingDir, target.absPath);
-      return;
-    }
-    if (/\.fbx(\?.*)?$/i.test(target.absPath)) {
-      void window.electronAPI.showItemInFolder({ filePath: target.absPath });
       return;
     }
     setModelLightboxPath(target.absPath);

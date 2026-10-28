@@ -173,6 +173,55 @@ describe('extractToolResultMedia', () => {
     });
   });
 
+  it('emits a standalone model item when a model file has no paired preview image', () => {
+    const hash = '1'.repeat(64);
+    const r = JSON.stringify({
+      ok: true,
+      _xdt_model_files: [{ provider: 'cindy', url: `cindy-media://blobs/${hash}.glb`, format: 'GLB' }],
+    });
+    expect(extractToolResultMedia(r)).toEqual([
+      {
+        kind: 'model',
+        url: `cindy-media://blobs/${hash}.glb`,
+        modelFile: { provider: 'cindy', url: `cindy-media://blobs/${hash}.glb`, format: 'GLB' },
+      },
+    ]);
+  });
+
+  it('only turns the unpaired remainder into model items (paired ones stay on their preview image)', () => {
+    const [h1, h2] = ['2'.repeat(64), '3'.repeat(64)];
+    const r = JSON.stringify({
+      xdt_image_urls: [`cindy-media://blobs/${'e'.repeat(64)}.png`],
+      _xdt_model_files: [
+        { provider: 'cindy', url: `cindy-media://blobs/${h1}.glb`, format: 'GLB' },
+        { provider: 'cindy', url: `cindy-media://blobs/${h2}.glb`, format: 'GLB' },
+      ],
+    });
+    const items = extractToolResultMedia(r);
+    expect(items.map((m) => m.kind)).toEqual(['image', 'model']);
+    expect(items[0].modelFile?.url).toContain(h1);
+    expect(items[1].url).toContain(h2);
+  });
+
+  it('ignores model files that are not managed .glb urls (no broken viewers)', () => {
+    const r = JSON.stringify({
+      _xdt_model_files: [
+        { provider: 'cindy', url: `cindy-media://blobs/${'4'.repeat(64)}.gltf`, format: 'GLTF' },
+        { provider: 'cindy', url: 'https://example.com/a.glb', format: 'GLB' },
+        { provider: 'mivo', url: 'x', format: 'GLB' },
+      ],
+    });
+    expect(extractToolResultMedia(r)).toEqual([]);
+  });
+
+  it('does not render model items when rendering is suppressed', () => {
+    const r = JSON.stringify({
+      _xdt_render_image: false,
+      _xdt_model_files: [{ provider: 'cindy', url: `cindy-media://blobs/${'5'.repeat(64)}.glb`, format: 'GLB' }],
+    });
+    expect(extractToolResultMedia(r)).toEqual([]);
+  });
+
   it('extracts ghost-world audio tracks (xdt_audio_tracks, cindy-media 协议)', () => {
     // Mirrors xd-mivo ghost poll_result output for Suno music: per-track
     // cindy-media audio url + cover/title/tags/lyrics/duration metadata,
