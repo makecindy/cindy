@@ -53,6 +53,15 @@ describe('getModel3DThumbnail', () => {
     expect(createThumbnailRenderer).toHaveBeenCalledTimes(1); // still the same renderer / GL context
   });
 
+  it('renders square thumbnails with framing padding and leaves the view to the SDK default (angled)', async () => {
+    await getModel3DThumbnail(blobSource(1));
+    const options = render.mock.calls[0][0];
+    expect(options.width).toBe(options.height);
+    expect(options.padding).toBe(1.25);
+    // 不指定 presetView:缩略图默认的 3/4 斜视角由 SDK 提供,别在这里写死回 front
+    expect(options).not.toHaveProperty('presetView');
+  });
+
   it('dedupes concurrent requests for the same source', async () => {
     const [a, b, c] = await Promise.all([
       getModel3DThumbnail(blobSource(1)),

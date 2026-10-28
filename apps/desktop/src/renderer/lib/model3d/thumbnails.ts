@@ -21,8 +21,13 @@ import {
 } from './readModel3DBlob';
 import { loadModelViewerSdk } from './modelViewerSdk';
 
-export const THUMBNAIL_WIDTH = 640;
-export const THUMBNAIL_HEIGHT = 400;
+// 卡片是 1:1 方块,缩略图也按正方形渲染:非正方形图被 object-contain 塞进方块会缩成一条,
+// 模型在卡片里就只占一小块。
+export const THUMBNAIL_WIDTH = 512;
+export const THUMBNAIL_HEIGHT = 512;
+// 取景留白系数:模型在方形缩略图里占画面约 60%–70%(立方体 1.25 时约 65%)。机位用库的默认值 `angled`
+// (3/4 斜视角),正对镜头的规则形体会退化成一块平面。
+export const THUMBNAIL_PADDING = 1.25;
 
 const CACHE_LIMIT = 48;
 const FAILURE_TTL_MS = 30_000;
@@ -90,6 +95,7 @@ async function generate(source: Model3DSource): Promise<string> {
     fileName: fileName || model3DFileName(source),
     width: THUMBNAIL_WIDTH,
     height: THUMBNAIL_HEIGHT,
+    padding: THUMBNAIL_PADDING,
     format: 'png',
   });
   return blobToDataUrl(image.blob);

@@ -160,7 +160,7 @@
     "lucide-react": "^0.468.0",
     "marked": "^16.4.2",
     "mermaid": "^11.14.0",
-    "mivo-model-viewer": "^0.8.0",
+    "mivo-model-viewer": "^0.8.3",
     "node-machine-id": "^1.1.12",
     "node-pty": "^1.0.0",
     "pdfjs-dist": "^5.7.284",
