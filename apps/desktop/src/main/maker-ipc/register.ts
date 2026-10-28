@@ -7950,6 +7950,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const mcpConfiguration = registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     ownerKey: () => `${isAppSessionBoundaryPending() ? 'pending:' : ''}${activeOwnerScopeKey()}:${getActiveAppSession().generation}`,
     runtimeChanged: () => notifyMcpCapabilityChange(),
+    configurationSettled: () => {
+      if (isAppSessionBoundaryPending()) return;
+      const ids = new Set([...maker.listActiveSessions().map(session => session.id), ...detachedCapabilitySessions.keys()]);
+      for (const id of ids) {
+        agentInputCoordinatorHolder?.wakeSession(id, 'mcp-configuration-settled');
+        settleSessionCapabilitiesHolder?.(id);
+      }
+    },
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
@@ -9463,6 +9471,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     current: currentCapabilitySession,
     // Pi discovery is advisory: keep native tools available to repair the source.
     canContinueAfterDiscoveryError: session => session.agentKind === 'pi' && !mcpConfiguration.hasPendingSave(),
+    inputReadyAfterDiscoveryFailure: session => agentInputCoordinatorHolder?.wakeSession(session.id, 'capability-discovery-advisory'),
     read: async session => {
       const detached = detachedCapabilitySessions.get(session.id);
       const snapshot = await readCapabilitySourceSnapshot({

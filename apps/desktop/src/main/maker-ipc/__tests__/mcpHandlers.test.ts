@@ -24,6 +24,7 @@ import { registerMcpHandlers, type McpHandlerDeps } from '../mcpHandlers.js';
 import { refreshCodexMcpEnvironment } from '../codexMcpRefresh.js';
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () => null }));
@@ -86,6 +87,46 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  it.each(['credential-rejected', 'window-closed'] as const)('wakes an already queued idle message after a new MCP save is %s', async reason => {
+    mountDb();
+    const harness = new IpcHarness();
+    let control!: ReturnType<typeof registerMcpHandlers>;
+    let coordinator!: AgentInputCoordinator;
+    const wake = vi.fn(() => coordinator.wakeSession('existing-task', 'mcp-configuration-settled'));
+    control = registerMcpHandlers(harness, makeDeps({ configurationSettled: wake }));
+    const send = vi.fn(async () => {
+      await control.waitForStableConfiguration();
+      return { kind: 'session-dispatch' as const, source: 'test', dispatched: true as const };
+    });
+    coordinator = new AgentInputCoordinator({
+      sendToAgent: send, steerToAgent: vi.fn(async () => {}), abortSession: vi.fn(async () => {}),
+      isTurnRunning: () => false, getTurnGeneration: () => 0, hasPendingInteraction: () => false,
+      getAgentKind: () => 'pi', getSdkSessionId: async () => 'original-native-history',
+      hasAssistantProgressAfter: async () => false,
+      hasPendingCredentialSwitch: () => control.hasPendingSave(), emitProjection: () => {},
+      persistQueueSnapshot: vi.fn(), loadQueueSnapshot: async () => [], getPersistedClientIds: async () => new Set(),
+    });
+    await coordinator.ensureQueueRestored('existing-task');
+    const receipt = await harness.invokeFrom(7, MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    expect(coordinator.shouldQueueNewTurn('existing-task')).toBe(true);
+    coordinator.enqueue('existing-task', { clientId: 'queued-user', text: 'Continue', persistedContent: 'Continue',
+      model: 'fixture', effort: 'low', permissionMode: 'default', workingDir: '/repo',
+      chatMessage: { clientId: 'queued-user', role: 'user', content: 'Continue' },
+      createOpts: { agentKind: 'pi', workingDir: '/repo', model: 'fixture' },
+    });
+    for (let i = 0; i < 24; i++) await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+    if (reason === 'window-closed') harness.destroySender(7);
+    else await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH,
+      { saveId: receipt.saveId, committed: false })).rejects.toThrow('credential save failed');
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(wake).toHaveBeenCalledOnce();
+    expect(coordinator.hasPendingQueuedWork('existing-task')).toBe(false);
+    expect(await listCustomMcpServers()).toEqual([]);
+    control.dispose();
+    expect(wake).toHaveBeenCalledOnce();
+  });
   it('does not block healthy tasks after an uncommitted new MCP credential fails', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -220,7 +261,8 @@ describe('mcp:custom:* CRUD handlers', () => {
     mountDb();
     const harness = new IpcHarness();
     let owner = 'first';
-    const deps = makeDeps({ ownerKey: () => owner });
+    const configurationSettled = vi.fn();
+    const deps = makeDeps({ ownerKey: () => owner, configurationSettled });
     const control = registerMcpHandlers(harness, deps);
     const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
       { deferRuntimeRefresh: true }) as { saveId: string };
@@ -230,6 +272,7 @@ describe('mcp:custom:* CRUD handlers', () => {
       { saveId: receipt.saveId, committed: true })).rejects.toThrow('inactive owner');
     control.dispose();
     await expect(waiting).rejects.toThrow('owner changed');
+    expect(configurationSettled).not.toHaveBeenCalled();
     expect(deps.refreshProviders).not.toHaveBeenCalled();
   });
 

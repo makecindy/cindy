@@ -24,6 +24,7 @@ import type {
   AgentInputCoordinatorDeps,
   AgentInputSendResult,
 } from '../agent-input-coordinator.js';
+import { createSessionCapabilityMonitor } from '../sessionCapabilityMonitor.js';
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import {
@@ -148,7 +149,7 @@ function sendSuccess(source = 'test'): AgentInputSendResult {
  * 下方源码断言锁住);restart 的实现由用例注入(默认模拟 register 的 close
  * cleanup:onSessionClosed)。
  */
-function createRestartHarness() {
+function createRestartHarness(capabilityGate: () => boolean = () => false, agentKind: 'codex' | 'pi' = 'codex') {
   let running = false;
   let live = true;
   let busyOtherSession = false;
@@ -198,11 +199,11 @@ function createRestartHarness() {
     isTurnRunning: () => running,
     getTurnGeneration: () => 0,
     hasPendingInteraction: () => false,
-    getAgentKind: () => 'codex',
+    getAgentKind: () => agentKind,
     getSdkSessionId: vi.fn(async () => 'sdk-session'),
     hasAssistantProgressAfter: () => Promise.resolve(false),
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
-      hasPendingCredentialSwitchEntry: () => pendingCredentialSwitch,
+      hasPendingCredentialSwitchEntry: () => pendingCredentialSwitch || capabilityGate(),
       isSessionRestarting: (sessionId) => service.isSessionRestarting(sessionId),
     }),
     emitProjection: (projection) => {
@@ -256,6 +257,58 @@ function createRestartHarness() {
     },
   };
 }
+
+describe('Pi advisory discovery releases the existing input queue', () => {
+  it.each(['comparison', 'preflight'] as const)('wakes an idle queued repair message after %s failure, once', async failurePoint => {
+    const session = { id: 'codex-deferred-restart-session', instanceId: 'healthy-pi' };
+    const heldRead = deferred<void>();
+    let failing = false;
+    let reads = 0;
+    const failAt = failurePoint === 'comparison' ? 1 : 2;
+    let monitor!: ReturnType<typeof createSessionCapabilityMonitor<typeof session>>;
+    const h = createRestartHarness(() => monitor.blocksInput(session), 'pi');
+    const reload = vi.fn(async () => session);
+    const inputReady = vi.fn(() => h.coordinator.wakeSession(session.id, 'capability-discovery-advisory'));
+    monitor = createSessionCapabilityMonitor({
+      isCurrent: candidate => candidate === session, isIdle: () => true,
+      read: async () => {
+        if (failing && ++reads >= failAt) { await heldRead.promise; throw new Error('unreadable Skill namespace'); }
+        return { revision: failing ? 'changed' : 'original', watchPaths: [] };
+      }, reload, changed: () => {}, canContinueAfterDiscoveryError: () => true,
+      inputReadyAfterDiscoveryFailure: inputReady,
+    });
+    await monitor.track(session);
+    await h.coordinator.ensureQueueRestored(h.SID);
+    h.sendToAgent.mockImplementation(async (id, _message, _opts, sendOpts) => {
+      expect((await monitor.beforeSend(session)).kind).toBe('unchanged');
+      await persistQueuedUserMessage(id, sendOpts);
+      return sendSuccess();
+    });
+    failing = true;
+    monitor.markChanged(session);
+    const background = monitor.beforeSend(session);
+    await flush();
+    expect(monitor.blocksInput(session)).toBe(true);
+    expect(h.coordinator.shouldQueueNewTurn(h.SID)).toBe(true);
+    h.coordinator.enqueue(h.SID, makeItem('repair-message', 'Repair the Skill directory', {
+      createOpts: { agentKind: 'pi', workingDir: '/repo', model: 'fixture', permissionMode: 'default' },
+    }));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    heldRead.resolve();
+    expect((await background).kind).toBe('unchanged');
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    await flush();
+    expect(monitor.state(session)?.phase).toBe('failed');
+    expect(reload).not.toHaveBeenCalled();
+    expect(inputReady).toHaveBeenCalledOnce();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+    expect(h.coordinator.hasPendingQueuedWork(h.SID)).toBe(false);
+    await monitor.beforeSend(session);
+    expect(inputReady).toHaveBeenCalledOnce();
+    h.service.clear();
+  });
+});
 
 function latestProjection(projections: AgentInputProjection[]): AgentInputProjection {
   const latest = projections.at(-1);

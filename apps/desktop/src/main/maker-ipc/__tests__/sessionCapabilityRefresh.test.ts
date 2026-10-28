@@ -336,13 +336,15 @@ describe('native resource discovery and send boundary', () => {
       current = { id: initial.id, instanceId: `${current.instanceId}-next` };
       return current;
     });
+    const inputReady = vi.fn();
     const monitor = createSessionCapabilityMonitor({
+      inputReadyAfterDiscoveryFailure: inputReady,
       canContinueAfterDiscoveryError: () => allowAdvisoryDiscoveryFailure,
       isCurrent: session => session === current,
       current: () => current,
       isIdle: () => idle, read, reload, changed: vi.fn(),
     });
-    return { initial, monitor, reload, read,
+    return { initial, monitor, reload, read, inputReady,
       get current() { return current; },
       change(value: string) { revision = value; },
       busy() { idle = false; }, idle() { idle = true; },
@@ -475,8 +477,10 @@ describe('native resource discovery and send boundary', () => {
     expect(h.reload).not.toHaveBeenCalled();
     expect(h.monitor.state(h.initial)?.phase).toBe('failed');
     h.change('fixed-preview');
+    h.inputReady.mockClear();
     h.reload.mockRejectedValueOnce(new Error('native startup failed'));
     expect((await h.monitor.beforeSend(h.initial)).kind).toBe('failed');
+    expect(h.inputReady).not.toHaveBeenCalled();
   });
 
   it('retains self-repair when discovery fails at refresh preflight before close', async () => {

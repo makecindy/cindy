@@ -57,6 +57,8 @@ export interface McpHandlerDeps {
   getReservedMcpIds?(): string[];
   /** Stable config + credential commit, used by original-task runtime reload. */
   runtimeChanged?(): void;
+  /** A completed or abandoned save releases admission, even without a config change. */
+  configurationSettled?(): void;
   ownerKey?(): string;
 }
 
@@ -91,9 +93,17 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       throwIpcError('PRECONDITION_FAILED', 'MCP configuration is already being saved');
     }
     const saveId = randomUUID();
-    let release!: () => void;
-    const done = new Promise<void>(resolve => { release = resolve; });
-    const save = { id, owner: ownerKey(), done, release, committing: false, preserveFailure };
+    let resolveDone!: () => void;
+    let released = false;
+    const owner = ownerKey();
+    const done = new Promise<void>(resolve => { resolveDone = resolve; });
+    const release = () => {
+      if (released) return;
+      released = true;
+      resolveDone();
+      if (owner === ownerKey()) deps.configurationSettled?.();
+    };
+    const save = { id, owner, done, release, committing: false, preserveFailure };
     saves.set(saveId, save);
     const sender = (event as { sender?: {
       once?(name: string, callback: () => void): unknown;

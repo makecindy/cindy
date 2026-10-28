@@ -20,7 +20,9 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
   reload(session: T, isCurrent: () => boolean): Promise<T>;
   changed(session: T): void;
   canContinueAfterDiscoveryError?(session: T): boolean;
+  inputReadyAfterDiscoveryFailure?(session: T): void;
 }) {
+  const notifiedAdvisoryRevision = new WeakMap<T, number>();
   const snapshots = new WeakMap<T, Promise<CapabilityResourceSnapshot>>();
   const coordinator = createSessionCapabilityRefreshCoordinator<T>({
     isCurrent: deps.isCurrent,
@@ -48,6 +50,15 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
   function canContinue(session: T, error: unknown): boolean {
     return error instanceof CapabilityDiscoveryError && deps.isCurrent(session)
       && deps.canContinueAfterDiscoveryError?.(session) === true;
+  }
+
+  function notifyAdvisoryInputReady(session: T): void {
+    const state = coordinator.state(session);
+    // An in-flight native operation still owns the send lease. Notify only once
+    // its failure has actually released the gate, including preflight failures.
+    if (state?.phase !== 'failed' || notifiedAdvisoryRevision.get(session) === state.revision) return;
+    notifiedAdvisoryRevision.set(session, state.revision);
+    deps.inputReadyAfterDiscoveryFailure?.(session);
   }
 
   function track(session: T): Promise<CapabilityResourceSnapshot> {
@@ -82,7 +93,10 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
     } catch (error) {
       if (coordinator.state(session)?.phase !== 'failed') coordinator.markFailed(session);
       deps.changed(session);
-      if (canContinue(session, error)) return false;
+      if (canContinue(session, error)) {
+        notifyAdvisoryInputReady(session);
+        return false;
+      }
       throw error;
     }
   }
@@ -99,6 +113,8 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
       }
       const outcome = await coordinator.beforeSend(current);
       if (outcome.kind === 'failed' && canContinue(current, outcome.error)) {
+        deps.changed(current);
+        notifyAdvisoryInputReady(current);
         return { kind: 'unchanged' as const };
       }
       if (outcome.kind === 'superseded') {
