@@ -217,6 +217,58 @@ describe('secure custom MCP setup', () => {
     expect(changed).not.toHaveBeenCalled();
     expect(await listMcpRecords()).toHaveLength(1);
   });
+  // Stop during the non-cancellable transaction must settle the visible card
+  // without resuming the stopped turn; the saved-before-Stop case misses this.
+  it.each(['saved', 'receipt-lost', 'failed'] as const)('settles a %s commit after Stop without continuing the turn', async (outcome) => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const changed = vi.fn(async () => true);
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, changed, verify, executionKey: () => execution,
+      save: async (...args) => {
+        await gate;
+        if (outcome === 'failed') throw new Error('SAVE_FAILED');
+        const result = await saveMcpConfig(...args);
+        if (outcome === 'receipt-lost') throw new Error('SAVE_FAILED');
+        return result;
+      },
+    });
+    const { input } = prepare();
+    const saving = service.submit(input);
+    await vi.waitFor(() => expect(frames.at(-1)?.status).toBe('committing'));
+    service.cleanupForSession('task');
+    finish();
+    await saving;
+    expect(frames.at(-1)?.status).toBe(outcome === 'failed' ? 'cancelled' : 'saved');
+    expect(service.pendingSnapshots('task')).toEqual([]);
+    expect(complete).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+    expect(await listMcpRecords()).toHaveLength(outcome === 'failed' ? 0 : 1);
+  });
+  it('does not publish the old owner card when a committing save settles after account invalidation', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, changed: async () => true, verify, executionKey: () => execution,
+      save: async (...args) => {
+        const result = await saveMcpConfig(...args);
+        await gate;
+        return result;
+      },
+    });
+    const { input } = prepare();
+    const saving = service.submit(input);
+    await vi.waitFor(() => expect(client.tx).toHaveBeenCalledOnce());
+    service.invalidate();
+    state.scope = 'owner:2';
+    const frameCount = frames.length;
+    finish();
+    await saving;
+    expect(frames).toHaveLength(frameCount);
+    expect(complete).not.toHaveBeenCalled();
+  });
   it('encrypts Settings credentials while retaining its existing network semantics', async () => {
     const input = {
       id: 'custom_settings',

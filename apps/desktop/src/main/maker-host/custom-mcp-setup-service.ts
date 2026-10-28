@@ -107,7 +107,9 @@ export class CustomMcpSetupService {
     clearTimeout(entry.timer);
     // Persistence is already durable. Runtime refresh may wait on a local
     // Agent host; never leave the owner looking at an encryption spinner.
-    if (!entry.silent) this.deps.broadcast(entry.sessionId, entry.snapshot);
+    // Stop suppresses Agent continuation, but the same owner's visible card
+    // must still settle after a transaction that can no longer be cancelled.
+    this.deps.broadcast(entry.sessionId, entry.snapshot);
     // Return the safe receipt before an idle Codex host refresh can retire
     // the originating session. The existing input queue deduplicates it.
     await this.notifyCompleted(entry);
@@ -319,7 +321,7 @@ export class CustomMcpSetupService {
           entry.committingDraft = undefined;
         }
       } catch (error) {
-        if (entry.abort.signal.aborted || entry.silent) return entry.snapshot;
+        if (entry.abort.signal.aborted) return entry.snapshot;
         const message = error instanceof Error ? error.message : '';
         let recovered = false;
         if (entry.committingDraft) {
@@ -329,16 +331,28 @@ export class CustomMcpSetupService {
             /* Keep the same operation/server id; never duplicate a possibly committed save. */
           }
         }
-        if (entry.abort.signal.aborted || entry.silent) return entry.snapshot;
+        if (entry.abort.signal.aborted) return entry.snapshot;
         if (!recovered)
           entry.snapshot = {
             ...entry.snapshot,
-            status: 'awaiting_user',
+            status: entry.silent ? 'cancelled' : 'awaiting_user',
             verification: undefined,
             errorCode: safeErrors.has(message as McpSetupError)
               ? (message as McpSetupError)
               : 'SAVE_FAILED',
           };
+        if (entry.silent) {
+          clearTimeout(entry.timer);
+          if (!recovered) {
+            try {
+              entry.owner.assertOwner();
+              this.deps.broadcast(entry.sessionId, entry.snapshot);
+            } catch {
+              /* Never publish a stopped owner's draft across an account boundary. */
+            }
+          }
+          return entry.snapshot;
+        }
       } finally {
         parsed.token = '';
         parsed.headers = {};
