@@ -3654,15 +3654,16 @@ export function NewMakerDraftRoute() {
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
-      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 则只在
-      // Worktree ON 时阻塞；OFF 仍可直接创建普通 session，保持两条轴独立。
+      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 同样双向阻塞：
+      // 未勾选时所选分支也决定建不建 worktree(applyWorktreeCreateMode)，用写入前的
+      // 旧值判定会把刚选的分支静默落在当前分支上。
       // 确认不合格(2026-08-07 裁决)时控件隐藏、勾选不生效，偏好写入在途不应
       // 卡住普通会话创建——确认不合格目录永远不会创建 worktree。
       if (
         selectedWorktree.confirmedIneligible !== true &&
         (wtPreferenceSavingRef.current ||
           wtPreferenceAuthorityUnknownRef.current ||
-          (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+          wtBranchPreferenceSavingRef.current)
       ) {
         toast.warning(t('ccAgent.draft.deviceStillLoading'));
         return false;
@@ -4881,16 +4882,15 @@ export function NewMakerDraftRoute() {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
         const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });
         // Keep Goal on the exact same worktree contract as Send.  In
-        // particular, an in-flight checkbox write blocks both directions,
-        // while an in-flight branch write only blocks a Worktree-enabled
-        // project.  OFF remains an ordinary base-repo create even if the
-        // independent branch preference transaction is still settling.
+        // particular, in-flight checkbox and branch writes both block: with
+        // Worktree OFF the picked branch still decides whether a checkout
+        // worktree is created, so the pre-write value must not be used.
         // 确认不合格(2026-08-07 裁决)时跳过偏好写入守卫,与 Send 同口径。
         if (
           selectedWorktree.confirmedIneligible !== true &&
           (wtPreferenceSavingRef.current ||
             wtPreferenceAuthorityUnknownRef.current ||
-            (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+            wtBranchPreferenceSavingRef.current)
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
