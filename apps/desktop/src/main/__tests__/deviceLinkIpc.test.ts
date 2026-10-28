@@ -35,6 +35,8 @@ vi.mock('./index', () => ({
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
+  closeLegacyBackgroundLinkIfIdle: vi.fn(),
+  retainForegroundLink: vi.fn(() => () => {}),
   remoteInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
   remoteUnsubscribe: vi.fn(),
@@ -53,6 +55,8 @@ vi.mock('../device-link/index', () => ({
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
+  closeLegacyBackgroundLinkIfIdle: vi.fn(),
+  retainForegroundLink: vi.fn(() => () => {}),
   remoteInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
   remoteUnsubscribe: vi.fn(),
@@ -874,9 +878,9 @@ describe('device-link controller handlers', () => {
     const deps = makeDeps({ invoke: vi.fn().mockResolvedValue({ ok: true, result: [] }) });
     const args = [200, 'active'];
     await handleInvoke(deps, 'dev-2', 'local-db:sessions:list', args, { background: true });
-    expect(deps.invoke).toHaveBeenCalledWith('dev-2', 'local-db:sessions:list', args, { background: true });
+    expect(deps.invoke).toHaveBeenCalledWith('dev-2', 'local-db:sessions:list', args, { background: true, passiveLink: true });
     await handleInvoke(deps, 'dev-2', 'local-db:sessions:list', args, { background: 'true' });
-    expect(deps.invoke).toHaveBeenLastCalledWith('dev-2', 'local-db:sessions:list', args);
+    expect(deps.invoke).toHaveBeenLastCalledWith('dev-2', 'local-db:sessions:list', args, { passiveLink: true });
   });
 
   it('invoke:CHANNEL_NOT_ALLOWED → 映射 IpcError', async () => {
@@ -1205,10 +1209,12 @@ describe('device-link controller handlers', () => {
         .fn()
         .mockResolvedValueOnce({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } })
         .mockResolvedValue({ ok: true, result: { ok: true } }),
+      onSubscriptionRefsChanged: vi.fn(),
     });
     await expect(handleSubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
       /\[DEVICE_LINK_ACCESS_REVOKED\]/,
     );
+    expect(deps.onSubscriptionRefsChanged).toHaveBeenCalledWith('dev-2');
 
     // 窗口 2 订阅成功 → 记 ref(count=1;窗口 1 的失败订阅没留残留)。
     await handleSubscribe(deps, 'dev-2', ['sessions'], 2);
@@ -1218,6 +1224,28 @@ describe('device-link controller handlers', () => {
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 2)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledWith('dev-2', ['sessions']);
   });
+
+  it.each(['INVOKE_TIMEOUT', 'BACKPRESSURE'] as const)(
+    'keeps a legacy link open until a retryable %s unsubscribe restores its session ref', async (code) => {
+      refcountTesting.reset();
+      const closeLink = vi.fn();
+      const deps = makeDeps({
+        unsubscribe: vi.fn()
+          .mockRejectedValueOnce(new DeviceLinkError(code, 'retry'))
+          .mockResolvedValue({ ok: true, result: { ok: true } }),
+        retainLinkDuringUnsubscribe: (deviceId) => () => {
+          if (refcountTesting.refCount(deviceId, 'session:s1') === 0) closeLink();
+        },
+      });
+      await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+      await expect(handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1)).rejects.toThrow();
+      expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(1);
+      expect(closeLink).not.toHaveBeenCalled();
+      await expect(handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1)).resolves.toEqual({ ok: true });
+      expect(closeLink).toHaveBeenCalledOnce();
+      refcountTesting.reset();
+    },
+  );
 });
 
 describe('[New-D] retryUnsubscribeAfterWindowGone — 窗口销毁后退订有限重试', () => {

@@ -38,6 +38,8 @@ function linkFixture(): { closeEpoch: (device: string) => number; close: (device
   const stopFilePeers = vi.fn();
   const deps = {
     openLinkCloseEpochs: new Map<string, number>(), openLinkInFlight: new Map(),
+    legacyBackgroundLinksNeedingCleanup: new Map<string, number>(),
+    explicitForegroundOpens: new Map<string, number>(),
     invalidatePluginOauth: vi.fn(), transportTimeoutReopen: { cancel: vi.fn() },
     cancelSubscriptionReplay: vi.fn(), client: { closeLink }, stopFilePeers,
   };

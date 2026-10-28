@@ -564,9 +564,12 @@ it.each([true, false])(
         return {};
       },
     );
+    const releaseLink = vi.fn();
+    const retainLink = vi.fn(() => releaseLink);
     const connection = new RemoteViewerConnection({
       owner: () => 'owner',
       request,
+      retainLink,
       readClipboard: () => '',
       writeClipboard: () => {},
       preferences: () => ({
@@ -580,6 +583,7 @@ it.each([true, false])(
     });
     connection.bind({ deviceId: 'target', name: 'Target' });
     connection.setActive(true);
+    expect(retainLink).toHaveBeenCalledWith('target');
     dispose.mockClear();
     const generation = connection.generation;
     await connection.request(generation, { op: 'capabilities' });
@@ -594,8 +598,10 @@ it.each([true, false])(
       lease: 'lease',
       ...(supported ? { lockScreen: true } : {}),
     });
+    expect(releaseLink).not.toHaveBeenCalled();
     finish();
     await closed;
+    await vi.waitFor(() => expect(releaseLink).toHaveBeenCalledOnce());
   },
 );
 

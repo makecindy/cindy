@@ -39,6 +39,7 @@ export class RemoteViewerConnection {
   active = false;
   generation = 0;
   private owner = '';
+  private releaseLinkHold: (() => void) | null = null;
   private lease: string | null = null;
   private starting: { lockScreen: boolean } | null = null;
   private pending = 0;
@@ -61,6 +62,7 @@ export class RemoteViewerConnection {
     private readonly deps: {
       owner(): string;
       request(deviceId: string, request: RemoteDesktopRequest, check: () => void): Promise<unknown>;
+      retainLink?(deviceId: string): () => void;
       readClipboard(): string;
       writeClipboard(value: string): void;
       clipboard?: ViewerClipboard;
@@ -117,6 +119,8 @@ export class RemoteViewerConnection {
       return;
     }
     this.active = Boolean(this.target);
+    if (this.active && !this.releaseLinkHold)
+      this.releaseLinkHold = this.deps.retainLink?.(this.target!.deviceId) ?? null;
   }
   check(generation: number): void {
     if (
@@ -153,6 +157,8 @@ export class RemoteViewerConnection {
     return pending;
   }
   deactivate(lockScreen = false): void {
+    const releaseLinkHold = this.releaseLinkHold;
+    this.releaseLinkHold = null;
     this.safetyState.invalidate();
     this.clipboardProgress = null;
     this.deps.credentials?.dispose();
@@ -172,8 +178,8 @@ export class RemoteViewerConnection {
     // Their media peer belongs to the retired viewer; the outcome is unknown.
     for (const settle of [...this.channelRequests.values()])
       settle({ kind: 'error', code: 'INVOKE_TIMEOUT' });
-    if (lease && target && owner === this.deps.owner())
-      void this.serializeLifecycle(() =>
+    if (lease && target && owner === this.deps.owner()) {
+      const stop = this.serializeLifecycle(() =>
         this.deps.request(
           target.deviceId,
           { op: 'stop', lease, ...(lockScreen ? { lockScreen: true } : {}) },
@@ -181,7 +187,13 @@ export class RemoteViewerConnection {
             if (owner !== this.deps.owner()) throw new Error('DESKTOP_STOPPED');
           },
         ),
-      ).catch(() => {});
+      );
+      void stop.then(() => releaseLinkHold?.(), () => releaseLinkHold?.());
+    } else if (releaseLinkHold) {
+      // An in-flight start may still need to stop a late lease before link cleanup.
+      if (this.lifecycle) void this.lifecycle.then(releaseLinkHold, releaseLinkHold);
+      else releaseLinkHold();
+    }
   }
   async request(
     generation: number,

@@ -16,7 +16,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
-import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
+import { assertBackgroundLinkAccepted, assertSubscriptionLinkAccepted, hasControlSubscription, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName } from './deviceName';
 import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
@@ -26,6 +26,7 @@ import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
 import {
   DeviceLinkClient,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   FILE_PEER_CHANNEL,
   isScopedPeer,
   parseSharedTaskPeer,
@@ -1052,6 +1053,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
+      // A peer-side final close ends a renderer's earlier explicit open intent.
+      // Transport resets retain it while the same foreground viewer reconnects.
+      if (reason !== 'transport-timeout') explicitForegroundOpens.delete(env.src);
       // reason → 重开循环动作统一路由:transport-timeout(可恢复瞬时重置,
       // 可靠层保留 stream/pending,被控端保留订阅与在途回包,link-accept 后
       // 双向同 seq 续传)触发有界退避重建;其它一切 reason(user/toggle-off/
@@ -1743,6 +1747,54 @@ async function ensureOnlineForRequest(): Promise<void> {
 
 /** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
 const openLinkCloseEpochs = new Map<string, number>();
+/** Only foreground invokes started in the current link epoch may keep its shared link open. */
+const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
+const foregroundLinkHolds = new Map<string, { epoch: number; count: number }>();
+/** A renderer OPEN_LINK is deliberate foreground use even before its first invoke. */
+const explicitForegroundOpens = new Map<string, number>();
+/** An older peer accepted a background open without suppressing its legacy wildcard. */
+const legacyBackgroundLinksNeedingCleanup = new Map<string, number>();
+
+function hasForegroundInvokeInCurrentEpoch(deviceId: string): boolean {
+  const state = foregroundInvokesInFlight.get(deviceId);
+  return state?.epoch === (openLinkCloseEpochs.get(deviceId) ?? 0) && state.count > 0;
+}
+
+function hasForegroundLinkHoldInCurrentEpoch(deviceId: string): boolean {
+  const state = foregroundLinkHolds.get(deviceId);
+  return state?.epoch === (openLinkCloseEpochs.get(deviceId) ?? 0) && state.count > 0;
+}
+
+function hasOutboundControlSubscription(deviceId: string): boolean {
+  return hasControlSubscription(snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? []);
+}
+
+/** Release only a legacy link opened as background, after its last foreground consumer leaves. */
+export function closeLegacyBackgroundLinkIfIdle(deviceId: string): void {
+  const epoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  if (legacyBackgroundLinksNeedingCleanup.get(deviceId) !== epoch ||
+    hasOutboundControlSubscription(deviceId) || hasForegroundInvokeInCurrentEpoch(deviceId) ||
+    hasForegroundLinkHoldInCurrentEpoch(deviceId) || explicitForegroundOpens.get(deviceId) === epoch) return;
+  closeRemoteLink(deviceId);
+}
+
+/** A remote viewer keeps its link until its final stop request has settled. */
+export function retainForegroundLink(deviceId: string): () => void {
+  const epoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const previous = foregroundLinkHolds.get(deviceId);
+  const hold = previous?.epoch === epoch ? previous : { epoch, count: 0 };
+  hold.count++;
+  foregroundLinkHolds.set(deviceId, hold);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hold.count--;
+    if (foregroundLinkHolds.get(deviceId) === hold && hold.count === 0)
+      foregroundLinkHolds.delete(deviceId);
+    closeLegacyBackgroundLinkIfIdle(deviceId);
+  };
+}
 
 /** Long-lived consumers bind to this generation so later reads cannot undo an explicit close. */
 export function getRemoteLinkCloseEpoch(deviceId: string): number {
@@ -1773,20 +1825,29 @@ export function getRemoteLinkCloseEpoch(deviceId: string): number {
  */
 export async function openRemoteLink(
   deviceId: string,
-  opts?: { observed?: boolean },
+  opts?: { observed?: boolean; explicit?: boolean },
 ): Promise<LinkAcceptPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const claimedExplicitOpen = opts?.explicit === true && explicitForegroundOpens.get(deviceId) !== closeEpoch;
+  if (opts?.explicit) explicitForegroundOpens.set(deviceId, closeEpoch);
   // 自动 recover/probe 由 recoverLink + isProbeEligible 挡。presence / subscribe
   // 可以在对端重新授权后走这里接回；终态只在成功建链后清除,失败重试不得提前解闩。
   const existing = openLinkInFlight.get(deviceId);
-  if (existing) return existing;
+  if (existing) {
+    try { return await existing; }
+    catch (error) {
+      if (claimedExplicitOpen && explicitForegroundOpens.get(deviceId) === closeEpoch)
+        explicitForegroundOpens.delete(deviceId);
+      throw error;
+    }
+  }
 
   // 取消代次:closeRemoteLink 无法 abort 已在等待上线的 promise,只能翻代;
   // 等待结束后复验代次,把「用户刚关闭的链路被迟到的建链重新建立」挡在发送前
   // (review P2:close-during-reconnect)。
-  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const doOpen = async (): Promise<LinkAcceptPayload> => {
     await ensureOnlineForRequest();
     // fail-closed 边界不得跨 await 失效:1.5s 等待期间用户可能已在设置里关闭
@@ -1796,16 +1857,28 @@ export async function openRemoteLink(
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
     }
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    const outboundTopics = snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [];
+    const capabilities = linkOpenCapabilities(CONTROLLER_CAPABILITIES, outboundTopics);
     const accepted = await client.openLink(deviceId, {
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      // 本机不在控制对端(无订阅)时声明后台链路,对端不进入受控状态(见 backgroundLink)。
-      capabilities: linkOpenCapabilities(
-        CONTROLLER_CAPABILITIES,
-        snapshotSubscriptions(deviceId).length > 0,
-      ),
+      // 没有会话实时流订阅时声明后台链路；列表/文件监听不应点亮对端接入提示。
+      capabilities,
     });
+    if (accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1))
+      legacyBackgroundLinksNeedingCleanup.delete(deviceId);
+    if (capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1) &&
+      !accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1) &&
+      !parseSharedTaskPeer(deviceId)) {
+      legacyBackgroundLinksNeedingCleanup.set(deviceId, closeEpoch);
+      if (!hasOutboundControlSubscription(deviceId) && !hasForegroundInvokeInCurrentEpoch(deviceId) &&
+        explicitForegroundOpens.get(deviceId) !== closeEpoch &&
+        !hasForegroundLinkHoldInCurrentEpoch(deviceId)) {
+        closeLegacyBackgroundLinkIfIdle(deviceId);
+        throw new Error('[UNSUPPORTED_CAPABILITY] remote device does not support background links');
+      }
+    }
     revokedByRemote.delete(deviceId);
     return accepted;
   };
@@ -1822,11 +1895,18 @@ export async function openRemoteLink(
     if (openLinkInFlight.get(deviceId) === request) openLinkInFlight.delete(deviceId);
   };
   void request.then(cleanup, cleanup);
-  return request;
+  try { return await request; }
+  catch (error) {
+    if (claimedExplicitOpen && explicitForegroundOpens.get(deviceId) === closeEpoch)
+      explicitForegroundOpens.delete(deviceId);
+    throw error;
+  }
 }
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
+  legacyBackgroundLinksNeedingCleanup.delete(deviceId);
+  explicitForegroundOpens.delete(deviceId);
   stopFilePeers(deviceId);
   invalidatePluginOauth(deviceId);
   // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
@@ -1900,9 +1980,10 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean },
+  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
+  const { passiveLink, ...invokeOptions } = options ?? {};
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   // 取消代次快照(不变量 3 的对称路径,review P1):等待上线期间用户 CLOSE_LINK
@@ -1926,7 +2007,7 @@ export async function remoteInvoke(
     preSend();
     if (!client?.isLinkReady(deviceId))
       throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
-    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
@@ -1952,7 +2033,7 @@ export async function remoteInvoke(
       () => openRemoteLink(deviceId, { observed: false }),
       preSend,
     );
-    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
@@ -1969,14 +2050,26 @@ export async function remoteInvoke(
     );
   // 熔断门禁:目标设备连续超时判定无响应后,新请求立即以 DEVICE_UNRESPONSIVE 快速失败
   // (不占管道、不等 12~30s 超时),恢复由周期单飞探测驱动。tracker 未初始化时直通。
-  if (!responsivenessTracker) return run();
-  return responsivenessTracker.guardInvoke(deviceId, channel, run);
+  const result = responsivenessTracker ? responsivenessTracker.guardInvoke(deviceId, channel, run) : run();
+  if (passiveLink) return result;
+  const previous = foregroundInvokesInFlight.get(deviceId);
+  const foreground = previous?.epoch === closeEpoch ? previous : { epoch: closeEpoch, count: 0 };
+  foreground.count++;
+  foregroundInvokesInFlight.set(deviceId, foreground);
+  try {
+    return await result;
+  } finally {
+    foreground.count--;
+    if (foregroundInvokesInFlight.get(deviceId) === foreground && foreground.count === 0)
+      foregroundInvokesInFlight.delete(deviceId);
+    closeLegacyBackgroundLinkIfIdle(deviceId);
+  }
 }
 
 /**
  * 控制端:后台只读请求(如用量历史读取其它电脑)。本机不在控制对端时,建的链路声明后台能力,
  * 对端不进入受控状态。旧被控端不认该能力、仍会装 legacy '*':需要新建链路且对端未声明支持时,
- * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
+ * 若本机仍无控制订阅（sessions / fs-watch:* 不算）就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
 export async function remoteBackgroundInvoke(
@@ -2021,13 +2114,19 @@ export function providerShareHostInvoke(target: string, channel: string, args: u
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
-    assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
-      hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
-      closeLink: () => closeRemoteLink(deviceId),
-    });
+    const accepted = await openRemoteLink(deviceId);
+    if (!parseSharedTaskPeer(deviceId)) {
+      assertBackgroundLinkAccepted(accepted, {
+        hasOutboundControlSubscription: () => hasControlSubscription(
+          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+        ),
+        hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) || hasForegroundLinkHoldInCurrentEpoch(deviceId),
+        closeLink: () => closeRemoteLink(deviceId),
+      });
+    }
   }
   // 账号等调用方状态必须穿过建链、上线与排队等待，在实际发送边界复验。
-  return remoteInvoke(deviceId, channel, args, options);
+  return remoteInvoke(deviceId, channel, args, { ...options, passiveLink: true });
 }
 
 /**
@@ -2068,9 +2167,19 @@ export async function remoteSubscribe(
         throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
       }
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
-      await openRemoteLink(deviceId, { observed: false });
+      const accepted = await openRemoteLink(deviceId, { observed: false });
       // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
       liveTopics = liveTopicsNow();
+      // Shared-task peers use their own scoped capability and never enter the legacy wildcard path.
+      if (!parseSharedTaskPeer(deviceId)) {
+        assertSubscriptionLinkAccepted(accepted, {
+          hasOutboundControlSubscription: () => hasControlSubscription(
+            snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+          ),
+          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) || hasForegroundLinkHoldInCurrentEpoch(deviceId),
+          closeLink: () => closeRemoteLink(deviceId),
+        });
+      }
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);

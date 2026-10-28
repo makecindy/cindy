@@ -59,6 +59,8 @@ import {
   setKeepAwakeEnabled,
   openRemoteLink,
   closeRemoteLink,
+  closeLegacyBackgroundLinkIfIdle,
+  retainForegroundLink,
   remoteInvoke,
   providerShareHostInvoke,
   remoteSubscribe,
@@ -149,11 +151,13 @@ export interface DeviceLinkIpcDeps {
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
-  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean }): Promise<InvokeResultPayload>;
+  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; passiveLink?: boolean }): Promise<InvokeResultPayload>;
   /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
+  onSubscriptionRefsChanged?(deviceId: string): void;
+  retainLinkDuringUnsubscribe?(deviceId: string): () => void;
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
@@ -209,7 +213,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
-    openLink: (deviceId: string) => openRemoteLink(deviceId),
+    openLink: (deviceId: string) => openRemoteLink(deviceId, { explicit: true }),
     closeLink: closeRemoteLink,
     invoke: (...args) => {
       requireDeviceLinkCapability();
@@ -218,6 +222,8 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
+    onSubscriptionRefsChanged: closeLegacyBackgroundLinkIfIdle,
+    retainLinkDuringUnsubscribe: retainForegroundLink,
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
@@ -604,6 +610,21 @@ export async function handleRestore(
  * 让控制端 renderer 调用方拿到的语义跟调本地 IPC 完全一致
  * (成功直接拿 result;失败 catch 到带 code 的 Error)。
  */
+/** These reads populate background mirrors; scheduling priority is independent of link intent. */
+const PASSIVE_LINK_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+  'local-db:sessions:get',
+  'local-db:sessions:get-many',
+  'maker:schedule:list-sidebar-index-runs',
+  'maker:schedule:list',
+  'maker:get-capabilities',
+  'maker:provider:list',
+  'maker:list-available-agents',
+  'maker:agent:status',
+  'maker:model-favorites:get',
+  'sidebar-settings:get-project-aliases',
+]);
+
 export async function handleInvoke(
   deps: DeviceLinkIpcDeps,
   deviceId: unknown,
@@ -755,8 +776,12 @@ export async function handleInvoke(
     // Local admission hint only: never forward this field or change authorization.
     const background = scheduling && typeof scheduling === 'object'
       && 'background' in scheduling && scheduling.background === true;
-    result = background
-      ? await deps.invoke(normalizedDeviceId, channel, callArgs, { background: true })
+    const passiveLink = PASSIVE_LINK_INVOKE_CHANNELS.has(channel);
+    result = background || passiveLink
+      ? await deps.invoke(normalizedDeviceId, channel, callArgs, {
+        ...(background ? { background: true } : {}),
+        ...(passiveLink ? { passiveLink: true } : {}),
+      })
       : await deps.invoke(normalizedDeviceId, channel, callArgs);
   } catch (err) {
     rethrowDeviceLinkError(err);
@@ -899,10 +924,14 @@ export async function handleSubscribe(
     // 订阅失败 → 撤掉刚记的本窗口 ref(满足「失败不留 ref」);并发 unsubscribe 已移除则为幂等
     // no-op。失败时本就没订上,忽略 recordUnsubscribe 的降零返回(不向 relay 转发 unsubscribe)。
     recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    deps.onSubscriptionRefsChanged?.(normalizedDeviceId);
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常,如 ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED)同样视作未订上 → 撤 ref。
-  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+  if (!result.ok) {
+    recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    deps.onSubscriptionRefsChanged?.(normalizedDeviceId);
+  }
   return unwrapSubscribeResult(result);
 }
 
@@ -923,8 +952,16 @@ export async function handleUnsubscribe(
   if (topicList.length === 0) {
     throwIpcError('INVALID_PARAMS', 'topics is required');
   }
+  const releaseLinkHold = deps.retainLinkDuringUnsubscribe?.(deviceId);
+  const refsSettled = (): void => {
+    releaseLinkHold?.();
+    deps.onSubscriptionRefsChanged?.(deviceId);
+  };
   const toUnsub = recordUnsubscribe(windowId, deviceId, topicList);
-  if (toUnsub.length === 0) return { ok: true }; // 仍有其它窗口持有,不向 relay 发 unsubscribe
+  if (toUnsub.length === 0) {
+    refsSettled();
+    return { ok: true };
+  }
   let result: InvokeResultPayload;
   try {
     result = await deps.unsubscribe(deviceId, toUnsub);
@@ -932,11 +969,13 @@ export async function handleUnsubscribe(
     // 链路仍在但单帧丢失(INVOKE_TIMEOUT)，或发送前被本地背压拒绝(BACKPRESSURE)时，
     // 恢复引用等待重试；链路断开等其它异常不恢复(见 isRetryableUnsubscribeError)。
     if (isRetryableUnsubscribeError(err)) recordSubscribe(windowId, deviceId, toUnsub);
+    refsSettled();
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常):ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED / IPC_ERROR 都是终态 ——
   // 被控端要么已清掉本控制端订阅表(撤销 / 关被控),要么根本不支持该 channel,远端无存活订阅可重试。
   // **不恢复**引用(恢复会留下永不释放的 phantom ref → 阻断别窗口真实退订 → 被控端持续推送),直接按码抛。
+  refsSettled();
   return unwrapSubscribeResult(result);
 }
 
@@ -1768,11 +1807,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
         if (topics.length > 0) {
+          const releaseLinkHold = deps.retainLinkDuringUnsubscribe?.(deviceId);
+          const refsSettled = (): void => {
+            releaseLinkHold?.();
+            deps.onSubscriptionRefsChanged?.(deviceId);
+          };
           void retryUnsubscribeAfterWindowGone(
             diagnostics.forWindow(deps, windowId).unsubscribe,
             deviceId,
             topics,
-          );
+          ).then(refsSettled, refsSettled);
         }
       }
     });

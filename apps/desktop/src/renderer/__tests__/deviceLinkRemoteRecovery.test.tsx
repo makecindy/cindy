@@ -253,19 +253,21 @@ describe('multi-device recovery lifecycle', () => {
     expect(maxInFlight()).toBe(1);
   });
 
-  it('unsupported sessions subscribe is not retried', async () => {
-    subscribe.mockImplementation((peer: string) =>
-      peer === 'slow'
-        ? Promise.reject(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old peer'))
-        : Promise.resolve({}),
-    );
-    renderHook(() => useDeviceLinkRemoteProjects());
-    await settle();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
-    });
-    expect(subscribe.mock.calls.filter(([peer]) => peer === 'slow')).toHaveLength(1);
-  });
+  it.each(['DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'UNSUPPORTED_CAPABILITY'])(
+    '%s sessions subscribe is not retried', async (code) => {
+      subscribe.mockImplementation((peer: string) =>
+        peer === 'slow'
+          ? Promise.reject(new Error(`[${code}] old peer`))
+          : Promise.resolve({}),
+      );
+      renderHook(() => useDeviceLinkRemoteProjects());
+      await settle();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(subscribe.mock.calls.filter(([peer]) => peer === 'slow')).toHaveLength(1);
+    },
+  );
 
   it('late initial settings cannot undo a disable notification', async () => {
     const initial = deferred<object>();

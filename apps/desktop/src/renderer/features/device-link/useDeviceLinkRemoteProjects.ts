@@ -479,7 +479,8 @@ export function useDeviceLinkRemoteProjects(
       return (
         code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ||
         code === 'DEVICE_LINK_REMOTE_DISABLED' ||
-        code === 'DEVICE_LINK_VERSION_MISMATCH'
+        code === 'DEVICE_LINK_VERSION_MISMATCH' ||
+        code === 'UNSUPPORTED_CAPABILITY'
       );
     };
 

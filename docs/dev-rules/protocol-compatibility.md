@@ -1369,11 +1369,11 @@ rowsGz }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` / `daily_sess
 压缩后仍超帧预算回 `{ format, oversize: true }`。只含按天 × 模型、按天 × 任务的 token 与金额及任务展示元数据，不含消息内容或凭证；handler 无 sender 依赖、无副作用。控制端按账号缓存每台电脑最近一次读到的行，
 增量从缓存 `todayKey` 前一天起拉；被控端回的 `sinceDay` 与请求不一致时按全量替换。
 新增端到端可选能力 `background-link-v1`（`DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1`，link-open 与
-link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订阅对端任何 topic 时建链即声明
+link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订阅对端的 `session:<id>` 实时流或 legacy `'*'` 时建链即声明
 （`apps/desktop/src/main/device-link/backgroundLink.ts`，所有建链与自动重开入口共用这一判据）；新被控端
 见到后不装 legacy `'*'`，不亮被控横幅、不转发推送、不挡无人值守更新重启，控制端之后显式 subscribe
-照常生效。旧被控端忽略该能力、照旧装 legacy `'*'`，所以用量读取走 `remoteBackgroundInvoke`：
-0.1.93 及更早的正式版或版本未知的电脑不建链；新建链路时对端未在 link-accept 声明支持，且本机仍无订阅，
+照常生效。只订阅 `sessions` 列表或 `fs-watch:*` 文件监听仍属于后台连接。旧被控端忽略该能力、照旧装 legacy `'*'`，所以用量读取走 `remoteBackgroundInvoke`：
+0.1.93 及更早的正式版或版本未知的电脑不建链；后台只读请求与后台订阅在新建链路后检查对端的 link-accept 声明；若对端不支持，且本机只有 sessions 或 fs-watch:* 后台订阅、没有正在进行的前台调用，
 就立即关闭这条链路并按需要更新处理，同一版本不再重试。已就绪的链路直接复用。
 旧控制端与 Mobile 不声明该能力，行为不变。
 旧被控端回 `CHANNEL_NOT_ALLOWED`，控制端把该电脑标为需要更新，不影响其它电脑；旧控制端
