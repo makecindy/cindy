@@ -113,23 +113,25 @@ export class DesktopNotifier implements Notifier {
 
   private async notifyFeishu(schedule: Schedule, run: ScheduleRun): Promise<void> {
     const text = renderExternalMessage(schedule, run);
-    if (run.sessionId && this.deps.sendFeishuSessionNotification) {
-      await this.deps.sendFeishuSessionNotification(run.sessionId, text);
-      return;
-    }
-    // 通知目标 = bot owner(用户私聊 bot 时 ownerGuard TOFU 记录的 open_id)。
-    // 飞书 open_id 是 per-app 的,只有 bot 自己 app 内的 open_id 能调它的 IM API;
-    // 历史上曾注入登录用户的主 app feishuOpenId 作参考,该字段已随飞书登录
-    // 下线一并退役(2026-07)。
-    const im = this.deps.getFeishuIm?.() ?? this.deps.feishuIm;
-    const ownerOpenId = im.getOwnerOpenId();
-    if (!ownerOpenId) {
-      this.deps.logger.warn?.(
-        `[scheduler-notifier] feishu notify skipped: no bot owner bound — user must DM the bot once first (schedule=${schedule.id})`,
-      );
-      return;
-    }
+    let target = run.sessionId ? `session=...${run.sessionId.slice(-8)}` : 'unresolved';
     try {
+      if (run.sessionId && this.deps.sendFeishuSessionNotification) {
+        await this.deps.sendFeishuSessionNotification(run.sessionId, text);
+        return;
+      }
+      // 通知目标 = bot owner(用户私聊 bot 时 ownerGuard TOFU 记录的 open_id)。
+      // 飞书 open_id 是 per-app 的,只有 bot 自己 app 内的 open_id 能调它的 IM API;
+      // 历史上曾注入登录用户的主 app feishuOpenId 作参考,该字段已随飞书登录
+      // 下线一并退役(2026-07)。
+      const im = this.deps.getFeishuIm?.() ?? this.deps.feishuIm;
+      const ownerOpenId = im.getOwnerOpenId();
+      if (!ownerOpenId) {
+        this.deps.logger.warn?.(
+          `[scheduler-notifier] feishu notify skipped: no bot owner bound — user must DM the bot once first (schedule=${schedule.id})`,
+        );
+        return;
+      }
+      target = `...${ownerOpenId.slice(-8)}`;
       await im.sendMarkdownText(ownerOpenId, `【Cindy】\n\n${text}`);
     } catch (err) {
       // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data.code/msg
@@ -137,7 +139,7 @@ export class DesktopNotifier implements Notifier {
       // with status code 400' 跟没说一样。
       const r = (err as { response?: { data?: unknown; status?: number } }).response;
       this.deps.logger.warn?.(
-        `[scheduler-notifier] feishu sendMarkdownText failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=...${ownerOpenId.slice(-8)}`,
+        `[scheduler-notifier] feishu notification failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=${target}`,
       );
       throw err;
     }

@@ -55,7 +55,7 @@ vi.mock('../../../maker-host/createDesktopProviderService', () => ({
 vi.mock('../../../localDb/client/current', () => ({
   getDbClient: vi.fn(() => ({ drizzle: { select: mocks.dbSelect, update: vi.fn() } })),
 }));
-vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
+vi.mock('../../../localDb/schema', () => ({ sessions: {}, botSessionLinks: {} }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
   toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
@@ -388,7 +388,10 @@ describe('turnRunner: connection handed to a companion bot', () => {
       .toBeLessThan(acquirePendingAgentSwitch.mock.invocationCallOrder[0]!);
   });
 
-  it('keeps the turn alive when the bot guard applies the pending agent switch and closes the live session', async () => {
+  // PR #7652 review: cold notification replies lacked botOwned and bypassed the
+  // configuration guard. Unit: public runner must send on the refreshed handle,
+  // with the original task's identity even when the selected partner differs.
+  it.each(['ordinary', 'canonical', 'thread', 'routine'])('keeps the %s turn alive when the bot guard replaces its live session', async route => {
     // reconcileBotModelRoute applies the staged switch immediately on an idle task:
     // the live session closes with reason 'agent-switch' *inside* prepareSend, before
     // the send lock's own suppression window. The runner must not forget the task.
@@ -414,10 +417,12 @@ describe('turnRunner: connection handed to a companion bot', () => {
       }
       return null;
     });
-    mocks.dbSelect.mockImplementation(() => ({
+    mocks.dbSelect.mockImplementation((fields?: Record<string, unknown>) => ({
       from: () => ({
         where: () => ({
-          limit: async () => [{ ...botRows.get('mimi-main'), status: 'active' }],
+          limit: async () => fields && 'botId' in fields
+            ? [{ botId: 'bot-mimi', role: route }]
+            : [{ ...botRows.get('mimi-main'), status: 'active', source: route === 'ordinary' ? 'telegram' : 'bot' }],
         }),
       }),
     }));
@@ -426,7 +431,17 @@ describe('turnRunner: connection handed to a companion bot', () => {
       acquirePendingAgentSwitch,
     });
 
-    await runTurn(OWNER);
+    if (route === 'ordinary') await runTurn(OWNER);
+    else {
+      binding = 'bot-other';
+      await runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'notification-reply',
+        text: 'continue original task', attachments: [], requesterIsOwner: true,
+        notificationSessionId: 'mimi-main',
+      });
+      expect(companion.resolveSession).not.toHaveBeenCalled();
+      expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    }
 
     expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
     expect(switched.send).toHaveBeenCalledTimes(1);
@@ -489,6 +504,27 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(rebuilt.send).toHaveBeenCalledTimes(1);
     for (const [, text] of mocks.im.sendText.mock.calls) expect(String(text)).not.toContain('❌');
     expect(runner.getMakerSessionById('mimi-main')).toBe(rebuilt.session);
+  });
+
+  it.each(['paused', 'missing-link', 'channel'])('refuses a cold %s companion notification reply without using the current selection', async scenario => {
+    binding = 'bot-other';
+    mocks.dbSelect.mockImplementation((fields?: Record<string, unknown>) => ({
+      from: () => ({ where: () => ({ limit: async () => fields && 'botId' in fields
+        ? scenario === 'missing-link' ? [] : [{ botId: 'bot-mimi', role: scenario === 'channel' ? 'channel' : 'canonical' }]
+        : [{ ...botRows.get('mimi-main'), source: 'bot', status: 'active' }],
+      }) }),
+    }));
+    companion.prepareSend.mockResolvedValue('paused');
+    const reply = () => runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'reply-blocked',
+      text: 'continue', attachments: [], requesterIsOwner: true, notificationSessionId: 'mimi-main',
+    });
+    if (scenario === 'paused') {
+      await reply();
+      expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
+    } else await expect(reply()).rejects.toThrow('Notification companion target is unavailable');
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    expect(companion.resolveSession).not.toHaveBeenCalled();
   });
 
   // Use the public runner and inspect Session.send: a binding alone must never

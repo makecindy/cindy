@@ -73,7 +73,7 @@ import {
   type SanitizedSendOutcomeError,
 } from '../../maker-host/send-outcome';
 import { getDbClient } from '../../localDb/client/current';
-import { sessions as sessionsTable } from '../../localDb/schema';
+import { botSessionLinks, sessions as sessionsTable } from '../../localDb/schema';
 import { hydrateSessionProvider } from '../../maker-host/session-provider-store';
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
@@ -805,17 +805,28 @@ export function createTurnRunner(
   }
 
   async function resolveNotificationTarget(sessionId: string, scopeKey?: string): Promise<RouteTarget> {
-    const [row] = await getDbClient().drizzle.select().from(sessionsTable)
+    const db = getDbClient().drizzle;
+    const [row] = await db.select().from(sessionsTable)
       .where(eq(sessionsTable.id, sessionId)).limit(1);
     if (!row?.workingDir || row.status === 'deleted' || row.status === 'archived' || row.orcaRole === 'worker') {
       throw new Error('Notification target session is unavailable');
+    }
+    let botOwned: RouteTarget['botOwned'];
+    if (row.source === 'bot') {
+      const [link] = await db.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+        .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+      // Owner notifications may resume the original main task, private topic or
+      // routine. Do not convert group/guest lanes into an owner private chat.
+      if (!link || !['canonical', 'thread', 'routine'].includes(link.role)
+        || !deps.companion?.prepareSend) throw new Error('Notification companion target is unavailable');
+      botOwned = { botId: link.botId, lane: 'canonical' };
     }
     return {
       row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId, remoteHostId: row.remoteHostId ?? null, providerId: row.providerId ?? null,
         agentDeviceId: row.agentDeviceId ?? null },
-      attached: false, notificationReply: true, scopeKey,
+      attached: false, notificationReply: true, scopeKey, botOwned,
     };
   }
 

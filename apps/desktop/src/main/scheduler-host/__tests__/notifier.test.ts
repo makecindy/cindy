@@ -283,6 +283,18 @@ describe('DesktopNotifier desktop status mapping', () => {
 
 
 describe('Feishu notification origin receipt', () => {
+  // PR #7652 review: linked sends bypassed structured Feishu failure logging.
+  // Unit: actual notify entry, one rejected session sender, no fallback/retry.
+  it('logs platform status and error details for a rejected linked notification without resending', async () => {
+    const error = Object.assign(new Error('permission denied'), { response: { status: 403, data: { code: 99991672, msg: 'permission denied' } } });
+    const sender = vi.fn(async () => { throw error; });
+    const { notifier, warn, sendMarkdownText } = createNotifier({ ownerOpenId: null, sendFeishuSessionNotification: sender });
+    await expect(notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'))).resolves.toBeUndefined();
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/status=403.*99991672.*permission denied/));
+    expect(warn).toHaveBeenCalledWith('feishu notify failed', error);
+  });
   // Regression: adopting the personal connection left ordinary scheduler runs
   // without an owner; the old precheck skipped the shared resolver entirely.
   // Unit; one completed run, null personal owner, explicit notify on/off.
