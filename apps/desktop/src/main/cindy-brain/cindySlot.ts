@@ -292,6 +292,13 @@ export interface CindySlotDeps {
    */
   searchWeb?: CindyProxySearchService['search'];
   /**
+   * Cindy 托管模型服务是否就绪(已登录且有网关凭证)。只用于在媒体目录为空时
+   * 给出对因的错误:未就绪说明是没登录也没连接其他供应商,而不是目录暂时取不到。
+   * 模型服务不再作为插件级的前置门禁(#7581):没用到模型的工具不受影响。
+   * 可选依赖:不注入 = 按旧口径回"目录暂时取不到"。
+   */
+  isModelAccessReady?(): boolean;
+  /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
    * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
@@ -830,6 +837,15 @@ export class GhostCindySlot {
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
     if (cfg.models.length === 0 || cfg.defaults === null) {
       const category = CATEGORY_LABEL[info.category];
+      if (this.deps.isModelAccessReady?.() === false) {
+        return {
+          ok: false,
+          message:
+            `当前没有可用的${category}模型：用户未登录 Cindy 模型服务，也没有连接支持${category}的模型供应商。` +
+            `请如实告知用户：登录 Cindy 或在设置中连接支持${category}的模型供应商后再试，不要重试。`,
+          errorCode: 'NO_CANDIDATE',
+        };
+      }
       return {
         ok: false,
         message:

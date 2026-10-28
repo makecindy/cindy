@@ -233,9 +233,13 @@ interface PluginSetupAssessment {
 - `satisfied` 条目可用于 Agent 理解 any-of 当前状态，但不暴露配置值；
 - Action 按 `kind` 由 Renderer 做四语言按钮文案，不在 assessment 中下发未本地化文案；
 - Host 可将现有 `secret`、`connection`、`kv` 声明映射成以上通用类型；
-- 客户端内 Provider / 模型能力映射为 `client_config`，不要求插件伪造 Secret 或 KV；
+- 客户端内配置可映射为 `client_config`，不要求插件伪造 Secret 或 KV；
 - `client_config` 按 manifest 声明的 Host capability 匹配，不按插件 id 或具体
-  Provider id 分支。新增使用既有 Host capability 的插件时，无需改 Setup Runtime Core。
+  Provider id 分支。新增使用既有 Host capability 的插件时，无需改 Setup Runtime Core；
+- 模型服务就绪不作为插件级 setup 前置条件（#7581）：`cindy.*` 声明只是请求 Host 能力的
+  权限，同一插件里不用模型的工具（如 Gmail 的 `media.deposit`、Web Search 的自带 Key
+  渠道）不得因模型服务未就绪被拦。用到模型或 Cindy 网关的那次能力调用，在 cindySlot
+  里按实际选中的能力与供应商检查，未就绪时只让这次调用返回对因的错误。
 
 ### 4.2 Agent setup plan
 
