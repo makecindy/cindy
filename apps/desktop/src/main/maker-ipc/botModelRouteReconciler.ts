@@ -101,6 +101,8 @@ export function createBotModelRouteReconciler(deps: {
   withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
   apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute | void>;
+  /** Returns a group only when its committed member matches the actual session route. */
+  readAppliedGroup?(sessionId: string): Promise<{ providerId: string; groupDeviceId: string | null } | null>;
   /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
 }) {
@@ -218,9 +220,16 @@ export function createBotModelRouteReconciler(deps: {
       if (!latest || latest.scheduledModelBaseline !== expectedBaseline || configuredKey(latest) !== key) {
         throw new ScheduledModelSelectionBusyError('Companion selection changed during baseline recovery');
       }
+      const directRouteReady = (resolved.providerId === null || latest.current.providerId === resolved.providerId)
+        && (latest.current.agentDeviceId ?? null) === (resolved.agentDeviceId ?? null);
+      // applyNow may select a group member after staging returned the group entry.
+      // Accept only a binding verified against the actual member, for this saved group.
+      const group = !directRouteReady ? await deps.readAppliedGroup?.(sessionId) : null;
+      assertCurrent();
+      const groupRouteReady = group != null && group.providerId === route.providerId
+        && group.groupDeviceId === (route.agentDeviceId ?? null);
       if (latest.current.agentKind !== resolved.agentKind || latest.current.model !== resolved.model ||
-        (resolved.providerId !== null && latest.current.providerId !== resolved.providerId) ||
-        (latest.current.agentDeviceId ?? null) !== (resolved.agentDeviceId ?? null)) {
+        (!directRouteReady && !groupRouteReady)) {
         throw new ScheduledModelSelectionBusyError('Saved companion route did not become ready');
       }
       if (await deps.onSelectionAccepted(sessionId, expectedBaseline) === false) {

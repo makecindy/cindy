@@ -7,6 +7,7 @@ import { checkDeviceRoute } from '../../remote-agent/controller/deviceRouteCheck
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
 import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
+import type { BotModelRoute } from '../../../shared/botModelChain';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
@@ -15,7 +16,7 @@ import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
 function fixture() {
   const saved: ScheduledModelSelection = { agentKind: 'pi', model: 'saved', providerId: 'current', effort: null, fastMode: false };
   const old = JSON.stringify({ ...saved, providerId: 'removed', scopeId: 'old' });
-  const state = { chain: [{ harness: 'pi' as const, model: saved.model, providerId: saved.providerId, effort: '' as const, fastMode: false }],
+  const state = { chain: [{ harness: 'pi' as const, model: saved.model, providerId: saved.providerId, effort: '' as const, fastMode: false }] as BotModelRoute[],
     current: { ...saved }, hasRuntimeOverride: true, followsCindyDefault: false, scheduledModelBaseline: old as string | null };
   let owner = 'one';
   let activeBot = true;
@@ -71,6 +72,42 @@ describe('automatic companion baseline recovery', () => {
     expect(h.state.scheduledModelBaseline).toBeNull();
     expect(h.clear).toHaveBeenCalledWith('bot', h.old);
   });
+  // #7471 review: group membership is committed only by the pending switch.
+  // Unit: a valid member must unblock input; unrelated/stale bindings must not.
+  it.each(['local-group', 'remote-group', 'wrong-group', 'wrong-owner', 'stale-binding', 'wrong-model', 'wrong-harness'] as const)(
+    'checks the committed group member before retiring a baseline: %s', async (outcome) => {
+      const h = fixture();
+      const groupDeviceId = outcome === 'local-group' ? null : 'group-owner';
+      const route = { ...h.saved, providerId: 'group-entry', agentDeviceId: groupDeviceId };
+      h.state.chain = [{ ...h.state.chain[0]!, providerId: route.providerId, agentDeviceId: groupDeviceId }];
+      let pending = false;
+      const applier = createBotModelRouteApplier({
+        stage: async () => { pending = true; return route; }, isIdle: () => true,
+        applyPendingSwitch: async () => {
+          h.state.current = { ...h.saved, providerId: 'member-provider', agentDeviceId: 'member-device',
+            ...(outcome === 'wrong-model' ? { model: 'unrelated' } : {}),
+            ...(outcome === 'wrong-harness' ? { agentKind: 'codex' as const } : {}) };
+          pending = false;
+        },
+        hasPendingSwitch: () => pending, onApplied: h.onApplied,
+      });
+      const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'one', read: async () => h.state,
+        apply: applier, onSelectionAccepted: h.clear,
+        readAppliedGroup: async () => outcome === 'stale-binding' ? null : ({
+          providerId: outcome === 'wrong-group' ? 'another-group' : route.providerId,
+          groupDeviceId: outcome === 'wrong-owner' ? 'another-owner' : groupDeviceId,
+        }),
+      });
+      if (outcome === 'local-group' || outcome === 'remote-group') {
+        await expect(reconcile.recoverUnavailableBaseline('bot', h.old)).resolves.toBe(true);
+        expect(h.state.scheduledModelBaseline).toBeNull();
+        expect(h.state.current.providerId).toBe('member-provider');
+      } else {
+        await expect(reconcile.recoverUnavailableBaseline('bot', h.old)).rejects.toThrow('did not become ready');
+        expect(h.state.scheduledModelBaseline).toBe(h.old);
+        expect(h.clear).not.toHaveBeenCalled();
+      }
+    });
   it.each([false, true])('preserves a later runtime fallback after recovery (default=%s)', async (followsCindyDefault) => {
     const h = fixture();
     h.state.followsCindyDefault = followsCindyDefault;
@@ -233,7 +270,7 @@ it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes af
   expect(cleared.runtimeEffective).toEqual(recovered);
 });
 describe('SSH baseline restoration through production profile application', () => {
-  it.each(['valid-remote-only', 'absent-on-host', 'host-offline'] as const)('%s uses the SSH catalog before deciding recovery', async (outcome) => {
+  it.each(['valid-remote-only', 'absent-on-host', 'host-offline', 'payment-required'] as const)('%s uses the SSH catalog before deciding recovery', async (outcome) => {
     const saved: ScheduledModelSelection = { agentKind: 'codex', model: 'profile-model', providerId: 'openai', effort: 'low', fastMode: false };
     const frozen = { ...saved, model: 'remote-override', effort: 'high' as const, fastMode: true };
     const original = JSON.stringify({ ...frozen, scopeId: 'ssh-run' });
@@ -242,6 +279,7 @@ describe('SSH baseline restoration through production profile application', () =
     const views = [{ id: 'openai', connected: true, agents: ['codex'], source: 'user', routing: { codex: {} }, models: { codex: [{
       id: outcome === 'absent-on-host' ? 'profile-model' : frozen.model,
       efforts: ['low', 'high'], defaultEffort: 'low', supportsFastMode: true,
+      ...(outcome === 'payment-required' ? { availability: 'requires_payment' as const } : {}),
     }] } }] as ProviderView[];
     const ssh = vi.fn(async () => {
       if (outcome === 'host-offline') throw new Error('SSH connection closed');
@@ -270,7 +308,12 @@ describe('SSH baseline restoration through production profile application', () =
       apply: async (id, route) => { await apply(id, route); },
       recoverUnavailableBaseline: recover,
     });
-    if (outcome === 'host-offline') {
+    if (outcome === 'payment-required') {
+      await expect(scope.restore('ssh-bot')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      expect(baseline).toBe(original);
+      expect(applied).toBeUndefined();
+      expect(recover).not.toHaveBeenCalled();
+    } else if (outcome === 'host-offline') {
       await expect(scope.restore('ssh-bot')).rejects.toMatchObject({ code: 'SSH_EXEC_FAILED' });
       expect(baseline).toBe(original);
       expect(applied).toBeUndefined();
@@ -288,6 +331,46 @@ describe('SSH baseline restoration through production profile application', () =
     expect(ssh).toHaveBeenCalledWith('ssh-builder');
     expect(local).not.toHaveBeenCalled();
   });
+});
+// #7471 review: entry existence in checkDeviceRoute does not establish payment
+// admission. Exercise the remote catalog resolver inside the real restore scope.
+it.each([
+  ['requires_payment', 'source'], ['requires_payment', null], ['retired', 'source'],
+] as const)('keeps remote payment failures distinct from obsolete models: %s / %s', async (reason, providerId) => {
+  const saved: ScheduledModelSelection = { agentKind: 'pi', model: 'old-model', providerId, effort: null, fastMode: false };
+  const original = JSON.stringify({ ...saved, agentDeviceId: 'execution-pc', scopeId: 'run' });
+  let baseline: string | null = original;
+  const views = [{ id: 'source', connected: true, source: 'user', agents: ['pi'], routing: { pi: {} },
+    models: { pi: [{ id: saved.model, ...(reason === 'requires_payment'
+      ? { availability: reason } : { status: reason }) }] } }] as ProviderView[];
+  const recover = vi.fn(async () => { baseline = null; return true; });
+  const applyModel = vi.fn();
+  const resolve = createScheduledModelSelectionResolver({
+    readRemoteProviders: async () => {
+      expect(await checkDeviceRoute(async () => views, 'pi', saved.providerId, saved.model)).toBeNull();
+      return views;
+    },
+    readSshCodexProviders: async () => { throw new Error('unexpected SSH read'); },
+    resolveLocalSelection: async () => { throw new Error('unexpected local read'); },
+  });
+  const scope = createScheduledModelScope({ createId: () => 'new', isBusy: () => false,
+    read: async () => ({ profile: saved, baseline }), write: async () => { baseline = null; },
+    apply: async (_id, selection) => { await applyScheduledModelSelection(selection, {
+      getTarget: async () => ({ agentKind: 'pi', status: 'active', agentDeviceId: 'execution-pc' }),
+      isBusy: () => false, resolveSelection: resolve, applyModel,
+      switchHarness: async () => { throw new Error('unexpected switch'); },
+    }); }, recoverUnavailableBaseline: recover,
+  });
+  if (reason === 'requires_payment') {
+    await expect(scope.restore('bot')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(baseline).toBe(original);
+    expect(recover).not.toHaveBeenCalled();
+  } else {
+    await scope.restore('bot');
+    expect(recover).toHaveBeenCalledWith('bot', original);
+    expect(baseline).toBeNull();
+  }
+  expect(applyModel).not.toHaveBeenCalled();
 });
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };

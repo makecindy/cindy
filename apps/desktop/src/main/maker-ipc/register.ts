@@ -16806,6 +16806,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
     },
+    readAppliedGroup: (sessionId) => providerGroupService?.sessionGroup(sessionId) ?? Promise.resolve(null),
     apply: createBotModelRouteApplier({
       stage: (sessionId, route, current) => stageSessionRouteSelection(
         sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind),

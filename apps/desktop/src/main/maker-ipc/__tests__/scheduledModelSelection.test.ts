@@ -298,7 +298,8 @@ describe('saved automation model selection at dispatch', () => {
       resolveSelection: async (value: ScheduledModelSelection) =>
         resolveScheduledModelSelection(value, [selected, provider('other')]),
     };
-    await expect(applyScheduledModelSelection(selection, deps)).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    await expect(applyScheduledModelSelection(selection, deps)).rejects.toThrow(
+      model.availability === 'requires_payment' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE');
     expect(deps.switchHarness).not.toHaveBeenCalled();
     expect(deps.applyModel).not.toHaveBeenCalled();
   });
@@ -598,7 +599,8 @@ describe('automation restore uses the execution computer', () => {
       const views = remoteCatalog('openai-shared');
       Object.assign(views[0].models.codex![0], flags);
       h.remote.mockResolvedValueOnce(views);
-      await expect(h.scope.restore('task')).rejects.toThrow('unavailable');
+      await expect(h.scope.restore('task')).rejects.toThrow(
+        flags.availability === 'requires_payment' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE');
       expect(h.state()).toEqual(before);
       expect(h.applyModel).not.toHaveBeenCalled();
       expect(h.switchHarness).not.toHaveBeenCalled();
