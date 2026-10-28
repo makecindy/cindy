@@ -38,25 +38,41 @@ export interface DracoDecoderBlobUrls {
   'draco_decoder.wasm': string;
 }
 
-let pending: Promise<DracoDecoderBlobUrls> | null = null;
-
-/** 解码器文件的 blob URL（进程内只创建一次；失败后可重试）。 */
-export function createDracoDecoderFiles(): Promise<DracoDecoderBlobUrls> {
-  if (!pending) {
-    pending = (async () => {
-      const wasmBytes = await readAssetBytes(wasmUrl);
-      return {
-        'draco_wasm_wrapper.js': URL.createObjectURL(
-          new Blob([wrapperSource], { type: 'text/javascript' }),
-        ),
-        'draco_decoder.wasm': URL.createObjectURL(
-          new Blob([wasmBytes as BlobPart], { type: 'application/wasm' }),
-        ),
-      };
-    })().catch((error: unknown) => {
-      pending = null;
-      throw error;
-    });
-  }
-  return pending;
+export interface DracoDecoderSource {
+  /** `draco_wasm_wrapper.js` 的源码文本 */
+  wrapperSource: string;
+  /** `draco_decoder.wasm` 的 URL：生产是内联的 data URL，开发模式是 dev server 路径 */
+  wasmUrl: string;
 }
+
+/**
+ * 解码器文件 blob URL 的加载器：每个加载器内部只创建一次 blob URL（并发调用共享同一个
+ * Promise），失败后可重试。来源作为参数注入，便于测试时不必重载模块。
+ */
+export function createDracoDecoderFilesLoader(
+  source: DracoDecoderSource,
+): () => Promise<DracoDecoderBlobUrls> {
+  let pending: Promise<DracoDecoderBlobUrls> | null = null;
+  return () => {
+    if (!pending) {
+      pending = (async () => {
+        const wasmBytes = await readAssetBytes(source.wasmUrl);
+        return {
+          'draco_wasm_wrapper.js': URL.createObjectURL(
+            new Blob([source.wrapperSource], { type: 'text/javascript' }),
+          ),
+          'draco_decoder.wasm': URL.createObjectURL(
+            new Blob([wasmBytes as BlobPart], { type: 'application/wasm' }),
+          ),
+        };
+      })().catch((error: unknown) => {
+        pending = null;
+        throw error;
+      });
+    }
+    return pending;
+  };
+}
+
+/** 随应用打包的解码器文件的 blob URL（进程内只创建一次；失败后可重试）。 */
+export const createDracoDecoderFiles = createDracoDecoderFilesLoader({ wrapperSource, wasmUrl });

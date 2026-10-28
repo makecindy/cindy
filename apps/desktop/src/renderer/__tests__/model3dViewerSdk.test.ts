@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createModelViewerSdkLoader } from '@/lib/model3d/modelViewerSdk';
 
 const sdk = {
   setEnabledFormats: vi.fn(),
@@ -9,11 +11,11 @@ const sdk = {
 const createDracoDecoderFiles = vi.fn();
 const order: string[] = [];
 
-async function load() {
-  vi.resetModules();
-  vi.doMock('mivo-model-viewer', () => sdk);
-  vi.doMock('@/lib/model3d/dracoDecoder', () => ({ createDracoDecoderFiles }));
-  return import('@/lib/model3d/modelViewerSdk');
+function load() {
+  return createModelViewerSdkLoader({
+    importSdk: async () => sdk as never,
+    createDracoFiles: createDracoDecoderFiles,
+  });
 }
 
 beforeEach(() => {
@@ -26,14 +28,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  vi.doUnmock('mivo-model-viewer');
-  vi.doUnmock('@/lib/model3d/dracoDecoder');
-});
-
 describe('loadModelViewerSdk', () => {
   it('limits the formats to the recognised 3D set (no zip / vrml / step) and self-hosts Draco', async () => {
-    const { loadModelViewerSdk } = await load();
+    const loadModelViewerSdk = load();
     await loadModelViewerSdk();
     const formats = sdk.setEnabledFormats.mock.calls[0][0] as string[];
     expect(formats).toEqual(['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae', '3mf', '3ds']);
@@ -45,7 +42,7 @@ describe('loadModelViewerSdk', () => {
   });
 
   it('configures once and returns the same SDK to every caller', async () => {
-    const { loadModelViewerSdk } = await load();
+    const loadModelViewerSdk = load();
     const [a, b] = await Promise.all([loadModelViewerSdk(), loadModelViewerSdk()]);
     expect(a === b).toBe(true);
     await loadModelViewerSdk();
@@ -55,7 +52,7 @@ describe('loadModelViewerSdk', () => {
 
   it('never hands the SDK out unconfigured: a Draco setup failure rejects, then a retry succeeds', async () => {
     createDracoDecoderFiles.mockRejectedValueOnce(new Error('decoder unavailable'));
-    const { loadModelViewerSdk } = await load();
+    const loadModelViewerSdk = load();
     await expect(loadModelViewerSdk()).rejects.toThrow('decoder unavailable');
     const loaded = await loadModelViewerSdk();
     expect(loaded.setEnabledFormats).toBe(sdk.setEnabledFormats);

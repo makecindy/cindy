@@ -15,20 +15,36 @@ import { MODEL3D_FORMATS } from '@cindy/maker-shared/model3d';
 
 type ModelViewerSdk = typeof import('mivo-model-viewer');
 
-let sdkPromise: Promise<ModelViewerSdk> | null = null;
-
-export function loadModelViewerSdk(): Promise<ModelViewerSdk> {
-  if (!sdkPromise) {
-    sdkPromise = Promise.all([import('mivo-model-viewer'), import('./dracoDecoder')])
-      .then(async ([sdk, draco]) => {
-        sdk.setEnabledFormats([...MODEL3D_FORMATS]);
-        sdk.setDracoDecoderFiles(await draco.createDracoDecoderFiles());
-        return sdk;
-      })
-      .catch((error: unknown) => {
-        sdkPromise = null;
-        throw error;
-      });
-  }
-  return sdkPromise;
+interface ModelViewerSdkDeps {
+  importSdk: () => Promise<ModelViewerSdk>;
+  createDracoFiles: () => Promise<Parameters<ModelViewerSdk['setDracoDecoderFiles']>[0]>;
 }
+
+/**
+ * SDK 加载器：每个加载器只配置一次并把同一个 SDK 交给所有调用方；配置失败（比如 Draco
+ * 解码器不可用）整体拒绝并清掉缓存，下次可重试，绝不把没配置好的 SDK 交出去。
+ * 依赖作为参数注入，便于测试时不必重载模块。
+ */
+export function createModelViewerSdkLoader(deps: ModelViewerSdkDeps): () => Promise<ModelViewerSdk> {
+  let sdkPromise: Promise<ModelViewerSdk> | null = null;
+  return () => {
+    if (!sdkPromise) {
+      sdkPromise = Promise.all([deps.importSdk(), deps.createDracoFiles()])
+        .then(([sdk, dracoFiles]) => {
+          sdk.setEnabledFormats([...MODEL3D_FORMATS]);
+          sdk.setDracoDecoderFiles(dracoFiles);
+          return sdk;
+        })
+        .catch((error: unknown) => {
+          sdkPromise = null;
+          throw error;
+        });
+    }
+    return sdkPromise;
+  };
+}
+
+export const loadModelViewerSdk = createModelViewerSdkLoader({
+  importSdk: () => import('mivo-model-viewer'),
+  createDracoFiles: () => import('./dracoDecoder').then((draco) => draco.createDracoDecoderFiles()),
+});
