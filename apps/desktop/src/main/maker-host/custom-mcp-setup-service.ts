@@ -436,13 +436,13 @@ export class CustomMcpSetupService {
     this.deps.broadcast(entry.sessionId, entry.snapshot);
     return entry.snapshot;
   }
-  /** The existing owner-scoped idle restart has applied the frozen MCP config. */
-  activationApplied(): void {
+  /** The owner-scoped idle restart or its immediate replacement has settled. */
+  activationSettled(applied: boolean): void {
     for (const entry of this.entries.values()) {
       if (entry.snapshot.status !== 'saved' || entry.snapshot.activation !== 'deferred') continue;
       try {
         entry.owner.assertOwner();
-        entry.snapshot = { ...entry.snapshot, activation: 'next_session' };
+        entry.snapshot = { ...entry.snapshot, activation: applied ? 'next_session' : 'pending' };
         this.deps.broadcast(entry.sessionId, entry.snapshot);
       } catch {
         /* Never publish a receipt across an account boundary. */

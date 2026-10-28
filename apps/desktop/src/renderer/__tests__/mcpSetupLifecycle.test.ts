@@ -168,6 +168,17 @@ describe('MCP card lifecycle', () => {
     onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...request, requestId: 'desktop-mcp-new' } });
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup?.requestId).toBe('desktop-mcp-new');
   });
+  it('keeps a newer setup form when the replaced receipt finishes activating', () => {
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...request, status: 'saved', activation: 'deferred' } });
+    const next = { ...request, requestId: 'desktop-mcp-next', operationId: '00000000-0000-4000-8000-000000000002' };
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: next });
+    const form = makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup;
+    expect(form).toMatchObject(next);
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...request, status: 'saved', activation: 'next_session', revision: 2 } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup).toBe(form);
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...next, status: 'verifying', revision: 1 } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup).toMatchObject({ requestId: next.requestId, status: 'verifying', revision: 1 });
+  });
   it('clears a cancelled request on host dismissal', () => {
     onInteractionRequest?.({ sessionId: SESSION_ID, request });
     onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: request.requestId, reason: 'resolved' });

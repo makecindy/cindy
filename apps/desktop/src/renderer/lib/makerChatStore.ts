@@ -8662,7 +8662,14 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       setState(sessionId, s => {
         if (s.dismissedMcpSetupRequestIds?.includes(parsed.requestId)) return s;
         if (s.pendingMcpSetup?.requestId === parsed.requestId && s.pendingMcpSetup.revision > parsed.revision) return s;
-        return { ...s, pendingMcpSetup: parsed };
+        const replacedReceipt = s.pendingMcpSetup?.status === 'saved' && s.pendingMcpSetup.requestId !== parsed.requestId;
+        return {
+          ...s,
+          dismissedMcpSetupRequestIds: replacedReceipt
+            ? [...(s.dismissedMcpSetupRequestIds ?? []), s.pendingMcpSetup!.requestId].slice(-200)
+            : s.dismissedMcpSetupRequestIds,
+          pendingMcpSetup: parsed,
+        };
       });
       return;
     }

@@ -2438,6 +2438,7 @@ async function shutdownAgentMcpEnvironmentsBestEffort(reason: string): Promise<v
 async function applyMemoryChangeWithCodexRestart<T extends object>(
   parts: MemoryChangeParts<T>,
 ): Promise<T & { codexRestartDeferred: boolean }> {
+  const ownerScopeKey = activeOwnerScopeKey();
   // 本次变更若覆盖了一个 pending 登记,被门挡住的会话队列必须在 clear 后补
   // 唤醒(门谓词变 false 不会自己触发 drain)。名单此刻采集 —— clear 发生在
   // prepare 关掉全部会话之后,那时已经采不到(review P1 2026-07-23)。
@@ -2465,6 +2466,11 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
         }
       },
       takePendingApplyRuntime: () => deferredCodexRestartHolder?.takePendingApplyRuntime() ?? null,
+      onRestartSettled: (applied) => {
+        if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey && !deferredCodexRestartHolder?.isPending()) {
+          getCustomMcpSetupService()?.activationSettled(applied);
+        }
+      },
       logger: log,
     },
     parts,
@@ -20852,7 +20858,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .listActiveSessions()
         .filter((session) => session.agentKind === 'codex' && !session.remoteHostId)
         .map((session) => session.id),
-    onApplied: () => getCustomMcpSetupService()?.activationApplied(),
+    onApplied: () => getCustomMcpSetupService()?.activationSettled(true),
     onQueueGateReleased: createDeferredRestartSettledWake({
       wakeSession: (sessionId, reason) => inputCoordinator.wakeSession(sessionId, reason),
     }),

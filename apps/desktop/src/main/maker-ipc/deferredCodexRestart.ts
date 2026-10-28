@@ -335,6 +335,8 @@ export interface MemoryChangeWithCodexRestartDeps {
    * 避免随后的 clearDeferredRestart 把该工作静默丢弃(review 第 2 轮)。
    */
   takePendingApplyRuntime?: () => (() => Promise<void>) | null;
+  /** Reports the immediate restart after it supersedes an older pending change. */
+  onRestartSettled?: (applied: boolean) => void;
   logger?: {
     info: (message: string, meta?: Record<string, unknown>) => void;
     warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -413,13 +415,16 @@ export async function runMemoryChangeWithCodexRestart<T extends object>(
     // 都被覆盖 —— 即使下方 finalize 失败也要清(设置已提交,旧 applyRuntime
     // 不能再回放)。
     deps.clearDeferredRestart();
+    let applied = false;
     try {
       await deps.finalize();
+      applied = true;
     } catch (err) {
       deps.logger?.warn('codex restart failed after memory setting change', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    if (!stale()) deps.onRestartSettled?.(applied);
     return { ...result, codexRestartDeferred: false };
   } finally {
     if (!changed) {

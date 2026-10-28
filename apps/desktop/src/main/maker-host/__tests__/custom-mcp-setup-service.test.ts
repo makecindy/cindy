@@ -7,7 +7,7 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { commitCustomMcp } from '../../localDb/worker/opHandlers/customMcpTx.js';
 import { CustomMcpSetupService, mcpSubmissionSchema } from '../custom-mcp-setup-service.js';
-import { DeferredCodexRestartService } from '../../maker-ipc/deferredCodexRestart.js';
+import { DeferredCodexRestartService, runMemoryChangeWithCodexRestart } from '../../maker-ipc/deferredCodexRestart.js';
 import {
   listMcpSummaries,
   resolveMcpCredentials,
@@ -198,7 +198,7 @@ describe('secure custom MCP setup', () => {
       restart,
       hasBusyLocalCodexSession: () => busy,
       listLocalCodexSessionIds: () => ['task'],
-      onApplied: () => service.activationApplied(),
+      onApplied: () => service.activationSettled(true),
     });
     service = new CustomMcpSetupService({
       broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
@@ -222,6 +222,37 @@ describe('secure custom MCP setup', () => {
       expect(complete).toHaveBeenCalledOnce();
     } finally { deferred.clear(); }
   });
+  it.each(['applied', 'failed', 'owner-changed'] as const)('settles a pending MCP receipt when an immediate setting refresh takes over (%s)', async (outcome) => {
+    const deferred = new DeferredCodexRestartService({
+      restart: async () => {}, hasBusyLocalCodexSession: () => true, listLocalCodexSessionIds: () => [],
+    });
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, verify, executionKey: () => execution,
+      activationPending: () => deferred.isPending(),
+      changed: async () => { deferred.schedule('MCP changed'); return 'deferred'; },
+    });
+    try {
+      expect(await service.submit(prepare().input)).toMatchObject({ activation: 'deferred' });
+      const owner = state.scope;
+      await runMemoryChangeWithCodexRestart({
+        prepare: async () => {},
+        finalize: async () => {
+          if (outcome === 'owner-changed') state.scope = 'owner:2';
+          if (outcome === 'failed') throw new Error('refresh failed');
+        },
+        cancel: () => {},
+        scheduleDeferredRestart: (reason, runtime) => deferred.schedule(reason, runtime),
+        clearDeferredRestart: () => deferred.clear(),
+        onRestartSettled: (applied: boolean) => {
+          if (!deferred.isPending()) service.activationSettled(applied);
+        },
+      }, { persist: async () => ({}), stillValid: () => state.scope === owner });
+      expect(frames.at(-1)).toMatchObject({ activation: outcome === 'applied' ? 'next_session' : outcome === 'failed' ? 'pending' : 'deferred' });
+      expect(complete).toHaveBeenCalledOnce();
+      expect(client.tx).toHaveBeenCalledOnce();
+    } finally { deferred.clear(); }
+  });
   it('publishes the applied receipt when an immediate refresh retires the originating Agent session', async () => {
     service = new CustomMcpSetupService({
       broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
@@ -240,7 +271,7 @@ describe('secure custom MCP setup', () => {
       activationPending: () => pending,
       changed: async () => {
         pending = false;
-        service.activationApplied();
+        service.activationSettled(true);
         return 'deferred';
       },
     });
@@ -255,7 +286,7 @@ describe('secure custom MCP setup', () => {
     await service.submit(prepare().input);
     const count = frames.length;
     state.scope = 'owner:2';
-    service.activationApplied();
+    service.activationSettled(true);
     expect(frames).toHaveLength(count);
   });
   it('revokes a queued completion if Stop arrives after persistence', async () => {
