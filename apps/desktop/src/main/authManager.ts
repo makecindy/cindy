@@ -4862,7 +4862,9 @@ async function runColdStartRefreshFlow(
       rateLimitDelayMs: 0,
       retryDelaysMs: COLD_START_REFRESH_TRANSIENT_RETRY_DELAYS_MS,
       // 重试窗口拉长后可能越过 20s 启动闸:用户此时已能手动登录,延迟的请求前必须复核代际。
-      shouldAbort: () => epochChanged('before-refresh-attempt'),
+      // 显式登录动作(loginActionPromise / browser-redirect)在 completeLogin() 之前不会推进
+      // authStateEpoch,所以进行中的登录也要视为取代,否则 A 的 refresh 仍会轮换 token 后被丢弃。
+      shouldAbort: () => epochChanged('before-refresh-attempt') || isAuthFlowBusy(),
       onFailure: ({ attempt, status, code, definitive, willRetry }) =>
         log.warn(
           `cold-start refresh attempt ${attempt} failed status=${status} code=${code ?? '<none>'} definitive=${definitive} transientWillRetry=${willRetry}`,
