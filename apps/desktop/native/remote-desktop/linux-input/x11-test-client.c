@@ -194,6 +194,14 @@ int main(int argc, char **argv) {
   typed_count = 0;
   send_batch("[{\"kind\":\"key\",\"code\":\"ShiftLeft\",\"down\":true}]\n");
   assert(held(remote_shift));
+  // Whole-paste preflight must not type or release our held modifiers.
+  char prefix[257], preflight[1024];
+  memset(prefix, 'a', 256); prefix[256] = 0;
+  snprintf(preflight, sizeof(preflight),
+           "[{\"kind\":\"text-check\",\"text\":\"%sA\"}]\n", prefix);
+  int check_presses = presses, check_releases = releases;
+  send_batch(preflight);
+  assert(presses == check_presses && releases == check_releases && held(remote_shift));
   send_batch("[{\"kind\":\"text\",\"text\":\"A\"}]\n");
   assert(held(remote_shift));
   send_batch("[{\"kind\":\"text\",\"text\":\"B\"}]\n");
@@ -245,6 +253,16 @@ int main(int argc, char **argv) {
   assert(after && width == after_width &&
          !memcmp(before, after, (size_t)(max - min + 1) * width * sizeof(KeySym)));
   XFree(after);
+
+  // PR #6775 discussion_r4398875925: an unsupported suffix must fail the
+  // whole-paste check before even an already-queued valid first chunk can type.
+  start(argv[1], false);
+  snprintf(preflight, sizeof(preflight),
+           "[{\"kind\":\"text-check\",\"text\":\"%s中\"}]\n"
+           "[{\"kind\":\"text\",\"text\":\"%s\"}]\n", prefix, prefix);
+  assert(write(input, preflight, strlen(preflight)) == (ssize_t)strlen(preflight));
+  finish(2);
+  assert(presses == previous_presses && clicks == previous_clicks);
 
   // Invalid second event must prevent the first valid motion from executing.
   start(argv[1], false);

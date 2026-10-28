@@ -17,7 +17,9 @@ import test from 'node:test';
 // Minimal failures: move(1,1) within a non-root rectangle; text("中文"); a valid
 // motion followed by an invalid key. Separate file because this needs isolated
 // Xvfb, XTEST and an independently compiled event receiver, not merely Wayland
-// build dependencies. Measured on Ubuntu 26.04/Nix: 0.88 s including compilation.
+// build dependencies. Also covers PR #6775 discussion_r4398875925: whole-paste
+// checks must preserve held modifiers and reject unsupported suffixes before input.
+// Ubuntu 26.04/Nix: 0.97 s including compilation, 4.01 s including Xvfb startup.
 // Run: xvfb-run -a node --test apps/desktop/native/remote-desktop/linux-input/x11-test.mjs
 const source = path.dirname(fileURLToPath(import.meta.url));
 function run(command, args, options = {}) {

@@ -496,7 +496,7 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
 // X11 inputHost integration: real start/input/release with in-memory native I/O.
 // Existing Wayland coverage cannot catch X11 display rejection, wrong geometry,
 // or stale coordinates after the selected screen moves (unit tier).
-// Standalone file duration on Windows: 0.661 s (18 tests).
+// Standalone file duration on Windows: 0.759 s (20 tests).
 it('starts X11 on the selected root rectangle and refuses stale layout before injection', async () => {
   const c = childProcess();
   const previousDisplays = displays;
@@ -546,6 +546,57 @@ it('starts X11 on the selected root rectangle and refuses stale layout before in
     displays = previousDisplays;
   }
 });
+
+// PR #6775 discussion_r4398875925: the production input() path must reject
+// a.repeat(256) + '中' before typing its valid prefix. Existing coverage only
+// checks Wayland chunking and X11 geometry (unit tier, in-memory native I/O).
+it.each([false, true])(
+  'preflights long X11 text before typing (supported: %s)',
+  async (supported) => {
+    vi.useFakeTimers();
+    const c = childProcess();
+    const failure = vi.fn(() => host.stop());
+    const host = new DesktopInputHost(failure, {
+      platform: 'linux',
+      linuxBackend: 'x11',
+      resolveBinary: async () => '/test/x11-helper',
+      spawn: () => {
+        queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+        return c.typed;
+      },
+    });
+    let typed = '';
+    const chunks: number[] = [];
+    c.child.stdin.write.mockImplementation((line: string) => {
+      const events = JSON.parse(line) as { kind: string; text?: string }[];
+      for (const event of events) {
+        if (event.text?.includes('中')) {
+          c.child.exitCode = 2;
+          c.child.emit('exit', 2);
+          c.child.emit('close', 2);
+          return;
+        }
+        if (event.kind === 'text') {
+          typed += event.text;
+          chunks.push(Array.from(event.text!).length);
+        }
+      }
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ok\n')));
+    });
+    try {
+      await host.start('1');
+      const text = 'a'.repeat(256) + (supported ? 'b' : '中');
+      host.input([{ kind: 'text', text }]);
+      await flush();
+      expect(typed).toBe(supported ? text : '');
+      expect(chunks).toEqual(supported ? [256, 1] : []);
+      expect(failure).toHaveBeenCalledTimes(supported ? 0 : 1);
+    } finally {
+      host.stop();
+      c.exit();
+    }
+  },
+);
 
 describe('代输入 window input', () => {
   it('starts the helper confined to one window and passes fractions through untouched', async () => {

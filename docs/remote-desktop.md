@@ -640,7 +640,13 @@ capabilities. Other Wayland compositors retain their existing view-only behavior
 The X11 helper uses XKB physical key names and XTEST event injection. Committed
 text travels only over its private stdin, not the clipboard, process arguments or
 logs. Text is limited to characters expressible by the current X keymap; an
-unsupported character rejects the batch before injection. Arbitrary Unicode text
+unsupported character rejects the batch before injection. Before splitting a long
+X11 text event into acknowledged 256-character chunks, Desktop sends a private,
+side-effect-free `text-check` for the complete event. A rejected suffix therefore
+cannot leave an already-typed prefix. Each chunk still rechecks the live keymap
+at execution time; this is not a rollback guarantee for layout changes or native
+failures during injection. The command is local to the bundled helper and does
+not change the device-link/Mobile protocol. Arbitrary Unicode text
 (such as Chinese text on a US keymap) is not supported by this backend. It never
 temporarily changes the global keymap: restoring a map after a fixed delay cannot
 prove the focused client consumed the character. Physical local input and other

@@ -387,6 +387,10 @@ export class DesktopInputHost {
         }
         flush();
         const chars = Array.from(event.text);
+        if (this.x11Geometry && chars.length > 256) {
+          // Check the whole paste before any chunk can inject a valid prefix.
+          this.write([{ kind: 'text-check', text: event.text }], this.activity!.begin([event]));
+        }
         for (let i = 0; i < chars.length; i += 256) {
           pending = [{ kind: 'text', text: chars.slice(i, i + 256).join('') }];
           flush();

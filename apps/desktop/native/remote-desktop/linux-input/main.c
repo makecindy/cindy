@@ -179,7 +179,7 @@ static bool event(json_object *object, bool apply) {
       return backend_key((uint32_t)mapped, down);
     return true;
   }
-  if (!strcmp(kind, "text")) {
+  if (!strcmp(kind, "text") || !strcmp(kind, "text-check")) {
     const char *text = string(object, "text");
     if (!text || strlen(text) > 16384)
       return false;
@@ -191,7 +191,8 @@ static bool event(json_object *object, bool apply) {
         return false;
     }
     if (!validating && !backend_text_available(text)) return false;
-    return !apply || backend_text(text);
+    // Private side-effect-free preflight for a complete paste before chunking.
+    return !apply || !strcmp(kind, "text-check") || backend_text(text);
   }
   return false;
 }
