@@ -16,7 +16,7 @@ import {
   pickOwnerSession,
   type ToolMessageRow,
 } from './attribution.js';
-import type { HostDaemonLedger } from './ledger.js';
+import type { HostDaemonLedger, HostDaemonOwnerRecord } from './ledger.js';
 import {
   isSystemScheduledTaskId,
   type RawScheduledTask,
@@ -111,6 +111,24 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     return picked ? { sessionId: picked.sessionId, title: picked.title } : null;
   }
 
+  /**
+   * 台账记录是否仍然描述「现在这条」任务。
+   * 同名同路径的任务被删掉、随后由别的程序重建时，定义写入时刻与启动命令都会变；
+   * 只按 id 认权限会让新任务继承旧授权，所以定义变了就撤销。
+   */
+  function ownerMatchesTask(owner: HostDaemonOwnerRecord | null, task: RawScheduledTask): boolean {
+    if (!owner) return false;
+    return owner.definitionMtimeMs === task.definitionMtimeMs && owner.command === toCommand(task);
+  }
+
+  /** 取当前有效归属；定义已变则顺手撤销，返回 null 让调用方重新判定。 */
+  function currentOwner(task: RawScheduledTask): HostDaemonOwnerRecord | null {
+    const owner = deps.ledger.getOwner(task.id);
+    if (!owner || ownerMatchesTask(owner, task)) return owner;
+    deps.ledger.clearOwner(task.id);
+    return null;
+  }
+
   /** 操作前重新扫描并复核归属：renderer 只提供候选 id，授权依据在 main 重算。 */
   async function requireOwnedTask(id: string): Promise<RawScheduledTask> {
     if (platform !== 'win32') {
@@ -122,8 +140,8 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     const tasks = await deps.scanTasks();
     const task = tasks.find((candidate) => candidate.id === id);
     if (!task) throw new HostDaemonActionError('NOT_FOUND', 'scheduled task no longer exists');
-    // 只有本功能登记过的条目才允许停止/删除 —— 绝不变成任意计划任务管理器。
-    if (!deps.ledger.getOwner(id)) {
+    // 只有本功能登记过、且定义没变过的条目才允许操作 —— 绝不变成任意计划任务管理器。
+    if (!ownerMatchesTask(currentOwner(task), task)) {
       throw new HostDaemonActionError('NOT_OWNED', 'scheduled task was not created by Cindy');
     }
     return task;
@@ -140,10 +158,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       const entries: HostDaemonEntry[] = [];
       let unrelatedCount = 0;
       let traces = 0;
-      let dirty = false;
 
       for (const task of tasks) {
-        let owner = deps.ledger.getOwner(task.id);
+        let owner = currentOwner(task);
 
         if (!owner) {
           const mtime = task.definitionMtimeMs;
@@ -162,16 +179,21 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
           try {
             traced = await traceOwner(task);
           } catch {
-            // 追溯失败（库忙 / 正在切账号）只影响本条归属，不让整张清单失败。
-            traced = null;
+            // 查询失败（库忙 / 正在切账号）≠ 查无此人：不能写负缓存，否则一次失败就
+            // 让这条任务永远隐身。本次按「无关」计数，下次扫描重试。
+            unrelatedCount += 1;
+            continue;
           }
           if (traced) {
-            deps.ledger.setOwner(task.id, { ...traced, atMs: capturedAtMs });
-            dirty = true;
+            deps.ledger.setOwner(task.id, {
+              ...traced,
+              atMs: capturedAtMs,
+              definitionMtimeMs: task.definitionMtimeMs ?? 0,
+              command: toCommand(task),
+            });
             owner = deps.ledger.getOwner(task.id);
           } else {
             deps.ledger.setMissMtime(task.id, mtime);
-            dirty = true;
             unrelatedCount += 1;
             continue;
           }
@@ -184,12 +206,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         entries.push(toEntry(task, owner));
       }
 
-      if (dirty) {
-        try {
-          deps.ledger.save();
-        } catch {
-          // 台账写失败只影响下次是否重算，不影响本次清单。
-        }
+      try {
+        // save() 自身只在有改动时落盘；撤销授权也走这里。
+        deps.ledger.save();
+      } catch {
+        // 台账写失败只影响下次是否重算，不影响本次清单。
       }
 
       entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -209,6 +230,13 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     async remove(id) {
       await requireOwnedTask(id);
       await deps.deleteTask(id);
+      // 任务已不在：顺手撤掉授权，避免同名任务重建后继承。
+      deps.ledger.clearOwner(id);
+      try {
+        deps.ledger.save();
+      } catch {
+        // 写失败只影响下次扫描，不影响这次删除结果。
+      }
     },
   };
 }

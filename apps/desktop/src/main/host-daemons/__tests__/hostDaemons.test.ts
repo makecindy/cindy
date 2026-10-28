@@ -26,6 +26,7 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
     owners,
     getOwner: (id) => owners.get(id) ?? null,
     setOwner: (id, record) => void owners.set(id, record),
+    clearOwner: (id) => void owners.delete(id),
     getMissMtime: (id) => misses.get(id) ?? null,
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
     save: () => {},
@@ -233,6 +234,84 @@ describe('hostDaemons service', () => {
     expect((await service.list()).unrelatedCount).toBe(1);
     expect((await service.list()).unrelatedCount).toBe(1);
     expect(queries).toBe(1);
+  });
+
+  // 同名同路径的任务被删掉、由别的程序重建时，台账里的旧记录不能继续授权。
+  it('revokes ownership when the task definition changed', async () => {
+    const ledger = memoryLedger();
+    const replaced = task({ definitionMtimeMs: 1_793_000_000_001, exec: 'C:\\other\\new.exe', args: '' });
+    const service = createHostDaemonsService({
+      scanTasks: async () => [replaced],
+      readToolMessages: async () => [],
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+    });
+    ledger.setOwner(replaced.id, {
+      sessionId: 'old-session',
+      title: '以前建过同名任务',
+      atMs: 1_700_000_000_000,
+      definitionMtimeMs: 1_600_000_000_000,
+      command: 'C:\\py\\pythonw.exe C:\\Users\\me\\airlink\\autopm.py',
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(snapshot.unrelatedCount).toBe(1);
+    expect(ledger.owners.has(replaced.id)).toBe(false);
+    await expect(service.remove(replaced.id)).rejects.toMatchObject({ code: 'NOT_OWNED' });
+  });
+
+  // 查询失败 ≠ 查无此人：不能留下负缓存，否则一次数据库抖动就让这条任务永远隐身。
+  it('does not cache a miss when the attribution query fails', async () => {
+    const ledger = memoryLedger();
+    let fail = true;
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task({ definitionMtimeMs: 1_793_028_922_179 })],
+      readToolMessages: async () => {
+        if (fail) throw new Error('database is locked');
+        return [{ sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' }];
+      },
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      // 远超 5 分钟窗口：否则「窗口内重算」会掩盖负缓存
+      now: () => 1_800_000_000_000,
+    });
+
+    expect((await service.list()).unrelatedCount).toBe(1);
+    expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
+
+    fail = false;
+    expect((await service.list()).entries.map((entry) => entry.name)).toEqual(['airlink-autopm']);
+  });
+
+  it('drops the ledger record after a successful delete', async () => {
+    const ledger = memoryLedger();
+    const deleted: string[] = [];
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages: async () => [
+        { sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' },
+      ],
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async (id) => void deleted.push(id),
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+    });
+
+    await service.list();
+    expect(ledger.owners.has('\\airlink-autopm')).toBe(true);
+    await service.remove('\\airlink-autopm');
+    expect(deleted).toEqual(['\\airlink-autopm']);
+    expect(ledger.owners.has('\\airlink-autopm')).toBe(false);
   });
 
   it('falls back to an unsupported snapshot off Windows', async () => {

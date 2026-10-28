@@ -15,10 +15,17 @@ import fs from 'node:fs';
 
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
+/**
+ * 归属记录。除「谁建的」之外还钉住**任务定义的身份**：同名同路径的任务被删掉后
+ * 由别的程序重建时，mtime 与启动命令都会变，旧归属随之失效 —— 否则清单会凭一个
+ * 名字就继承停止/删除权限。
+ */
 export interface HostDaemonOwnerRecord {
   sessionId: string;
   title: string | null;
   atMs: number;
+  definitionMtimeMs: number;
+  command: string;
 }
 
 interface LedgerFile {
@@ -47,10 +54,17 @@ function parseLedger(raw: string): LedgerFile {
     for (const [id, value] of Object.entries(parsed.owners)) {
       if (!isRecord(value) || typeof value.sessionId !== 'string') continue;
       if (typeof value.atMs !== 'number' || !Number.isFinite(value.atMs)) continue;
+      // 缺身份字段的旧记录无法核对定义，直接丢弃：宁可重新追溯，也不凭名字授权。
+      if (typeof value.definitionMtimeMs !== 'number' || !Number.isFinite(value.definitionMtimeMs)) {
+        continue;
+      }
+      if (typeof value.command !== 'string') continue;
       owners[id] = {
         sessionId: value.sessionId,
         title: typeof value.title === 'string' ? value.title : null,
         atMs: value.atMs,
+        definitionMtimeMs: value.definitionMtimeMs,
+        command: value.command,
       };
     }
   }
@@ -68,6 +82,8 @@ function parseLedger(raw: string): LedgerFile {
 export interface HostDaemonLedger {
   getOwner(id: string): HostDaemonOwnerRecord | null;
   setOwner(id: string, record: HostDaemonOwnerRecord): void;
+  /** 定义已变或任务已删除时撤销授权。 */
+  clearOwner(id: string): void;
   getMissMtime(id: string): number | null;
   setMissMtime(id: string, mtimeMs: number): void;
   save(): void;
@@ -96,6 +112,12 @@ export function createHostDaemonLedger(filePath: string): HostDaemonLedger {
       const current = ensure();
       current.owners[id] = record;
       delete current.misses[id];
+      dirty = true;
+    },
+    clearOwner(id) {
+      const current = ensure();
+      if (!current.owners[id]) return;
+      delete current.owners[id];
       dirty = true;
     },
     getMissMtime(id) {
