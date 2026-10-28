@@ -1831,4 +1831,29 @@ describe('session runtime control wiring', () => {
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
   });
+
+  it('schedules the quota-fallback revert and tears it down on quit', () => {
+    // “逻辑对但没接线”是这个特性已经发生过两次的失败模式，这里只盯接线本身。
+    const revert = registerSource.slice(
+      registerSource.indexOf('  const usageLimitFallbackRevert = createUsageLimitFallbackRevert({'),
+      registerSource.indexOf('  const inputCoordinator: AgentInputCoordinator'),
+    );
+    expect(revert).toContain('observeUsageChanges((kind)');
+    expect(revert).toContain('setInterval(scheduleUsageLimitFallbackRevert, 60_000)');
+    expect(revert).toContain("onQuit('usage-limit-fallback-revert'");
+    expect(revert).toContain('unsubscribeRevertUsageChanges()');
+  });
+
+  it('drops the quota-fallback episode on any explicit model selection', () => {
+    // 回切只消费 episode；用户一旦自己选了模型（包括选回同一个），那条 episode 必须消失，
+    // 否则“用户就想用备用模型”会被自动改回去。两处入口：发送时落地的选择、SET_MODEL 的 apply。
+    const clears = registerSource.match(/writeSessionUsageLimitFallbackEpisode\(sessionId, null\)/g) ?? [];
+    expect(clears.length).toBeGreaterThanOrEqual(2);
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('writeSessionUsageLimitFallbackEpisode(sessionId, null)');
+  });
 });

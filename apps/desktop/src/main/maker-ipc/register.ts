@@ -20103,7 +20103,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         policy.source.model,
       );
       // 只当否定条件用：true = 确定仍受限，这一轮不白试。绝不当「已恢复」的证据。
-      return limit?.limited === true;
+      // 没带重置时刻的窗口会被快照永远算作 live（没有到期时间就等于一直有效），
+      // 那种 limited 证明不了「过了已知重置时刻仍受限」，会把 episode 永久卡死在不尝试也不收口；
+      // 真正的安全来自时间门 + 原子认领 + 5 次预算，所以这里要求同时有重置时刻。
+      return limit?.limited === true && limit.resetAtMs !== null;
     },
     writeEpisode: (sessionId, episode) =>
       writeSessionUsageLimitFallbackEpisode(sessionId, episode),

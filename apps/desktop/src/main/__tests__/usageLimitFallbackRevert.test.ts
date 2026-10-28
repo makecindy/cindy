@@ -72,6 +72,8 @@ function harness(options: {
     pending: options.hasPendingSelection ?? false,
     turnRunning: options.turnRunning ?? false,
     hasRecovery: options.hasRecovery ?? false,
+    /** 测试用：标记“中途被换了 episode”，避免重入。 */
+    replaced: false,
     eligible: options.eligible ?? true,
   };
   const applySourceSelection = vi.fn(async (input: {
@@ -350,13 +352,14 @@ describe('usage-limit fallback revert (episode accounting)', () => {
   });
 
   it('已经不在降级组合上（用户换走过）→ 清 episode、不切', async () => {
-    const { deps, applySourceSelection, state, writeEpisode } = harness({
+    const { deps, applySourceSelection, state, clearEpisode } = harness({
       effective: { ...source, model: 'glm-4.6', providerId: 'zhipu' },
     });
     await createUsageLimitFallbackRevert(deps).sweep();
 
     expect(applySourceSelection).not.toHaveBeenCalled();
-    expect(writeEpisode).toHaveBeenCalledWith('s1', null);
+    // 清是 CAS 的：只删读到的那一份。
+    expect(clearEpisode).toHaveBeenCalledWith('s1', expect.objectContaining({ attempts: 0 }));
     expect(state.episodes.size).toBe(0);
   });
 
@@ -450,5 +453,32 @@ describe('usage-limit fallback revert (episode accounting)', () => {
 
     expect(result.reverted).toBe(0);
     expect(applySourceSelection).not.toHaveBeenCalled();
+  });
+
+  it('“已不在降级组合上”的收尾也不抹掉期间新写的 episode', async () => {
+    const { deps, state, clearEpisode } = harness();
+    const original = deps.readProfiles;
+    deps.readProfiles = async (sessionId) => {
+      const profiles = await original(sessionId);
+      // 模拟：读 profile 的时候用户手选回源、紧接着又降级一次写下新 episode。
+      const entry = state.episodes.get(sessionId);
+      if (entry && !state.replaced) {
+        state.replaced = true;
+        state.episodes.set(sessionId, {
+          sessionId,
+          policy: entry.policy,
+          episode: { ...entry.episode, failedAtMs: entry.episode.failedAtMs + 1, attempts: 0 },
+        });
+        state.effective = { ...state.effective, providerId: 'openai', model: 'gpt-6.1-sol' };
+      }
+      return profiles;
+    };
+
+    await createUsageLimitFallbackRevert(deps).sweep();
+
+    // 我们的清是 CAS：读到的旧 episode 已不匹配，新 episode 必须活下来。
+    expect(clearEpisode).toHaveBeenCalledWith('s1', expect.objectContaining({ attempts: 0 }));
+    expect([...state.episodes.values()][0]?.episode.attempts).toBe(0);
+    expect(state.episodes.size).toBe(1);
   });
 });

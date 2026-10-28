@@ -163,14 +163,21 @@ export function createUsageLimitFallbackRevert(
     const { sessionId, policy, episode } = input;
     const profiles = await deps.readProfiles(sessionId);
     if (!profiles) {
-      // 任务没了：episode 留着也没人消费。
-      await deps.writeEpisode(sessionId, null);
+      // 任务没了：episode 留着也没人消费。CAS 清，不抹掉期间新写的。
+      await deps.clearEpisode(sessionId, {
+        failedAtMs: episode.failedAtMs,
+        attempts: episode.attempts,
+      });
       return 'skipped';
     }
     if (profiles.hasPendingSelection) return 'skipped';
     if (!isOnFallbackTarget(policy, episode, profiles.effective)) {
       // 已经不在降级组合上（用户换走/换回）——这条 episode 不再适用。
-      await deps.writeEpisode(sessionId, null);
+      // 必须 CAS 清：readProfiles 在锁外，期间可能刚又降级一次写下了新 episode。
+      await deps.clearEpisode(sessionId, {
+        failedAtMs: episode.failedAtMs,
+        attempts: episode.attempts,
+      });
       return 'skipped';
     }
     if (!deps.canApplySelection(sessionId, profiles.generation)) return 'skipped';
@@ -191,7 +198,10 @@ export function createUsageLimitFallbackRevert(
       // 组合或 generation 变了（用户换过 / Agent 换过 / 新 turn 落了别的路线）→ 作废。
       if (fresh.generation !== profiles.generation) return 'skipped' as const;
       if (!isOnFallbackTarget(policy, episode, fresh.effective)) {
-        await deps.writeEpisode(sessionId, null);
+        await deps.clearEpisode(sessionId, {
+          failedAtMs: episode.failedAtMs,
+          attempts: episode.attempts,
+        });
         return 'skipped' as const;
       }
       if (!deps.canApplySelection(sessionId, profiles.generation)) return 'skipped' as const;
