@@ -198,6 +198,18 @@ function normalizeKnownFileHref(href: string): string {
   return basenameFromPathLike(decoded);
 }
 
+function isExplicitKnownFileDestination(href: string): boolean {
+  const decoded = safeDecodeURIComponent(stripQueryAndHash(href.trim()));
+  return (
+    /^file:\/\//i.test(decoded) ||
+    decoded.startsWith('/') ||
+    WIN_ABS_RE.test(decoded) ||
+    decoded.startsWith('\\\\') ||
+    decoded.startsWith('~/') ||
+    decoded.startsWith('~\\')
+  );
+}
+
 /**
  * Resolve a model-authored markdown link against files the user attached in
  * this chat session. LLMs often cite an uploaded document as
@@ -221,6 +233,10 @@ export function resolveKnownLocalFileHref(
   files: readonly KnownLocalFileRef[] | undefined,
 ): string | null {
   if (!href || !files || files.length === 0) return null;
+  // Attachment matching fills in a missing location for model-authored bare
+  // or relative references. Never replace an explicit local destination just
+  // because an attachment happens to share its basename (Issue #7617).
+  if (isExplicitKnownFileDestination(href)) return null;
   const wanted = normalizeKnownFileHref(href).toLowerCase();
   if (!wanted) return null;
 

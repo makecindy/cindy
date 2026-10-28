@@ -201,6 +201,24 @@ describe('classifyMarkdownLinkTarget', () => {
     });
   });
 
+  // Issue #7617: attachment basename completion is only for references that
+  // still need a location. An explicit destination must keep its own identity
+  // even when the task has an attachment with the same basename.
+  it.each([
+    'C:\\project\\report.pdf',
+    'C:/project/report.pdf',
+    '/project/report.pdf',
+    'file:///C:/project/report.pdf',
+    'file:///project/report.pdf',
+    '\\\\server\\share\\report.pdf',
+    '~/project/report.pdf',
+    '%2Fproject%2Freport.pdf',
+  ])('keeps explicit destination %s instead of a same-name attachment', (href) => {
+    expect(classifyMarkdownLinkTarget(href, [
+      { name: 'report.pdf', path: 'C:\\uploads\\report.pdf' },
+    ])).toMatchObject({ kind: 'local-candidate', href });
+  });
+
   it('does not render unsupported schemes or directories as clickable links', () => {
     expect(classifyMarkdownLinkTarget('mailto:me@example.com')).toEqual({
       kind: 'plain-text',
