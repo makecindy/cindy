@@ -114,10 +114,10 @@ export function useSessionUsageLimitFallback(
         const result = await window.electronAPI.maker.sessionUsageLimitFallbackSet(sessionId, next);
         return applyMutation(result, sessionId);
       } catch (cause) {
-        if (mountedRef.current) setError(readErrorMessage(cause));
+        if (mountedRef.current && sessionIdRef.current === sessionId) setError(readErrorMessage(cause));
         return false;
       } finally {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current && sessionIdRef.current === sessionId) setLoading(false);
       }
     },
     [applyMutation, sessionId],
@@ -131,10 +131,10 @@ export function useSessionUsageLimitFallback(
       const result = await window.electronAPI.maker.sessionUsageLimitFallbackClear(sessionId);
       return applyMutation(result, sessionId);
     } catch (cause) {
-      if (mountedRef.current) setError(readErrorMessage(cause));
+      if (mountedRef.current && sessionIdRef.current === sessionId) setError(readErrorMessage(cause));
       return false;
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && sessionIdRef.current === sessionId) setLoading(false);
     }
   }, [applyMutation, sessionId]);
 
