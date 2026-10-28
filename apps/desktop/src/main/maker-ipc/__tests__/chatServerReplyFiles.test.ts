@@ -291,15 +291,28 @@ describe('group reply file delivery', () => {
     } finally { await fs.rm(alias, { force: true }); }
   });
 
-  it.each([':42', ':42:3', ':42-50', '#L42', '#L42-L50'])('delivers line-located file links %s once alongside a PDF', async suffix => {
+  // Group regression: source citations outside the hidden lane workspace must
+  // remain readable text, never trigger file export or reject an otherwise valid reply.
+  // Existing file-delivery cases cover artifacts; these unit inputs exercise the
+  // production preparer's distinct citation-only and mixed-delivery branches.
+  it.each([':42', ':42:3', ':42-50', '#L42', '#L42-L50'])('keeps line-located references %s as text alongside file delivery', async suffix => {
     const source = path.join(work, 'source.ts');
     await fs.writeFile(source, 'export const answer = 42;');
     const result = await prepareChatReplyFiles(`[source](source.ts${suffix}) [again](./source.ts) [PDF](<${pdf}>)`, 'lane', () => {});
-    expect(result.text).toBe('source again PDF');
+    expect(result.text).toBe(`source (source.ts${suffix}) again PDF`);
     expect(result.attachments).toHaveLength(2);
     expect(result.attachments[0]!.name).toBe('source.ts');
     expect((await result.attachments[0]!.readBytes!()).toString()).toBe('export const answer = 42;');
     expect((await result.attachments[1]!.readBytes!()).toString()).toContain('%PDF');
+  });
+
+  it.each(['inline', 'reference'])('keeps an out-of-workspace %s citation without file authority or reading bytes', async mode => {
+    const target = '/unavailable-project/source.ts:42';
+    const body = mode === 'inline' ? `[依据](<${target}>)` : `[依据][source]\n\n[source]: <${target}>`;
+    scope.snapshot = null;
+    const result = await prepareChatReplyFiles(body, 'lane', () => { throw new Error('No file authority'); });
+    expect(result.attachments).toEqual([]);
+    expect(result.text.trim()).toBe(`依据 (${target})`);
   });
 
   it('preserves literal line-like filenames in encoded file URLs and explicit query paths', async () => {
