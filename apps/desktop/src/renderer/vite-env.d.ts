@@ -5484,6 +5484,9 @@ interface ElectronAPI {
     stop: (
       request: import('../shared/hostDaemons').HostDaemonActionRequest,
     ) => Promise<{ ok: true }>;
+    run: (
+      request: import('../shared/hostDaemons').HostDaemonActionRequest,
+    ) => Promise<{ ok: true }>;
     remove: (
       request: import('../shared/hostDaemons').HostDaemonActionRequest,
     ) => Promise<{ ok: true }>;

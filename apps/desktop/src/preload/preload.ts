@@ -171,6 +171,7 @@ import {
 import {
   HOST_DAEMONS_DELETE_CHANNEL,
   HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
   type HostDaemonActionRequest,
   type HostDaemonsSnapshot,
@@ -6252,6 +6253,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<HostDaemonsSnapshot> => ipcRenderer.invoke(HOST_DAEMONS_LIST_CHANNEL),
     stop: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
       ipcRenderer.invoke(HOST_DAEMONS_STOP_CHANNEL, request),
+    run: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_RUN_CHANNEL, request),
     remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
       ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
   },

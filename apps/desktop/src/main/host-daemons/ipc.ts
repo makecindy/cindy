@@ -14,6 +14,7 @@ import { ipcMain } from 'electron';
 import {
   HOST_DAEMONS_DELETE_CHANNEL,
   HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
   type HostDaemonsSnapshot,
 } from '../../shared/hostDaemons.js';
@@ -77,6 +78,7 @@ export function registerHostDaemonsIpc(opts: HostDaemonsIpcOptions): void {
   };
 
   registerAction(HOST_DAEMONS_STOP_CHANNEL, (service, id) => service.stop(id));
+  registerAction(HOST_DAEMONS_RUN_CHANNEL, (service, id) => service.run(id));
   registerAction(HOST_DAEMONS_DELETE_CHANNEL, (service, id) => service.remove(id));
 }
 
@@ -85,5 +87,6 @@ export function _resetHostDaemonsIpcForTests(): void {
   registered = false;
   ipcMain.removeHandler(HOST_DAEMONS_LIST_CHANNEL);
   ipcMain.removeHandler(HOST_DAEMONS_STOP_CHANNEL);
+  ipcMain.removeHandler(HOST_DAEMONS_RUN_CHANNEL);
   ipcMain.removeHandler(HOST_DAEMONS_DELETE_CHANNEL);
 }

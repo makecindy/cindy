@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   HOST_DAEMONS_DELETE_CHANNEL,
   HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
 } from '../../shared/hostDaemons';
 
@@ -75,11 +76,13 @@ describe('resource usage window host daemons bridge', () => {
     mocks.invoke.mockClear();
     await exposed!.list();
     await exposed!.stop({ id: '\\demo' });
+    await exposed!.run({ id: '\\demo' });
     await exposed!.remove({ id: '\\demo' });
 
     expect(mocks.invoke.mock.calls).toEqual([
       [HOST_DAEMONS_LIST_CHANNEL],
       [HOST_DAEMONS_STOP_CHANNEL, { id: '\\demo' }],
+      [HOST_DAEMONS_RUN_CHANNEL, { id: '\\demo' }],
       [HOST_DAEMONS_DELETE_CHANNEL, { id: '\\demo' }],
     ]);
   });

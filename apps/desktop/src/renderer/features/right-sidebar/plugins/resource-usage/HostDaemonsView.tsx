@@ -68,6 +68,21 @@ export function HostDaemonsView() {
     }
   };
 
+  /** 立即跑一次。停止是可逆的一半：没有这一步任务只能等下一个触发时机。 */
+  const runNow = async (entry: HostDaemonEntry) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.hostDaemons.run({ id: entry.id });
+      toast.success(t('rightSidebar.hostDaemons.started', { name: entry.name }));
+      await load();
+    } catch {
+      toast.error(t('rightSidebar.hostDaemons.actionFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading && snapshot === null) {
     return (
       <div className="resource-usage-loading host-daemons-loading">
@@ -128,6 +143,14 @@ export function HostDaemonsView() {
                 </div>
               </div>
               <div className="host-daemons-actions">
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  disabled={busy || entry.state === 'running' || entry.state === 'disabled'}
+                  onClick={() => void runNow(entry)}
+                >
+                  {t('rightSidebar.hostDaemons.run')}
+                </Button>
                 <Button
                   variant="secondary"
                   size="xs"

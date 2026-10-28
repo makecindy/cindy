@@ -134,6 +134,11 @@ export function buildDeleteScheduledTaskScript(id: string): string | null {
   return buildActionScript(id, 'Unregister-ScheduledTask', ' -Confirm:$false');
 }
 
+/** 立即跑一次；停止之后用户要靠它把任务重新拉起来。 */
+export function buildRunScheduledTaskScript(id: string): string | null {
+  return buildActionScript(id, 'Start-ScheduledTask', '');
+}
+
 export async function scanScheduledTasks(): Promise<RawScheduledTask[]> {
   if (process.platform !== 'win32') return [];
   const stdout = await runWindowsScriptWorker(WINDOWS_SCHEDULED_TASK_SCAN_SCRIPT, {
@@ -153,5 +158,12 @@ export async function stopScheduledTask(id: string): Promise<void> {
 export async function deleteScheduledTask(id: string): Promise<void> {
   const script = buildDeleteScheduledTaskScript(id);
   if (!script) throw new Error('scheduled task id is not deletable');
+  await runWindowsScriptWorker(script, { timeoutMs: 15_000 });
+}
+
+/** 立即运行一次。调用方必须先做归属校验。 */
+export async function runScheduledTask(id: string): Promise<void> {
+  const script = buildRunScheduledTaskScript(id);
+  if (!script) throw new Error('scheduled task id is not runnable');
   await runWindowsScriptWorker(script, { timeoutMs: 15_000 });
 }

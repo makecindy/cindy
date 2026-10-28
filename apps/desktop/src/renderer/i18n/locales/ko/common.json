@@ -9315,6 +9315,8 @@
       },
       "stop": "중지",
       "delete": "삭제",
+      "run": "지금 실행",
+      "started": "{{name}} 실행됨",
       "stopTitle": "“{{name}}”을(를) 중지할까요?",
       "stopBody": "이번 실행만 끝냅니다. 작업은 예정대로 다시 시작됩니다.",
       "deleteTitle": "“{{name}}”을(를) 삭제할까요?",

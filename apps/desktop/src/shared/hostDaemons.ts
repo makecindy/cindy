@@ -18,6 +18,8 @@
 export const HOST_DAEMONS_LIST_CHANNEL = 'host-daemons:list';
 /** renderer → main(invoke)：停止一次计划任务运行（不动任务定义）。 */
 export const HOST_DAEMONS_STOP_CHANNEL = 'host-daemons:stop';
+/** renderer → main(invoke)：立即运行一次（停止之后要靠它把任务重新拉起来）。 */
+export const HOST_DAEMONS_RUN_CHANNEL = 'host-daemons:run';
 /** renderer → main(invoke)：从这台电脑删除计划任务。 */
 export const HOST_DAEMONS_DELETE_CHANNEL = 'host-daemons:delete';
 

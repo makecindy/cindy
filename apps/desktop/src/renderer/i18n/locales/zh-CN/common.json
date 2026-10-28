@@ -9315,6 +9315,8 @@
       },
       "stop": "停止",
       "delete": "删除",
+      "run": "立即运行",
+      "started": "已启动 {{name}}",
       "stopTitle": "停止「{{name}}」？",
       "stopBody": "只结束这一次运行，任务仍会按原计划再次启动。",
       "deleteTitle": "删除「{{name}}」？",

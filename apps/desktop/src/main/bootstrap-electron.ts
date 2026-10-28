@@ -561,6 +561,7 @@ import { registerHostDaemonsIpc } from './host-daemons/ipc.js';
 import { createHostDaemonLedger } from './host-daemons/ledger.js';
 import {
   deleteScheduledTask,
+  runScheduledTask,
   scanScheduledTasks,
   stopScheduledTask,
 } from './host-daemons/scheduledTasks.js';
@@ -2540,6 +2541,7 @@ registerHostDaemonsIpc({
       readToolMessages,
       ledger: createHostDaemonLedger(path.join(app.getPath('userData'), 'host-daemons.v1.json')),
       stopTask: stopScheduledTask,
+      runTask: runScheduledTask,
       deleteTask: deleteScheduledTask,
     });
     return hostDaemonsService;

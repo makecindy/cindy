@@ -43,6 +43,8 @@ export interface HostDaemonsServiceDeps {
   readToolMessages: (fromMs: number, toMs: number) => Promise<ToolMessageRow[]>;
   ledger: HostDaemonLedger;
   stopTask: (id: string) => Promise<void>;
+  /** 立即运行一次（停止之后把任务重新拉起来）。 */
+  runTask: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   now?: () => number;
   platform?: NodeJS.Platform;
@@ -90,6 +92,7 @@ function toEntry(
 export interface HostDaemonsService {
   list(): Promise<HostDaemonsSnapshot>;
   stop(id: string): Promise<void>;
+  run(id: string): Promise<void>;
   remove(id: string): Promise<void>;
 }
 
@@ -196,6 +199,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     async stop(id) {
       await requireOwnedTask(id);
       await deps.stopTask(id);
+    },
+
+    async run(id) {
+      await requireOwnedTask(id);
+      await deps.runTask(id);
     },
 
     async remove(id) {

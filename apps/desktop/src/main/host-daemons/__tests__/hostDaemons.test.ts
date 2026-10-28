@@ -117,6 +117,7 @@ describe('hostDaemons service', () => {
       readToolMessages: async () => dbRows,
       ledger,
       stopTask: async () => {},
+      runTask: async () => {},
       deleteTask: async () => {},
       platform: 'win32',
       now: () => 1_800_000_000_000,
@@ -137,6 +138,21 @@ describe('hostDaemons service', () => {
     dbRows = [];
     const second = await service.list();
     expect(second.entries.map((entry) => entry.name)).toEqual(['airlink-autopm']);
+
+    // 停止是可逆的一半：立即运行沿用同一条归属复核，并真的下发到系统。
+    const ran: string[] = [];
+    const runnable = createHostDaemonsService({
+      scanTasks: async () => scanned,
+      readToolMessages: async () => [],
+      ledger,
+      stopTask: async () => {},
+      runTask: async (id) => void ran.push(id),
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+    });
+    await runnable.run('\\airlink-autopm');
+    expect(ran).toEqual(['\\airlink-autopm']);
   });
 
   it('refuses to stop or delete a task it did not attribute', async () => {
@@ -145,12 +161,17 @@ describe('hostDaemons service', () => {
       readToolMessages: async () => [],
       ledger: memoryLedger(),
       stopTask: async () => {},
+      runTask: async () => {},
       deleteTask: async () => {},
       platform: 'win32',
     });
 
     await expect(service.stop('\\v2rayNAutoRun')).rejects.toBeInstanceOf(HostDaemonActionError);
+    await expect(service.run('\\v2rayNAutoRun')).rejects.toBeInstanceOf(HostDaemonActionError);
     await expect(service.remove('\\Microsoft\\Windows\\Defrag')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(service.run('\\Microsoft\\Windows\\Defrag')).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
   });
@@ -170,6 +191,7 @@ describe('hostDaemons service', () => {
       },
       ledger: memoryLedger(),
       stopTask: async () => {},
+      runTask: async () => {},
       deleteTask: async () => {},
       platform: 'win32' as const,
       now: () => clockMs,
@@ -202,6 +224,7 @@ describe('hostDaemons service', () => {
       },
       ledger: memoryLedger(),
       stopTask: async () => {},
+      runTask: async () => {},
       deleteTask: async () => {},
       platform: 'win32',
       now: () => createdMs + 30 * 60_000,
@@ -220,6 +243,7 @@ describe('hostDaemons service', () => {
       readToolMessages: async () => [],
       ledger: memoryLedger(),
       stopTask: async () => {},
+      runTask: async () => {},
       deleteTask: async () => {},
       platform: 'darwin',
     });
