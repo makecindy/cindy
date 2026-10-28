@@ -13355,6 +13355,7 @@
       "deviceStillLoading": "Remote device is still loading, please wait",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
+      "worktreeBranchNeedsWorktree": "Branch {{branch}} only applies with Worktree on. Without it, this task runs on the current branch {{current}}. Turn on Worktree, or switch the branch back to {{current}}.",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
       "remoteProjectBanner": "New session in {{project}} on {{device}}",

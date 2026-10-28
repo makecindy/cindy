@@ -13301,6 +13301,7 @@
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
       "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
+      "worktreeBranchNeedsWorktree": "worktree를 켜지 않으면 선택한 브랜치 {{branch}}는 적용되지 않고, 작업은 현재 브랜치 {{current}}에서 실행됩니다. worktree를 켜거나 브랜치를 {{current}}(으)로 되돌려 주세요.",
       "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",

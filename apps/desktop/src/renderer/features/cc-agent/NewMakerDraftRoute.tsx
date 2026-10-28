@@ -52,6 +52,7 @@ import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
+import { isSourceBranchIgnoredWithoutWorktree } from '@/components/new-chat/branchPick';
 import {
   FolderPickerPopover,
   type FolderPickerDeviceScope,
@@ -887,6 +888,7 @@ export function NewMakerDraftRoute() {
   // 发送门放行普通会话(2026-08-07 裁决,勾选记忆只对合格目录生效)。null = 探测中或
   // 失败,维持 fail closed——「确认不是 git」和「探测不出来」不是一回事。
   const [wtConfirmedIneligible, setWtConfirmedIneligible] = useState<boolean | null>(null);
+  const [wtCurrentBranch, setWtCurrentBranch] = useState<string | null>(null);
   // repo-scoped 分支偏好以工作端 main 为权威。target ref 在换设备 / repo 的同步动作里先行
   // 改写，挡住 React commit 前一瞬间到达的旧 GET / APPLY / push；seq 另挡异步 GET 晚到。
   const wtBranchTargetRef = useRef<DraftWorktreeBranchTarget>({
@@ -2388,6 +2390,7 @@ export function NewMakerDraftRoute() {
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
         setWtConfirmedIneligible(null);
+        setWtCurrentBranch(null);
       }
       if (deviceChanged) {
         // A checkbox write belongs to the previous work device. Invalidate its
@@ -3503,6 +3506,7 @@ export function NewMakerDraftRoute() {
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    currentBranch: wtCurrentBranch,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
@@ -3514,6 +3518,7 @@ export function NewMakerDraftRoute() {
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    currentBranch: wtCurrentBranch,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
@@ -3672,6 +3677,24 @@ export function NewMakerDraftRoute() {
           toast.error(t('ccAgent.draft.deviceStillLoading'));
           return false;
         }
+      }
+      // 未勾 worktree 时任务跑在当前 checkout 上，所选的另一条分支不会生效；保留草稿并
+      // 提示，不能静默建在当前分支上(远程电脑与本机同一口径)。
+      if (
+        selectedWorkingDir
+        && !isRemoteProjectDraft
+        && selectedWorktree.confirmedIneligible !== true
+        && isSourceBranchIgnoredWithoutWorktree({
+          worktreeEnabled: selectedWorktree.enabled,
+          currentBranch: selectedWorktree.currentBranch,
+          sourceBranch: selectedWorktree.sourceBranch,
+        })
+      ) {
+        toast.error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
+          branch: selectedWorktree.sourceBranch.trim(),
+          current: selectedWorktree.currentBranch,
+        }));
+        return false;
       }
       const dataOwnerAtSend = getDataOwnerGeneration();
       const builtInSkillIntent = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.builtInSkillIntent;
@@ -4876,6 +4899,22 @@ export function NewMakerDraftRoute() {
             throw new Error(t('ccAgent.draft.deviceStillLoading'));
           }
         }
+        // 与 handleSend 同口径：未勾 worktree 时所选的另一条分支不会生效，不能静默开工。
+        if (
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.confirmedIneligible !== true
+          && isSourceBranchIgnoredWithoutWorktree({
+            worktreeEnabled: selectedWorktree.enabled,
+            currentBranch: selectedWorktree.currentBranch,
+            sourceBranch: selectedWorktree.sourceBranch,
+          })
+        ) {
+          throw new Error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
+            branch: selectedWorktree.sourceBranch.trim(),
+            current: selectedWorktree.currentBranch,
+          }));
+        }
         const dataOwnerAtGoal = getDataOwnerGeneration();
         const isCurrentDataOwner = () =>
           dataOwnerAtGoal.dataOwnerId === dataOwnerId &&
@@ -5847,6 +5886,7 @@ export function NewMakerDraftRoute() {
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
+                  onCurrentBranchChange={setWtCurrentBranch}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
                   onSuggestedNameChange={handleWtNameChange}

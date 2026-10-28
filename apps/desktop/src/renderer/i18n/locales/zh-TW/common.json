@@ -13301,6 +13301,7 @@
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置配置。請檢查連線，Cindy 正在重試。",
       "worktreeMissingRepo": "無法開 worktree：缺少當前目錄的倉庫根",
+      "worktreeBranchNeedsWorktree": "未勾選 worktree 時，所選分支 {{branch}} 不會生效，任務會在目前分支 {{current}} 上執行。請勾選 worktree，或把分支改回 {{current}}。",
       "worktreeRepoHint": "可嘗試重新選一次工作目錄，等右下角資料夾標識重新整理後再試",
       "sessionInactive": "任務已不再處於活躍狀態",
       "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建任務",
