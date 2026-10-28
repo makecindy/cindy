@@ -70,15 +70,17 @@ function Scenario({ mode }: { mode: string }) {
     // removes that shell minimum to exercise the card itself at 320 px.
     <div className={mode === 'narrow' ? '[&_[data-ui-frame=content]]:min-w-0' : undefined}>
       <AppFrame>
-        <div className={mode.startsWith('layout') ? 'relative min-h-0 flex-1' : 'min-w-0 p-3'} data-ui-mcp>
+        <div className={mode.startsWith('layout') ? 'relative min-h-0 flex-1' : 'min-h-0 min-w-0 overflow-y-auto p-3'} data-ui-mcp>
           {mode.startsWith('layout') ? (
             <>
-              <div data-ui-messages className="absolute inset-0 overflow-y-auto px-4">
-                {Array.from({ length: 60 }, (_, index) => <p key={index} className="py-3 text-13">Message {index + 1}</p>)}
+              <div data-ui-messages className="absolute inset-0 overflow-y-auto px-4 pb-[150px]">
+                <div className="mx-auto w-[90%]" data-ui-timeline-column>
+                  {Array.from({ length: 12 }, (_, index) => <p key={index} className="py-3 text-13">Message {index + 1}</p>)}
+                  <McpSetupPrompt snapshot={snapshot} onDismiss={() => {}} />
+                </div>
               </div>
               <div className="pointer-events-none absolute bottom-0 left-4 right-4">
                 <div className="pointer-events-auto mx-auto flex w-[90%] flex-col items-center gap-[10px] pb-5" data-chat-composer-stack>
-                  <McpSetupPrompt snapshot={snapshot} onDismiss={() => {}} />
                   <textarea data-ui-composer aria-label="Composer" className="h-[100px] w-full shrink-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-3" />
                 </div>
               </div>

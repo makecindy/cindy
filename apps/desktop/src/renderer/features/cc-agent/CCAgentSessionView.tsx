@@ -5284,6 +5284,9 @@ function CCAgentSessionContent({
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
+      footer={pendingMcpSetup && sessionId && !remoteDeviceId && !readOnly ? (
+        <McpSetupPrompt key={pendingMcpSetup.requestId} snapshot={pendingMcpSetup} onDismiss={() => dismissMcpSetupResult(sessionId)} />
+      ) : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5682,7 +5685,7 @@ function CCAgentSessionContent({
                       pendingRenameSessionsConfirm ||
                       pendingGhostGrantConfirm ||
                       pendingRemoteDesktopConfirmation ||
-                      pendingInputHandoff || pendingMcpSetup
+                      pendingInputHandoff
                     )
                   }
                   className="mb-0"
@@ -5920,7 +5923,7 @@ function CCAgentSessionContent({
                     pendingRenameSessionsConfirm ||
                     pendingGhostGrantConfirm ||
                     pendingRemoteDesktopConfirmation ||
-                    pendingInputHandoff || pendingMcpSetup
+                    pendingInputHandoff
                   )
                 }
                 placeholder={
@@ -6003,8 +6006,6 @@ function CCAgentSessionContent({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
-                ) : pendingMcpSetup && sessionId && !remoteDeviceId ? (
-                  <McpSetupPrompt key={pendingMcpSetup.requestId} snapshot={pendingMcpSetup} onDismiss={() => dismissMcpSetupResult(sessionId)} />
                 ) : pendingInputHandoff && sessionId && !isSharedTaskPeer(remoteDeviceId ?? '') ? (
                   <InputHandoffCard
                     key={pendingInputHandoff.requestId}

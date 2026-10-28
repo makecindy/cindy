@@ -18,8 +18,8 @@ export default {
     'activation-pending': { about: 'Retry runtime refresh without creating another server' },
     'activation-deferred': { about: 'Automatic idle refresh updates the receipt without a manual retry' },
     'activation-refreshing': { about: 'Applying saved configuration has no retry button' },
-    layout: { about: 'Composer-aligned form leaves messages scrollable in a short task view', viewport: { width: 600, height: 600 } },
-    'layout-narrow': { about: 'The same bounded form and aligned composer at a narrow desktop width', viewport: { width: 400, height: 600 } },
+    layout: { about: 'Fully expanded host form scrolls with messages while composer stays fixed', viewport: { width: 600, height: 600 } },
+    'layout-narrow': { about: 'The full inline form uses the message scrollport at a narrow desktop width', viewport: { width: 400, height: 600 } },
     settings: {
       about: 'Existing Settings modal keeps saved credentials without reading them back',
     },
@@ -31,25 +31,24 @@ export default {
     if (ui.case.startsWith('layout')) {
       const card = page.locator('[data-ui-mcp] section');
       const composer = page.locator('[data-ui-composer]');
+      const messages = page.locator('[data-ui-messages]');
+      await messages.evaluate(el => { el.scrollTop = 400; });
       const cardBox = await card.boundingBox();
       const composerBox = await composer.boundingBox();
+      const columnBox = await page.locator('[data-ui-timeline-column]').boundingBox();
       assert.ok(cardBox && composerBox);
-      assert.ok(Math.abs(cardBox.x - composerBox.x) < 1 && Math.abs(cardBox.width - composerBox.width) < 1, 'card edges must match the composer');
-      assert.ok(cardBox.y >= 100, 'the card must leave a visible message area');
+      assert.ok(columnBox && Math.abs(cardBox.x - columnBox.x) < 1 && Math.abs(cardBox.width - columnBox.width) < 1, 'inline card edges must match the message column');
       const form = card.locator('fieldset').first();
-      assert.ok(await form.evaluate(el => el.scrollHeight > el.clientHeight), 'long form must have its own scrollport');
-      const save = page.getByRole('button', { name: await ui.t('settings.mcp.save'), exact: true });
-      const saveBefore = await save.boundingBox();
-      await form.hover();
-      await page.mouse.wheel(0, 600);
-      await page.waitForFunction(() => document.querySelector('[data-ui-mcp] section fieldset').scrollTop > 0);
-      const saveAfter = await save.boundingBox();
-      assert.equal(saveAfter.y, saveBefore.y, 'actions must stay visible while the form scrolls');
-      const messages = page.locator('[data-ui-messages]');
-      await page.mouse.move(cardBox.x + 10, cardBox.y - 30);
-      await page.mouse.wheel(0, 400);
-      await page.waitForFunction(() => document.querySelector('[data-ui-messages]').scrollTop > 0);
-      assert.ok(await messages.evaluate(el => el.scrollTop > 0), 'messages must still scroll above the card');
+      assert.ok(await form.evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'the whole form must expand without an inner scrollport');
+      await page.mouse.move(cardBox.x + 20, Math.max(80, cardBox.y + 30));
+      const before = await messages.evaluate(el => el.scrollTop);
+      await page.mouse.wheel(0, 200);
+      await page.waitForFunction(value => document.querySelector('[data-ui-messages]').scrollTop > value, before);
+      const afterBox = await card.boundingBox();
+      const composerAfter = await composer.boundingBox();
+      assert.ok(afterBox.y < cardBox.y, 'the card must move with the message history');
+      assert.equal(composerAfter.y, composerBox.y, 'the composer must stay fixed while the form scrolls');
+      assert.equal(await form.evaluate(el => el.scrollTop), 0, 'wheel input must not scroll inside the form');
       await ui.capture('scrolled');
       return;
     }
