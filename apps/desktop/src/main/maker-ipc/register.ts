@@ -17407,9 +17407,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           };
         }
         if (patch.usageLimitFallback !== null) {
-          // 这些任务永不走额度自动继续（定时任务、伙伴、Orca Worker、共享中的任务、
-          // 目标模式在管的任务、执行已暂停），远程 Agent 任务也不在范围内：写入时就拒绝，
-          // 不留在库里一条永远不触发的策略。
+          // 这里能判定的是“当前就不适用于额度自动继续”的任务：伙伴、Orca Worker、
+          // 共享中的任务、执行已暂停、当前由目标模式托管。定时任务只能从入队消息的 origin
+          // 看出来，会话行没这个标记，因此它不在写入门内，而是触发时不命中、照原规则恢复。
           if (!await isUsageLimitAutoResumeEligible(targetSessionId)) {
             return {
               ok: false,
@@ -17425,7 +17425,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             };
           }
         }
-        if (patch.usageLimitFallback === null) {          await writeSessionUsageLimitFallback(targetSessionId, null);
+        if (patch.usageLimitFallback === null) {
+          await writeSessionUsageLimitFallback(targetSessionId, null);
           return {
             ok: true as const,
             status: 'applied' as const,
@@ -19948,7 +19949,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       candidateToken,
       {
         reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
-        agentSwitch: { from: labels.from, to: labels.to, cause: 'usage-limit' },
+        agentSwitch: { from: labels.from, to: labels.to, cause: 'usage-limit', kind: 'model' },
         attempt: 1,
         maxAttempts: 1,
         sessionTotal: 0,

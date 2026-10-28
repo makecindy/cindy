@@ -240,11 +240,16 @@ export interface AutoResumeGroupSwitch {
 export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload' | 'failed';
 
 export interface AutoResumeAgentSwitch {
-  /** 原电脑的显示名。 */
+  /** 原电脑的显示名（`kind: 'model'` 时是原模型 id）。 */
   from: string;
-  /** 换到的电脑的显示名。 */
+  /** 换到的电脑的显示名（`kind: 'model'` 时是备用模型 id）。 */
   to: string;
   cause: AutoResumeAgentSwitchCause;
+  /**
+   * 换的是什么：换电脑（供应商组）还是换模型（任务级额度备用路线）。两者共用同一条活动行，
+   * from/to 在两种情况下分别是电脑名与模型 id。旧端不读该字段，按原文案渲染。
+   */
+  kind?: 'computer' | 'model';
 }
 
 export interface AutoResumeAgentReconnect {
