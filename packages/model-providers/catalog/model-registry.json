@@ -8099,7 +8099,7 @@
           "xhigh",
           "max"
         ],
-        "defaultEffort": "medium",
+        "defaultEffort": "max",
         "officialDocs": "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
       },
       "referencePriceGroups": [
