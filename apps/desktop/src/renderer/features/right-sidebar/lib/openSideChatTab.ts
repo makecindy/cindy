@@ -132,7 +132,7 @@ export function watchSideChatTabs(sessionId: string): () => void {
 /** Open an independent follow-up on the parent's execution host. */
 export async function openSideChatTab(
   sessionId: string,
-  options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement } = {},
+  options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement; assertSubmissionCurrent?: () => void } = {},
 ): Promise<boolean> {
   try {
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
@@ -146,6 +146,7 @@ export async function openSideChatTab(
       remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '', [child]);
     }
     try {
+      options.assertSubmissionCurrent?.();
       if (options.prompt || options.attachments?.length) saveDraft(child.id, {
         text: options.prompt ? textToTiptapDoc(options.prompt) : null,
         attachments: options.attachments ?? [],
@@ -160,6 +161,14 @@ export async function openSideChatTab(
         await setActiveTab(sessionId, existing.id);
       } else {
         await addTab(sessionId, 'side-chat', { sessionId: child.id, deviceId }, options.placement);
+      }
+      try {
+        options.assertSubmissionCurrent?.();
+      } catch (error) {
+        const tab = getBucket(sessionId).tabs.find(item => item.kind === 'side-chat'
+          && (item.state as { sessionId?: string } | null)?.sessionId === child.id);
+        if (tab) await closeTab(sessionId, tab.id, { skipBeforeClose: true });
+        throw error;
       }
     } catch (error) {
       // A failed tab write must not leave an unreachable branch running or listed.

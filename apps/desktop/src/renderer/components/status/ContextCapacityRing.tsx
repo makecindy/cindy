@@ -33,6 +33,7 @@ export function getModelContextWindow(
 }
 
 export function ContextCapacityRing({
+  variant = 'ring',
   isRunning,
   sessionId,
   providerId,
@@ -46,6 +47,7 @@ export function ContextCapacityRing({
   providers,
   disabled,
 }: {
+  variant?: 'ring' | 'bar';
   isRunning?: boolean;
   sessionId?: string;
   providerId?: string | null;
@@ -106,7 +108,11 @@ export function ContextCapacityRing({
       ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`
       : 'No context data yet';
 
-  const ringContent = (
+  const ringContent = variant === 'bar' ? (
+    <span className="hud-context-track" aria-hidden="true">
+      <span className="hud-context-fill" style={{ width: `${pct}%`, background: fillColor }} />
+    </span>
+  ) : (
     <>
       <svg
         width={size}
@@ -232,7 +238,7 @@ export function ContextCapacityRing({
     </div>
   );
 
-  if (sessionId) {
+  if (sessionId && variant === 'ring') {
     return (
       <ContextWindowBudgetChip
         sessionId={sessionId}
@@ -253,19 +259,56 @@ export function ContextCapacityRing({
   }
 
   return (
-    <Tip text={tooltipText}>
+    <Tip
+      text={
+        onCompact ? (
+          <>
+            <div>{tooltipText}</div>
+            <div>{t('ccAgent.layout.contextRing.compactHint')}</div>
+          </>
+        ) : vendorKey === 'codex' ? (
+          // Native Codex manages compaction; this control only reads its capacity.
+          <>
+            <div>
+              {codexContext?.pendingApply
+                ? t('ccAgent.layout.contextRing.codexPendingHint')
+                : tooltipText}
+            </div>
+            <div>
+              {codexContext
+                ? t('settings.providers.models.advanced.codexContextValues', {
+                    total: codexContext.contextWindow.toLocaleString(),
+                    usable: codexContext.usableContextWindow.toLocaleString(),
+                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
+                  })
+                : t('settings.providers.models.advanced.codexContextUnknown')}
+            </div>
+            <div>{t('ccAgent.layout.contextRing.codexAutoHint')}</div>
+          </>
+        ) : (
+          tooltipText
+        )
+      }
+    >
       {onCompact ? (
         <button
           type="button"
           onClick={onCompact}
           aria-label={t('ccAgent.layout.contextRing.compactHint')}
-          className="flex shrink-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-75 active:opacity-60"
+          className={variant === 'bar' ? 'hud-context-bar' : 'flex shrink-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-75 active:opacity-60'}
         >
           {ringContent}
         </button>
       ) : (
         <div
-          className="flex shrink-0 items-center gap-1"
+          className={variant === 'bar' ? 'hud-context-bar' : 'flex shrink-0 items-center gap-1'}
+          tabIndex={variant === 'bar' ? 0 : undefined}
+          role={variant === 'bar' ? 'meter' : undefined}
+          aria-label={variant === 'bar' ? tooltipText : undefined}
+          aria-valuemin={variant === 'bar' ? 0 : undefined}
+          aria-valuemax={variant === 'bar' ? 100 : undefined}
+          aria-valuenow={variant === 'bar' ? pct : undefined}
+          onFocus={() => { if (vendorKey === 'codex') setContextInspection((n) => n + 1); }}
           onMouseEnter={() => {
             if (vendorKey === 'codex') setContextInspection((n) => n + 1);
           }}

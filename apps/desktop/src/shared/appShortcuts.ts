@@ -35,6 +35,7 @@ export interface AppShortcutCombo {
 export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer' | 'global';
 
 export const APP_SHORTCUT_IDS = [
+  'hud-toggle-pass-through',
   'toggle-sidebar',
   'session-history-back',
   'session-history-forward',
@@ -101,8 +102,8 @@ export interface AppShortcutDefinition {
    * true = 本条目的默认组合对用户既有绑定让位: 与其它 id 的 override 或
    * registry 之外体系的用户键位 (yieldToCombos) 撞键时, 默认组合被压制
    * (该槽位等效无绑定), 写入侧 findAppShortcutConflict 也不把它算作占用。
-   * 只用于「批量占键的次要便捷槽位」(switch-session-*): 它们隐藏在设置页
-   * 之外, 用户看不到也解不开, 不让位就会一次按键双动作。save-file / ⌘, 等
+   * 用于次要便捷槽位或新增的可改绑快捷键, 避免占用升级前的用户绑定。
+   * 例如 switch-session-* 隐藏在设置页之外, 不让位就会一次按键双动作。save-file / ⌘, 等
    * 惯例键虽也 hiddenInSettings 但**不得**设本字段 —— 否则用户把别的键改绑
    * 到 ⌘S 会被放行并静默丢失保存快捷键。
    */
@@ -114,6 +115,8 @@ export interface AppShortcutDefinition {
    * —— store 与设置页双端都按此校验拦截。
    */
   menuBacked?: boolean;
+  /** Native global registration requires an accelerator that does not steal editing shortcuts. */
+  globalBacked?: boolean;
   /** 缺省 = 全平台可用。 */
   platforms?: ReadonlyArray<'darwin' | 'win32' | 'linux'>;
   /**
@@ -145,6 +148,16 @@ function modCombo(code: string, platform: string, extra: ComboModifiers = {}): A
 // 数组顺序即设置页展示顺序: 高频动作在前 (新对话 → 侧边栏 → 权限模式 →
 // 命令行 → 查找 → 缩放 → 浏览器)。hiddenInSettings 项不展示但仍正常生效。
 export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
+  {
+    id: 'hud-toggle-pass-through',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.hud-toggle-pass-through.label',
+    descriptionKey: 'settings.shortcuts.items.hud-toggle-pass-through.description',
+    rebindable: true,
+    globalBacked: true,
+    platforms: ['darwin'],
+    getDefaultCombos: (platform) => [modCombo('KeyH', platform, { shift: true })],
+  },
   {
     id: 'new-maker',
     scope: 'app',
@@ -196,6 +209,8 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     labelKey: 'settings.shortcuts.items.region-screenshot.label',
     descriptionKey: 'settings.shortcuts.items.region-screenshot.description',
     rebindable: true,
+    // 新增默认键不能覆盖升级前保存的用户绑定 (例如 HUD 鼠标穿透)。
+    yieldsToUserBindings: true,
     platforms: ['darwin', 'win32'],
     getDefaultCombos: (platform) =>
       platform === 'darwin'
@@ -452,7 +467,7 @@ function collidesWithNonRebindableDefault(
 
 /**
  * 规整 override 集合: 丢弃未知 id、不可改绑 id、当前平台不可用 id、非法
- * combo、与不可改绑快捷键默认组合撞键的存量 combo。null 值 (删除绑定) 原样
+ * combo、全局注册不可用或与不可改绑快捷键默认组合撞键的存量 combo。null 值 (删除绑定) 原样
  * 保留。版本升级删除某 id 后, 存量 override 在 load 时自动自愈。
  */
 export function normalizeAppShortcutOverrides(raw: unknown, platform: string): AppShortcutOverrides {
@@ -469,6 +484,11 @@ export function normalizeAppShortcutOverrides(raw: unknown, platform: string): A
     }
     const normalized = normalizeAppShortcutCombo(value);
     if (!normalized) continue;
+    // Old app-scoped HUD overrides may still be unsafe when registered globally.
+    if (
+      (def.scope === 'global' || def.globalBacked) &&
+      !isGlobalAppShortcutComboUsable(normalized, platform)
+    ) continue;
     if (collidesWithNonRebindableDefault(normalized, platform)) continue;
     result[key] = normalized;
   }
@@ -783,7 +803,7 @@ export function isAppShortcutComboBindable(comboValue: AppShortcutCombo): boolea
 const GLOBAL_EDITING_CODES = new Set(['KeyA', 'KeyC', 'KeyV', 'KeyX', 'KeyY', 'KeyZ']);
 
 /**
- * global scope 条目的额外约束: 必须能表达为 Electron accelerator (globalShortcut
+ * global scope / globalBacked 条目的额外约束: 必须能表达为 Electron accelerator (globalShortcut
  * 只认 accelerator, 表达不了 = 绑定了也永远不触发), 且不得占用编辑惯例键 ——
  * 全局快捷键会在所有应用里截走按键。系统保留键另由 keyboardReserved 判定。
  */

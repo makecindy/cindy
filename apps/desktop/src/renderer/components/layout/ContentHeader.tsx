@@ -145,7 +145,7 @@ export function ContentHeader({
   }
 
   return (
-    <header
+    <header data-hud-main-header
       className={cn(
         // 46px 行高 (与 CONTENT_HEADER_HEIGHT_PX 同步):红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar
@@ -165,6 +165,8 @@ export function ContentHeader({
       // 36px Tab 条那层(在面板身上,语义准)。
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
+      {/* HUD is a sibling overlay; carve its hit region into the native drag owner. */}
+      {isMac && <div aria-hidden className="absolute right-[40px] top-0 h-full w-8" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />}
       {chromeActionsHitHole > 0 && (
         <div
           aria-hidden

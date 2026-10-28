@@ -50,6 +50,7 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
     t: (key: string, options: Record<string, string | number> = {}) => {
       const templates: Record<string, string> = {
+        'hud.weeklyUnavailable': '暂无七天配额',
         'quotaCard.usageTitle': '用量明细',
         'quotaCard.staleData': '数据更新于 {{minutes}} 分钟前',
         'todaySpend.openXaiUsage': '打开 Grok 用量页面',
@@ -719,6 +720,28 @@ describe('TodaySpendChip Claude subscription popover', () => {
     const trigger = screen.getByRole('button', { name: '打开 Codex 用量页面' });
     expect(trigger.textContent).toContain('5h 剩余 88%');
     expect(trigger.textContent).toContain('7天 剩余 66%');
+  });
+
+  // HUD regression: the inline summary must show weekly quota only, without
+  // task cost or another interactive popover. Existing tests cover the full chip.
+  it('HUD does not substitute a five-hour window when weekly quota is missing', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { source: 'codex-app-server', limitId: 'codex', primary: { usedPercent: 12, windowMinutes: 300 } };
+    const { container } = render(<TodaySpendChip quotaOnly vendorKey="codex" providerId="openai" modelId="gpt-5.6-sol" sessionId="session-codex" />);
+    expect(container.textContent).not.toContain('88%');
+    expect(container.textContent).not.toContain('5h');
+    expect(container.textContent).toBe('暂无七天配额');
+  });
+  it('HUD summary shows only the weekly remaining quota', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = {
+      source: 'codex-app-server', limitId: 'codex',
+      primary: { usedPercent: 12, windowMinutes: 300 },
+      secondary: { usedPercent: 34, windowMinutes: 10_080 },
+    };
+    const { container } = render(<TodaySpendChip quotaOnly vendorKey="codex" providerId="openai" modelId="gpt-5.6-sol" sessionId="session-codex" sessionInitialCostUsd={0.5} />);
+    expect(container.textContent).toBe('7天 剩余 66%');
+    expect(container.querySelector('button')).toBeNull();
   });
 
   it('悬停约 300ms 后显示额度卡片', () => {

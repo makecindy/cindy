@@ -1,0 +1,322 @@
+/* Typed inherited channels let the browser interpolate each layer linearly. */
+@property --hud-background {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+@property --hud-composer {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+@property --hud-message {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+@property --hud-input {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+@property --hud-image-opacity {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+@property --hud-controls-opacity {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+.hud-mode {
+  transition: --hud-background 200ms linear, --hud-composer 200ms linear,
+    --hud-message 200ms linear, --hud-input 200ms linear,
+    --hud-image-opacity 200ms linear, --hud-controls-opacity 200ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-mode { transition: none; }
+}
+
+/* HUD is a presentation of the mounted task, not a second chat implementation.
+   No ancestor opacity: text/images/composer controls remain independently adjustable. */
+.hud-entry {
+  position: absolute;
+  right: 42px;
+  top: 9px;
+  z-index: 60;
+}
+.hud-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: hsl(var(--titlebar-icon));
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.hud-icon:hover {
+  background: hsl(var(--titlebar-button-hover));
+}
+.hud-chrome {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 12px;
+  z-index: 80;
+  background: var(--chat-input-bg);
+  border-bottom: 1px solid var(--border-default);
+}
+html.hud-window,
+.hud-window body,
+.hud-window #root {
+  background: transparent !important;
+}
+.hud-mode {
+  padding-top: 34px;
+  background: color-mix(
+    in srgb,
+    hsl(var(--content-area)) var(--hud-background),
+    transparent
+  ) !important;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.hud-mode [data-hud-sidebar],
+.hud-mode [data-hud-normal-chrome],
+.hud-mode [data-hud-main-header],
+.hud-mode [data-panel-drag-root]:not([data-panel-drag-root='chat-main']),
+.hud-mode .layout-divider-v,
+.hud-mode .layout-divider-h {
+  display: none !important;
+}
+.hud-mode [data-layout-node-id]:not(:has([data-panel-drag-root='chat-main'])),
+.hud-mode [data-layout-root-child-id]:not(:has([data-panel-drag-root='chat-main'])) {
+  display: none !important;
+}
+.hud-mode [data-layout-node-id]:has([data-panel-drag-root='chat-main']),
+.hud-mode [data-layout-root-child-id]:has([data-panel-drag-root='chat-main']) {
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+.hud-mode [data-panel-drag-root='chat-main'] {
+  display: flex !important;
+  min-width: 0 !important;
+}
+/* The draft page owns a surface separate from the regular conversation viewport.
+   Clear it too, so the HUD root is the only background alpha layer. */
+.hud-mode .bg-content-area,
+.hud-mode [data-testid='create-agent-shell'] {
+  background: transparent !important;
+}
+.hud-mode .wallpaper-message-viewport {
+  background: transparent !important;
+}
+.hud-mode .wallpaper-message-viewport::before,
+.hud-mode .wallpaper-message-viewport::after,
+.hud-mode .wallpaper-composer-fade {
+  display: none !important;
+}
+.hud-mode [data-hud-composer] {
+  position: relative !important;
+  inset: auto !important;
+  flex-shrink: 0;
+  padding: 6px 12px;
+}
+.hud-mode[data-hud-position='top'] [data-hud-composer] {
+  order: -1;
+}
+.hud-mode [data-hud-composer] > .h-8 {
+  display: none;
+}
+.hud-mode [data-chat-input-root] {
+  gap: 4px;
+}
+.hud-mode [data-hud-composer-surface] {
+  background: color-mix(in srgb, var(--chat-input-bg) var(--hud-composer), transparent) !important;
+}
+.hud-mode .wallpaper-message-viewport * {
+  -webkit-text-fill-color: color-mix(in srgb, currentColor var(--hud-message), transparent);
+}
+.hud-mode [data-chat-input-root] [contenteditable],
+.hud-mode [data-chat-input-root] [contenteditable] * {
+  -webkit-text-fill-color: color-mix(in srgb, currentColor var(--hud-input), transparent);
+}
+.hud-mode .wallpaper-message-viewport img,
+.hud-mode [data-chat-input-root] img {
+  opacity: var(--hud-image-opacity);
+}
+.hud-mode .wallpaper-message-viewport button,
+.hud-mode [data-chat-input-root] button {
+  opacity: var(--hud-controls-opacity);
+  -webkit-text-fill-color: currentColor;
+}
+.hud-screen-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  pointer-events: auto;
+}
+
+.hud-settings-overlay {
+  position: absolute;
+  inset: 34px 0 0;
+  z-index: 70;
+  overflow: auto;
+  padding: 16px;
+  background: var(--settings-theme-card-bg);
+  color: var(--text-primary);
+  -webkit-app-region: no-drag;
+}
+
+/* Clear wallpaper and nested card surfaces before applying one alpha layer. */
+.hud-window body::before,
+.hud-window body::after,
+.hud-mode .wallpaper-composer-zone::before,
+.hud-mode .wallpaper-composer-zone::after {
+  display: none !important;
+}
+.hud-mode .wallpaper-composer-zone,
+.hud-mode [data-split-group-composer-drop-target] {
+  background: transparent !important;
+}
+.hud-mode [data-testid='create-agent-main'] {
+  padding: 12px !important;
+}
+.hud-mode [data-testid='create-agent-main'] > div {
+  max-width: none !important;
+  height: 100%;
+}
+.hud-mode [data-testid='create-agent-brand-lockup'] {
+  display: none;
+}
+.hud-mode [data-testid='create-agent-main'] [data-hud-draft-composer] {
+  order: 0 !important;
+}
+.hud-mode[data-hud-position='bottom'] [data-hud-draft-composer] {
+  margin-top: auto;
+}
+
+.hud-mode [data-hud-composer-surface] {
+  border-radius: 12px;
+}
+.hud-mode [data-testid='create-agent-main'] > div > :not([data-hud-draft-composer]) {
+  display: none !important;
+}
+
+/* A stable runtime slot prevents idle/running status changes from moving the editor. */
+.hud-mode [data-hud-runtime-row] {
+  order: 2;
+  min-height: 30px;
+  flex-shrink: 0;
+}
+.hud-mode .wallpaper-composer-zone {
+  padding-bottom: 0;
+}
+.hud-mode [data-hud-footer] {
+  margin-top: 0;
+  gap: 4px;
+  padding: 0 2px;
+  height: 24px;
+  flex-shrink: 0;
+  visibility: visible;
+}
+.hud-context-bar {
+  order: -1;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  cursor: help;
+  -webkit-app-region: no-drag;
+}
+.hud-context-track {
+  display: block;
+  height: 3px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--msg-tool-card-border);
+}
+.hud-context-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.hud-context-bar:hover .hud-context-track,
+.hud-context-bar:focus-visible .hud-context-track {
+  height: 4px;
+}
+.hud-mode [data-chat-composer-stack] {
+  gap: 0;
+}
+
+.hud-composer-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+}
+.hud-composer-meta-row .hud-screen-control {
+  margin-inline-start: 2ch;
+  flex-shrink: 0;
+  align-self: auto;
+}
+.hud-weekly-quota {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.hud-path-chip {
+  margin-left: auto;
+  margin-inline-end: 2ch;
+  min-width: 0;
+  flex: 1 1 0;
+  height: 24px;
+  text-align: right;
+  -webkit-app-region: no-drag;
+}
+.hud-path-chip > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-path-chip:hover {
+  color: var(--text-primary);
+}
+
+.hud-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+/* Bottom placement anchors the editor: transient status grows above it, not below. */
+.hud-mode[data-hud-position='bottom'] [data-hud-runtime-row] {
+  order: -1;
+  min-height: 0;
+}
+.hud-mode[data-hud-position='bottom'] [data-hud-composer] {
+  padding-bottom: 0;
+}
+
+.hud-icon[aria-pressed='true'] {
+  color: var(--text-primary);
+  background: hsl(var(--titlebar-button-hover));
+  box-shadow: inset 0 0 0 1px var(--border-default);
+}

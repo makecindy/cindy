@@ -1,3 +1,5 @@
+import { HudScreenRevokedError, type HudScreenSubmission } from '@/features/hud/screenSubmission';
+import { useHudScreenAttachment } from '@/features/hud/useHudScreenAttachment';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
@@ -496,6 +498,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  /** Existing session quota, shown inline only in HUD mode. */
+  hudQuota?: ReactNode;
   onSend: (
     message: string,
     model: string,
@@ -504,6 +508,7 @@ interface ChatInputProps {
     files?: AttachedFile[],
     mentions?: MentionedResource[],
     opts?: {
+      hudScreenSubmission?: HudScreenSubmission;
       deliveryMode?: MessageDeliveryMode;
       builtInSkillIntent?: BuiltInSkillDraftIntent;
       providerId?: string | null;
@@ -1242,6 +1247,7 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  hudQuota,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -1428,7 +1434,8 @@ export function ChatInput({
       composerDocIsEmpty(ed.state.doc) &&
       latestAttachmentsRef.current.length === 0 &&
       browserCommentsRef.current.length === 0 &&
-      voiceDraftTextRef.current.length === 0
+      voiceDraftTextRef.current.length === 0 &&
+      !hudScreen.hasPendingCapture
     );
   };
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
@@ -1755,6 +1762,7 @@ export function ChatInput({
   const lastComposerSelectionFromRef = useRef<number | null>(null);
   const internalMentionDragActiveRef = useRef(false);
   const [workingDir, setWorkingDir] = useState<string | null>(initialWorkingDir ?? null);
+  const hudScreen = useHudScreenAttachment(sessionId, workingDir, hudQuota);
   const [internalFolderOpen, setInternalFolderOpen] = useState(false);
 
   // Ref bridge for Tiptap handlePaste(粘贴管线):editorProps 闭包只建一次,
@@ -5468,7 +5476,7 @@ export function ChatInput({
     () => {},
   );
   const dispatchSend = useCallback(
-    async (deliveryMode: MessageDeliveryMode = 'queue') => {
+    async (deliveryMode: MessageDeliveryMode = 'queue', prepareHudScreen = hudScreen.begin()) => {
       if (!editor) return;
       if (disabled || sessionModelLoading) return;
       if ((folderTransfers.hasPending || waitingForFoldersRef.current) &&
@@ -5770,7 +5778,7 @@ export function ChatInput({
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
         const text = formatBrowserCommentsForSend(commentsForSend, editorText);
-        if (!text && attachmentsForSend.length === 0) return;
+        if (!text && attachmentsForSend.length === 0 && !hudScreen.hasPendingCapture) return;
 
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
@@ -5843,7 +5851,7 @@ export function ChatInput({
         // 评论截图并入发送附件(item.screenshot 即 AttachedFile,顺序在用户附件后,
         // 与评论块的编号 caption 对应)。
         const commentScreenshots = commentsForSend.map((c) => c.screenshot);
-        const filesToSend =
+        let filesToSend =
           attachmentsForSend.length > 0 || commentScreenshots.length > 0
             ? [...attachmentsForSend, ...commentScreenshots]
             : undefined;
@@ -6165,7 +6173,9 @@ export function ChatInput({
                 onRemoteOptimisticFailure,
               )
             : () => {};
+        let acceptHudScreen: (() => void) | undefined;
         const onDeferredAccepted = () => {
+          acceptHudScreen?.();
           if (optimisticallyClearRemoteComposer) {
             // 缺 workingDir 的第一次尝试会返回 false，并把远程 composer 恢复回来。
             // 补选目录后若真正受理，需要开启一轮新的失败恢复资格，再只清掉原草稿；
@@ -6236,6 +6246,14 @@ export function ChatInput({
         let result: boolean | void;
         let effortForSend = selectedEffort;
         try {
+          // Snapshot/optimistic clear precedes capture: remote typing during the
+          // native await belongs to the next draft. Existing failure restore
+          // preserves that newer draft and restores the source when safe.
+          const screenshot = await prepareHudScreen(text);
+          if (screenshot) {
+            filesToSend = [...(filesToSend ?? []), screenshot.attachment];
+            acceptHudScreen = screenshot.accept;
+          }
           if (sessionId) {
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
@@ -6274,6 +6292,9 @@ export function ChatInput({
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
             effortForSend = coordinator.getCommittedEffort(sessionId) ?? selectedEffort;
           }
+          // Effort synchronization may have yielded after capture preparation.
+          // Revalidate consent before handing pixels to the existing send pipeline.
+          screenshot?.assertCurrent();
           result = await onSend(
             routedText,
             activeModel,
@@ -6282,6 +6303,7 @@ export function ChatInput({
             filesToSend,
             mentionsToSend,
             {
+              ...(screenshot ? { hudScreenSubmission: screenshot } : {}),
               deliveryMode,
               providerId: sendProviderId,
               ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
@@ -6305,6 +6327,7 @@ export function ChatInput({
           );
         } catch (error) {
           restoreRemoteComposerAndRelease();
+          if (error instanceof HudScreenRevokedError) toast.error(t('hud.captureFailed'));
           log.warn('send rejected:', error instanceof Error ? error.message : String(error));
           return;
         }
@@ -6312,6 +6335,7 @@ export function ChatInput({
           restoreRemoteComposerAndRelease();
           return;
         }
+        acceptHudScreen?.();
         if (!sourceSessionId) clearSentComposer();
         releaseRemoteComposerTransition();
         markRecentPluginUsage();
@@ -6333,6 +6357,7 @@ export function ChatInput({
       folderTransfers.hasPending,
       sessionId,
       onSend,
+      hudScreen,
       activeModel,
       selectedEffort,
       activePermissionMode,
@@ -6470,8 +6495,10 @@ export function ChatInput({
         await submitQueueEdit();
         return;
       }
+      // Voice refinement precedes dispatchSend, so pin consent at the original click.
+      const prepareHudScreen = hudScreen.begin();
       if (voiceBusyOnCurrentComposer) {
-        const currentCanSend = !isEditorEmpty(editor) || hasPreparedOrPendingAttachments;
+        const currentCanSend = !isEditorEmpty(editor) || hasPreparedOrPendingAttachments || hudScreen.hasPendingCapture;
         if (!voiceInput.isListening && !currentCanSend && voiceInput.draftText.trim().length === 0)
           return;
         if (voiceInputStopAndSendPromiseRef.current) {
@@ -6487,7 +6514,7 @@ export function ChatInput({
             // failed after the user pressed Send.
             return;
           }
-          await dispatchSend(deliveryMode);
+          await dispatchSend(deliveryMode, prepareHudScreen);
         })().finally(() => {
           if (voiceInputStopAndSendPromiseRef.current === stopAndSend) {
             voiceInputStopAndSendPromiseRef.current = null;
@@ -6498,7 +6525,7 @@ export function ChatInput({
         return;
       }
       acceptPromptRecommendation();
-      await dispatchSend(deliveryMode);
+      await dispatchSend(deliveryMode, prepareHudScreen);
     },
     [
       acceptPromptRecommendation,
@@ -6506,6 +6533,7 @@ export function ChatInput({
       editor,
       handleVoiceInputStop,
       hasPreparedOrPendingAttachments,
+      hudScreen,
       queueEditActive,
       submitQueueEdit,
       voiceBusyOnCurrentComposer,
@@ -9018,7 +9046,7 @@ export function ChatInput({
 
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
-  const hasComposerPayload = hasMessage || hasPreparedOrPendingAttachments || browserComments.length > 0;
+  const hasComposerPayload = hasMessage || hasPreparedOrPendingAttachments || browserComments.length > 0 || hudScreen.hasPendingCapture;
   const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
   const recommendationComposerState = {
     enabled: recommendationEnabled,
@@ -9027,7 +9055,7 @@ export function ChatInput({
       storageKeyForDraftRef.current === storageKey &&
       !isRestoringRef.current,
     hasMessage,
-    hasAttachments: hasPreparedOrPendingAttachments,
+    hasAttachments: hasPreparedOrPendingAttachments || hudScreen.hasPendingCapture,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
     mutationLocked: composerMutationLocked,
@@ -9242,6 +9270,7 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+      {hudScreen.control}
       {makePreflight && makePreflight.sessionId === sessionId && (
         <CindyMakePreflightDialog
           {...makePreflight}
@@ -9291,6 +9320,7 @@ export function ChatInput({
       <div ref={paletteAnchorRef} className="relative w-full">
         <div
           ref={mergedCardRef}
+          data-hud-composer-surface
           className={cn(
             'flex w-full flex-col gap-0',
             showFusedWrapper && [

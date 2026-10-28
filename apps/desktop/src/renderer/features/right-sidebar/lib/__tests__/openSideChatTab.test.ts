@@ -114,6 +114,26 @@ describe('side chat task entry', () => {
     expect(await openSideChatTab('parent', { prompt: 'question', attachments })).toBe(false);
   });
 
+  // HUD capture can be revoked while child creation or tab persistence waits.
+  it.each(['create', 'tab'])('rejects a revoked attachment transfer during %s', async phase => {
+    let revoked = false;
+    if (phase === 'create') mocks.create.mockImplementationOnce(async () => { revoked = true; return { id: 'child' }; });
+    else mocks.add.mockImplementationOnce(async () => {
+      mocks.tabs = [{ id: 'new-tab', kind: 'side-chat', state: { sessionId: 'child' } }];
+      revoked = true;
+      return mocks.tabs[0];
+    });
+    const assertSubmissionCurrent = () => { if (revoked) throw new Error('capture revoked'); };
+    expect(await openSideChatTab('parent', { prompt: 'question',
+      attachments: [{ id: 'screen', name: 'screen.png', path: 'clipboard://screen.png',
+        ext: '.png', size: 1, category: 'image', mimeType: 'image/png' }], assertSubmissionCurrent })).toBe(false);
+    expect(mocks.status).toHaveBeenCalledWith('child', 'deleted', { kind: 'local' });
+    expect(mocks.clear).toHaveBeenCalledWith('child');
+    if (phase === 'create') expect(mocks.save).not.toHaveBeenCalled();
+    else expect(mocks.close).toHaveBeenCalledWith('parent', 'new-tab', { skipBeforeClose: true });
+    expect(mocks.reveal).not.toHaveBeenCalled();
+  });
+
   it('deletes only the new remote branch if its tab cannot be opened', async () => {
     mocks.device = 'execution-host';
     mocks.add.mockRejectedValueOnce(new Error('disk full'));

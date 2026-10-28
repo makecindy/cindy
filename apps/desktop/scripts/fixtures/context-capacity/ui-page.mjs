@@ -10,6 +10,8 @@ export default {
     'src/renderer/lib/modelDefinitions': 'export const getModelsForVendor = () => [];',
   },
   cases: {
+    hud: { about: 'HUD compactable context bar', data: { hud: true } },
+    'hud-codex': { about: 'HUD read-only native context bar', data: { hud: true, codex: true } },
     default: { about: 'One ring opens usage, manual compaction and window choices' },
     high: { about: 'Context nearly full', data: { high: true } },
     codex: { about: 'Native Codex details above window choices', data: { codex: true } },
@@ -28,9 +30,28 @@ export default {
     },
   },
   async ready(page) {
-    await page.locator('[data-context-window-budget-chip]').waitFor();
+    await page.locator('[data-context-window-budget-chip], .hud-context-bar').waitFor();
   },
   async check(page, ui) {
+    if (ui.data.hud) {
+      const bar = page.locator('.hud-context-bar');
+      const footer = page.getByTestId('context-footer');
+      const barBox = await bar.boundingBox();
+      const footerBox = await footer.boundingBox();
+      assert.ok(barBox && footerBox && Math.abs(barBox.width - footerBox.width) <= 1);
+      assert.equal(await page.locator('[data-context-window-budget-chip]').count(), 0);
+      if (ui.data.codex) {
+        assert.equal(await bar.getAttribute('role'), 'meter');
+        assert.equal(await bar.getAttribute('aria-valuenow'), '12');
+      }
+      await ui.capture('hud-bar', { locator: footer });
+      await bar.hover();
+      const tooltip = page.getByRole('tooltip');
+      await tooltip.waitFor();
+      assert.ok((await tooltip.innerText()).includes('12%'));
+      await ui.capture('hud-details');
+      return;
+    }
     const ring = page.locator('[data-context-window-budget-chip]');
     assert.equal(await ring.textContent(), ui.data.high ? '92%' : '12%');
     assert.equal(await page.getByRole('radiogroup').count(), 0);

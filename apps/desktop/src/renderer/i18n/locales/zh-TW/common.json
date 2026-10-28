@@ -6652,6 +6652,10 @@
         "switch-session-9": {
           "label": "切換到第 9 個任務",
           "description": "跳轉到側邊欄第 9 個可見任務"
+        },
+        "hud-toggle-pass-through": {
+          "label": "切換 HUD 滑鼠穿透",
+          "description": "HUD 開啟時，可在任何軟體中開啟或關閉滑鼠穿透。"
         }
       },
       "none": "未設定",
@@ -18110,5 +18114,50 @@
     "title": "確認附件存取",
     "message": "Cindy 無法讀取這個附件。請選擇原始檔案，確認後繼續傳送這則訊息；取消會保留草稿。",
     "button": "使用原始檔案"
+  },
+  "hud": {
+    "passThrough": "滑鼠穿透",
+    "passThroughOff": "開啟滑鼠穿透",
+    "passThroughOn": "關閉滑鼠穿透",
+    "passThroughHint": "頂部按鈕與下方快捷鍵控制同一個開關；快捷鍵也可在「鍵盤快捷鍵」設定中修改。開啟後，僅勾選的區域穿透；頂部按鈕和設定始終可點擊。",
+    "passThroughBackground": "視窗背景",
+    "passThroughUserMessages": "我傳送的訊息",
+    "passThroughAssistantMessages": "AI 回覆",
+    "passThroughComposer": "輸入框和傳送按鈕",
+    "shortcutUnavailable": "滑鼠穿透快捷鍵未設定或已被佔用，請在 HUD 設定中重新設定",
+    "layerUp": "上移一層",
+    "layerDown": "下移一層",
+    "layerNormal": "一般視窗",
+    "layerFloating": "懸浮",
+    "layerHigh": "高層懸浮",
+    "settings": "HUD",
+    "enter": "進入 HUD 模式",
+    "exit": "恢復主視窗（Esc）",
+    "description": "在懸浮視窗中繼續目前任務，可調整視窗層級及各區域的透明度。",
+    "backgroundTransparency": "視窗背景透明度",
+    "composerTransparency": "輸入列背景透明度",
+    "messageTransparency": "訊息文字透明度",
+    "inputTransparency": "輸入框文字透明度",
+    "imageTransparency": "圖片透明度",
+    "controlsTransparency": "圖示與按鈕透明度",
+    "transparencyHint": "0% 完全不透明，100% 完全透明。恢復視窗與設定入口始終可用。",
+    "position": "輸入列位置",
+    "top": "頂部",
+    "bottom": "底部",
+    "allowScreen": "允許 AI 查看螢幕",
+    "screenHint": "僅在 HUD 中直接詢問目前畫面或勾選「{{screenAction}}」時擷取 HUD 所在顯示器。截圖隨本則訊息傳送給目前模型，並可能保存在任務歷史中。不會持續監看；此開關不改變既有電腦操作工具的權限。",
+    "openPermission": "開啟系統螢幕錄製權限",
+    "reset": "恢復 HUD 預設設定",
+    "thisScreen": "本次查看螢幕",
+    "capturing": "正在查看螢幕…",
+    "screenDisabled": "請先在 HUD 設定中允許查看螢幕",
+    "screenPermission": "請在系統設定中授予螢幕錄製權限後重試",
+    "captureFailed": "無法擷取畫面，訊息尚未傳送",
+    "fullscreen": "請先離開 macOS 全螢幕，再進入 HUD",
+    "failed": "無法完成 HUD 操作",
+    "weeklyUnavailable": "暫無七天配額",
+    "copyPath": "複製完整路徑",
+    "pathCopied": "路徑已複製",
+    "settingsAction": "HUD 設定"
   }
 }

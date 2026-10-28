@@ -1,3 +1,4 @@
+import '../../../src/renderer/features/hud/hud.css';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import { ContextCapacityRing } from '../../../src/renderer/components/status/ContextCapacityRing';
 
@@ -55,8 +56,9 @@ mountPage({
   }),
   render: (ctx) => (
     <div className="flex h-screen items-end justify-end bg-content-area p-6">
-      <div className="flex items-center gap-3" data-testid="context-footer">
+      <div className={ctx.data.hud ? "flex w-full items-center gap-3" : "flex items-center gap-3"} data-testid="context-footer">
         <ContextCapacityRing
+          variant={ctx.data.hud ? 'bar' : 'ring'}
           sessionId="fixture-session"
           providerId="xd"
           model={ctx.data.unknown ? 'unknown' : 'fixture-model'}

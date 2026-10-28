@@ -65,6 +65,7 @@ type SettingsNavIcon = ComponentType<LucideProps>;
 const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
   appearance: Palette,
+  hud: MonitorCog,
   billing: CircleDollarSign,
   usage: ChartColumn,
   personalization: Sparkles,

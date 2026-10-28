@@ -287,6 +287,7 @@ function toEpochMs(epochSeconds: number | null | undefined): number | null {
  * Codex 订阅与 Claude 订阅两种形态共用, 成品字符串在组件里统一格式化。
  */
 interface ChipWindowSegment extends ChipWindowSlot {
+  durationMinutes?: number;
   label: string;
   /**
    * 倒计时已过点、快照还停在上个周期 —— 悬念期: 段显示「重置中…」(呼吸省略号)
@@ -364,6 +365,7 @@ function toCodexChipWindow(
     // 身份 key 带 windowMinutes: 上游调整窗口策略(如换掉 5h 窗)时视为新窗口,
     // 只重置动画基线, 不误触重置滚动。
     key: `codex-${slotKey}:${window.windowMinutes ?? 'na'}`,
+    durationMinutes: window.windowMinutes ?? undefined,
     label: formatWindowLabel(window, t('todaySpend.codex.limitWindow'), t, nowMs, {
       preferResetCountdown: true,
     }),
@@ -473,6 +475,7 @@ function getClaudeChipWindows(
     const resetsAtMs = toEpochMs(fiveHour.resetsAt);
     windows.push({
       key: 'claude-5h',
+      durationMinutes: FIVE_HOUR_WINDOW_MINUTES,
       label: countdown ?? '5h',
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
@@ -499,6 +502,7 @@ function getClaudeChipWindows(
       : weekly.label;
     const resetsAtMs = toEpochMs(weekly.window.resetsAt);
     windows.push({
+      durationMinutes: WEEKLY_WINDOW_MINUTES,
       // 身份 key 区分总周限与各 scoped 周限: 切模型导致窗口切换时只重置动画基线。
       key: weekly.modelDisplayName
         ? `claude-weekly:${weekly.modelDisplayName}`
@@ -542,6 +546,7 @@ function getZhipuChipWindows(
     const remainingPercent = 100 - clampPercent(window.usedPercent);
     windows.push({
       key,
+      durationMinutes: windowMinutes,
       label: countdown ?? fallbackLabel,
       remainingPercent,
       resetsAtMs,
@@ -744,6 +749,7 @@ function getXaiChipWindows(
   const resetsAtMs = toEpochMs(snapshot.resetsAt ?? undefined);
   return [
     {
+      durationMinutes: WEEKLY_WINDOW_MINUTES,
       key: JSON.stringify(['xai-weekly', snapshot.accountFingerprint ?? null]),
       label: countdown ?? t('todaySpend.xai.weeklyLabel'),
       remainingPercent: 100 - clampPercent(used),
@@ -804,6 +810,8 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 }
 
 interface TodaySpendChipProps {
+  /** HUD summary: quota only, without task accounting or nested popovers. */
+  quotaOnly?: boolean;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
@@ -838,6 +846,7 @@ interface TodaySpendChipProps {
 }
 
 export function TodaySpendChip({
+  quotaOnly = false,
   vendorKey = 'cc',
   modelId,
   providerId,
@@ -1809,6 +1818,22 @@ export function TodaySpendChip({
     'transition-colors',
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] rounded-full',
   );
+
+  if (quotaOnly) {
+    const weeklyIndex = chipWindows.findIndex(window => window.durationMinutes === 10080);
+    const weekly = chipWindows[weeklyIndex];
+    const weeklyRollup = weeklyIndex === 0 ? rollupA : rollupB;
+    const label = t('todaySpend.codex.daysWindow', { days: 7 });
+    const summary = weekly
+      ? weekly.resetPending
+        ? `${t('todaySpend.resetPendingSegment', { label })}…`
+        : t('todaySpend.codex.windowSegment', {
+            label,
+            remaining: formatPercent(weeklyRollup?.percent ?? weekly.remainingPercent),
+          })
+      : t('hud.weeklyUnavailable');
+    return <span className={cn('text-12 tabular-nums', weekly?.alerting && 'text-[var(--error-fg)]')}>{summary}</span>;
+  }
 
   return (
     <div

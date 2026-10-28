@@ -79,6 +79,7 @@ function TabGroupPanelBody({ groupId }: { groupId: TabGroupId }): ReactNode {
         subagentsAvailable={host.subagentsAvailable}
         isMac={host.isMac}
         unifiedTopbar={host.isMac && atWindowTop}
+        topbarTrailing={host.reserveHudEntry && atWindowTop && (groupId !== 'left' || isMaximized) ? <div aria-hidden className="h-full w-16 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} data-hud-entry-reservation /> : undefined}
         // 贴着窗口左上角(左栏收起后左侧组 / 聊天列里的上方组都可能):给红绿灯与
         // ChromeActions 让位,否则页签与关闭按钮压在它们下面。
         reserveLeftChromeActions={

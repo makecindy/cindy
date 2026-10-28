@@ -173,6 +173,7 @@ interface RightSidebarShellProps {
   onActiveTabChange?: (tabId: string | null) => void;
   /** 合并顶栏首 / 尾插槽(独立窗口的红绿灯让位、合并按钮与窗口控件)。 */
   topbarLeading?: ReactNode;
+  topbarAction?: ReactNode;
   topbarTrailing?: ReactNode;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
    *  false(空白处 = 拖面板手势面);detached 子窗口不传,默认 true。 */
@@ -210,6 +211,7 @@ export function RightSidebarShell({
   onTabCreated,
   onActiveTabChange,
   topbarLeading,
+  topbarAction,
   topbarTrailing,
   chromeWindowDrag = true,
   panelSide = 'right',
@@ -943,6 +945,7 @@ export function RightSidebarShell({
                 isMaximized={isMaximized}
               />
             )}
+            {topbarAction}
             {onCloseSidebar && (
               <RightSidebarToggle
                 size="toolbar"

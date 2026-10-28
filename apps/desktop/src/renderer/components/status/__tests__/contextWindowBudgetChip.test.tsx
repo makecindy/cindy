@@ -326,6 +326,26 @@ describe('ContextWindowBudgetChip', () => {
     expect(container.querySelector('span')?.textContent).toBe(`${pct}%`);
   });
 
+  it('keeps the HUD bar read-only while restoring the normal ring controls on exit', async () => {
+    // Upstream extracted the ring and merged budget controls into it. A HUD session
+    // must retain its focusable read-only meter, without losing normal controls on exit.
+    const props = {
+      sessionId: SESSION_ID, contextTokens: 120_000, sdkContextWindow: 1_000_000,
+      model: 'grok-4.6', providerId: 'xd', vendorKey: 'cc' as const, providers: routeCatalog,
+    };
+    const view = render(<ContextCapacityRing {...props} variant="bar" />);
+    const meter = screen.getByRole('meter');
+    expect(meter.getAttribute('aria-valuenow')).toBe('12');
+    expect(meter.tabIndex).toBe(0);
+    fireEvent.click(meter);
+    expect(document.querySelector('[data-context-window-budget-chip]')).toBeNull();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    view.rerender(<ContextCapacityRing {...props} variant="ring" />);
+    expect(screen.queryByRole('meter')).toBeNull();
+    await openTierCard();
+    expect(screen.getByRole('radiogroup')).toBeTruthy();
+  });
+
   it('keeps budget choices inside the ring details and compacts only on explicit action', async () => {
     // User decision 2026-10-27: one ring entry, with budget controls inside its details.
     // Existing tests only covered the standalone chip; this exercises the merged surface.

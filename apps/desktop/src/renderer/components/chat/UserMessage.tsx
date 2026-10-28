@@ -1376,6 +1376,7 @@ export function UserMessage({
       onMouseLeave={() => setHovered(false)}
     >
       <div
+        data-hud-pointer-region="userMessages"
         className={cn(
           'flex flex-col gap-2',
           orcaCommunication || hookSource

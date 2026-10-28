@@ -5,6 +5,8 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "hud-mode", "status": "proposed", "en": "HUD", "translations": {"zh-CN": "HUD", "zh-TW": "HUD", "ja": "HUD", "ko": "HUD"}, "note": "macOS 当前任务的悬浮呈现模式。各语言保留 HUD 缩写，不改变原任务与对话模型；此条登记新增术语，待维护者裁决。"},
+    {"id": "hud-click-through", "status": "proposed", "en": "Click-Through", "translations": {"zh-CN": "鼠标穿透", "zh-TW": "滑鼠穿透", "ja": "クリック透過", "ko": "클릭 통과"}, "checkCase": false, "note": "HUD 中将选定区域的鼠标事件传给下方窗口；按钮、设置标题与快捷键统一用词。仅登记 HUD 新术语，不修改其他功能的称法。"},
     {"id":"scrolling-screenshot","status":"proposed","en":"Scrolling Screenshot","translations":{"zh-CN":"滚动截图","zh-TW":"捲動截圖","ja":"スクロールスクリーンショット","ko":"스크롤 스크린샷"},"checkCase":false,"note":"2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。"},
     {"id": "archive-task", "status": "proposed", "en": "Archive", "translations": {"zh-CN": "归档", "zh-TW": "歸檔", "ja": "アーカイブ", "ko": "보관"}, "checkCase": false, "note": "任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。"},
     {"id": "speech-speed", "status": "proposed", "en": "Speech speed", "translations": {"zh-CN": "语速", "zh-TW": "語速", "ja": "読み上げ速度", "ko": "읽기 속도"}, "checkCase": false, "note": "伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。"},

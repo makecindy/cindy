@@ -26,7 +26,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 
 /** 顶行容器：整行作为窗口拖拽区。 */
 export const WINDOW_DRAG_STYLE = { WebkitAppRegion: 'drag' } as CSSProperties;
@@ -37,6 +37,8 @@ export const WINDOW_NO_DRAG_STYLE = { WebkitAppRegion: 'no-drag' } as CSSPropert
 interface InvisibleWindowDragStripProps {
   /** 拖拽条高度，默认 50px（与 ContentHeader 同高）。 */
   height?: number;
+  /** Native no-drag holes for controls overlaid by the owning layout. */
+  children?: ReactNode;
 }
 
 /**
@@ -48,13 +50,15 @@ interface InvisibleWindowDragStripProps {
  * 若有元素落进顶部 50px，点击 / 聚焦不会被本条挡住（标了 no-drag 的
  * 交互元素可正常工作）。
  */
-export function InvisibleWindowDragStrip({ height = 50 }: InvisibleWindowDragStripProps) {
+export function InvisibleWindowDragStrip({ height = 50, children }: InvisibleWindowDragStripProps) {
   return (
     <div
       aria-hidden
       className="absolute inset-x-0 top-0 z-10"
       style={{ height, pointerEvents: 'none', ...WINDOW_DRAG_STYLE }}
-    />
+    >
+      {children}
+    </div>
   );
 }
 

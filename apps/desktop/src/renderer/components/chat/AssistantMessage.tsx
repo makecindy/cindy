@@ -384,6 +384,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
+      data-hud-pointer-region="assistantMessages"
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

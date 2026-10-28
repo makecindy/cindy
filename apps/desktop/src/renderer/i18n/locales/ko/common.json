@@ -6652,6 +6652,10 @@
         "switch-session-9": {
           "label": "9번째 세션으로 이동",
           "description": "사이드바에 표시된 9번째 세션으로 이동합니다"
+        },
+        "hud-toggle-pass-through": {
+          "label": "HUD 클릭 통과 전환",
+          "description": "HUD가 열려 있는 동안 모든 앱에서 클릭 통과를 켜거나 끕니다."
         }
       },
       "none": "설정 안 됨",
@@ -18110,5 +18114,50 @@
     "title": "첨부 파일 접근 확인",
     "message": "Cindy가 이 첨부 파일을 읽을 수 없습니다. 원본 파일을 선택하면 이 메시지 전송을 계속합니다. 취소하면 초안이 유지됩니다.",
     "button": "원본 파일 사용"
+  },
+  "hud": {
+    "passThrough": "클릭 통과",
+    "passThroughOff": "클릭 통과 켜기",
+    "passThroughOn": "클릭 통과 끄기",
+    "passThroughHint": "상단 버튼과 아래 단축키는 같은 스위치를 제어합니다. 키보드 단축키 설정에서도 변경할 수 있습니다. 선택한 영역만 클릭을 통과시키며 상단 버튼과 설정은 항상 클릭할 수 있습니다.",
+    "passThroughBackground": "창 배경",
+    "passThroughUserMessages": "내가 보낸 메시지",
+    "passThroughAssistantMessages": "AI 답변",
+    "passThroughComposer": "입력창 및 전송 버튼",
+    "shortcutUnavailable": "클릭 통과 단축키가 설정되지 않았거나 사용할 수 없습니다. HUD 설정에서 변경하세요.",
+    "layerUp": "한 단계 앞으로",
+    "layerDown": "한 단계 뒤로",
+    "layerNormal": "일반 창",
+    "layerFloating": "플로팅",
+    "layerHigh": "더 앞에 표시",
+    "settings": "HUD",
+    "enter": "HUD 모드 열기",
+    "exit": "창 복원 (Esc)",
+    "description": "플로팅 창에서 현재 작업을 이어갈 수 있습니다. 창의 앞뒤 순서와 각 영역의 투명도를 조절할 수 있습니다.",
+    "backgroundTransparency": "창 배경 투명도",
+    "composerTransparency": "입력줄 배경 투명도",
+    "messageTransparency": "메시지 글자 투명도",
+    "inputTransparency": "입력 글자 투명도",
+    "imageTransparency": "이미지 투명도",
+    "controlsTransparency": "아이콘 및 버튼 투명도",
+    "transparencyHint": "0%는 불투명, 100%는 투명합니다. 복원과 설정 버튼은 항상 표시됩니다.",
+    "position": "입력줄 위치",
+    "top": "위",
+    "bottom": "아래",
+    "allowScreen": "AI의 화면 확인 허용",
+    "screenHint": "HUD에서 현재 화면에 대해 직접 질문하거나 ‘{{screenAction}}’을 선택한 경우에만 HUD가 있는 디스플레이의 스크린샷을 찍습니다. 스크린샷은 이번 메시지와 함께 선택한 모델로 전송되며 작업 기록에 남을 수 있습니다. 지속적으로 관찰하지 않습니다. 이 설정은 기존 컴퓨터 제어 도구의 권한을 변경하지 않습니다.",
+    "openPermission": "화면 기록 권한 설정 열기",
+    "reset": "HUD 설정을 기본값으로 복원",
+    "thisScreen": "이번에만 화면 확인",
+    "capturing": "화면 확인 중…",
+    "screenDisabled": "HUD 설정에서 AI의 화면 확인을 허용하세요.",
+    "screenPermission": "시스템 설정에서 화면 기록을 허용한 뒤 다시 시도하세요.",
+    "captureFailed": "화면을 캡처하지 못했습니다. 메시지는 전송되지 않았습니다.",
+    "fullscreen": "macOS 전체 화면을 종료한 뒤 HUD를 여세요.",
+    "failed": "HUD 작업에 실패했습니다. 다시 시도하세요.",
+    "weeklyUnavailable": "7일 할당량 정보 없음",
+    "copyPath": "전체 경로 복사",
+    "pathCopied": "경로를 복사했습니다",
+    "settingsAction": "HUD 설정"
   }
 }

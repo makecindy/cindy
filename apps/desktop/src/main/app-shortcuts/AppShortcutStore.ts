@@ -73,11 +73,7 @@ export class AppShortcutStore {
 
   /** main 消费端 (菜单 accelerator / before-input-event) 实时取某 id 的生效组合。 */
   getEffectiveCombos(id: AppShortcutId): AppShortcutCombo[] {
-    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return [];
-    const override = this.load()[id];
-    if (override === null) return []; // 用户删除了绑定
-    if (override) return [override];
-    return getAppShortcutDefinition(id).getDefaultCombos(this.options.platform);
+    return this.getEffectiveMap().get(id) ?? [];
   }
 
   getEffectiveMap(): Map<AppShortcutId, AppShortcutCombo[]> {
@@ -107,13 +103,15 @@ export class AppShortcutStore {
     // darwin 上菜单专属 id 的组合必须能表达为 Electron accelerator, 否则
     // 菜单无 accelerator 且没有任何按键 fallback —— 绑定形同虚设。
     if (
-      def.menuBacked &&
-      this.options.platform === 'darwin' &&
-      comboToElectronAccelerator(normalized, 'darwin') === null
+      (def.globalBacked || (def.menuBacked && this.options.platform === 'darwin')) &&
+      comboToElectronAccelerator(normalized, this.options.platform) === null
     ) {
       return 'menu-inexpressible';
     }
-    if (def.scope === 'global' && !isGlobalAppShortcutComboUsable(normalized, this.options.platform)) {
+    if (
+      (def.scope === 'global' || def.globalBacked) &&
+      !isGlobalAppShortcutComboUsable(normalized, this.options.platform)
+    ) {
       return 'global-unusable';
     }
     const current = this.load();

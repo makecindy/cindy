@@ -213,6 +213,9 @@ describe('settings search catalog', () => {
       buildSettingsSearchDocuments(t, TAB_IDS, { ...context, ...override }).map(
         ({ entry }) => entry.id,
       );
+    expect(ids()).not.toContain('hud.settings');
+    expect(ids({ platform: 'win32' })).not.toContain('hud.settings');
+    expect(ids({ platform: 'darwin' })).toContain('hud.settings');
     expect(ids()).not.toContain('remoteControl.devices');
     expect(ids({ mode: 'cloud' })).toContain('remoteControl.devices');
     for (const region of ['cn', 'dev', 'global'] as const) {

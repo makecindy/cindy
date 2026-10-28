@@ -6646,6 +6646,10 @@
         "switch-session-9": {
           "label": "切换到第 9 个任务",
           "description": "跳转到侧边栏第 9 个可见任务"
+        },
+        "hud-toggle-pass-through": {
+          "label": "切换 HUD 鼠标穿透",
+          "description": "HUD 打开时，在任意软件中开启或关闭鼠标穿透。"
         }
       },
       "none": "未设置",
@@ -18110,5 +18114,50 @@
     "title": "确认附件访问",
     "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
     "button": "使用原文件"
+  },
+  "hud": {
+    "passThrough": "鼠标穿透",
+    "passThroughOff": "开启鼠标穿透",
+    "passThroughOn": "关闭鼠标穿透",
+    "passThroughHint": "顶部按钮与下方快捷键控制同一个开关；快捷键也可在“键盘快捷键”设置中修改。开启后，仅勾选的区域穿透；顶部按钮和设置始终可点击。",
+    "passThroughBackground": "窗口背景",
+    "passThroughUserMessages": "我发送的消息",
+    "passThroughAssistantMessages": "AI 回复",
+    "passThroughComposer": "输入框和发送按钮",
+    "shortcutUnavailable": "鼠标穿透快捷键未设置或被占用，请在 HUD 设置中重新设置",
+    "layerUp": "上移一层",
+    "layerDown": "下移一层",
+    "layerNormal": "普通窗口",
+    "layerFloating": "悬浮",
+    "layerHigh": "高层悬浮",
+    "settings": "HUD",
+    "enter": "进入 HUD 模式",
+    "exit": "恢复主窗口（Esc）",
+    "description": "在悬浮窗口中继续当前任务，可调整窗口层级和各区域的透明度。",
+    "backgroundTransparency": "窗口背景透明度",
+    "composerTransparency": "输入条背景透明度",
+    "messageTransparency": "消息文字透明度",
+    "inputTransparency": "输入框文字透明度",
+    "imageTransparency": "图片透明度",
+    "controlsTransparency": "图标和按钮透明度",
+    "transparencyHint": "0% 完全不透明，100% 完全透明。恢复窗口和设置入口始终可用。",
+    "position": "输入条位置",
+    "top": "顶部",
+    "bottom": "底部",
+    "allowScreen": "允许 AI 查看屏幕",
+    "screenHint": "仅在 HUD 中直接询问当前画面或勾选“{{screenAction}}”时截取 HUD 所在显示器。截图随本条消息发送给当前模型，并可能保存在任务历史中。不会持续观察；此开关不改变已有电脑操作工具的权限。",
+    "openPermission": "打开系统屏幕录制权限",
+    "reset": "恢复 HUD 默认设置",
+    "thisScreen": "本次查看屏幕",
+    "capturing": "正在查看屏幕…",
+    "screenDisabled": "请先在 HUD 设置中允许查看屏幕",
+    "screenPermission": "请在系统设置中授予屏幕录制权限，然后重试",
+    "captureFailed": "未能获取画面，消息尚未发送",
+    "fullscreen": "请先退出 macOS 全屏，再进入 HUD",
+    "failed": "未能完成 HUD 操作",
+    "weeklyUnavailable": "暂无七天配额",
+    "copyPath": "复制完整路径",
+    "pathCopied": "路径已复制",
+    "settingsAction": "HUD 设置"
   }
 }

@@ -194,6 +194,24 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect(fixed.content.children[1].fraction).toBeCloseTo(0.15);
   });
 
+  it('temporary HUD presentation retains panes without saving compact-window fractions', async () => {
+    vi.useFakeTimers();
+    currentLayout = { ...createDefaultLayout(), content: { type: 'split', id: 'root', direction: 'row', children: [
+      { fraction: 0.9, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+      { fraction: 0.1, node: { type: 'pane', id: 'right', panelKind: 'right-tabs', minWidth: 120 } },
+    ] } };
+    const tree = (hud: boolean) => <BuiltinPanelBridgeProvider value={bridge}><LayoutRoot chatPresentationOnly={hud} /></BuiltinPanelBridgeProvider>;
+    const view = render(tree(true));
+    const chat = screen.getByTestId('p-chat');
+    screen.getByTestId('layout-root-content').getBoundingClientRect = () => ({ width: 800, height: 600 }) as DOMRect;
+    await act(async () => { vi.advanceTimersByTime(240); });
+    expect(setLayoutMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('p-right')).toBeTruthy();
+    view.rerender(tree(false));
+    await act(async () => { vi.advanceTimersByTime(120); });
+    expect(setLayoutMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('p-chat')).toBe(chat);
+  });
   it('分割线拖动期间暂停 120px clamp 自愈，松手后再执行', async () => {
     vi.useFakeTimers();
     currentLayout = {

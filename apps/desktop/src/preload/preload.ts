@@ -47,6 +47,7 @@ import {
   type VoiceSpeakerFilterStatus,
 } from '../shared/voiceSpeakerFilter';
 import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } from '@cindy/maker-shared/device-link-contract';
+import { hudApi } from './hud';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
 import type {
@@ -1099,6 +1100,7 @@ ipcRenderer.on('appearance-settings:changed', (_event, settings: AppearanceSetti
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  hud: hudApi,
   localAgent: {
     onConfirmation: (listener: (request: import('../shared/localAgent').LocalAgentConfirmation) => void): (() => void) => {
       const receive = (_event: Electron.IpcRendererEvent, request: import('../shared/localAgent').LocalAgentConfirmation) => listener(request);

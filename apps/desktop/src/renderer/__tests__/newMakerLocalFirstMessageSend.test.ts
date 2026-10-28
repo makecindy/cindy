@@ -25,7 +25,7 @@ describe('NewMakerDraftRoute local first-message send', () => {
 
   it('sends the local first message from the draft route before navigating', () => {
     const sendMessage = source.indexOf(
-      'const sendPromise = makerChatStore.sendMessage(',
+      'makerChatStore.sendMessage(',
       localFence,
     );
     const navigate = source.indexOf('navigateToSession();', sendMessage);
@@ -48,7 +48,8 @@ describe('NewMakerDraftRoute local first-message send', () => {
   });
 
   it('does not register a memory-only pending payload for ordinary local text', () => {
-    const localSend = source.indexOf('const sendPromise = makerChatStore.sendMessage(', localFence);
+    const localSend = source.indexOf('makerChatStore.sendMessage(', localFence);
+    expect(localSend).toBeGreaterThan(localFence);
     const pendingAfterSend = source.indexOf('setPending(newSession.id', localSend);
     expect(source).toContain('setPending(remoteSessionId, {');
     expect(pendingSource).toContain(
@@ -101,7 +102,7 @@ describe('NewMakerDraftRoute local first-message send', () => {
     const leading = source.indexOf('leadingSlashInvocation(message)', slashMatch);
     const pendingHandoff = source.indexOf('setPending(newSession.id, {', slashMatch);
     const sendPromise = source.indexOf(
-      'const sendPromise = makerChatStore.sendMessage(',
+      'makerChatStore.sendMessage(',
       localFence,
     );
     const reviewStart = source.indexOf('window.electronAPI.maker.startReview({', localFence);

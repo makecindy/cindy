@@ -55,6 +55,26 @@ describe('AppShortcutStore', () => {
     expect(store.getOverrides()).toEqual({});
   });
 
+  it('preserves a saved HUD binding when a new screenshot default uses the same key', () => {
+    const savedHudCombo = combo('KeyA', { ctrl: true, shift: true });
+    fs.writeFileSync(filePath(), JSON.stringify({
+      version: 1,
+      overrides: { 'hud-toggle-pass-through': savedHudCombo },
+    }));
+    const store = makeStore('darwin');
+    expect(store.getOverrides()['hud-toggle-pass-through']).toEqual(savedHudCombo);
+    expect(store.getEffectiveMap().get('region-screenshot')).toEqual([]);
+    expect(store.getEffectiveCombos('region-screenshot')).toEqual([]);
+    expect(store.getEffectiveCombos('hud-toggle-pass-through')).toEqual([savedHudCombo]);
+    expect(store.setOverride('region-screenshot', savedHudCombo)).toBe('conflict');
+
+    store.clearOverride('hud-toggle-pass-through');
+    expect(store.getEffectiveCombos('region-screenshot')).toEqual([savedHudCombo]);
+    expect(store.setOverride('hud-toggle-pass-through', savedHudCombo)).toBeNull();
+    expect(store.getEffectiveCombos('region-screenshot')).toEqual([]);
+    expect(makeStore('darwin').getEffectiveCombos('region-screenshot')).toEqual([]);
+  });
+
   it('setOverride persists only the override key to disk', () => {
     const store = makeStore('darwin');
     expect(store.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
@@ -112,6 +132,35 @@ describe('AppShortcutStore', () => {
     // (IntlYen 无 accelerator 映射且不与任何默认组合撞键)
     const winStore = makeStore('win32');
     expect(winStore.setOverride('new-maker', combo('IntlYen', { ctrl: true }))).toBeNull();
+  });
+
+  it('rejects HUD overrides that steal global editing shortcuts', () => {
+    const store = makeStore('darwin');
+    expect(store.setOverride('hud-toggle-pass-through', combo('KeyY', { meta: true }))).toBe(
+      'global-unusable',
+    );
+    expect(store.getOverrides()).toEqual({});
+    expect(fs.existsSync(filePath())).toBe(false);
+    expect(store.setOverride('hud-toggle-pass-through', combo('KeyY', { meta: true, shift: true }))).toBeNull();
+    expect(makeStore('darwin').getEffectiveCombos('hud-toggle-pass-through')).toEqual([
+      combo('KeyY', { meta: true, shift: true }),
+    ]);
+  });
+
+  it('does not reactivate a legacy HUD editing shortcut when loading saved overrides', () => {
+    const raw = JSON.stringify({ version: 1, overrides: {
+      'hud-toggle-pass-through': combo('KeyY', { meta: true }),
+      'toggle-sidebar': combo('KeyJ', { meta: true }),
+    } });
+    fs.writeFileSync(filePath(), raw);
+    const store = makeStore('darwin');
+    expect(store.getEffectiveCombos('hud-toggle-pass-through')).toEqual([
+      combo('KeyH', { meta: true, shift: true }),
+    ]);
+    expect(store.getOverrides()['toggle-sidebar']).toEqual(combo('KeyJ', { meta: true }));
+    expect(fs.readFileSync(filePath(), 'utf-8')).toBe(raw);
+    expect(store.setOverride('hud-toggle-pass-through', null)).toBeNull();
+    expect(makeStore('darwin').getEffectiveCombos('hud-toggle-pass-through')).toEqual([]);
   });
 
   it('guards the system-wide screenshot shortcut', () => {
@@ -272,4 +321,16 @@ describe('AppShortcutStore', () => {
       expect.objectContaining({ code: 'KeyB', ctrl: true, meta: false }),
     );
   });
+});
+
+it('persists the HUD shortcut in the shared registry, checks conflicts, and restores defaults', () => {
+  const store = makeStore('darwin');
+  expect(store.getEffectiveCombos('hud-toggle-pass-through')[0]).toMatchObject({ code: 'KeyH', meta: true, shift: true });
+  expect(store.setOverride('hud-toggle-pass-through', combo('KeyB', { meta: true }))).toBe('conflict');
+  expect(store.setOverride('hud-toggle-pass-through', combo('KeyJ', { meta: true, shift: true }))).toBeNull();
+  expect(makeStore().getEffectiveCombos('hud-toggle-pass-through')[0].code).toBe('KeyJ');
+  store.setOverride('hud-toggle-pass-through', null);
+  expect(store.getEffectiveCombos('hud-toggle-pass-through')).toEqual([]);
+  store.clearOverride('hud-toggle-pass-through');
+  expect(store.getEffectiveCombos('hud-toggle-pass-through')[0].code).toBe('KeyH');
 });

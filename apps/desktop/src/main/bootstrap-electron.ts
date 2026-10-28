@@ -6,6 +6,7 @@ import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-im
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
+import { registerHudIpc, attachHudWindow, isHudWindow, rememberHudAppearance } from './hud/ipc';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, refreshMenubarControlState, refreshMenubarLocalization, stopMenubarService } from './menubar/service.js';
@@ -2516,6 +2517,7 @@ registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
+registerHudIpc();
 registerMenubarIpc();
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
@@ -3987,6 +3989,8 @@ const createWindow = () => {
       : path.join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     show: false,
+    // Native alpha backing is required for HUD; CSS alpha alone cannot reveal other apps.
+    transparent: process.platform === 'darwin',
     backgroundColor: bgColor,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
@@ -4022,6 +4026,8 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
+  rememberHudAppearance(winBackdropConfig);
+  attachHudWindow(mainWindow);
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {
@@ -4704,6 +4710,8 @@ const registerIpcHandlers = () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
     const config = resolveVibrancyConfig(familyId, isDark, process.platform);
+    rememberHudAppearance(config);
+    if (isHudWindow(win)) return;
     if (process.platform === 'darwin') {
       win.setVibrancy(config.vibrancy as 'under-window' | null);
     }

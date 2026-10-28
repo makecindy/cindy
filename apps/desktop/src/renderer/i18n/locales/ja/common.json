@@ -6652,6 +6652,10 @@
         "switch-session-9": {
           "label": "9番目のセッションに移動",
           "description": "サイドバーに表示されている9番目のセッションに移動します"
+        },
+        "hud-toggle-pass-through": {
+          "label": "HUD のクリック透過を切り替え",
+          "description": "HUD が開いている間、どのアプリからでもクリック透過を切り替えます。"
         }
       },
       "none": "未設定",
@@ -18110,5 +18114,50 @@
     "title": "添付ファイルへのアクセスを確認",
     "message": "Cindy がこの添付ファイルを読み取れません。元のファイルを選択すると、このメッセージの送信を続行します。キャンセルすると下書きが保持されます。",
     "button": "元のファイルを使用"
+  },
+  "hud": {
+    "passThrough": "クリック透過",
+    "passThroughOff": "クリック透過を有効にする",
+    "passThroughOn": "クリック透過を無効にする",
+    "passThroughHint": "上部のボタンと下のショートカットは同じスイッチを操作します。「キーボードショートカット」設定でも変更できます。選択した領域のみクリックを透過し、上部ボタンと設定は常にクリックできます。",
+    "passThroughBackground": "ウィンドウの背景",
+    "passThroughUserMessages": "送信したメッセージ",
+    "passThroughAssistantMessages": "AI の返信",
+    "passThroughComposer": "入力欄と送信ボタン",
+    "shortcutUnavailable": "クリック透過のショートカットが未設定か使用できません。HUD 設定で変更してください。",
+    "layerUp": "一段前面へ",
+    "layerDown": "一段背面へ",
+    "layerNormal": "通常ウィンドウ",
+    "layerFloating": "フローティング",
+    "layerHigh": "より前面に表示",
+    "settings": "HUD",
+    "enter": "HUD モードに切り替え",
+    "exit": "ウィンドウを復元（Esc）",
+    "description": "フローティングウィンドウで現在のタスクを続けられます。ウィンドウの重なり順と各領域の透明度を調整できます。",
+    "backgroundTransparency": "ウィンドウ背景の透明度",
+    "composerTransparency": "入力バー背景の透明度",
+    "messageTransparency": "メッセージ文字の透明度",
+    "inputTransparency": "入力文字の透明度",
+    "imageTransparency": "画像の透明度",
+    "controlsTransparency": "アイコンとボタンの透明度",
+    "transparencyHint": "0% は不透明、100% は透明です。復元と設定ボタンは常に表示されます。",
+    "position": "入力バーの位置",
+    "top": "上",
+    "bottom": "下",
+    "allowScreen": "AI に画面の確認を許可",
+    "screenHint": "HUD で現在の画面について直接質問するか「{{screenAction}}」を選択したときだけ、HUD のあるディスプレイのスクリーンショットを撮影します。画像は今回のメッセージとともに選択中のモデルに送信され、タスク履歴に残る場合があります。継続的な監視は行いません。この設定は既存のコンピューター操作ツールの権限を変更しません。",
+    "openPermission": "画面収録の権限設定を開く",
+    "reset": "HUD 設定を初期値に戻す",
+    "thisScreen": "今回だけ画面を確認",
+    "capturing": "画面を確認中…",
+    "screenDisabled": "HUD 設定で AI による画面の確認を許可してください。",
+    "screenPermission": "システム設定で画面収録を許可して再試行してください。",
+    "captureFailed": "画面を取得できませんでした。メッセージは未送信です。",
+    "fullscreen": "macOS のフルスクリーンを終了してください。",
+    "failed": "HUD の操作に失敗しました。",
+    "weeklyUnavailable": "7 日間のクォータ情報なし",
+    "copyPath": "完全なパスをコピー",
+    "pathCopied": "パスをコピーしました",
+    "settingsAction": "HUD 設定"
   }
 }

@@ -12,6 +12,8 @@ export interface TabGroupHostValue {
   deviceLinkDeviceId?: string | null;
   subagentsAvailable?: boolean;
   isMac: boolean;
+  /** Reserve the window corner occupied by the floating HUD/sidebar entry pair. */
+  reserveHudEntry?: boolean;
   /** 「在独立窗口中打开」某个页签(带 windowId = 搬进已有窗口);副窗口不提供。 */
   onDetachTab?: (tabId: string, targetWindowId?: string) => void;
   /**

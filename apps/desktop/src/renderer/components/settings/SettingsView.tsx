@@ -23,6 +23,7 @@ import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
+import { HudSection } from './HudSection';
 import { AppearanceSection } from './AppearanceSection';
 import { SubagentModelSection } from './SubagentModelSection';
 import { AuxiliaryModelSection } from './AuxiliaryModelSection';
@@ -112,7 +113,7 @@ export function SettingsView() {
     if (raw === 'tina') return 'im-bot';
     if (raw === 'billing' && !canAccessBilling) return 'general';
     if (raw === 'usage' && !canAccessUsage) return 'general';
-    if (raw === 'agent-island' && !isMac) return 'general';
+    if ((raw === 'agent-island' || raw === 'hud') && !isMac) return 'general';
     // legacy 深链:外观设置原在「通用」、回复动效原在「个性化」,旧 section 深链落到「外观」。
     if (isLegacyAppearanceDeepLink(raw, rawSection)) return 'appearance';
     return isSettingsTab(raw) ? raw : 'general';
@@ -235,7 +236,7 @@ export function SettingsView() {
     () =>
       TAB_IDS.filter(
         (tabId) =>
-          (isMac || tabId !== 'agent-island') &&
+          (isMac || (tabId !== 'agent-island' && tabId !== 'hud')) &&
           (canAccessBilling || tabId !== 'billing') &&
           (canAccessUsage || tabId !== 'usage'),
       ),
@@ -490,6 +491,8 @@ export function SettingsView() {
                 </section>
               </div>
             )}
+
+            {isMac && activeTab === 'hud' && (<div role="tabpanel" id="settings-panel-hud" aria-labelledby="settings-tab-hud"><HudSection /></div>)}
 
             {activeTab === 'appearance' && (
               <div

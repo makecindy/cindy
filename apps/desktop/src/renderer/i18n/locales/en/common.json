@@ -6683,6 +6683,10 @@
         "switch-session-9": {
           "label": "Go to session 9",
           "description": "Jump to the 9th visible session in the sidebar"
+        },
+        "hud-toggle-pass-through": {
+          "label": "Toggle HUD Click-Through",
+          "description": "Toggle click-through from any app while HUD is open."
         }
       },
       "none": "Not set",
@@ -18170,5 +18174,50 @@
     "title": "Confirm Attachment Access",
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
+  },
+  "hud": {
+    "passThrough": "Click-Through",
+    "passThroughOff": "Enable Click-Through",
+    "passThroughOn": "Disable Click-Through",
+    "passThroughHint": "The toolbar button and shortcut below control the same toggle. You can also edit it in Keyboard Shortcuts. Only selected regions pass clicks through; toolbar buttons and settings stay clickable.",
+    "passThroughBackground": "Window Background",
+    "passThroughUserMessages": "My Sent Messages",
+    "passThroughAssistantMessages": "AI Replies",
+    "passThroughComposer": "Composer and Send Button",
+    "shortcutUnavailable": "The click-through shortcut is unset or unavailable. Choose another shortcut in HUD settings.",
+    "layerUp": "Raise One Level",
+    "layerDown": "Lower One Level",
+    "layerNormal": "Normal Window",
+    "layerFloating": "Floating",
+    "layerHigh": "Higher Floating Level",
+    "settings": "HUD",
+    "enter": "Enter HUD Mode",
+    "exit": "Restore Main Window (Esc)",
+    "description": "Continue your current task in a floating window. Adjust its stacking level and the transparency of each area.",
+    "backgroundTransparency": "Window Background Transparency",
+    "composerTransparency": "Input Bar Background Transparency",
+    "messageTransparency": "Message Text Transparency",
+    "inputTransparency": "Input Text Transparency",
+    "imageTransparency": "Image Transparency",
+    "controlsTransparency": "Icon and Button Transparency",
+    "transparencyHint": "0% is opaque; 100% is transparent. Restore and settings controls stay available.",
+    "position": "Input Bar Position",
+    "top": "Top",
+    "bottom": "Bottom",
+    "allowScreen": "Allow AI to View the Screen",
+    "screenHint": "Capture the display containing HUD only for a direct question about the current screen or when “{{screenAction}}” is selected. The screenshot is sent with this message to the selected model and may remain in task history. No continuous monitoring. This setting does not change existing computer-use tool permissions.",
+    "openPermission": "Open Screen Recording Permissions",
+    "reset": "Reset HUD Settings",
+    "thisScreen": "View Screen This Time",
+    "capturing": "Viewing screen…",
+    "screenDisabled": "Allow screen viewing in HUD settings first.",
+    "screenPermission": "Grant screen recording access in System Settings, then retry.",
+    "captureFailed": "Could not capture the screen. Your message was not sent.",
+    "fullscreen": "Leave macOS full screen before entering HUD.",
+    "failed": "Could not complete the HUD action.",
+    "weeklyUnavailable": "7-day quota unavailable",
+    "copyPath": "Copy Full Path",
+    "pathCopied": "Path copied",
+    "settingsAction": "HUD Settings"
   }
 }

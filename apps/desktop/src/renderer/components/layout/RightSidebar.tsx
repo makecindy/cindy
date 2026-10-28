@@ -14,6 +14,7 @@
 
 import {
   type CSSProperties,
+  type ReactNode,
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -45,6 +46,7 @@ export interface RightSidebarHandle {
 }
 
 interface RightSidebarProps {
+  topbarAction?: ReactNode;
   isCollapsed: boolean;
   /** Expanded-state width in px —— 兜底值。宽度主权在引擎:本组件优先消费
    *  PaneWidthContext 的实时值(拖引擎缝把手时逐帧跟手),引擎未接管时才回落
@@ -88,6 +90,7 @@ interface RightSidebarProps {
 
 export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(function RightSidebar(
   {
+    topbarAction,
     isCollapsed,
     width,
     isMac,
@@ -261,6 +264,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           </div>
         )}
         <RightSidebarShell
+          topbarAction={topbarAction}
           sessionId={sessionId}
           workdir={workdir}
           remoteHostId={remoteHostId}
