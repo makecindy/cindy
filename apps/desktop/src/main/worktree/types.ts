@@ -39,6 +39,11 @@ export interface WorktreeMeta {
   quarantinePath?: string;
   /** true = scheduler 创建的临时 worktree，session 关闭时可池化复用而非销毁。 */
   ephemeral?: boolean;
+  /**
+   * true = worktree 直接检出用户已有的本地分支(branch === sourceBranch，未勾选 worktree
+   * 时按所选分支工作)。分支属于用户，任何回收路径都只移除目录、绝不删除该分支。
+   */
+  checksOutSourceBranch?: boolean;
 }
 
 export type WorktreeErrorKind =
@@ -71,6 +76,11 @@ export interface CreateWorktreeReq {
   recoveryKey?: string;
   /** 标记为 ephemeral worktree（scheduler 用），session 关闭时可池化复用。 */
   ephemeral?: boolean;
+  /**
+   * true = 不新建 `cindy/<name>`，直接在新 worktree 里检出 sourceBranch(必须是本地分支)，
+   * 改动提交在该分支上，用户主目录不切换。旧版工作端忽略此字段，退回从源分支新建托管分支。
+   */
+  checkoutSourceBranch?: boolean;
 }
 
 export type CreateWorktreeResp =

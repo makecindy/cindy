@@ -13302,6 +13302,7 @@
       "remoteDefaultsLoadFailed": "リモートデバイスの設定を読み込めませんでした。接続を確認してください。Cindy が再試行しています。",
       "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートが見つかりません",
       "worktreeBranchNeedsWorktree": "worktree がオフの場合、選択したブランチ {{branch}} は使われず、タスクは現在のブランチ {{current}} で実行されます。worktree をオンにするか、ブランチを {{current}} に戻してください。",
+      "worktreeCheckoutBranchOldHost": "リモートのコンピューターの Cindy が古いため、変更は {{source}} 自体ではなく、{{source}} から新しく作成したブランチ {{branch}} にコミットされます。そのコンピューターの Cindy を更新すると {{source}} で直接作業できます。",
       "worktreeRepoHint": "作業ディレクトリを選び直し、右下のフォルダー表示が更新されてから再試行してください",
       "sessionInactive": "セッションはすでにアクティブではありません",
       "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",

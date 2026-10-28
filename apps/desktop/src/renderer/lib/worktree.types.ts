@@ -22,6 +22,8 @@ export interface WorktreeMeta {
   createdAt: string;
   /** 隔离回收期间的实际路径；正常 worktree 不设置。 */
   quarantinePath?: string;
+  /** true = 直接检出用户已有分支(branch === sourceBranch)，不是托管分支。 */
+  checksOutSourceBranch?: boolean;
 }
 
 /**
@@ -52,6 +54,8 @@ export interface CreateWorktreeReq {
   baseRepo: string;
   name: string;
   sourceBranch: string;
+  /** true = 直接在新 worktree 里检出 sourceBranch，不新建托管分支。 */
+  checkoutSourceBranch?: boolean;
 }
 
 export type CreateWorktreeResp =

@@ -52,7 +52,7 @@ import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
-import { isSourceBranchIgnoredWithoutWorktree } from '@/components/new-chat/branchPick';
+import { applyWorktreeCreateMode } from '@/components/new-chat/branchPick';
 import {
   FolderPickerPopover,
   type FolderPickerDeviceScope,
@@ -243,6 +243,7 @@ import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fil
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
+  checkoutSourceBranchIgnoredByHost,
   createRemoteSessionWithPrecreatedWorktree,
   forgetPendingRemotePrecreatedWorktree,
   isRemotePrecreatedWorktreeCleanupPendingError,
@@ -2086,7 +2087,13 @@ export function NewMakerDraftRoute() {
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。
   const provisionalDraftArgs = useMemo<ProvisionalDraftCreateArgs | null>(() => {
     if (isDeviceLinkDraft || usesDeviceCatalog) return null;
-    if (wtEnabled && wtConfirmedIneligible !== true) return null;
+    // 发送时会建 worktree(勾选，或未勾选但选了另一条本地分支)就不能预先建在主目录里。
+    const wtWillCreate = applyWorktreeCreateMode({
+      enabled: wtEnabled,
+      currentBranch: wtCurrentBranch,
+      sourceBranch: wtSourceBranch,
+    }).enabled;
+    if (wtWillCreate && wtConfirmedIneligible !== true) return null;
     const workingDir = effectiveWorkingDir?.trim() || undefined;
     return {
       id: localDraftSessionIdRef.current,
@@ -2109,6 +2116,8 @@ export function NewMakerDraftRoute() {
     isDeviceLinkDraft,
     usesDeviceCatalog,
     wtEnabled,
+    wtCurrentBranch,
+    wtSourceBranch,
     wtConfirmedIneligible,
     effectiveWorkingDir,
     persistedAgentKind,
@@ -3640,7 +3649,8 @@ export function NewMakerDraftRoute() {
       // 发送语义以用户按下 Send 的那一帧为准。鉴权检查期间项目/分支仍可能被 UI
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
-      const selectedWorktree = { ...wtRef.current };
+      // 未勾选但选了另一条本地分支时折叠成「直接检出该分支」的 worktree，与勾选共用下方全部门。
+      const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
@@ -3678,17 +3688,13 @@ export function NewMakerDraftRoute() {
           return false;
         }
       }
-      // 未勾 worktree 时任务跑在当前 checkout 上，所选的另一条分支不会生效；保留草稿并
-      // 提示，不能静默建在当前分支上(远程电脑与本机同一口径)。
+      // 未勾 worktree 且源分支是远端引用：无法直接在上面工作，保留草稿并提示，
+      // 不能静默建在当前分支上(远程电脑与本机同一口径)。
       if (
         selectedWorkingDir
         && !isRemoteProjectDraft
         && selectedWorktree.confirmedIneligible !== true
-        && isSourceBranchIgnoredWithoutWorktree({
-          worktreeEnabled: selectedWorktree.enabled,
-          currentBranch: selectedWorktree.currentBranch,
-          sourceBranch: selectedWorktree.sourceBranch,
-        })
+        && selectedWorktree.sourceBranchUnsupported
       ) {
         toast.error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
           branch: selectedWorktree.sourceBranch.trim(),
@@ -3873,6 +3879,7 @@ export function NewMakerDraftRoute() {
                   baseRepo,
                   name,
                   sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                  ...(wt.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                   recoveryKey,
                 };
                 const resp = parseRemoteWorktreeCreateResult(
@@ -3894,6 +3901,12 @@ export function NewMakerDraftRoute() {
                   return;
                 }
                 remoteWorkingDir = resp.meta.path;
+                if (checkoutSourceBranchIgnoredByHost(wt.checkoutSourceBranch, resp.meta)) {
+                  toast.warning(t('ccAgent.draft.worktreeCheckoutBranchOldHost', {
+                    branch: resp.meta.branch,
+                    source: resp.meta.sourceBranch,
+                  }));
+                }
                 precreatedWorktree = {
                   path: resp.meta.path,
                   recoveryKey,
@@ -4255,7 +4268,7 @@ export function NewMakerDraftRoute() {
             }
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
 
-            let branchName = getBranchName(name);
+            let branchName = wt.checkoutSourceBranch ? wt.sourceBranch.trim() : getBranchName(name);
             const newSession = await createSession({
               id: sessionId,
               agentKind: persistedAgentKind,
@@ -4356,6 +4369,7 @@ export function NewMakerDraftRoute() {
                   baseRepo,
                   name,
                   sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                  ...(wt.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                 });
                 if (!resp.ok) {
                   worktreeCreationStore.set(newSession.id, {
@@ -4865,7 +4879,7 @@ export function NewMakerDraftRoute() {
       let optimisticGoalTitle: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
-        const selectedWorktree = { ...wtRef.current };
+        const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });
         // Keep Goal on the exact same worktree contract as Send.  In
         // particular, an in-flight checkbox write blocks both directions,
         // while an in-flight branch write only blocks a Worktree-enabled
@@ -4899,16 +4913,12 @@ export function NewMakerDraftRoute() {
             throw new Error(t('ccAgent.draft.deviceStillLoading'));
           }
         }
-        // 与 handleSend 同口径：未勾 worktree 时所选的另一条分支不会生效，不能静默开工。
+        // 与 handleSend 同口径：远端引用作源分支时未勾选无法直接工作，不能静默开工。
         if (
           selectedWorkingDir
           && !isRemoteProjectDraft
           && selectedWorktree.confirmedIneligible !== true
-          && isSourceBranchIgnoredWithoutWorktree({
-            worktreeEnabled: selectedWorktree.enabled,
-            currentBranch: selectedWorktree.currentBranch,
-            sourceBranch: selectedWorktree.sourceBranch,
-          })
+          && selectedWorktree.sourceBranchUnsupported
         ) {
           throw new Error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
             branch: selectedWorktree.sourceBranch.trim(),
@@ -5040,6 +5050,7 @@ export function NewMakerDraftRoute() {
                   baseRepo: selectedWorktree.baseRepo,
                   name,
                   sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+                  ...(selectedWorktree.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                   recoveryKey,
                 };
                 resp = parseRemoteWorktreeCreateResult(
@@ -5061,6 +5072,12 @@ export function NewMakerDraftRoute() {
                 throw new Error(resp.error.message ?? resp.error.kind);
               }
               remoteWorkingDir = resp.meta.path;
+              if (checkoutSourceBranchIgnoredByHost(selectedWorktree.checkoutSourceBranch, resp.meta)) {
+                toast.warning(t('ccAgent.draft.worktreeCheckoutBranchOldHost', {
+                  branch: resp.meta.branch,
+                  source: resp.meta.sourceBranch,
+                }));
+              }
               precreatedWorktree = { path: resp.meta.path, recoveryKey, createdAt };
               await registerPendingRemotePrecreatedWorktree(
                 { ...reservation, path: resp.meta.path, phase: 'precreated' },
@@ -5288,7 +5305,9 @@ export function NewMakerDraftRoute() {
             goalWorktreeName = (suggestResp.name ?? '').trim();
           }
           if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
-          goalWorktreeBranchName = getBranchName(goalWorktreeName);
+          goalWorktreeBranchName = selectedWorktree.checkoutSourceBranch
+            ? selectedWorktree.sourceBranch.trim()
+            : getBranchName(goalWorktreeName);
           // The local API needs a session id, so this is a compensated saga:
           // create an empty base-repo session, then create the worktree and move
           // workingDir. Any setup failure soft-deletes that empty session before
@@ -5330,6 +5349,7 @@ export function NewMakerDraftRoute() {
             name: goalWorktreeName,
             initialBranchName: goalWorktreeBranchName,
             sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+            checkoutSourceBranch: selectedWorktree.checkoutSourceBranch,
             createWorktree: (request) => window.electronAPI.worktreeCreate(request),
             updateWorkingDir: (managedDir) =>
               sessionService

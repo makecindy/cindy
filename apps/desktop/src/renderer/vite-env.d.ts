@@ -4426,6 +4426,7 @@ interface ElectronAPI {
     baseRepo: string;
     name: string;
     sourceBranch: string;
+    checkoutSourceBranch?: boolean;
   }) => Promise<import('@/lib/worktree.types').CreateWorktreeResp>;
   worktreeDetectCwd: (req: {
     cwd: string;

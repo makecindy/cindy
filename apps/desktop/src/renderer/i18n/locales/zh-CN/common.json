@@ -13302,6 +13302,7 @@
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeBranchNeedsWorktree": "未勾选 worktree 时，所选分支 {{branch}} 不会生效，任务会在当前分支 {{current}} 上运行。请勾选 worktree，或把分支改回 {{current}}。",
+      "worktreeCheckoutBranchOldHost": "远程电脑上的 Cindy 版本较旧，改动会提交在基于 {{source}} 新建的分支 {{branch}} 上，而不是 {{source}} 本身。更新那台电脑上的 Cindy 后即可直接在 {{source}} 上工作。",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "任务已不再处于活跃状态",
       "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建任务",

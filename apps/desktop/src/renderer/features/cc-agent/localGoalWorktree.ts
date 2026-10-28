@@ -40,11 +40,14 @@ export async function prepareLocalGoalWorktree(input: {
   name: string;
   initialBranchName: string;
   sourceBranch: string;
+  /** 直接在新 worktree 里检出 sourceBranch(未勾选 worktree 时按所选分支工作)。 */
+  checkoutSourceBranch?: boolean;
   createWorktree: (request: {
     sessionId: string;
     baseRepo: string;
     name: string;
     sourceBranch: string;
+    checkoutSourceBranch?: boolean;
   }) => Promise<LocalGoalWorktreeCreateResponse>;
   updateWorkingDir: (path: string) => Promise<void>;
   patchWorkingDir: (path: string) => void;
@@ -62,6 +65,7 @@ export async function prepareLocalGoalWorktree(input: {
       baseRepo: input.baseRepo,
       name: input.name,
       sourceBranch: input.sourceBranch,
+      ...(input.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
     });
     if (!response.ok) {
       throw new Error(response.error.message ?? response.error.kind);

@@ -22,16 +22,44 @@ export type BranchPickEffect =
   | { kind: 'set-source'; branch: string };
 
 /**
- * worktree 未勾时，任务直接跑在仓库当前 checkout 上(这里从不切换用户分支)，所选源分支
- * 不会生效。用户若选了与当前 checkout 不同的分支，发送/Goal 必须保留草稿并提示，不能
- * 静默建在当前分支上。当前分支未知(探测中、detached HEAD)时无法判断，不拦。
+ * 发送 / Goal 时建哪种 worktree(从不切换用户主目录的分支):
+ *  - 'new-branch'：勾选 → 从源分支新建 `cindy/<name>`，隔离着改；
+ *  - 'checkout-source'：未勾选但选了与当前 checkout 不同的本地分支 → 新 worktree 直接检出
+ *    该分支，改动落在它本身；
+ *  - 'unsupported-source'：未勾选但源分支是远端引用(只可能来自勾选时保存的偏好)，无法
+ *    直接在上面工作 → 保留草稿并提示，不能静默建在当前分支上；
+ *  - null：不建，任务跑在主目录当前分支。当前分支未知(探测中、detached HEAD)时也不建。
  */
-export function isSourceBranchIgnoredWithoutWorktree(
+export type WorktreeCreateMode = 'new-branch' | 'checkout-source' | 'unsupported-source' | null;
+
+export function resolveWorktreeCreateMode(
   state: Pick<BranchPickState, 'worktreeEnabled' | 'currentBranch' | 'sourceBranch'>,
-): boolean {
-  if (state.worktreeEnabled || !state.currentBranch) return false;
+): WorktreeCreateMode {
+  if (state.worktreeEnabled) return 'new-branch';
+  if (!state.currentBranch) return null;
   const picked = state.sourceBranch.trim();
-  return picked.length > 0 && picked !== state.currentBranch;
+  if (!picked || picked === state.currentBranch) return null;
+  return picked.startsWith('refs/') ? 'unsupported-source' : 'checkout-source';
+}
+
+/**
+ * 把创建方式折叠进发送快照：'checkout-source' 与勾选共用同一条创建流程和全部前置门
+ * (baseRepo、分支偏好就绪、远端回收能力)，只多带 checkoutSourceBranch。
+ */
+export function applyWorktreeCreateMode<
+  T extends { enabled: boolean; currentBranch: string | null; sourceBranch: string },
+>(wt: T): T & { checkoutSourceBranch: boolean; sourceBranchUnsupported: boolean } {
+  const mode = resolveWorktreeCreateMode({
+    worktreeEnabled: wt.enabled,
+    currentBranch: wt.currentBranch,
+    sourceBranch: wt.sourceBranch,
+  });
+  return {
+    ...wt,
+    enabled: mode === 'new-branch' || mode === 'checkout-source',
+    checkoutSourceBranch: mode === 'checkout-source',
+    sourceBranchUnsupported: mode === 'unsupported-source',
+  };
 }
 
 export function resolveBranchPick(state: BranchPickState, picked: string): BranchPickEffect {
