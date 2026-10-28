@@ -101,6 +101,7 @@ function fakeWindow() {
     show: vi.fn(() => { visible = true; window.emit('show'); }),
     isDestroyed: () => destroyed,
     isVisible: () => visible,
+    getMediaSourceId: () => 'window:999:0',
     setVisibleOnAllWorkspaces: vi.fn(),
     setAlwaysOnTop: vi.fn(),
     setBounds: vi.fn(),
@@ -160,6 +161,44 @@ describe('screenshot window lifecycle', () => {
     closeAllPins();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  // Region detection: native hit-testing can replace the transparent front
+  // rectangle. Existing lifecycle tests never queried elements. Minimal input:
+  // two overlapping windows on an offset display; unit, no OS UI or real waits.
+  it('returns the corrected window in display coordinates and drops a query after the session closes', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'darwin' } }));
+    const monitor = { ...display, bounds: { x: -100, y: 100, width: 100, height: 100 } } as Display;
+    const overlay = pool.ensure(monitor)!;
+    const owner = overlay.window.webContents;
+    pool.markShellReady(owner, owner.mainFrame);
+    const captured = [
+      { handle: 1, pid: 1, rect: [-100, 100, 0, 200] as [number, number, number, number], snapRects: [[-100, 120, 0, 200] as [number, number, number, number]] },
+      { handle: 2, pid: 2, rect: [-90, 110, -10, 190] as [number, number, number, number] },
+    ];
+    const hit = vi.fn(async () => captured[1]);
+    const elements = vi.fn(async () => ({ rects: [[-80, 120, -50, 150]], preferredRect: [-80, 120, -50, 150] }));
+    const session = new RegionScreenshotSession({ pool, captures: [{ display: monitor, image }], helper: { windowAt: hit, elements } as unknown as SnapshotHelper, windows: captured, lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    await session.open();
+    // Snapshot defaults must reach the first paint on an offset display, before
+    // any ELEMENTS_AT reply; previous coverage only inspected query conversion.
+    const begin = vi.mocked(owner.send).mock.calls.find(([name]) => name === 'region-screenshot:begin')![1];
+    expect(begin.windows[0].snapRects).toEqual([{ x: 0, y: 20, width: 100, height: 80 }]);
+    await expect(session.elementsAt(owner, owner.mainFrame, session.token, 0, 25, 25)).resolves.toEqual({
+      window: { id: 1, rect: { x: 10, y: 10, width: 80, height: 80 } },
+      rects: [{ x: 20, y: 20, width: 30, height: 30 }],
+      preferredRect: { x: 20, y: 20, width: 30, height: 30 },
+    });
+    expect(hit).toHaveBeenCalledWith(captured, -75, 125, [999]);
+    expect(elements).toHaveBeenCalledWith(captured[1], -75, 125);
+    hit.mockClear();
+    await expect(session.elementsAt(owner, owner.mainFrame, 'old-token', 0, 25, 25)).resolves.toBeNull();
+    await expect(session.elementsAt(owner, owner.mainFrame, session.token, 0, 125, 25)).resolves.toBeNull();
+    expect(hit).not.toHaveBeenCalled();
+    const pending = session.elementsAt(owner, owner.mainFrame, session.token, 0, 25, 25);
+    session.cancel(owner, owner.mainFrame, session.token);
+    await expect(pending).resolves.toBeNull();
+    expect(elements).toHaveBeenCalledTimes(1);
   });
 
   // 用户反馈：打开截图时整屏缩放。实机验证 Aura 动画；unit 保护临时开关

@@ -7,10 +7,11 @@
 //
 // - {"id":1,"op":"windows"}  on-screen windows, front to back (with owner pid).
 // - {"id":2,"op":"elements","pid":P,"x":X,"y":Y}  accessibility elements of
-//   that app under the point, innermost first. The tree is walked from the
-//   app's windows instead of hit-testing the screen, because Cindy's overlay
-//   covers the screen. Needs the Accessibility permission; without it the
-//   answer is empty and the overlay snaps to windows only.
+//   that app under the point, innermost first. Hit-test the application and
+//   walk its parents, with a bounded window-tree fallback. Needs Accessibility;
+//   without it the answer is empty and the overlay snaps to windows only.
+// - {"id":6,"op":"window-at","x":X,"y":Y,"exclude":[N]}  mouse hit window,
+//   excluding only this screenshot's overlay window numbers.
 // - {"id":3,"op":"frontmost"} / {"id":4,"op":"activate","pid":P}  remember and
 //   give focus back to the app the user was in before the screenshot.
 // - {"id":5,"op":"screens"}  per display the top inset taken by the camera
@@ -96,6 +97,26 @@ func children(of element: AXUIElement) -> [AXUIElement] {
   (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
 }
 
+/// AppKit skips transparent pixels and windows that ignore mouse events.
+/// Only Cindy's screenshot overlays are excluded explicitly; an unknown front
+/// window must still block the captured windows behind it.
+func windowAt(point: CGPoint, excluding: Set<Int>) -> Int {
+  let cocoaPoint = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - point.y)
+  var below = 0
+  for _ in 0..<(excluding.count + 1) {
+    let hit = NSWindow.windowNumber(at: cocoaPoint, belowWindowWithWindowNumber: below)
+    if hit == 0 || hit == below { return 0 }
+    if !excluding.contains(hit) { return hit }
+    below = hit
+  }
+  return 0
+}
+
+func matches(_ a: CGRect, _ b: CGRect) -> Bool {
+  abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2
+    && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
+}
+
 /// Smallest element among `candidates` whose frame contains the point.
 func smallest(_ candidates: [AXUIElement], containing point: CGPoint) -> (AXUIElement, CGRect)? {
   var best: (AXUIElement, CGRect)?
@@ -109,22 +130,85 @@ func smallest(_ candidates: [AXUIElement], containing point: CGPoint) -> (AXUIEl
   return best
 }
 
-func elementChain(pid: pid_t, point: CGPoint) -> [[Double]] {
-  guard AXIsProcessTrusted() else { return [] }
+func elementChain(pid: pid_t, point: CGPoint, bounds: CGRect?) -> [String: Any] {
+  guard AXIsProcessTrusted() else { return ["rects": []] }
   let started = Date()
   elementDeadline = started.addingTimeInterval(elementBudget)
   defer { elementDeadline = nil }
   let app = AXUIElementCreateApplication(pid)
-  let windows = (attribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
-  guard var current = smallest(windows, containing: point) else { return [] }
-  var chain: [CGRect] = [current.1]
-  for _ in 0..<maxDepth {
-    if Date().timeIntervalSince(started) > elementBudget { break }
-    guard let next = smallest(children(of: current.0), containing: point) else { break }
-    if next.1 != chain.last { chain.append(next.1) }
-    current = next
+  AXUIElementSetMessagingTimeout(app, 0.05)
+  var hit: AXUIElement?
+  if AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
+    let hit = hit
+  {
+    var current = hit
+    var visited: [AXUIElement] = []
+    var chain: [CGRect] = []
+    var document: CGRect?
+    var scroll: CGRect?
+    for _ in 0..<maxDepth {
+      if elementDeadline!.timeIntervalSinceNow <= 0 || visited.contains(where: { CFEqual($0, current) }) { break }
+      visited.append(current)
+      let rect = frame(of: current)
+      if let rect = rect, rect.contains(point), chain.last != rect {
+        chain.append(rect)
+      }
+      let role = attribute(current, kAXRoleAttribute) as? String
+      if let rect = rect, rect.contains(point) {
+        if role == "AXWebArea" { document = rect }
+        if role == kAXScrollAreaRole { scroll = rect }
+      }
+      if role == kAXWindowRole {
+        // The app may own both the target and our screenshot overlay. Never use
+        // a hit from another window of that app (or an overlapping sibling).
+        if let rect = rect, bounds.map({ matches(rect, $0) }) ?? true {
+          var result: [String: Any] = ["rects": chain.map(rectArray)]
+          result["preferredRect"] = rectArray(document ?? scroll ?? rect)
+          return result
+        }
+        break
+      }
+      guard let parent = attribute(current, kAXParentAttribute),
+        CFGetTypeID(parent) == AXUIElementGetTypeID()
+      else { break }
+      current = parent as! AXUIElement
+    }
   }
-  return chain.reversed().map(rectArray)
+  let windows = (attribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+  let matching = windows.filter { window in
+    guard let rect = frame(of: window) else { return false }
+    return bounds.map { matches(rect, $0) } ?? rect.contains(point)
+  }
+  guard let root = smallest(matching, containing: point) else { return ["rects": []] }
+  var pending: [(AXUIElement, [CGRect], CGRect?, CGRect?, Int)] = [(root.0, [root.1], nil, nil, 0)]
+  var best: [CGRect] = []
+  var preferred: CGRect?
+  var bestIsDocument = false
+  var visited = 0
+  while let (current, chain, document, scroll, depth) = pending.popLast() {
+    if Date().timeIntervalSince(started) > elementBudget || visited >= 256 { break }
+    visited += 1
+    if (document != nil && !bestIsDocument) || ((document != nil) == bestIsDocument && chain.count > best.count) {
+      best = chain; preferred = document ?? scroll; bestIsDocument = document != nil
+    }
+    if depth >= maxDepth { continue }
+    var candidates: [(AXUIElement, CGRect)] = []
+    for child in children(of: current).prefix(512) {
+      if Date().timeIntervalSince(started) > elementBudget { break }
+      if let rect = frame(of: child), rect.contains(point) { candidates.append((child, rect)) }
+    }
+    candidates.sort { $0.1.width * $0.1.height < $1.1.width * $1.1.height }
+    for (child, rect) in candidates.reversed() {
+      let role = attribute(child, kAXRoleAttribute) as? String
+      var next = chain
+      if next.last != rect { next.append(rect) }
+      pending.append((child, next, document ?? (role == "AXWebArea" ? rect : nil),
+        scroll ?? (role == kAXScrollAreaRole ? rect : nil), depth + 1))
+    }
+  }
+  var result: [String: Any] = ["rects": best.reversed().map(rectArray)]
+  result["preferredRect"] = rectArray(preferred ?? root.1)
+  return result
 }
 
 func screenInsets() -> [[String: Any]] {
@@ -179,14 +263,30 @@ while let line = readLine() {
     emit(["id": id, "keys": Array(labels.filter { CGEventSource.keyState(.combinedSessionState, key: $0.0) }.prefix(8).map { $0.1 })])
   case "windows":
     emit(["id": id, "windows": onScreenWindows()])
+  case "window-at":
+    if let x = (request["x"] as? NSNumber)?.doubleValue,
+      let y = (request["y"] as? NSNumber)?.doubleValue, x.isFinite, y.isFinite
+    {
+      let excluded = Set(request["exclude"] as? [Int] ?? [])
+      emit(["id": id, "hwnd": windowAt(point: CGPoint(x: x, y: y), excluding: excluded)])
+    } else {
+      emit(["id": id, "error": "invalid-request"])
+    }
   case "screens":
     emit(["id": id, "screens": screenInsets()])
   case "elements":
     if let pid = (request["pid"] as? NSNumber)?.int32Value,
       let x = (request["x"] as? NSNumber)?.doubleValue,
-      let y = (request["y"] as? NSNumber)?.doubleValue
+      let y = (request["y"] as? NSNumber)?.doubleValue, x.isFinite, y.isFinite
     {
-      emit(["id": id, "rects": elementChain(pid: pid, point: CGPoint(x: x, y: y))])
+      let rect = request["rect"] as? [Double]
+      let bounds = rect.flatMap { r -> CGRect? in
+        guard r.count == 4, r.allSatisfy({ $0.isFinite }), r[2] > r[0], r[3] > r[1] else { return nil }
+        return CGRect(x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1])
+      }
+      var result = elementChain(pid: pid, point: CGPoint(x: x, y: y), bounds: bounds)
+      result["id"] = id
+      emit(result)
     } else {
       emit(["id": id, "error": "invalid-request"])
     }

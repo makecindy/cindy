@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   REGION_SCREENSHOT_CHANNEL as C,
   type RegionRect,
+  type RegionScreenshotHit,
   type RegionScreenshotBegin,
   type RegionScreenshotExport,
   type RegionScreenshotBitmap,
@@ -36,7 +37,7 @@ contextBridge.exposeInMainWorld('regionScreenshot', {
   copyText: (token: string, text: string): void => ipcRenderer.send(C.COPY_TEXT, token, text),
   cancel: (token: string): void => ipcRenderer.send(C.CANCEL, token),
   abandon: (): void => ipcRenderer.send(C.ABANDON),
-  elementsAt: (token: string, windowId: number, x: number, y: number): Promise<RegionRect[]> =>
+  elementsAt: (token: string, windowId: number, x: number, y: number): Promise<RegionScreenshotHit | null> =>
     ipcRenderer.invoke(C.ELEMENTS_AT, token, windowId, x, y),
   exportImage: (token: string, payload: RegionScreenshotExport): Promise<boolean> =>
     ipcRenderer.invoke(C.EXPORT, token, payload),

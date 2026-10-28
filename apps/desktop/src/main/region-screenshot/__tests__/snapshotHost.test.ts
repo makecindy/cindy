@@ -64,6 +64,31 @@ describe('snapshot helper failure isolation', () => {
     await expect(helper.windows()).resolves.toEqual([]);
   });
 
+  // Region identification regression: rectangle z-order cannot identify a
+  // click-through overlay. Exercise the native protocol through the production
+  // host; an opaque unknown window must not expose windows behind it. Unit,
+  // in-memory child streams; existing tests cover failures, not target identity.
+  it('resolves the native hit only against captured windows, without falling through an occluder', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'darwin' } }));
+    const captured = [
+      { handle: 5, pid: 9, rect: [0, 0, 200, 300] as [number, number, number, number] },
+      { handle: 6, pid: 10, rect: [20, 20, 100, 100] as [number, number, number, number] },
+    ];
+    const request = helper.windowAt(captured, 30, 40, [99]);
+    expect(JSON.parse(child.stdin.read().toString())).toMatchObject({ op: 'window-at', x: 30, y: 40, exclude: [99] });
+    child.stdout.write(JSON.stringify({ id: 1, hwnd: 6 }) + '\n');
+    await expect(request).resolves.toBe(captured[1]);
+    const occluded = helper.windowAt(captured, 30, 40, [99]);
+    child.stdout.write(JSON.stringify({ id: 2, hwnd: 77 }) + '\n');
+    await expect(occluded).resolves.toBeNull();
+    const stale = helper.windowAt(captured, 150, 40, [99]);
+    child.stdout.write(JSON.stringify({ id: 3, hwnd: 6 }) + '\n');
+    await expect(stale).resolves.toBeNull();
+    const unavailable = helper.windowAt(captured, 30, 40, [99]);
+    child.stdout.write(JSON.stringify({ id: 4, error: 'unknown-op' }) + '\n');
+    await expect(unavailable).resolves.toBe(captured[0]);
+  });
+
   it('bounds a stuck helper instead of accumulating timed-out queries', async () => {
     const result = helper.windows();
     await vi.advanceTimersByTimeAsync(1500);
@@ -80,12 +105,31 @@ describe('snapshot helper failure isolation', () => {
       JSON.stringify({
         id: 1,
         windows: [
-          { hwnd: 5, pid: 9, rect: [0, 0, 20, 30] },
+          // Captured child geometry is optional and must stay within its window.
+          { hwnd: 5, pid: 9, rect: [0, 0, 20, 30], snapRects: [[0, 5, 20, 30], [-1, 0, 20, 30], [0, 0, -1, 2], null] },
+          { hwnd: 7, rect: [0, 0, 20, 30] },
           { hwnd: 6, rect: [0, 0, -1, 2] },
         ],
       }) + '\n',
     );
-    await expect(result).resolves.toEqual([{ handle: 5, pid: 9, rect: [0, 0, 20, 30] }]);
+    await expect(result).resolves.toEqual([
+      { handle: 5, pid: 9, rect: [0, 0, 20, 30], snapRects: [[0, 5, 20, 30]] },
+      { handle: 7, pid: null, rect: [0, 0, 20, 30] },
+    ]);
+  });
+
+  // Browser content regression: the native preferred rectangle must survive
+  // the production transport, while malformed/old replies remain usable.
+  // Existing tests only cover window geometry; unit, one in-memory response.
+  it.each([
+    { preferredRect: [10, 20, 190, 280], expected: { preferredRect: [10, 20, 190, 280] } },
+    { preferredRect: [100, 100, 190, 280], expected: {} },
+    { preferredRect: [0, 0, -1, 30], expected: {} },
+    { preferredRect: undefined, expected: {} },
+  ])('preserves only a valid content region containing the query point: $preferredRect', async ({ preferredRect, expected }) => {
+    const result = helper.elements({ handle: 5, pid: null, rect: [0, 0, 200, 300] }, 30, 40);
+    child.stdout.write(JSON.stringify({ id: 1, rects: [[20, 30, 60, 70], [100, 100, 110, 110], null], preferredRect }) + '\n');
+    await expect(result).resolves.toEqual({ rects: [[20, 30, 60, 70]], ...expected });
   });
 
   // Unit: the production start entry on unsupported platforms must keep screen

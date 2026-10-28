@@ -29,6 +29,7 @@ import {
   type RegionScreenshotBegin,
   type RegionScreenshotBitmap,
   type RegionScreenshotWindow,
+  type RegionScreenshotHit,
 } from '../../shared/regionScreenshot';
 import { hideScreenshotOverlay, showScreenshotOverlay, type OverlayPool, type OverlayWindow } from './overlays';
 import type { SnapshotHelper, SnapshotWindow } from './snapshotHost';
@@ -204,7 +205,11 @@ export class RegionScreenshotSession {
     const windows: RegionScreenshotWindow[] = [];
     this.deps.windows.forEach((window, id) => {
       const rect = intersectRegion(toLocal(toGlobalDip(window.rect), display), viewport);
-      if (rect) windows.push({ id, rect });
+      if (rect) windows.push({ id, rect,
+        ...(window.snapRects ? { snapRects: window.snapRects
+          .map((region) => intersectRegion(toLocal(toGlobalDip(region), display), viewport))
+          .filter((region): region is RegionRect => region !== null) } : {}),
+      });
     });
     const bitmap = image.toBitmap();
     return {
@@ -284,18 +289,30 @@ export class RegionScreenshotSession {
     windowId: unknown,
     x: unknown,
     y: unknown,
-  ): Promise<RegionRect[]> {
+  ): Promise<RegionScreenshotHit | null> {
     const member = this.member(sender, frame, token);
-    if (!member || !Number.isInteger(windowId)) return [];
-    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x + y)) return [];
-    const window = this.deps.windows[windowId as number];
-    if (!window) return [];
+    if (!member || !Number.isInteger(windowId)) return null;
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x + y)) return null;
+    if (!this.deps.windows[windowId as number]) return null;
     const { display } = member.capture;
+    if (x < 0 || y < 0 || x >= display.bounds.width || y >= display.bounds.height) return null;
     const global = { x: x + display.bounds.x, y: y + display.bounds.y };
     const point = process.platform === 'win32' ? screen.dipToScreenPoint(global) : global;
-    const rects = await this.deps.helper.elements(window, point.x, point.y);
-    if (this.closed) return [];
-    return rects.map((rect) => toLocal(toGlobalDip(rect), display));
+    const excluded = process.platform === 'darwin'
+      ? [...this.members.values()].filter(({ overlay }) => !overlay.window.isDestroyed())
+        .map(({ overlay }) => Number(overlay.window.getMediaSourceId().split(':')[1]))
+        .filter((id) => Number.isSafeInteger(id) && id > 0)
+      : [];
+    const window = await this.deps.helper.windowAt(this.deps.windows, point.x, point.y, excluded);
+    if (this.closed) return null;
+    if (!window) return { window: null, rects: [] };
+    const hit = await this.deps.helper.elements(window, point.x, point.y);
+    if (this.closed) return null;
+    return {
+      window: { id: this.deps.windows.indexOf(window), rect: toLocal(toGlobalDip(window.rect), display) },
+      rects: hit.rects.map((rect) => toLocal(toGlobalDip(rect), display)),
+      ...(hit.preferredRect ? { preferredRect: toLocal(toGlobalDip(hit.preferredRect), display) } : {}),
+    };
   }
 
   copyText(
