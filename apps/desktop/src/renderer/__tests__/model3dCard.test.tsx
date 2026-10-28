@@ -87,6 +87,17 @@ describe('Model3DCardContent', () => {
     await act(async () => { await Promise.resolve(); });
     expect(screen.queryByAltText('chat.media.modelPreviewAlt')).toBeNull();
     expect(screen.getByText('ship.fbx')).toBeTruthy();
+    // 退化成一行「图标 + 名字 + 格式」,不再留 1:1 的空方块
+    expect(screen.getByText('FBX')).toBeTruthy();
+    expect(document.querySelector('.aspect-square')).toBeNull();
+  });
+
+  it('keeps the square thumbnail frame while loading', async () => {
+    getModel3DThumbnail.mockReturnValue(new Promise(() => {}));
+    render(React.createElement(Model3DCardContent, { source: localSource }));
+    reveal();
+    await waitFor(() => expect(getModel3DThumbnail).toHaveBeenCalled());
+    expect(document.querySelector('.aspect-square')).not.toBeNull();
   });
 
   it('stays idle while disabled (e.g. the file is still pending review)', async () => {
