@@ -28,10 +28,25 @@
 
 import * as nodePath from 'node:path';
 
+import { isModel3DPath } from '@cindy/maker-shared/model3d';
+
 import { throwIpcError } from './utils/ipcValidate.js';
 
 /** Hard ceiling regardless of the caller-requested maxSize. */
 export const READ_FILE_BYTES_CAP = 30 * 1024 * 1024;
+
+/**
+ * Ceiling for the dedicated 3D-model read (`readModelFileBytes`). Game-grade
+ * FBX / GLB assets routinely exceed the 30 MB preview cap; this larger ceiling
+ * is only reachable through the model entry point, which also pins the file
+ * (and its resolved target) to a 3D model extension.
+ */
+export const READ_MODEL_BYTES_CAP = 128 * 1024 * 1024;
+
+export interface ReadFileBytesOptions {
+  /** Overrides the default 30 MB hard ceiling (callers can still request less). */
+  hardCap?: number;
+}
 
 /**
  * The stat fields this module needs. `dev`/`ino`/`size` are bigint because the
@@ -82,6 +97,7 @@ function isSameFileObject(expected: FileIdentityStat, actual: FileIdentityStat):
 export async function readFileBytesForPreview(
   params: unknown,
   deps: ReadFileBytesDeps,
+  options: ReadFileBytesOptions = {},
 ): Promise<{ bytes: Uint8Array; size: number }> {
   // Validate the payload shape BEFORE destructuring: a null / non-object
   // params from a buggy or hostile renderer must land on INVALID_PARAMS, not
@@ -94,11 +110,10 @@ export async function readFileBytesForPreview(
   // Coerce defensively: a NaN / non-finite / non-positive maxSize must fall
   // back to the hard cap, never make Math.min return NaN (which would make the
   // size comparisons below vacuously false and drop the cap entirely).
+  const hardCap = options.hardCap ?? READ_FILE_BYTES_CAP;
   const requested = Number(rawMaxSize);
   const maxSize =
-    Number.isFinite(requested) && requested > 0
-      ? Math.min(requested, READ_FILE_BYTES_CAP)
-      : READ_FILE_BYTES_CAP;
+    Number.isFinite(requested) && requested > 0 ? Math.min(requested, hardCap) : hardCap;
 
   if (typeof filePath !== 'string' || !nodePath.isAbsolute(filePath)) {
     throwIpcError('INVALID_PARAMS', 'filePath must be an absolute path');
@@ -150,7 +165,7 @@ export async function readFileBytesForPreview(
       throwIpcError('PRECONDITION_FAILED', 'file changed during read');
     }
     // Down to Number only after the identity check: the size ceiling is a plain
-    // number and a 30MB cap is far below Number.MAX_SAFE_INTEGER.
+    // number and any cap here is far below Number.MAX_SAFE_INTEGER.
     const size = Number(st.size);
     if (size > maxSize) {
       throwIpcError('PRECONDITION_FAILED', 'file exceeds the preview size limit');
@@ -175,4 +190,37 @@ export async function readFileBytesForPreview(
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * Read a local 3D model file's bytes for the in-app viewer / thumbnail service.
+ *
+ * Same validation, path policy and descriptor-bound read as
+ * `readFileBytesForPreview`, with two differences: the ceiling is
+ * `READ_MODEL_BYTES_CAP`, and both the requested path AND its resolved target
+ * must carry a 3D model extension — a `model.glb -> ~/notes.txt` symlink cannot
+ * be used to pull an arbitrary file through the larger-cap channel.
+ */
+export async function readModelFileBytes(
+  params: unknown,
+  deps: ReadFileBytesDeps,
+): Promise<{ bytes: Uint8Array; size: number }> {
+  if (typeof params !== 'object' || params === null) {
+    throwIpcError('INVALID_PARAMS', 'params must be an object');
+  }
+  const { filePath } = params as { filePath?: unknown };
+  if (typeof filePath !== 'string' || !isModel3DPath(filePath) || /^[a-z][a-z0-9+.-]*:\/\//i.test(filePath)) {
+    throwIpcError('INVALID_PARAMS', 'filePath must be an absolute path to a 3D model file');
+  }
+  return readFileBytesForPreview(
+    // maxSize is intentionally not forwarded: the cap is decided here, not by the renderer.
+    { filePath },
+    {
+      ...deps,
+      // The core runs the policy on both the requested path and its realpath, so
+      // folding the extension rule in here also pins the symlink-resolved target.
+      isPathAllowed: (target) => isModel3DPath(target) && deps.isPathAllowed(target),
+    },
+    { hardCap: READ_MODEL_BYTES_CAP },
+  );
 }
