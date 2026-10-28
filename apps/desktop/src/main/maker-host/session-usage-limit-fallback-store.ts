@@ -183,6 +183,32 @@ export async function writeSessionUsageLimitFallbackEpisode(
 }
 
 /**
+ * 原子地清掉 episode：只有它仍是调用方手里那个（failedAtMs 与 attempts 都对得上）才删。
+ * 回切收尾必须用它，否则一次失败的回切收尾会抹掉期间新写进来的 episode（例如刚又降级一次）。
+ */
+export async function clearSessionUsageLimitFallbackEpisode(
+  sessionId: string,
+  expected: { failedAtMs: number; attempts: number },
+): Promise<boolean> {
+  let cleared = false;
+  await store.updateAtomic(({ value }) => {
+    const current = value.episodes[sessionId];
+    if (
+      !current ||
+      current.failedAtMs !== expected.failedAtMs ||
+      current.attempts !== expected.attempts
+    ) {
+      return { policies: value.policies, episodes: value.episodes };
+    }
+    cleared = true;
+    const episodes = { ...value.episodes };
+    delete episodes[sessionId];
+    return { policies: value.policies, episodes };
+  });
+  return cleared;
+}
+
+/**
  * 原子地给 episode 记一次尝试：**只有 episode 仍是调用方读到的那个**（failedAtMs 与
  * attempts 都对得上）才写。返回 false = 期间被清掉或换过（例如用户刚选了模型），
  * 调用方必须放弃这次回切 —— 否则会把用户的选择重新复活成一条自动回切记录。

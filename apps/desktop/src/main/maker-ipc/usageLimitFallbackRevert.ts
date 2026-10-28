@@ -84,6 +84,14 @@ export interface UsageLimitFallbackRevertDeps {
   isSourceKnownLimited(policy: SessionUsageLimitFallback): Promise<boolean>;
   writeEpisode(sessionId: string, episode: SessionUsageLimitFallbackEpisode | null): Promise<void>;
   /**
+   * 原子地清掉 episode：只有它仍是 `expected` 那个才删，返回是否删成。
+   * 回切收尾必须用它——无条件删会抹掉期间新写进来的 episode。
+   */
+  clearEpisode(
+    sessionId: string,
+    expected: { failedAtMs: number; attempts: number },
+  ): Promise<boolean>;
+  /**
    * 原子认领一次尝试：只有 episode 仍是 `expected` 那个才写 `next`，返回是否写成。
    * 期间被清掉（用户选了模型）或被改写时必须返回 false，调用方据此放弃这次回切。
    */
@@ -196,12 +204,27 @@ export function createUsageLimitFallbackRevert(
         { ...episode, attempts, nextEligibleAtMs },
       );
       if (!claimed) return 'skipped' as const;
-      const applied = await deps.applySourceSelection({
-        sessionId,
-        from: fresh.effective,
-        source: policy.source,
-        generation: profiles.generation,
-      });
+      // claim 是 await：这期间可能新起一轮 turn，或刚挂上一个额度恢复。
+      // 那两件事都会让这次换路变成“吞掉恢复”，所以动路线前再核一次。
+      if (deps.isTurnRunning(sessionId) || deps.hasUsageLimitRecovery(sessionId)) {
+        return 'skipped' as const;
+      }
+      let applied: UsageLimitFallbackRevertSelectionResult;
+      try {
+        applied = await deps.applySourceSelection({
+          sessionId,
+          from: fresh.effective,
+          source: policy.source,
+          generation: profiles.generation,
+        });
+      } catch (error: unknown) {
+        // 抛错也走“失败”这一条：否则会绕过下面的次数与上限逻辑，episode 永远不清。
+        deps.log.warn('usage-limit fallback revert apply threw', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return 'failed' as const;
+      }
       const switched =
         !applied.superseded &&
         !applied.deferred &&
@@ -210,8 +233,10 @@ export function createUsageLimitFallbackRevert(
       return switched ? ('reverted' as const) : ('failed' as const);
     });
 
+    const claimedState = { failedAtMs: episode.failedAtMs, attempts: episode.attempts + 1 };
     if (outcome === 'reverted') {
-      await deps.writeEpisode(sessionId, null);
+      // CAS 清：期间若又写了新 episode（例如刚又降级一次），不能把它抹掉。
+      await deps.clearEpisode(sessionId, claimedState);
       deps.log.info('usage-limit fallback reverted', {
         sessionId,
         fromProviderId: episode.targetRoute.providerId,
@@ -225,7 +250,7 @@ export function createUsageLimitFallbackRevert(
     if (outcome === 'failed') {
       const attempts = episode.attempts + 1;
       if (attempts >= USAGE_LIMIT_FALLBACK_REVERT_MAX_ATTEMPTS) {
-        await deps.writeEpisode(sessionId, null);
+        await deps.clearEpisode(sessionId, claimedState);
         deps.log.info('usage-limit fallback revert gave up', { sessionId, attempts });
         return 'exhausted';
       }

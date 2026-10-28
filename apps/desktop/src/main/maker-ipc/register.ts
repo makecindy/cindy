@@ -1275,6 +1275,7 @@ import {
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   claimSessionUsageLimitFallbackEpisodeAttempt,
+  clearSessionUsageLimitFallbackEpisode,
   readAllSessionUsageLimitFallbackEpisodes,
   readAllSessionUsageLimitFallbacks,
   readSessionUsageLimitFallback,
@@ -20106,6 +20107,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     writeEpisode: (sessionId, episode) =>
       writeSessionUsageLimitFallbackEpisode(sessionId, episode),
+    clearEpisode: (sessionId, expected) =>
+      clearSessionUsageLimitFallbackEpisode(sessionId, expected),
     claimAttempt: (sessionId, expected, next) =>
       claimSessionUsageLimitFallbackEpisodeAttempt(sessionId, expected, next),
     now: () => Date.now(),

@@ -119,6 +119,21 @@ function harness(options: {
       return true;
     },
   );
+  /** 与真实 store 同语义：只有 episode 仍是那一份才删。 */
+  const clearEpisode = vi.fn(
+    async (sessionId: string, expected: { failedAtMs: number; attempts: number }) => {
+      const entry = state.episodes.get(sessionId);
+      if (
+        !entry ||
+        entry.episode.failedAtMs !== expected.failedAtMs ||
+        entry.episode.attempts !== expected.attempts
+      ) {
+        return false;
+      }
+      state.episodes.delete(sessionId);
+      return true;
+    },
+  );
   const deps: UsageLimitFallbackRevertDeps = {
     readEpisodes: () => [...state.episodes.values()],
     readProfiles: async (sessionId) => {
@@ -137,11 +152,12 @@ function harness(options: {
     applySourceSelection,
     isSourceKnownLimited: async () => options.knownLimited ?? false,
     writeEpisode,
+    clearEpisode,
     claimAttempt,
     now: () => state.now,
     log: { info: vi.fn(), warn: vi.fn() },
   };
-  return { deps, applySourceSelection, writeEpisode, claimAttempt, state };
+  return { deps, applySourceSelection, writeEpisode, clearEpisode, claimAttempt, state };
 }
 
 describe('usage-limit fallback revert (episode accounting)', () => {
@@ -185,7 +201,7 @@ describe('usage-limit fallback revert (episode accounting)', () => {
   });
 
   it('到期且切成功 → 用 policy.source 的完整组合切回，并清掉 episode', async () => {
-    const { deps, applySourceSelection, writeEpisode } = harness({
+    const { deps, applySourceSelection, clearEpisode } = harness({
       episodes: [
         {
           sessionId: 's1',
@@ -202,7 +218,8 @@ describe('usage-limit fallback revert (episode accounting)', () => {
       source: policy.source,
       generation: 3,
     });
-    expect(writeEpisode).toHaveBeenLastCalledWith('s1', null);
+    // 收尾用 CAS 清（只有仍是自己那一份才删），不是无条件 write(null)。
+    expect(clearEpisode).toHaveBeenCalledWith('s1', expect.objectContaining({ attempts: 1 }));
     expect(result.reverted).toBe(1);
   });
 
@@ -325,11 +342,11 @@ describe('usage-limit fallback revert (episode accounting)', () => {
   });
 
   it('仍在限额里（快照否定条件）不白试，也不消耗尝试', async () => {
-    const { deps, applySourceSelection, writeEpisode } = harness({ knownLimited: true });
+    const { deps, applySourceSelection, clearEpisode } = harness({ knownLimited: true });
     await createUsageLimitFallbackRevert(deps).sweep();
 
     expect(applySourceSelection).not.toHaveBeenCalled();
-    expect(writeEpisode).not.toHaveBeenCalled();
+    expect(clearEpisode).not.toHaveBeenCalled();
   });
 
   it('已经不在降级组合上（用户换走过）→ 清 episode、不切', async () => {
@@ -378,5 +395,60 @@ describe('usage-limit fallback revert (episode accounting)', () => {
     const [a, b] = await Promise.all([revert.sweep(), revert.sweep()]);
     expect(applySourceSelection).toHaveBeenCalledTimes(1);
     expect(a).toEqual(b);
+  });
+
+  it('抛错也要计入次数：到上限就清 episode，不会无限重试', async () => {
+    const { deps, state } = harness({ throwOnApply: true });
+    const revert = createUsageLimitFallbackRevert(deps);
+
+    let exhausted = 0;
+    for (let i = 0; i < 6; i += 1) {
+      state.now += 3 * 60 * 60 * 1000;
+      const result = await revert.sweep();
+      exhausted += result.exhausted;
+    }
+
+    // 第 5 次失败就收口；第 6 轮已经没有 episode 可扫。
+    expect(exhausted).toBe(1);
+    expect(state.episodes.size).toBe(0);
+  });
+
+  it('回切收尾不会抹掉期间新写进来的 episode', async () => {
+    const { deps, state } = harness();
+    const original = deps.applySourceSelection;
+    deps.applySourceSelection = async (input) => {
+      // 模拟：切回的同时又降级了一次，写下了新的 episode。
+      const entry = state.episodes.get(input.sessionId)!;
+      state.episodes.set(input.sessionId, {
+        sessionId: input.sessionId,
+        policy: entry.policy,
+        episode: { ...entry.episode, failedAtMs: entry.episode.failedAtMs + 1, attempts: 0 },
+      });
+      return original(input);
+    };
+
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(result.reverted).toBe(1);
+    // 旧回切只能用 CAS 清自己那一份，新 episode 必须活下来。
+    const survivor = [...state.episodes.values()][0];
+    expect(survivor?.episode.attempts).toBe(0);
+    expect(survivor?.episode.failedAtMs).toBeGreaterThan(survivor!.episode.knownResetAtMs ?? 0);
+  });
+
+  it('认领成功但落盘期间挂上了额度恢复，就不再选模', async () => {
+    const { deps, state, applySourceSelection } = harness();
+    const baseClaim = deps.claimAttempt;
+    deps.claimAttempt = async (sessionId, expected, next) => {
+      const claimed = await baseClaim(sessionId, expected, next);
+      // 模拟：认领落盘的同时，这一轮撞上额度并挂上了恢复。
+      state.hasRecovery = true;
+      return claimed;
+    };
+
+    const result = await createUsageLimitFallbackRevert(deps).sweep();
+
+    expect(result.reverted).toBe(0);
+    expect(applySourceSelection).not.toHaveBeenCalled();
   });
 });
