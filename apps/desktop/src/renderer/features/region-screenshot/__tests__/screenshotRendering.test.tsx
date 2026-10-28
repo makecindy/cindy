@@ -94,6 +94,53 @@ describe('screenshot rendering recovery', () => {
     expect(screen.getByText('250 × 200')).toBeTruthy();
     expect(bridge.elementsAt).toHaveBeenCalledTimes(7);
   });
+  // PR #7661 discussion_r4398847280: a native null window must not flash the
+  // captured window underneath an unknown occluder at each new pointer position.
+  // Existing corrected-target coverage only used non-null windows. Production
+  // overlay + deferred null/recovery replies is the minimal input; tier: unit.
+  it('retains a confirmed unknown occluder while a new point is pending', async () => {
+    vi.stubGlobal('PointerEvent', MouseEvent);
+    vi.stubGlobal('ImageData', class {
+      data = new Uint8ClampedArray(4);
+      constructor(readonly width: number, readonly height: number) {}
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    let begin!: Parameters<RegionScreenshotOverlayBridge['onBegin']>[0];
+    const replies: ((hit: RegionScreenshotHit) => void)[] = [];
+    const bridge = {
+      onBegin: (callback: typeof begin) => { begin = callback; return () => {}; },
+      onEnd: () => () => {}, onClear: () => () => {},
+      shellReady() {}, abandon() {}, painted() {}, focused() {}, selectionStarted() {},
+      elementsAt: vi.fn(() => new Promise<RegionScreenshotHit>((resolve) => replies.push(resolve))),
+    } as unknown as RegionScreenshotOverlayBridge;
+    const outer = { id: 0, rect: { x: 0, y: 0, width: 500, height: 400 } };
+    const front = { id: 1, rect: { x: 400, y: 100, width: 100, height: 100 } };
+    const { container } = render(<RegionScreenshotOverlay bridge={bridge} />);
+    const root = container.firstElementChild!;
+    await act(async () => begin({ token: 'occluded', locale: 'en', viewport: { width: 600, height: 500 }, safeArea: { x: 0, y: 0, width: 600, height: 500 }, scaleFactor: 1, frame: { width: 1, height: 1, data: new Uint8Array(4) }, windows: [front, outer], cursor: { x: 50, y: 80 }, lastRegion: null }));
+    await act(async () => replies[0]({ window: null, rects: [] }));
+    expect(screen.getByText('600 × 500')).toBeTruthy();
+    for (const x of [100, 200]) {
+      fireEvent.pointerMove(root, { clientX: x, clientY: 80 });
+      expect(screen.getByText('600 × 500')).toBeTruthy();
+    }
+    // An obsolete non-null hit cannot select the occluded window either.
+    await act(async () => replies[1]({ window: outer, rects: [] }));
+    expect(screen.getByText('600 × 500')).toBeTruthy();
+    expect(bridge.elementsAt).toHaveBeenLastCalledWith('occluded', 0, 200, 80);
+    await act(async () => replies[2]({ window: null, rects: [] }));
+    fireEvent.pointerMove(root, { clientX: 250, clientY: 80 });
+    expect(screen.getByText('600 × 500')).toBeTruthy();
+    // A fresh hit restores the known window as soon as the occluder is left.
+    await act(async () => replies[3]({ window: outer, rects: [] }));
+    expect(screen.getByText('500 × 400')).toBeTruthy();
+    fireEvent.pointerMove(root, { clientX: 300, clientY: 80 });
+    await act(async () => replies[4]({ window: null, rects: [] }));
+    fireEvent.pointerMove(root, { clientX: 450, clientY: 150 });
+    expect(screen.getByText('100 × 100')).toBeTruthy(); // a different captured front ends retention
+    await act(async () => replies[5]({ window: front, rects: [] }));
+    expect(bridge.elementsAt).toHaveBeenCalledTimes(6);
+  });
   // 2026-10-28 flicker: final-result assertions missed the whole-window frame
   // inserted during every pending query. Production overlay, two moves before a
   // deferred reply (unit); also cover old helpers without captured child regions.

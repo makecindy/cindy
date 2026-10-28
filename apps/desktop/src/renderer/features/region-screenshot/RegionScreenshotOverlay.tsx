@@ -478,16 +478,16 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     // element chain (or the window under a transparent pixel) is still valid.
     const hit = cache && cache.point.x === point.x && cache.point.y === point.y ? cache.hit : null;
     const rectangularWindow = topWindowAt(current.windows, point);
-    // If native hit testing corrected a click-through front window, keep the
-    // confirmed target's default while this point is pending. This is only a
-    // display fallback: requestElements still queries the new point, and its
-    // reply may select an opaque part of the front window. Leaving the corrected
-    // bounds or entering a different front window ends this fallback immediately.
-    const pendingWindow = !hit && cache?.hit.window && rectangularWindow
-      && cache.hit.window.id !== rectangularWindow.id
+    // Keep a corrected target (including an explicit null for an unknown
+    // occluder) while this point is pending under the same captured front window.
+    // This is only a display fallback: requestElements still queries the new
+    // point, and its reply is authoritative. Leaving a known corrected target's
+    // bounds or entering a different front window ends retention immediately.
+    const pendingHit = !hit && cache && rectangularWindow
+      && cache.hit.window?.id !== rectangularWindow.id
       && topWindowAt(current.windows, cache.point)?.id === rectangularWindow.id
-      && rectContains(cache.hit.window.rect, point) ? cache.hit.window : null;
-    const window = hit ? hit.window : pendingWindow ?? rectangularWindow;
+      && (!cache.hit.window || rectContains(cache.hit.window.rect, point)) ? cache.hit : null;
+    const window = hit ? hit.window : pendingHit ? pendingHit.window : rectangularWindow;
     const snapshot = current.windows.find((candidate) => candidate.id === window?.id);
     // Default regions belong to the frozen capture, not a point query. UIA may
     // finish later or fail without making the outline bounce back to the window.
