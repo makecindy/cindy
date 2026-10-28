@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 臺可進入",
       "filterMetaWithUnavailable": "{{available}} 臺可進入 · {{unavailable}} 臺需處理",
       "showUnavailableReason": "展開裝置可查看無法使用的原因",
-      "emptyCopy": "在電腦端登入同一帳號，並在設定的遠端控制中開啟「允許同帳號裝置控制本機」。",
+      "emptyCopy": "在電腦端登入同一帳號，並在「設定 → 遠端連線」中開啟「允許同帳號裝置控制本機」。",
       "emptyTitle": "還沒有可顯示的電腦",
       "hideUnavailableA11y": "隱藏無法使用的電腦",
       "showUnavailableA11y": "顯示無法使用的電腦",
@@ -338,7 +338,9 @@
       "doneUnread": "已完成未讀",
       "running": "執行中",
       "close": "關閉",
-      "cancelRename": "取消重新命名"
+      "cancelRename": "取消重新命名",
+      "createdBy": "由 {{name}} 建立",
+      "ownedBy": "歸屬 {{name}}"
     },
     "accounts": {
       "title": "切換帳號",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "無",
       "summarySeparator": "、",
-      "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。"
+      "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。",
+      "filterTeammatesHeading": "夥伴",
+      "filterAnySource": "不限來源",
+      "filterSelectedTeammates": "已選 {{count}} 位"
     },
     "search": {
       "placeholder": "搜尋標題或內容…",

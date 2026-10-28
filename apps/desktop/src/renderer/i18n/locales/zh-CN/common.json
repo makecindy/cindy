@@ -74,6 +74,11 @@
       "stopped": "本机连接已停止"
     }
   },
+  "attachmentAccessConfirmation": {
+    "title": "确认附件访问",
+    "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
+    "button": "使用原文件"
+  },
   "mailReader": {
     "showExternalImages": "显示外部图片",
     "markReadFailed": "未能同步已读状态，请检查邮箱授权后重新打开。",
@@ -845,6 +850,135 @@
       "deleted": "已删除 {{provider}} 的供应商组"
     }
   },
+  "regionScreenshot": {
+    "editor": { "fitWidth": "适合宽度", "loading": "正在加载图片…" },
+    "moveToolbar": "左右拖动工具栏",
+    "hint": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格全屏 · C 复制颜色 · Esc 退出",
+    "hintWithLast": "单击选中窗口或元素，拖动框选 · 滚轮切换范围 · 空格全屏 · R 上次区域 · C 复制颜色 · Esc 退出",
+    "copy": "复制",
+    "cancel": "退出截图",
+    "captureFailed": "未能截取屏幕",
+    "permission": {
+      "title": "需要屏幕录制权限",
+      "detail": "截图需要在“系统设置 > 隐私与安全性 > 屏幕与系统录音”中允许 {{appName}}，开启后重新打开 {{appName}}。",
+      "openSettings": "打开系统设置",
+      "later": "暂不开启"
+    },
+    "undo": "撤销",
+    "redo": "重做",
+    "pinToScreen": "贴到屏幕",
+    "pin": {
+      "copy": "复制",
+      "save": "保存…",
+      "ask": "问 {{appName}}",
+      "opacity": "不透明度",
+      "originalSize": "原始大小",
+      "passThrough": "鼠标穿透",
+      "close": "关闭",
+      "closeAll": "关闭全部贴图",
+      "unlock": "恢复鼠标操作"
+    },
+    "save": "保存",
+    "cindy": "交给 {{appName}}",
+    "tools": {
+      "rect": "矩形",
+      "ellipse": "椭圆",
+      "line": "直线",
+      "arrow": "箭头",
+      "pen": "画笔",
+      "marker": "荧光笔",
+      "text": "文字",
+      "mosaic": "马赛克",
+      "blur": "模糊",
+      "step": "序号"
+    },
+    "ai": {
+      "ask": "问 {{appName}}",
+      "translate": "翻译",
+      "explain": "解释",
+      "extract": "提取文字"
+    },
+    "size": {
+      "stroke": {
+        "0": "细",
+        "1": "中",
+        "2": "粗"
+      },
+      "text": {
+        "0": "小号",
+        "1": "中号",
+        "2": "大号"
+      },
+      "strength": {
+        "0": "弱",
+        "1": "中",
+        "2": "强"
+      }
+    },
+    "colors": {
+      "red": "红色",
+      "yellow": "黄色",
+      "green": "绿色",
+      "blue": "蓝色",
+      "black": "黑色",
+      "white": "白色"
+    },
+    "magnifier": {
+      "copyHint": "C 复制颜色"
+    },
+    "saveFileName": "截图",
+    "saveFailed": "未能保存截图",
+    "prompt": {
+      "translate": "请识别这张截图中的文字并翻译成简体中文，保留原有的段落和列表结构，只输出译文。如果原文已经是中文，就翻译成英文。",
+      "explain": "请解释这张截图的内容。如果是报错，说明原因和解决办法；如果是图表、代码或界面，说明它在表达什么、有哪些要点。",
+      "extract": "请把这张截图中的文字原样提取出来，保留原有的换行、段落和列表；表格用 Markdown 表格输出。只输出提取的文字。"
+    },
+    "live": {
+      "scroll": "滚动截图",
+      "video": "录屏",
+      "gif": "录制 GIF",
+      "recording": "正在录制…",
+      "preview": "采集预览",
+      "cursor": "显示鼠标指针",
+      "keys": "显示按键（包含输入内容）",
+      "start": "开始录制",
+      "pause": "暂停",
+      "resume": "继续",
+      "finish": "完成",
+      "paused": "录制已暂停",
+      "done": "采集完成，可以保存",
+      "saved": "已保存",
+      "copied": "已复制",
+      "copyFailed": "复制失败，可以重试或保存文件。",
+      "scrollHint": "在选区内向上或向下滚动，也可点击自动滚动",
+      "recordHint": "在预览上绘制标注，标注会进入录像。不录制声音",
+      "format": "格式",
+      "videoFormat": "视频 (WebM)",
+      "prepareHint": "点击开始后倒计时 3 秒，不录制声音。",
+      "countdown": "{{count}} 秒后开始录制",
+      "countdownHint": "即将开始，按 Esc 取消。",
+      "annotate": "标注",
+      "finishing": "正在完成…",
+      "replay": "重新播放",
+      "previewUnavailable": "无法打开预览。可直接保存，或关闭上一个预览后重试。",
+      "playbackFailed": "无法播放，仍可保存录制文件。",
+      "annotationNoRoom": "选区旁空间不足，无法展开标注。",
+      "overlap": "这一段未能接上。可稍往回滚动，或完成已截取的部分。",
+      "limit": "已达到采集上限，请完成并保存这段内容",
+      "captureFailed": "采集已停止，可以继续重试或保存已采集内容",
+      "encodeFailed": "录制内容编码失败，请关闭后重新录制",
+      "exportFailed": "保存失败，请再次选择保存",
+      "keysUnavailable": "按键显示不可用。macOS 请为 Cindy 开启输入监控权限",
+      "noRoom": "无法开始。请框选至少 32 × 32 像素的区域，并在选区旁留出预览空间。",
+      "image": "截图",
+      "startScroll": "开始滚动截图",
+      "autoScroll": "自动滚动",
+      "stopScroll": "停止滚动",
+      "edit": "编辑",
+      "autoUnavailable": "自动滚动已停止，可在选区内手动滚动",
+      "autoPermission": "自动滚动需要「辅助功能」权限。请在系统设置中允许 Cindy 后再试，也可以在选区内手动滚动"
+    }
+  },
   "privacyExit": {
     "status": "正在通过 Cindy 被远程控制",
     "hint": "点击屏幕或按任意键，确认后断开连接",
@@ -1170,6 +1304,7 @@
       "done": "完成",
       "running": "运行中",
       "networkReconnecting": "（{{attempt}}/{{maxAttempts}}）网络连接中断，正在重新连接…",
+      "callingTool": "正在调用工具…",
       "updatingTasks": "正在更新任务",
       "awaitingPermission": "等待授权",
       "awaitingQuestion": "等待你的回复",
@@ -3574,6 +3709,12 @@
           "contextLimitHint": "用于此模型的所有可用引擎。以整数 K 编辑（1 K = 1,000 tokens）；未编辑时保留精确值。保存后用于后续运行，正在生成的内容不受影响。实际可用长度仍受模型服务限制。",
           "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可选扩展至 1M（1,000,000）。服务运行时需在「管理服务」中重启以应用更改；已停止时，下次使用自动生效。长输入会增加内存占用和等待时间。",
           "contextLimitAria": "上下文上限（千 tokens）",
+          "compaction": {
+            "title": "自动压缩",
+            "hint": "占用达到所选比例时整理上下文。比例越低，越早压缩；实际时机仍受引擎限制。",
+            "default": "{{pct}}%（默认）",
+            "timing": "用于此来源下该模型的所有可用引擎。后续运行生效，不中断正在生成的内容。"
+          },
           "contextLimitRoute": "当前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超过上游声明的长度，可能导致请求失败。",
           "restoreDefault": "恢复默认",
@@ -6172,9 +6313,15 @@
         "conflict": "与「{{name}}」冲突",
         "voiceConflict": "与语音输入快捷键冲突",
         "composerVoiceConflict": "与语音输入快捷键冲突，请修改发送或语音输入快捷键。",
-        "menuAccelerator": "该组合键无法注册为菜单快捷键"
+        "menuAccelerator": "该组合键无法注册为菜单快捷键",
+        "globalUnusable": "该组合键不能用作全局快捷键",
+        "globalOccupied": "已被其他应用占用，请换一个组合键"
       },
       "items": {
+        "region-screenshot": {
+          "label": "截图",
+          "description": "在任意应用中截图，可以标注、贴到屏幕，或交给 {{appName}} 处理"
+        },
         "toggle-sidebar": {
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"
@@ -6587,6 +6734,9 @@
         "installAria": "安装 {{name}}"
       },
       "market": {
+        "publisherKind": {
+          "official": "官方"
+        },
         "scopeAria": "筛选插件来源",
         "scope": {
           "all": "全部",
@@ -6900,18 +7050,6 @@
         "codeDetail": "在独立沙箱中运行，无法访问你的文件与网络。",
         "resident": "常驻运行(生效后即启动，不调用也保持后台进程)",
         "residentDetail": "空闲时也占用少量内存；停用或卸载后进程立即关闭。",
-        "harnessRead": "读取 AI 运行信息：{{name}}",
-        "harnessReadDetail": "可读取能力目录、用量或上下文占用（按声明范围）。不包含消息、工具参数、结果或固定指令正文。",
-        "harnessMessages": "读取已关联任务的消息",
-        "harnessMessagesDetail": "可读取已获准任务的用户消息、AI 回复及已保存历史，其中可能包含敏感内容。不包含固定指令或隐藏思考。",
-        "harnessToolContent": "读取工具参数和结果",
-        "harnessToolContentDetail": "可读取已获准任务的工具参数和结果，其中可能包含文件内容、命令或敏感信息。",
-        "harnessEvents": "旁听 AI 运行动态：{{name}}",
-        "harnessEventsDetail": "按声明范围接收运行事件。消息及工具正文需另行批准；事件可能有缺口，不能作为完整历史。",
-        "harnessHooks": "可阻止 AI 操作：{{name}}",
-        "harnessHooksDetail": "可在支持的执行前或审批边界阻止操作，不能代你批准或改写参数。最多等待 1.5 秒；超时后继续原有审批。",
-        "harnessActions": "控制 AI 运行：{{name}}",
-        "harnessActionsDetail": "只能调用已接通并单独批准的运行操作。",
         "subscribeTopics": "旁听你的任务动态(每轮往来与任务事件，不含消息内容)",
         "subscribeActivity": "旁听 AI 何时在思考、何时在等你",
         "subscribeActivityDetail": "只知道时机：思考何时开始与结束，以及 AI 何时在等你批准或等你回答。看不到思考内容、待批准的操作、涉及的命令与文件、计划正文、问题与你的答案，也无法代你批准。",
@@ -7338,6 +7476,203 @@
         "downloadsValue": "{{value}} 下载",
         "usesValue": "{{value}} 使用",
         "usesExplanation": "当前共享范围内各版本累计的工具调用次数。下方个人调用仅统计本机当前账户，口径不同。"
+      },
+      "contribution": {
+        "unreadReview": "有新的审核结果",
+        "viewReviewResult": "查看 {{version}} 审核结果",
+        "anonymous": "匿名发布",
+        "anonymousHint": "对整款插件隐藏公开署名，可随时修改。关闭后显示各版本提审时保存的原作者昵称。",
+        "anonymousAuthorOnly": "仅原作者可修改",
+        "anonymousUnavailable": "作者设置暂不可用",
+        "anonymousUpdateFailed": "无法确认匿名设置是否已保存，请刷新后重试。",
+        "myPlugins": "发布插件",
+        "publish": "提交审核",
+        "submitUpdate": "提交新版本审核",
+        "publishHint": "仅限有权发布的插件，审核通过后在社区上架。",
+        "preparing": "正在准备当前安装的插件…",
+        "confirmSubmit": "提交审核",
+        "confirmPublic": "当前插件包及其中的代码、声明的权限将提交人工审核，审核通过后可在社区公开分发。",
+        "packageSize": "包大小：{{size}} 字节",
+        "refreshList": "刷新列表",
+        "refreshDetail": "刷新详情",
+        "signInRequired": "登录后即可管理你向公开市场提交的插件。",
+        "permissionDenied": "当前账号无权发布此插件。",
+        "notFound": "当前账号无法查看此插件。",
+        "accountChanged": "账号已切换，请用当前账号刷新。",
+        "loadFailed": "暂时无法读取插件信息。",
+        "offline": "当前离线，请联网后刷新查看最新结果。",
+        "cachedResult": "当前显示此账号上次查询的结果",
+        "lastRefreshed": "上次刷新：{{time}}",
+        "search": "搜索我的插件",
+        "filterLabel": "筛选我的插件",
+        "filter": {
+          "all": "全部",
+          "pending": "待审核",
+          "needs_action": "需要处理",
+          "published": "已上架"
+        },
+        "loading": "正在加载…",
+        "empty": "还没有提交过插件。选择自己开发并使用的插件，提交审核。",
+        "noMatches": "没有符合搜索或筛选条件的插件。",
+        "goPublish": "去发布",
+        "currentMarket": "当前上架版本",
+        "inUseVersion": "使用中",
+        "localVersion": "本地版本",
+        "localEnabled": "已启用",
+        "localDisabled": "已停用",
+        "submitVersion": "提交 {{version}} 审核",
+        "installPublished": "安装已上架版本",
+        "publishedContentUnavailable": "暂时无法读取当前上架版本的介绍和更新说明。",
+        "currentSubmission": "当前提审",
+        "localState": {
+          "missing": "本机未安装",
+          "unavailable": "暂时无法读取本地版本"
+        },
+        "listedVersion": "已上架",
+        "pendingVersion": "待审核",
+        "notInstalled": "未安装",
+        "versionUnknown": "版本未知",
+        "noPendingVersion": "无待审核版本",
+        "versionFacts": "版本状态",
+        "publishing": "发布管理",
+        "latestSubmission": "最近提交",
+        "noSubmission": "尚无提交",
+        "marketVersion": "已上架 · {{version}}",
+        "market": {
+          "not_listed": "尚未上架",
+          "disabled": "已下架",
+          "archived": "已归档",
+          "release_unavailable": "版本暂不可用"
+        },
+        "review": {
+          "pending": "待审核",
+          "approved": "审核通过",
+          "rejected": "已退回",
+          "published": "已上架",
+          "superseded": "已被后续提交替代",
+          "legacy_unverified": "历史修订无法核实",
+          "current": "处理结果尚未确认",
+          "cancelled": "已取消"
+        },
+        "reason": "处理原因",
+        "submittedContent": "已提交内容",
+        "snapshotUnavailable": "原提交内容未留存或已无法核实。",
+        "history": "发布记录",
+        "loadMore": "加载更多",
+        "loadMoreHistory": "加载更多历史",
+        "releaseId": "版本记录 ID",
+        "revision": "修订令牌",
+        "technicalDetails": "技术详情",
+        "outcome": {
+          "submitted_for_review": "已提交审核",
+          "metadata_updated": "展示信息已更新",
+          "unchanged": "内容未变，已返回已有结果"
+        },
+        "event": {
+          "submitted": "已提交",
+          "metadata_updated": "展示信息已更新",
+          "approved": "审核通过",
+          "rejected": "已退回",
+          "enabled": "已上架",
+          "disabled": "已下架",
+          "current_changed": "市场版本已切换",
+          "revoked": "版本已撤销",
+          "cancelled": "已取消"
+        },
+        "source": {
+          "manual": "手动发布",
+          "ai": "AI 协助发布",
+          "github_oidc": "仓库发布",
+          "console_upload": "控制台上传",
+          "member_upload": "企业发布",
+          "server_template": "模板发布",
+          "community_upload": "社区发布",
+          "unknown": "既有发布渠道"
+        },
+        "errors": {
+          "CONTRIBUTION_NOT_AUTHORIZED": "没有此公开插件的提交权限，请联系维护者。安装插件不授予发布权。",
+          "CONTRIBUTION_REVISION_STALE": "目标版本已变化，请刷新并核对内容后重新准备。",
+          "RELEASE_VERSION_CONFLICT": "此版本不能覆盖已有运行内容，请修改插件版本后再提交。",
+          "PLUGIN_GHOST_ID_CONFLICT": "这个插件标识已被使用。发布新插件请更换标识；更新已有插件请使用原发布账号。",
+          "CONTRIBUTION_OPERATION_NOT_FOUND": "当前账号无法查看这次提交。",
+          "PRECONDITION_FAILED": "当前插件无法提交审核。",
+          "PERSONAL_CONTEXT_REQUIRED": "登录后即可管理你向公开市场提交的插件。",
+          "ACCOUNT_REAUTH_REQUIRED": "登录状态已失效，请重新登录后重试。",
+          "PERMISSION_DENIED": "当前账号无权发布此插件。",
+          "OWNER_CHANGED": "账号已切换，请用当前账号刷新。",
+          "PLUGIN_NOT_FOUND": "当前账号无法查看此插件。",
+          "CONTRIBUTION_SUBMISSION_NOT_FOUND": "当前账号无法查看此插件。",
+          "NOT_FOUND": "当前账号无法查看此插件。",
+          "INTERNAL": "请求失败，请稍后重试。",
+          "MUTATION_CANCELLED": "请求已取消，请重新操作。",
+          "CONTRIBUTION_IDEMPOTENCY_CONFLICT": "提交请求与原记录不一致，请刷新后重新提交。",
+          "PLUGIN_ARCHIVED": "已归档",
+          "RELEASE_REVOKED": "版本已撤销",
+          "INVALID_PARAMS": "提交信息有误，请检查插件信息后重新提交。",
+          "PAYLOAD_TOO_LARGE": "插件包过大，请缩小后重新提交。",
+          "RATE_LIMITED": "请求过于频繁，请稍后再试。",
+          "JWKS_UNAVAILABLE": "账号验证服务暂不可用，请稍后再试。",
+          "STORAGE_UNAVAILABLE": "文件存储服务暂不可用，请稍后再试。",
+          "PLUGIN_REPLICAS_NOT_READY": "插件服务暂不可用，请稍后再试。",
+          "UPLOAD_OBJECT_MISSING": "未找到上传的插件包，请重新提交。",
+          "UPLOAD_SIZE_MISMATCH": "上传的插件包大小不符，请重新提交。",
+          "UPLOAD_SHA256_MISMATCH": "上传的插件包校验失败，请重新提交。",
+          "PLUGIN_PACKAGE_INVALID": "插件包格式无效，请检查后重新提交。",
+          "CONTRIBUTION_TARGET_MISMATCH": "插件包与提交目标不符，请检查插件 ID 和版本。",
+          "PUBLISH_STORAGE_UNAVAILABLE": "文件存储服务暂不可用，请稍后再试。",
+          "PUBLISH_INTERNAL_ERROR": "服务端处理失败，请稍后再试。",
+          "RELEASE_NOTES_REQUIRED": "尚未提审：请在插件源码的 ghost.json.releaseNotes 中补全更新说明，安装更新后重新提交审核。",
+          "VERSION_ALREADY_SUBMITTED": "该版本已经提审，请更改版本号并安装更新后重新提交审核。",
+          "PLUGIN_PENDING_RELEASE_EXISTS": "此插件已有版本正在审核，请先查看或取消该次提审。",
+          "CONTRIBUTION_PACKAGE_CHANGED": "本地插件在摘要显示后发生变化，请刷新摘要后重新核对。"
+        },
+        "installForAccount": "无法找到原来选择的插件安装。请在当前账号下重新选择插件，核对后再提交审核。",
+        "releaseSha": "实际版本包 SHA-256",
+        "uploadedSha": "本次上传包 SHA-256",
+        "publishPlugin": "发布插件",
+        "chooseLocal": "选择自己开发的本地插件，核对版本后提交审核。",
+        "noLocalPlugins": "还没有已安装插件。请先安装并使用自己开发的插件。",
+        "noPublishablePlugins": "没有可发布的已安装插件。请先安装并使用自己开发的插件，并在详情确认安装身份和权限批准状态。",
+        "unavailable": {
+          "officialGithubRequired": "官方公开插件不支持在客户端提审。请通过 GitHub 仓库提交修改，以保证仓库源码完整，便于后续维护。",
+          "reservedId": "此插件使用 Cindy 保留标识，不能在客户端提审。官方公开插件请通过 GitHub 仓库提交修改，以保证源码完整，便于后续维护。",
+          "privatePlugin": "此插件来自组织或私域，不能转为社区公开发布。",
+          "identityPending": "插件安装身份尚未确认，暂时无法发布。",
+          "approvalRequired": "此插件尚未完成权限批准，请先在此详情完成确认。",
+          "installationUnavailable": "当前插件安装不可用，请重新打开原插件详情。",
+          "sourceUnverified": "无法确认此插件的安装来源。请打开自己开发的本地插件。",
+          "publishingPermissionRequired": "当前账号没有此插件的提交权限。"
+        },
+        "intro": "管理公开市场插件的发布、更新与审核状态",
+        "pluginColumn": "插件",
+        "latestState": "最新情况",
+        "version": "版本",
+        "chooseVersion": "查看版本",
+        "submittedAt": "提审时间",
+        "approvedAt": "通过时间",
+        "notApproved": "尚未通过",
+        "timeUnavailable": "未记录",
+        "releaseNotes": "更新说明",
+        "versionUpdates": "版本与更新",
+        "versionManagement": "版本管理",
+        "versionContent": "版本内容",
+        "loadMoreVersions": "加载更多版本",
+        "notSubmitted": "尚未提审",
+        "submitVersion": "提交 {{version}} 审核",
+        "publishingVersion": "本次提审 · {{version}}",
+        "refreshSummary": "刷新发布摘要",
+        "versionConsumedHint": "提审成功受理后，此版本号不能再次使用；取消或退回后也需要更改版本号。",
+        "cancelReview": "取消本次提审",
+        "cancelReviewTitle": "取消 {{name}} {{version}} 的提审？",
+        "cancelReviewDescription": "取消不影响当前上架版本。{{version}} 已经提审，之后必须使用新版本号再提交。",
+        "keepReview": "继续审核",
+        "cancelledAt": "取消时间",
+        "cancelled": "已取消",
+        "cancelReviewCompleted": "已取消本次提审。当前上架版本不受影响。",
+        "cancelReviewAlreadyFinal": "审核已经完成，本次未取消。下方显示实际审核结果。",
+        "viewPendingVersion": "查看正在审核的版本",
+        "submitFailed": "提交失败",
+        "viewDetails": "查看详情"
       }
     },
     "mcp": {
@@ -9196,6 +9531,8 @@
   },
   "bots": {
     "workbench": {
+      "ownedMark": "归属 {{names}}",
+      "createdMark": "由 {{names}} 创建",
       "followingMark": "{{names}}在跟进这个任务"
     },
     "glance": {
@@ -12739,7 +13076,36 @@
     }
   },
   "ccAgent": {
-    "sessionEntry": {"missing":"找不到这条任务，它可能已被删除。","denied":"当前账号或电脑无法访问这条任务。","failed":"未能加载这条任务。","back":"返回任务列表","retry":"重新加载任务"},
+    "sessionEntry": {
+      "missing": "找不到这条任务，它可能已被删除。",
+      "denied": "当前账号或电脑无法访问这条任务。",
+      "failed": "未能加载这条任务。",
+      "back": "返回任务列表",
+      "retry": "重新加载任务"
+    },
+    "contextRingPanel": {
+      "title": "上下文",
+      "meaning": "AI 本轮能参考的内容，包括对话、指令和工具结果。",
+      "used": "已使用",
+      "available": "空间充足",
+      "elevated": "占用较高",
+      "nearLimit": "接近上限",
+      "unknown": "尚无数据",
+      "continueHint": "可以继续对话，暂时无需调整。",
+      "unknownHint": "收到模型的用量数据后，这里会显示当前占用。",
+      "tokens": "{{used}} / {{total}} tokens",
+      "compact": "压缩上下文",
+      "compactHelp": "概括较早内容，腾出空间。部分细节可能省略。",
+      "adjust": "调整窗口",
+      "taskScope": "本任务",
+      "modelSettings": "模型默认设置",
+      "modelSettingsHint": "修改此模型的默认窗口及上限，也会影响其他任务。",
+      "remoteModelSettings": "长期调整需前往运行此任务的电脑，修改模型设置。",
+      "costHint": "更大的窗口能容纳更多内容，也可能增加费用。",
+      "technical": "技术详情",
+      "auto": "自动压缩",
+      "autoHelp": "Codex 会在接近压缩阈值时自动整理上下文。"
+    },
     "contextWindowBudget": {
       "menuTitle": "任务上下文窗口",
       "triggerLabel": "任务上下文窗口，当前 {{window}}",
@@ -12989,7 +13355,7 @@
       "selectFolderFailed": "选择目录失败，请重试",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}，伙伴：{{creators}}）",
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
@@ -13054,6 +13420,9 @@
       "filterProjectOrderTip": {
         "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
       },
+      "filterCreatorsHeading": "伙伴",
+      "filterCreatorsAny": "不限来源",
+      "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
       "filterHeading": "筛选",
@@ -13167,6 +13536,14 @@
         "description": "将恢复此对话组内 {{count}} 个已归档任务。恢复后将从“已归档”列表移除，并回到“活跃”列表。",
         "empty": "此对话组内没有可恢复的任务"
       },
+      "automationArchiveAll": {
+        "description": "将归档此自动化生成的 {{count}} 个任务。自动化仍会按计划运行。",
+        "descriptionWithSkip": "将归档此自动化生成的 {{count}} 个任务，跳过{{skip}}的任务。自动化仍会按计划运行。",
+        "allPinnedOrRunning": "此自动化的任务全部已置顶或在运行中，无可归档项",
+        "allPinned": "此自动化的任务全部已置顶，不会归档",
+        "allRunning": "此自动化的任务全部在运行中，暂无可归档项",
+        "empty": "此自动化没有可归档的任务"
+      },
       "archiveAll": {
         "title": "归档全部任务",
         "confirm": "归档全部",
@@ -13176,6 +13553,7 @@
         "skipRunning": "{{count}} 个运行中",
         "skipPinned": "{{count}} 个已置顶",
         "skipSeparator": "、",
+        "skipped": "已跳过{{skip}}的任务",
         "archived_one": "已归档 {{count}} 个任务",
         "archived_other": "已归档 {{count}} 个任务",
         "partialFailure": "已归档 {{ok}} 个，{{fail}} 个失败，请重试",
@@ -16315,6 +16693,7 @@
     "timezone": "时区",
     "delete": "删除例行任务",
     "save": "保存例行任务",
+    "saved": "例行任务已保存",
     "deleteConfirm": "删除这条例行任务，并取消等待中的运行？",
     "keep": "保留例行任务",
     "openTask": "查看任务",

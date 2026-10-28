@@ -683,10 +683,13 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     { agentKind: 'pi' as const, effort: null, fastMode: false },
     { agentKind: 'pi' as const, effort: 'high' as const, fastMode: true },
     { agentKind: 'codex' as const, effort: 'high' as const, fastMode: false },
+    { agentKind: 'pi' as const, effort: 'high' as const, fastMode: false, agentDeviceId: 'shared:owner' },
+    { agentKind: 'codex' as const, effort: 'high' as const, fastMode: false, agentDeviceId: 'shared:owner' },
   ])('keeps the resolved selection through queue acceptance: %j', async (axes) => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     const setFastMode = vi.fn(async () => {});
-    Object.assign(h.session, { agentKind: axes.agentKind, model: 'shared-model', setFastMode });
+    Object.assign(h.session, { agentKind: axes.agentKind, model: 'shared-model', setFastMode,
+      agentDeviceId: 'agentDeviceId' in axes ? axes.agentDeviceId : null });
     mocks.getSessionProvider.mockReturnValue('selected');
     const queue = createQueueHarness({ busy: false });
     const release = vi.fn();
@@ -707,6 +710,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const schedule = heartbeatSchedule({
       agentKind: axes.agentKind,
       modelAgentKind: axes.agentKind,
+      modelAgentDeviceId: 'agentDeviceId' in axes ? axes.agentDeviceId : undefined,
       model: 'shared-model',
       effort: 'ultra',
       fastMode: true,
@@ -740,6 +744,46 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     h.emit({ type: 'done', data: {}, source: 'pi' });
     await fire;
     expect(schedule).toEqual(saved);
+  });
+
+  // Review regression (integration): the previous matrix only kept the same live
+  // location. An identical provider/model on another device must never receive
+  // this run. Exercise both preparation and accepted-before-vendor boundaries.
+  it.each([
+    { agentKind: 'pi' as const, boundary: 'preparing', nextDevice: 'shared:other' },
+    { agentKind: 'codex' as const, boundary: 'preparing', nextDevice: null },
+    { agentKind: 'pi' as const, boundary: 'accepted', nextDevice: null },
+    { agentKind: 'codex' as const, boundary: 'accepted', nextDevice: 'shared:other' },
+  ])('rejects a changed Agent location at queue dispatch: %j', async ({ agentKind, boundary, nextDevice }) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const selection = { agentKind, agentDeviceId: 'shared:selected', model: 'shared-model',
+      providerId: 'selected', effort: null, fastMode: false };
+    Object.assign(h.session, selection);
+    mocks.getSessionProvider.mockReturnValue('selected');
+    const queue = createQueueHarness({ busy: false });
+    const { runner, replaceLiveSession } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: selection.model,
+      acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection }),
+    });
+    const result = runner.fire(heartbeatSchedule({ agentKind, modelAgentKind: agentKind,
+      modelAgentDeviceId: selection.agentDeviceId, model: selection.model, providerId: selection.providerId }),
+    createFireContext()).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const request = enqueueLast(queue);
+    if (boundary === 'accepted') await request.onPreparing?.();
+    const changed = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(changed.session, selection, { agentDeviceId: nextDevice,
+      setFastMode: vi.fn(async () => {}), setEffort: vi.fn(async () => {}) });
+    replaceLiveSession(changed.session);
+    if (boundary === 'accepted') await request.onAccepted({ permissionMode: 'ask', planMode: false });
+    else await queue.accept();
+    // Let an incorrectly accepted send finish so the assertion reports success
+    // vs failure instead of merely timing out on the pre-fix implementation.
+    changed.emit({ type: 'done', data: {}, source: agentKind });
+    expect(await result).toBeInstanceOf(Error);
+    expect(String(await result)).toContain('Scheduled model route changed');
+    expect(changed.setModel).not.toHaveBeenCalled();
+    if (boundary === 'accepted') expect(changed.session.abort).toHaveBeenCalledTimes(1);
   });
 
   it.each(['harness-changed', 'effort-failed', 'fast-failed'] as const)(

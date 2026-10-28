@@ -4,6 +4,8 @@
  * other's insert requests.
  */
 
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+
 const INSERT_SESSION_LINK_EVENT = 'cindy-composer-insert-session-link';
 
 /** A request to insert one conversation/message deep link into a composer. */
@@ -119,4 +121,67 @@ export function insertPromptIntoEditor(
   chain.focus('end');
   if (!opts.isEmpty) chain.splitBlock();
   chain.insertContent(opts.text).run();
+}
+
+/**
+ * 一次性「发送这份草稿」请求。用户在别处点了一个明确的一键动作 (如截图工具条的
+ * 「翻译」), 入口先把草稿写进 composerDraftStore, 再请求该草稿所在的输入框按
+ * 普通发送键同一条路径发出 —— 不绕过模型、权限、建任务等任何发送逻辑。
+ *
+ * 请求带上期望出现的附件, 输入框等草稿与附件都同步到位才发, 每条请求只发一次;
+ * 暂时没有输入框接住 (还在路由切换) 时保留到过期, 之后挂载的输入框再取。
+ */
+export interface ComposerSubmitRequest {
+  storageKey: string;
+  /** 草稿里必须已有这张附件 (按 url 比对) 才发送。 */
+  attachmentUrl: string;
+  expiresAt: number;
+}
+
+const DEFAULT_SUBMIT_TTL_MS = 15_000;
+const pendingSubmitRequests = new Map<string, ComposerSubmitRequest & { owner: DataOwnerGeneration }>();
+const submitRequestHandlers = new Map<string, Set<() => void>>();
+
+export function requestComposerSubmit(
+  request: Omit<ComposerSubmitRequest, 'expiresAt'>,
+  ttlMs = DEFAULT_SUBMIT_TTL_MS,
+): void {
+  pendingSubmitRequests.set(request.storageKey, { ...request, expiresAt: Date.now() + ttlMs, owner: getDataOwnerGeneration() });
+  for (const handler of submitRequestHandlers.get(request.storageKey) ?? []) handler();
+}
+
+/** 当前仍有效的请求 (不取走)。 */
+export function peekComposerSubmitRequest(storageKey: string): ComposerSubmitRequest | null {
+  const request = pendingSubmitRequests.get(storageKey);
+  if (!request) return null;
+  if (request.expiresAt <= Date.now() || !isDataOwnerGenerationCurrent(request.owner)) {
+    pendingSubmitRequests.delete(storageKey);
+    return null;
+  }
+  return request;
+}
+
+/** 取走请求; 之后同一请求不会再触发发送。 */
+export function takeComposerSubmitRequest(storageKey: string): ComposerSubmitRequest | null {
+  const request = peekComposerSubmitRequest(storageKey);
+  pendingSubmitRequests.delete(storageKey);
+  return request;
+}
+
+/** 订阅某个草稿的发送请求; 订阅时已有待处理请求会立即通知一次。 */
+export function subscribeComposerSubmitRequest(
+  storageKey: string,
+  handler: () => void,
+): () => void {
+  let handlers = submitRequestHandlers.get(storageKey);
+  if (!handlers) {
+    handlers = new Set();
+    submitRequestHandlers.set(storageKey, handlers);
+  }
+  handlers.add(handler);
+  if (peekComposerSubmitRequest(storageKey)) queueMicrotask(handler);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) submitRequestHandlers.delete(storageKey);
+  };
 }

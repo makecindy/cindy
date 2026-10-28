@@ -131,6 +131,7 @@ import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryL
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
 import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
 import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
+import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -826,6 +827,23 @@ export function MainLayout() {
     pendingDeepLinkPulledRef.current = true;
     void pullChatInvitations();
   }, [handleDeepLinkPayload, pullChatInvitations]);
+
+  // 全局截图「问 Cindy / 翻译 / 解释 / 提取文字」: 挂载时与每次唤醒时各取一次,
+  // main 侧 take 是原子的, 两条路径不会重复处理同一张截图。
+  useEffect(() => {
+    const compose = window.electronAPI.regionScreenshotCompose;
+    if (!compose) return;
+    const pull = () => {
+      void compose
+        .take()
+        .then((request) => {
+          if (request) applyScreenshotComposeRequest(request, navigate);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    return compose.onWake(pull);
+  }, [navigate]);
 
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarCollapsed((prev) => {

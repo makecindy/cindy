@@ -53,6 +53,7 @@
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（2026-10-14） |
+| 定时任务 | 选择远程／分享供应商模型（运行位置、引擎、模型与速度）及清除覆盖恢复跟随；绑定任务或持续模式切回本机须保留完整引擎／模型选择 | 有   | 有（设置或清除模型选择均核验目标电脑的 `supportsScheduleAgentDeviceSelection`） |
 | 定时任务 | 新建、安装检查脚本                                         | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
@@ -69,6 +70,7 @@
 | 伙伴     | 查看与更换主力电脑                                         | 有   | 有（2026-10-17） |
 | 伙伴     | 夜间学习：暂停 / 恢复、立即运行（沿用伙伴自己的例行任务工具） | 有   | 无               |
 | 伙伴     | 夜间学习：改频率、撤销 / 恢复整理改动、处理在观察的做法     | 无   | 无               |
+| 社区插件贡献 | 当前安装快照准备、提交审核/当前进度、本人列表/详情/留存内容 | 有（2026-10-15） | 无 |
 
 Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟随之后 cd 进入的 worktree。
 面板默认识别实际目录属于 UI 行为；Agent 通过显式 working_dir 共用已有 worktree，
@@ -102,8 +104,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)
   「Agent 跨电脑管理定时任务与发消息」。
 
-仅伙伴代主人向任务下达要求时，由宿主附上可核实的用户原话，工具参数承载必要的轻度补充；
-普通任务互发、自动化、回传与伙伴通话保持正常正文，无原话不加空栏。来源回执不提供执行授权。
+伙伴或普通任务代主人下达要求时，由宿主附上当前输入中可核实的用户原话，工具参数承载必要的轻度补充；
+自主消息、自动化与回传保持正常正文，无原话不加空栏。伙伴通话和继续转交已核实请求
+保留同一来源；接收任务沿用原请求范围和当前权限档，不增加交接确认。来源回执不是新的执行权限档。
 详见 [消息来源](message-source.md#跨任务请求与伙伴通话的原话2026-10-202026-10-21-收窄)。
 
 ### 模型速度
@@ -160,3 +163,17 @@ Host 不因当前输入缺少主人标记再追加行动同意判定。只认运
 伙伴例行任务（2026-10-26）：桌面与 `routine_save` 共用每条规则的 `modelOverride`，可选引擎、来源、型号、执行位置、推理强度与 Fast；null 恢复跟随伙伴，省略保留选择。执行记录返回独立 `sessionId`。内置跟进／每天查待办也可选模型，指令与触发条件仍由宿主维护。`sessionMode`（`persistent` 复用同一任务／`fresh` 每次触发新建任务）同样经桌面与 `routine_save` 设置，省略保留原值。跨电脑桌面设置通过 `routines.saveWithModel` 与 `routines.saveWithSessionMode` 能力声明协商；手机仍按现有合同不提供例行任务管理。
 
 执行任务的模型可用 `cindy_helper` 的 cindy 类 `report_task_delivery` 报告本轮是否新交付最终结果；只限当前任务执行者，子 Agent 不可代报。三个 Harness 共用此入口；它不结束任务或授予操作权限。跟进通知门控见 `cindy-bots-runtime.md` §6.3。
+
+## 社区插件贡献
+
+普通个人作者的独立入口为 `ghost_contribution_prepare`、`ghost_contribution_submit`、
+`ghost_contribution_status`、`ghost_contribution_stop`、`ghost_my_plugins`、`ghost_cancel_plugin_review`，由 `cindy-tools`
+直接提供工具说明。手动和 AI 复用 Host 的精确安装快照、操作键、回执及个人读取接口；AI 不拿到
+Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full Access / Auto / Ask，不加最后人工点击。
+共享任务访客及既有 helper surface 判为 restricted 的插件托管任务（包括其 Worker）不得读取个人
+个人插件发布资料或执行发布。普通用户自己的 Worker、自动任务沿相同账号边界与任务权限；人工审核不由 Agent 执行。
+客户端提交边界见 [社区贡献实现说明](../plugin-community-contribution.md)。
+
+2026-10-16：个人发布 prepare 返回包内 releaseNotes 和远端只读预检；submit 前重新校验所见快照内容。
+`ghost_cancel_plugin_review` 使用本人版本的精确 revision，区分停止上传与取消审核，沿现有 Full Access/Auto/Ask 授权。
+旧版本包仍可安装，成功提审后的同版本不再支持改包重提。

@@ -2,7 +2,8 @@
  * exportGhostPackage
  * ---------------------------------------------------------------------------
  * 插件详情页「导出 .cindy」的打包业务体:把已装插件的安装目录重新打成
- * .cindy zip 包,供 main IPC handler 经系统保存对话框落盘。
+ * .cindy zip 包。snapshotInstalledGhostPackage 供社区投稿直接固定当前包，
+ * exportGhostPackage 保持经系统保存对话框导出的原行为。
  *
  * 设计(第一性原理:导出包必须可原样通过装入校验):
  *
@@ -526,10 +527,13 @@ async function snapshotPackage(
   return null;
 }
 
-export async function exportGhostPackage(
+export async function snapshotInstalledGhostPackage(
   id: unknown,
-  deps: ExportGhostPackageDeps,
-): Promise<ExportGhostPackageResult> {
+  deps: Pick<ExportGhostPackageDeps, 'listInstalled'>,
+): Promise<
+  | { status: 'prepared'; bytes: Buffer; ghost: InstalledGhost; contentSha256: string }
+  | Exclude<ExportGhostPackageResult, { status: 'saved' } | { status: 'canceled' }>
+> {
   if (typeof id !== 'string' || !isGhostInstanceId(id)) {
     return { status: 'invalid_id' };
   }
@@ -579,6 +583,23 @@ export async function exportGhostPackage(
     return { status: 'error', code: 'compress_failed' };
   }
   if (buf.byteLength > maxArchive) return { status: 'error', code: 'too_large' };
+
+  const contentEntries = snapshot.entries.map(file => [
+    file.rel, file.unixPermissions, crypto.createHash('sha256').update(file.data).digest('hex'),
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const contentSha256 = crypto.createHash('sha256')
+    .update(JSON.stringify([snapshot.emptyDirs.slice().sort(), contentEntries]))
+    .digest('hex');
+  return { status: 'prepared', bytes: buf, ghost, contentSha256 };
+}
+
+export async function exportGhostPackage(
+  id: unknown,
+  deps: ExportGhostPackageDeps,
+): Promise<ExportGhostPackageResult> {
+  const prepared = await snapshotInstalledGhostPackage(id, deps);
+  if (prepared.status !== 'prepared') return prepared;
+  const { bytes: buf, ghost } = prepared;
 
   const baseName = sanitizeExportFileNamePart(ghost.manifest.name) || ghost.manifest.id;
   // 版本同样来自作者清单,可能与名字一样含路径分隔符/控制字符,

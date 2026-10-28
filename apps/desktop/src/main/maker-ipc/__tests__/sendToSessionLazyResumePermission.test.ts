@@ -233,6 +233,7 @@ function botTaskDispatchHarness(
     waitForSendToSessionLock: async () => undefined,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
     inputCoordinator: { ensureQueueRestored: asyncNoop, shouldQueueNewTurn: () => false },
+    enqueueSendToSessionMessage: vi.fn(asyncNoop),
     BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
     agentSwitchPending: new Map(),
     notifyAgentIslandUserPrompt: noop,
@@ -269,7 +270,7 @@ function botTaskDispatchHarness(
       throw new ReferenceError(`unstubbed dependency of the production slice: ${String(key)}`);
     },
   });
-  return { ...loadBotTaskDispatch(scope), bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
+  return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
 
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {
@@ -383,6 +384,28 @@ describe('companion internal delivery after automation', () => {
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
 // for both idle branches; guard tier because register.ts has no separately exported entry.
 describe('idle forwarded request authorization', () => {
+  // 2026-10-27 / unit: a new recipient must accept the same durable provenance as
+  // an existing one; direct send previously left its next handoff without a source.
+  it('queues the first verified request of a newly created task', async () => {
+    const broadcast = vi.fn();
+    const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
+    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
+    const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
+      openSession: async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
+        ({ row, value: await create(row, async () => {}) }),
+      enqueueSendToSessionMessage: enqueue,
+      broadcastSessionCreated: broadcast,
+    });
+    const receipt = { kind: 'agent-request', request: {
+      userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
+    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt,
+      createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
+    })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(h.sendOptions).toHaveLength(0);
+    expect(broadcast).toHaveBeenCalledWith('new-child');
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
   it.each([
     ['live', 'agent-request'], ['resumed', 'agent-request'],
     ['live', 'delegated-continuation'], ['resumed', 'delegated-continuation'],
@@ -413,7 +436,7 @@ describe('idle forwarded request authorization', () => {
 
   // Incident 2026-10-23: the owner's relayed "可以提交 pr" reached the task with an empty
   // review intent. A relay the sending host verified carries exactly the owner's words.
-  it.each(['live', 'resumed'] as const)('%s dispatch reviews a verified owner relay against the owner words', async path => {
+  it.each(['live', 'resumed'] as const)('%s dispatch keeps a verified owner relay on the durable input path', async path => {
     const live: Record<string, object> = path === 'live' ? { child: {
       id: 'child', agentKind: 'claude-code', remoteHostId: null,
       isTurnRunning: () => false, getStatus: () => 'active',
@@ -424,7 +447,11 @@ describe('idle forwarded request authorization', () => {
       autoReviewUserText: { kind: 'agent-request', request: {
         userText: 'Submit the PR.', sessionId: 'source', clientId: 'owner-input', ownerVerified: true } },
     });
-    expect(h.sendOptions[0]?.[AUTO_REVIEW_USER_INTENT]).toBe('Submit the PR.');
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'child', autoReviewUserText: { kind: 'agent-request', request: {
+        userText: 'Submit the PR.', sessionId: 'source', clientId: 'owner-input', ownerVerified: true } },
+    }));
+    expect(h.sendOptions).toHaveLength(0);
     expect(h.readAutoReviewHistory).not.toHaveBeenCalled();
   });
 });

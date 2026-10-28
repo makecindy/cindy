@@ -1,5 +1,4 @@
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
-import { createHarnessHookBridge } from '../shared/harness-hooks.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
 import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
@@ -2531,15 +2530,18 @@ export class PiAgent extends BaseAgent {
     // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
     // SDK retries can swallow quota errors before the agent sees them).
     const compactionModelOverrides: Record<string, { reserveTokens: number }> = {};
-    const addBudget = (provider: string, id: string, window: number, workingWindow?: number) => {
+    const addBudget = (provider: string, id: string, window: number, workingWindow?: number,
+      source = provider, sourceModel = id) => {
       // 任务级预算优先:预算存在时**每个**可选模型都按预算生成保留量(与预演、切后写盘
       // 同一口径)，否则顶层 reserveTokens 会被同模型的 model-level override 盖掉。
       const effectiveWorkingWindow = opts.sessionContextWindowBudget ?? workingWindow;
-      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], effectiveWorkingWindow));
+      const pct = this.deps.resolveModelCompactionPct?.(source, sourceModel) ?? opts.piCompactionPct;
+      const settings = JSON.parse(buildPiSettingsJsonContent(window, pct, [], effectiveWorkingWindow));
       compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
     };
     for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
-      this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', model.id) ?? undefined);
+      this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', model.id) ?? undefined,
+      gatewayProviderId ?? 'xd');
     for (const provider of nativeProviders) {
       if (provider.id === PI_PROVIDER_ID) continue;
       for (const model of provider.models) {
@@ -2564,7 +2566,7 @@ export class PiAgent extends BaseAgent {
           ? workingWindow
           : Math.max(model.contextWindow ?? learnedWindow ?? 128_000, workingWindow ?? 0);
         addBudget(provider.id, model.wireId ?? model.id,
-          budgetWindow, workingWindow);
+          budgetWindow, workingWindow, provider.sourceProviderId ?? provider.id, model.id);
       }
     }
     const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
@@ -4724,6 +4726,32 @@ export class PiAgent extends BaseAgent {
         }
         return;
       }
+      if (approval.method === 'input' && approval.title === 'cindy:harness-hook') {
+        // The harness hook bridge was reverted (2f2721a49b), so nothing on the
+        // host handles these any more, but a durable child started by an older
+        // bridge can still raise one. It is an internal sync hook, not an
+        // approval: answer `continue` (the native policy) instead of rendering
+        // a `Subagent: tool` card with `{}` input (#7494).
+        try {
+          // Park across an account switch rather than answer for the outgoing
+          // account, as the turn-change acknowledgement does.
+          if (accountBoundaryTeardown) return;
+          const controlled = await publishPiSubagentApproval(status.taskId, {
+            childId: task.childId,
+            approvalId: approval.id,
+            value: JSON.stringify({ action: 'continue' }),
+            runtimeOwnerId: controlOwnerId,
+          });
+          if (controlled > 0) piSubagentApprovalDeliveries.add(key);
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent harness hook response failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          piSubagentApprovalRequests.delete(key);
+        }
+        return;
+      }
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
       let resolvedWritePath: string | null | undefined;
@@ -5153,9 +5181,6 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
-    const harnessHookBridge = createHarnessHookBridge();
-    const harnessHooksEnabled = !remote && !hosted && !reviewMode;
-    let nativeCompactionActive = false;
     // Pi owns automatic threshold and overflow compaction. Cindy only records a
     // deterministic native failure so Desktop can rebuild before the next send.
     let nativeAutoCompactNeedsRollover = false;
@@ -5185,8 +5210,7 @@ export class PiAgent extends BaseAgent {
       const resp = await proc.request(command, { timeoutMs: PI_COMPACT_TIMEOUT_MS });
       if (!resp.success) {
         const err = (resp.error ?? '').toLowerCase();
-        // Native cancellation returns before appending a compaction entry.
-        if (err === 'compaction cancelled' || err.includes('nothing to compact') || err.includes('too small')) {
+        if (err.includes('nothing to compact') || err.includes('too small')) {
           return { noop: true };
         }
         throw new Error(`pi compact failed: ${resp.error ?? 'unknown'}`);
@@ -5633,7 +5657,6 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
-        CINDY_PI_HARNESS_HOOKS: harnessHooksEnabled ? '1' : '0',
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
@@ -5736,8 +5759,6 @@ export class PiAgent extends BaseAgent {
           if (event.type === 'agent_start' || event.type === 'agent_settled') {
             piAgentLifecycleSequence += 1;
           }
-          if (event.type === 'compaction_start') nativeCompactionActive = true;
-          if (event.type === 'compaction_end') nativeCompactionActive = false;
           if (!remote && event.type === 'extension_ui_request' && event.method === 'notify') {
             if (event.message === `${CINDY_PI_TEXT_ONLY_READY_PREFIX}${runtimeInstanceId}`) {
               textOnlyPolicyReady = true;
@@ -5749,27 +5770,6 @@ export class PiAgent extends BaseAgent {
             }
           }
           if (event.type === 'extension_ui_request') {
-            if (event.method === 'input' && event.title === 'cindy:harness-hook') {
-              const requestId = typeof event.id === 'string' ? event.id : '';
-              let payload: Record<string, unknown> = {};
-              try { payload = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); }
-              catch { /* Invalid bridge input preserves the original native policy. */ }
-              const request = payload && typeof payload === 'object' ? payload : {};
-              const valid = harnessHooksEnabled && requestId && !closed && !proc.isClosed &&
-                (request.name === 'compaction.before' || request.name === 'tool.before' && typeof request.toolName === 'string');
-              void (valid ? harnessHookBridge.run({
-                name: request.name as 'tool.before' | 'compaction.before',
-                ...(request.name === 'tool.before' ? {
-                  toolName: request.toolName as string,
-                  toolUseId: typeof request.toolUseId === 'string' ? request.toolUseId : undefined,
-                  input: request.input,
-                } : {}),
-              }) : Promise.resolve({ action: 'continue' })).then(result => {
-                if (!requestId || closed || proc.isClosed) return;
-                proc.send({ type: 'extension_ui_response', id: requestId, value: JSON.stringify(result) });
-              }).catch(() => { /* Native timeout keeps the existing permission flow. */ });
-              return;
-            }
             if (event.method === 'input' &&
                 (event.title === 'cindy:provider-refresh' || event.title === 'cindy:provider-refresh-ack')) {
               const requestId = typeof event.id === 'string' ? event.id : '';
@@ -6731,7 +6731,8 @@ export class PiAgent extends BaseAgent {
       model: string,
       budget: number | null = sessionContextWindowBudget,
     ): number => {
-      const settings = JSON.parse(buildPiSettingsJsonContent(window, sessionPiAutoCompactPct, [],
+      const settings = JSON.parse(buildPiSettingsJsonContent(window,
+        this.deps.resolveModelCompactionPct?.(source, model) ?? sessionPiAutoCompactPct, [],
         budget ?? this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
@@ -7586,19 +7587,6 @@ export class PiAgent extends BaseAgent {
     };
 
     const handle: AgentSessionHandle = {
-      harnessHooks: harnessHooksEnabled ? ['tool.before', 'compaction.before'] : [],
-      setHarnessHookHandler: handler => harnessHookBridge.setHandler(handler),
-      ...(harnessHooksEnabled ? {
-        requestHarnessCompaction: () => runExclusivePiRpc(async () => {
-          // Pi 1.0.2 auto-compaction belongs to the agent run, whose terminal
-          // event is agent_settled (not agent_end). The same RPC lane orders
-          // all Cindy prompts and controls; recheck after acquiring that lane.
-          if (closed || proc.isClosed || ctx.isStreaming || nativeCompactionActive) {
-            throw new Error('SESSION_RUNNING: Pi is not idle for compaction');
-          }
-          return requestPiCompact();
-        }),
-      } : {}),
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
         if (decision.unavailable) autoReviewUnavailableNotice.notify();
@@ -8214,7 +8202,6 @@ export class PiAgent extends BaseAgent {
       },
 
       async close(closeOpts?: AgentSessionTeardownOptions): Promise<void> {
-        harnessHookBridge.close();
         closed = true;
         // No reason means the caller could not identify its boundary; fail
         // closed to the account boundary rather than leaving a detached child

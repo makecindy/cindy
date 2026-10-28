@@ -309,6 +309,7 @@ export const MAKER_INVOKE = {
    * (远程改被控端全局设置越权)。
    */
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_COMPACTION_SET: 'maker:model-compaction:set',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调

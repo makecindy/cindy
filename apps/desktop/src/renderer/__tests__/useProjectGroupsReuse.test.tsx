@@ -73,7 +73,9 @@ describe('project grouping hook references', () => {
   it('keeps enriched projects stable and shares identical filtered results', () => {
     const { result, rerender } = renderHook(
       ({ rows }) => {
-        const all = useProjectGroups(rows);
+        // #7469: the real sidebar rebuilds the complete alias-member array on
+        // every snapshot. Existing tests omitted it, hiding full regrouping.
+        const all = useProjectGroups(rows, undefined, false, undefined, '', undefined, [...rows]);
         const filtered = useProjectGroups(rows, undefined, false, undefined, '', all);
         return { all, filtered };
       },

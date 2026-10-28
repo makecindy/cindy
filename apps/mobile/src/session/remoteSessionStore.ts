@@ -1,3 +1,4 @@
+import { isTeammateTask } from './teammateTaskSource';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
@@ -1784,6 +1785,7 @@ function sameElementRefs<T>(a: readonly T[], b: readonly T[]): boolean {
 
 function reconcileVisibleSessions(): void {
   const next = mergedSessions.filter((session) => session.source !== 'side-chat'
+    && (session.source !== 'bot' || isTeammateTask(session))
     && sessionListRemovalPreviews.pendingFields(session.id).length === 0
     && (CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source)));
   if (!sameElementRefs(visibleSessions, next)) visibleSessions = next;
@@ -1827,6 +1829,8 @@ function preserveSessionRuntimeFields(
   if (!local) return fresh;
   let next = fresh;
   for (const key of [
+    'companion',
+    'taskTeammate',
     'agentSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',

@@ -11,6 +11,15 @@ Profile 版本）。它是显式接受模型的意图；宿主重新校验模型
 返回成功视为完成恢复，必须读回版本及发送结果。现有 `update_teammate_profile` 显式提交
 `modelChain` 时走同一接受入口，包括重复选择当前值；省略模型字段不改变恢复状态。
 
+## 设置中的引擎更新准备
+
+Desktop 新增本机 `update-harness-prepare` IPC（Claude Code/Codex、用户看到的目标版本），
+只供可信应用顶层 renderer 在重启确认前准备下载，不暴露到 device-link allowlist。
+原 `update-harness-relaunch` 追加可选 `preparedVersion`：宿主只接受本轮准备成功的目标，
+下次启动只消费缓存，避免确认期间清单变化又触发启动下载。省略参数的旧设置入口仍写
+原 scoped 修复标记，回复保持兼容。应用更新 IPC、手机与设备间 wire protocol 不变；后台归档只放新缓存目录，旧客户端
+忽略它，不改变原安装目录、凭证、数据库或持久偏好。
+
 ## 任务链接保留所属电脑
 
 任务查询返回可选 `sessionUrl`，沿用 `cindy://session/<id>?device=<deviceId>`。
@@ -69,8 +78,21 @@ Server 保留原市场资源 ID 和不可变旧 Release；无能力声明的客�
 仅拉取确认远程分支不存在后，在本次胶囊选择内置灰；换分支或重新挂载即重新判断。
 同步仅由用户点击触发，按配置的 tracking remote/ref（否则 origin 同名分支）拉取一个显式
 refspec，再按需快进本地分支。
-设备互联对单次同步预留 90 秒（网络 Git 30 秒及清理、本地探测），失败不重放写请求、
-不重置 peer 或 relay；创建和发送不等待同步，不改用其它源引用。手机本轮不提供入口。
+手动 fetch 使用 `--progress`，连续 60 秒没有新增对象、接收字节或解包进度才超时；
+重复进度行与普通输出不续期。本地探测仍有 5 秒上限，超时沿用整棵进程树清理。
+单次命令用 `-c fetch.unpackLimit=1` 让小批对象也经过会报告字节进度的 `index-pack`，
+避免单个大对象被 `unpack-objects` 静默接收时误判停滞；不修改用户 Git 配置。
+新版控制端在 `worktree:sync-branch` 请求追加可选 `waitForResult: true`，被控端至多等待
+10 秒，未完成时返回 `{ pending: true, operationId }`。后续请求带同一 `operationId`，
+只等待原操作，绝不重新 fetch；句柄绑定账号代次、控制设备、仓库和分支。
+运行中操作上限 64 个；已完成结果独立保留最多 64 个、最长 5 分钟，超量淘汰最早完成者，
+不占用运行配额，也不淘汰运行中的操作。轮询连接错误后保留已收到的句柄，用户再次点击
+只续接原操作；收到终态、终态错误或切换选择后清除句柄，不自动重放初始写请求。
+未知、过期或不匹配的句柄报 `branch-sync:changed`，不自动重新执行。每次 invoke 仍沿用
+90 秒传输预算，不修改共享链路的超时、重试或恢复策略；两个控制端的句柄互不通用。
+旧控制端不传新字段，新被控端仍返回原终态；新控制端连接旧被控端时接受原终态，沿用旧端
+Git 超时。长下载的完整体验需要两端更新。失败不重放写请求、不重置 peer 或 relay；
+创建和发送不等待同步，不改用其它源引用。手机本轮不提供入口。无服务端或数据库变更。
 实现见 `apps/desktop/src/main/worktree/branchSync.ts`；真实 Git 回归在
 `branchSync.git-integration.test.ts`。
 
@@ -795,9 +817,9 @@ SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integratio
 `maker:schedule:*` channel，参数形状不变，被控端仍由原 IPC 入口校验并执行。`schedule_list` 的
 `query` 文本筛选在发起端对返回结果做，不改请求。`device` 缺省时返回形状与原来一致，三个读取工具
 都只多出 `scope: "local"`。跨电脑读取按电脑分组，离线、未开启远程控制、撤权、超时、不支持的电脑逐台
-列出，`partial` 表示覆盖不全。`schedule_update` 跨电脑时拒绝 `bindToCurrentSession` 和
-`intervalMs` 以外的 `null` 清空（JSON 边界表达不了「带 key 的 undefined」），明确报
-`INVALID_PARAMS`，不写出与意图不符的任务。其它电脑返回的定时任务与运行记录里，`targetSessionId` / `sessionId` 加上 `deviceId::` 前缀（与历史
+列出，`partial` 表示覆盖不全。`schedule_update` 跨电脑时拒绝 `bindToCurrentSession`；除
+`intervalMs` 与下文模型选择字段外，其它字段的 `null` 清空仍明确报 `INVALID_PARAMS`，
+不写出与意图不符的任务。其它电脑返回的定时任务与运行记录里，`targetSessionId` / `sessionId` 加上 `deviceId::` 前缀（与历史
 查询同一约定），跨电脑 `schedule_update` 收到同一台电脑前缀的 `targetSessionId` 先去掉再发送，指向
 别的电脑的拒绝。被控端对 `preRunHook` 是整对象替换：跨电脑改它必须
 显式带 `timeoutMs`（数值，或 `null` 表示不限时，后者发送为不带 `timeoutMs` 的整对象），否则报 `INVALID_PARAMS`（省略会清成不限时，发起端先读后写又会覆盖并发修改）。被控端不认识这些 channel（早于完整控制面的旧版本）时
@@ -3486,6 +3508,35 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 不发送，新接收端按未核实处理。同账号鉴权、行动回执与共享访客限制不变。产品语义见
 [伙伴代表谁](../product-rules/teammate-authority.md)。
 
+## 普通个人的社区插件贡献
+
+已安装清单可选追加只读 `publishingSource`，由 Host 既有实例记录、批准回执与安装台账重建。
+它仅用于个人提审入口的来源准入，不改变列表的来源展示、安装来源、自动更新或发布权限。
+缺失或无法核实来源时不开放提审；本地安装和公开安装都不会因提审或过审自动转换来源，不新增持久化关联记录。
+
+新增独立 `/api/plugin-contributions` 和精确 `plugin-contributions:*` IPC，不改企业发布、
+旧公开市场 DTO 或 device-link allowlist。两仓分别维护等价
+[HTTP / DTO 契约](../plugin-community-contribution-contract.md)。客户端使用当前个人 Access Token，
+以可信 auth discovery 的 issuer 与 token sub 核对所有作者响应主体；`cn/global` 只用于选择 Host 配置，
+不能当作 issuer。服务器仍做验签和 public 提交 ACL，包内作者声明不授予提交权。
+
+prepare / PUT / commit 复用同一固定包和持久幂等键；202 仅表示处理。结果不明先查原操作；
+不换包、不换键自动新建发布操作。receipt 的 uploadedPackage SHA 与实际 releaseRevision SHA 分开，
+`outcome`、修订审核与市场 `available` 分开。处理历史以独立 eventId 分页，旧修订不套用当前修订结果。
+Host 持久操作按账号隔离、异步结果按 owner generation 拦截；审核结果通过用户打开、刷新、前台恢复及前台定时读取同步。
+本地 `review-updates` / `mark-review-read` IPC 仅供可信桌面 Renderer，不加入 device-link 白名单。
+提示点复用现有作者列表和精确修订的审核记录，Main 只额外保存按账号隔离的本机已读标记；
+不新增服务端通知/已读 API，不改变审核事实，不因列表查询或 AI 查询而清除提示。
+旧服务器未实现接口时如实显示读取/发布失败，不试探企业或 Platform 身份，也不伪造空列表或成功。
+存量插件安装、批准记录、启用状态、包格式和市场来源枚举均保持原契约；本能力需要两端更新。
+
+## 社区版本提审 v2（2026-10-16）
+
+manifest 可选字符串 `releaseNotes`；旧包缺字段仍可安装。首次上架可不填写，曾上架插件的后续提审须提供完整非空更新说明。
+个人只读 preflight 查询版本、待审与提交权限；SubmissionView 追加真实时间及允许取消动作。
+审核状态增加 cancelled；Main/preload 新增精确 cancelReview，AI 对应 ghost_cancel_plugin_review。
+旧 journal 字段可选只为读取/原操作恢复，不允许新客户端静默绕过新版预检。
+个人投稿复用原审核请求及上架流程，不增加启用开关、审核令牌或历史比较包门槛。取消仅针对本人仍有提交授权的精确待审修订，已通过或驳回时按真实状态返回。
 
 ## 伙伴跟进邀请（2026-10-21）
 
@@ -3528,6 +3579,30 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 配置读取、保存与包内导航照旧，完整跨文档确认隔离须两端都更新。插件本身无需更新，
 不改变已装批准、凭证、KV、版本或原生指纹。实现与时序验证见
 [原配置页协议](../remote-plugin-oauth.md#手机原配置页授权的增量能力)。
+
+## 自动化的远程模型选择
+
+`Schedule` / 创建与更新输入增量增加可选 `modelAgentDeviceId`：缺省保持旧版绑定任务的位置继承，
+空字符串表示自动化所在电脑，非空使用既有远程／分享 Agent 标识。SQLite 新增可空文本列，
+SQL NULL 对应缺省；项目 `version: 1` 配置同样允许该字段，旧文件无需改写。
+既有 `agentDeviceId` 仍只提供新建／重建任务的默认位置；绑定任务存在时继续跟随它的当前位置。
+显式 `modelAgentDeviceId` 优先于该默认值（包括空字符串本机），仅查看或修改旧记录的非模型字段
+不会将默认位置转换为显式覆盖。MCP 的旧 `agentDeviceId: "local"` 仍沿用原协议；从
+`schedule_list_models` 选择本机并填写 `modelAgentDeviceId` 时使用空字符串，不使用 `"local"`。
+绑定任务或持续模式的 Agent 自动化显式选本机时也须有 `modelAgentKind` 与 `model`；不完整选择在保存前拒绝，
+不把“选本机”误作继承绑定任务的位置。更新可沿用已存的完整选择，恢复跟随时清除显式选择。
+`maker:get-capabilities` 返回 `supportsScheduleAgentDeviceSelection: true`。
+新调用方只有明确看到此能力才向其它电脑提交位置选择；旧端未知字段会被忽略，禁止静默降级。
+跨电脑更新非空 `modelAgentKind` 时，即使省略位置以继承原位置，也必须先确认既有
+`supportsScheduleModelSelection: true`；旧端不支持时在写入前拒绝。同时设置位置或清空模型
+字段时，两项所需能力一起核验，复用一次能力查询及原有账号代次检查，不新增协议字段。
+跨电脑 `schedule_update` 清空 `modelAgentDeviceId` / `modelAgentKind` / `model` / `providerId` /
+`effort` 时，同样先核验此能力，再保留可序列化的 `null` 发送；接收端 IPC 转成带 key 的
+`undefined` 后交给 Scheduler 与存储。省略字段仍是不修改，不在发送前丢掉清空意图。
+旧调用方修改新自动化的非模型字段仍保留位置；修改模型路线却未携带已固定的位置时拒绝保存，
+避免意外把另一台电脑的供应商当作本机来源。执行与恢复仍使用既有远程授权、目录与切换协议。
+直接发送与排队派发在准备完成后，按实际运行位置、模型及供应商重新读取远程目录；来源或模型
+已停用、离线或授权不可用时拒绝本次调用，排队项取消发送预留并失败收口，不回退到本机来源。
 
 ## 公共插件分享（未发布首版）
 
@@ -3595,3 +3670,84 @@ worker 的任务，按最近更新取前 200 条；伙伴行 `revision` 追加�
 旧控制端按未知 rel 忽略，`conversation` 仍是第一条链接，打开聊天不变；新控制端连接旧 Host
 时没有该链接，任务行不显示标记。Mobile 读取的链接上限由 64 放宽到 256 以容纳这组链接。
 不增加 IPC channel、请求参数、数据库字段、push 类型或 Mobile 原生配置。
+
+## 桌面伙伴来源筛选
+
+桌面在读取 `teammates` 名册后，用每个伙伴的 `conversation` 任务 ID 调用既有的
+`maker:bot-delegations:list`。只将 `requestingBotId` 匹配、`childSessionId` 非空的记录
+作为创建来源；不把接手关系当创建，也不要求远端支持新增的 `created` link。
+包含活跃和归档任务，实际展示仍由任务列表状态筛选决定；旧版远端也能直接使用。
+已有 `following` 链接继续提供跟进标记，任务创建关系同时用于远程创建者头像。
+
+按电脑 ID + 伙伴 ID 区分筛选，按电脑 ID + 任务 ID 匹配任务；远程头像使用原电脑媒体地址。
+同一 Host 串行读取伙伴任务记录，关系缓存保留 ID、不保存任务卡正文。委派变更推送与
+名册变更沿原刷新合并窗口更新；读取失败保留已有归属，成功空结果清空。
+切账号、撤权、断线后的旧响应仍受原请求代次隔离。只读关系请求失败不重启 relay、
+不影响其它设备、不重放任何任务操作。不增加 IPC、权限、服务端字段或数据库迁移。
+
+Task creator filtering resolves built-in Cindy identity through the existing local `listCindyCopies` read,
+which now returns even a single remaining cloud Cindy. The merge settings entry still requires two copies.
+This allows old remote hosts without template metadata to participate in the unified filter without
+changing their wire protocol or triggering any companion merge. Identity is cached with the owner-scoped roster.
+
+### 伙伴独立任务的列表归属（2026-10-27）
+
+`sessions:list/get/get-many` 可选投影 `companion: { id, role, channel? }`，从现有
+`bot_session_links` 读取，不新增数据库列或改运行身份。普通列表仅纳入 `routine/channel`，
+仍过滤隐藏任务与删除中的伙伴；`canonical/thread/group` 保留伙伴入口。
+旧远端的普通列表未包含这些任务时，桌面经原有同账号 `history:query/list_sessions`
+分页读取 `source=bot` 的归属，再用原有批量／单条读取补齐 Session。无权限或接口失败不能
+清空普通任务；撤权沿原处理路径上报。设备／状态代次失效时丢弃迟到回复，保留其它设备的
+镜像，不重启链路或重新授权。离线镜像仅保存归属的 id/role/channel，恢复时仍可筛选和显示头像。
+
+
+Mobile follows the same read-only compatibility path for teammate task attribution and independent
+routine/channel Sessions. `taskTeammate` is a client-local display projection (ID/name/avatar), not a
+new wire field or permission. Its slim home cache keeps it with `companion`; optional read failure
+retains that host's previous attribution and successful absence clears it. Account/query invalidation
+and list mutation epochs fence all late results. Home and device list refreshes share this reader.
+Cloud Cindy identities come from the existing owner-scoped `/preferences` profile snapshots, using
+the same exact preset identity helper as Desktop. Only their IDs enter the cloud-home display cache;
+profile bodies are not persisted. This adds no endpoint, database migration or native configuration.
+
+## macOS 原生触控板输入
+
+本机聚焦的浏览器／插件页可在顶层 HTML 声明
+`<meta name="cindy-native-trackpad" content="touch">`，并用 `data-cindy-trackpad`
+标记接收触摸的平面元素。宿主将 AppKit 的两指位置映射为该元素的浏览器触摸事件；
+鼠标位置是落指中心，两轴按触控板物理比例等比映射，按原始抬指／取消结束。
+映射使用画面长边作为统一距离基准，避免竖屏窄边压缩平移；落指间距与后续位移
+使用同一比例，未裁切时保持缩放比例、旋转角度和静止手指的位置，不单独加速双指中心。
+触点在元素边缘停止，越界位移不累计；反向移动立即响应，不要求先退回越界距离。
+不新增 preload、renderer IPC 或远程请求；插件沙箱仍为零桥，归属与聚焦检查沿用宿主。
+后台窗口、第三指、页面导航、失焦会取消触摸；原生模块不可用或已有调试会话时保留原输入。
+旧宿主忽略 meta／属性，继续 wheel 兼容路径；手机、Windows、Linux 不接收本机 AppKit 数据。
+AppKit 鼠标位置固定使用窗口内容坐标；嵌入侧栏须先扣除宿主内对应 webview 的位置，
+并分别处理宿主与 guest 缩放，再在 guest 内命中检测。独立窗口没有这个偏移，
+不能单独替代开发版实际侧栏的输入验收。
+
+`data-cindy-trackpad="contacts"` 可选整帧输入：元素收到 `cindy-trackpad` DOM
+事件，`detail={phase,touches:[{id,x,y}]}`；坐标相对该元素所属 frame 的 viewport，
+phase 为 begin/change/end/cancel，touches 是仍按下的全部触点。整帧原子投递，避免
+Chromium 把双指拆成单指前奏及等待触摸 ACK。空属性仍投递标准 Touch/Pointer 事件；
+旧宿主按旧路径工作，插件仍保留标准触摸处理。只有宿主向页面投递数据，没有反向特权桥。
+
+contacts 在每次 begin 投递前核对原元素仍连接、仍声明 contacts，且仍是落指锚点
+命中的元素（在元素所属 Document／ShadowRoot 内检测）。目标被替换、移除或遮挡时，
+向旧元素发送 cancel（断开的旧元素也可接收清理），停止旧采集并重新命中；下一原生采样
+可在新目标开始，不依赖再次移动鼠标。旧目标迟到的失败回复不能撤销后来的目标。
+取消、释放 CDP object 完成后才 detach，沿用现有采集代次，无新队列或持久状态。
+
+标准 Touch 路径完整结束与取消使用空 `touchPoints`。当前打包 Chromium 默认 WebTouch
+路径的部分抬指使用 released IDs；仅发送剩余触点的 touchMove 不会释放缺失手指。
+这与 contacts DOM 事件始终表示「全部仍按下触点」的约定不同；以真实 Electron 的
+部分抬指、完整结束和取消回归核对，不能只靠 CDP mock 推断浏览器行为。
+
+## 主人请求跨任务连续性（2026-10-28）
+
+沿用可选 `requestSource.ownerVerified` 和持久 `autoReviewUserText` 回执，不新增字段或 migration。
+伙伴私信开始携带当前已接受的主人请求；原话与正文包装仍按旧接收端的逐字验证。无原话时不传空回执。
+当前接受的核实回执可继续转交，`agent-request` 与 `delegated-continuation` 的审核投影保持同一原话。
+旧接收端仍可能丢弃核实状态或把接收回复标成私密；完整修复需要执行交接的宿主升级。
+账号、群与 IM 发言人校验、权限档、Plan、输入代次和撤销校验保持不变。
+不改变连接恢复或重放策略；单次派发失败只影响该请求，不重启连接或扩大设备访问。

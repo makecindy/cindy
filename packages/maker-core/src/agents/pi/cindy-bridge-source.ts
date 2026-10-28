@@ -3374,9 +3374,21 @@ class CindyMcpGateway {
         unavailableServers,
       };
     } else {
+      const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const offset = Number.isSafeInteger(input.offset) && Number(input.offset) >= 0 ? Number(input.offset) : 0;
+      const limit = Number.isSafeInteger(input.limit) && Number(input.limit) > 0 ? Math.min(Number(input.limit), 50) : 50;
+      const matches = query ? tools.filter((tool) =>
+        [tool.server, tool.name, tool.description].some((value) => value.toLowerCase().includes(query))) : tools;
+      const page = matches.slice(offset, offset + limit);
       payload = {
         ok: true,
-        tools,
+        tools: page.map((tool) => ({ ...tool, description: tool.description.length > 240
+          ? tool.description.slice(0, 240) + '…' : tool.description })),
+        total: matches.length,
+        offset,
+        ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
+        availableServers: this.availableServers(),
+        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -3808,16 +3820,19 @@ class CindyMcpGateway {
       name: CINDY_MCP_LIST_TOOLS,
       label: 'Discover Cindy MCP tools',
       description:
-        'List every connected Cindy/MCP capability without loading their parameter schemas into startup context. ' +
-        'Omit arguments to discover names and descriptions. Before invoking a tool, pass its exact server and tool ' +
+        'Discover connected Cindy/MCP tools in pages of at most 50 short descriptions. Use query or server to narrow ' +
+        'results, or offset=nextOffset for more. Before invoking a tool, pass its exact server and tool ' +
         'names here once to inspect that single input schema, then use cindy_mcp_call_tool.',
       parameters: {
         type: 'object',
         properties: {
           server: {
             type: 'string',
-            description: 'Optional exact server name. Omit to list tools from every connected server.',
+            description: 'Optional exact server name. Omit to search across connected servers.',
           },
+          query: { type: 'string', description: 'Search tool names and full descriptions, case-insensitively.' },
+          offset: { type: 'integer', minimum: 0, description: 'Use the previous nextOffset to continue browsing.' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Page size; default 50.' },
           tool: {
             type: 'string',
             description: 'Optional exact tool name. Requires server and returns that tool\'s input schema.',
@@ -4033,7 +4048,7 @@ function astraResponsesPayload(payload, model) {
 
 async function nativeFastPayload(payload, model, ctx) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
-  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
   let models;
   try { models = JSON.parse(process.env.CINDY_PI_FAST_MODELS || '[]'); } catch { return undefined; }
   if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
@@ -4635,26 +4650,6 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
-  // This uses the existing RPC UI channel; no model tool or prompt is added.
-  const runHarnessHook = async (name: string, event: any, ctx: any): Promise<boolean> => {
-    if (process.env.CINDY_PI_HARNESS_HOOKS !== '1') return false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const payload = name === 'tool.before'
-        ? { name, toolName: event.toolName, toolUseId: event.toolCallId, input: event.input }
-        : { name };
-      const value = await Promise.race([
-        ctx.ui.input('cindy:harness-hook', JSON.stringify(payload)),
-        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 2000); }),
-      ]);
-      return typeof value === 'string' && JSON.parse(value)?.action === 'block';
-    } catch { return false; }
-    finally { if (timer) clearTimeout(timer); }
-  };
-  pi.on('session_before_compact', async (event: any, ctx: any) => {
-    if (await runHarnessHook('compaction.before', event, ctx)) return { cancel: true };
-  });
-
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {
@@ -4677,9 +4672,6 @@ export default async function cindyBridge(piApi: any) {
         block: true,
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
-    }
-    if (await runHarnessHook('tool.before', event, ctx)) {
-      return { block: true, reason: 'Blocked by an approved task plugin.' };
     }
     if (event.toolName === 'ask_user_question') return;
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {

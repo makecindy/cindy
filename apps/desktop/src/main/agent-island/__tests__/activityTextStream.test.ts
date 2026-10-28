@@ -4,6 +4,7 @@ import {
   AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH,
   appendActivityTextStream,
   createActivityTextStreamState,
+  normalizeActivityText,
   type ActivityTextStreamMetrics,
 } from '../activityTextStream.js';
 
@@ -70,6 +71,60 @@ function legacyExtractTextFromStructuredContent(value: unknown): string | null {
 }
 
 describe('Agent Island activity text stream', () => {
+  // Regression: Island preferred raw activity over the already-readable companion preview.
+  // Unit tier; exercise the production normalizer/stream with a minimal rich answer.
+  const richAnswer = '```cindy-ui\n'
+    + '{"version":1,"seq":1,"op":"create","id":"answer","kind":"text","props":{"text":"网络检查完成"}}\n'
+    + '```';
+
+  it('extracts component text before truncating final activity previews', () => {
+    expect(normalizeActivityText(richAnswer)).toBe('网络检查完成');
+    expect(normalizeActivityText(JSON.stringify({ content: richAnswer }))).toBe('网络检查完成');
+    expect(normalizeActivityText(`检查结果\n${richAnswer}\n可以继续使用。`))
+      .toBe('检查结果 网络检查完成 可以继续使用。');
+  });
+
+  it('keeps rich protocol out of streamed previews across delta boundaries', () => {
+    const stream = createActivityTextStreamState();
+    for (const chunk of ['```cindy-', 'ui\n', '{"version":1,',
+      '"seq":1,"op":"create","id":"answer","kind":"text","props":{"text":"网络检查完成"}}\n', '```']) {
+      expect(appendActivityTextStream(stream, chunk)).not.toMatch(/cindy-|version|seq|create|props/);
+    }
+    expect(appendActivityTextStream(stream, '')).toBe('网络检查完成');
+  });
+
+  it('preserves ordinary code and explicitly quoted rich protocol examples', () => {
+    const example = `\`\`\`\`markdown\n${richAnswer}\n\`\`\`\``;
+    expect(normalizeActivityText(example)).toBe(legacyNormalizeActivityText(example));
+    const code = '```json\n{"status":"ok"}\n```';
+    expect(normalizeActivityText(code)).toBe(legacyNormalizeActivityText(code));
+  });
+
+  // Review regressions: only unfinished rich opening fences may be hidden.
+  // Ordinary closing fences and inline/quoted examples must survive every delta.
+  it.each(['`', '~'])('preserves %s code fences and examples during streaming', (fenceCharacter) => {
+    const fence = fenceCharacter.repeat(3);
+    expectEveryStreamingStepToMatchLegacyNormalization([`${fence}json\n`, ...`{"status":"ok"}\n${fence}`]);
+    const quoted = `${fenceCharacter.repeat(4)}markdown\n${fence}cindy-ui\n{}\n${fence}\n${fenceCharacter.repeat(4)}`;
+    const stream = createActivityTextStreamState();
+    expect(appendActivityTextStream(stream, quoted)).toBe(legacyNormalizeActivityText(quoted));
+  });
+
+  it('does not turn leading whitespace into a line break inside an inline example', () => {
+    const inline = '\n示例 ```cindy-ui\n{}\n```';
+    const stream = createActivityTextStreamState();
+    expect(appendActivityTextStream(stream, inline)).toBe(normalizeActivityText(inline));
+  });
+
+  it('hides a truncated rich operation until the full final text is available', () => {
+    const source = '```cindy-ui\n'
+      + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'answer', kind: 'text',
+        props: { style: { padding: 12 }, text: '检查完成。'.repeat(100) } }) + '\n```';
+    const stream = createActivityTextStreamState();
+    expect(appendActivityTextStream(stream, source)).toBe('');
+    expect(normalizeActivityText(source)).toBe('检查完成。'.repeat(100).slice(0, AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH));
+  });
+
   it('preserves the existing display text across whitespace, markdown, emoji, and the 280-code-unit boundary', () => {
     expectEveryStreamingStepToMatchLegacyNormalization([
       '\n  ',

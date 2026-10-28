@@ -53,6 +53,7 @@ import { outboundFetch } from './outbound-fetch.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
@@ -1163,6 +1164,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      resolveWebSocketUpstream: resolvePiWebSocketUpstream,
+      prepareWebSocketRequest: createPiWebSocketRequestPreparer(),
+      webSocketTransforms: piWebSocketTransforms,
       oversizedRequestRecovery: createAttachmentRecovery(headers => {
         const piSessionId = headerValue(headers, 'x-cindy-pi-session-id');
         if (piSessionId) {

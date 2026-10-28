@@ -8,6 +8,7 @@ import {
 import {
   disposeKeepAliveVoiceInputMicrophone,
   isMicrophoneDeviceUnavailableError,
+  noteVoiceInputUse,
   prewarmVoiceInputMicrophoneWithAutomaticFallback,
   prepareVoiceInputMicrophone,
   WebMicAudioEngine,
@@ -111,6 +112,9 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
       workletReady: Promise.resolve(),
       workletUrl: 'https://app.local/pcm16k-worklet.js',
     });
+    // Establish the renderer before recording intent: it also subscribes to
+    // power releases, even if no microphone has been opened yet.
+    noteVoiceInputUse();
   });
 
   afterEach(async () => {

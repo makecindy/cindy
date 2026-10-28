@@ -78,7 +78,8 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
-export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read';
+export type AutomationScheduleAction =
+  'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read' | 'archive-all';
 
 interface ScopedAutomationGroupKey {
   key: string;

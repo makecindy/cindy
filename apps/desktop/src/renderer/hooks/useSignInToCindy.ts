@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '@/contexts/AuthContext';
 
-export function useSignInToCindy(): () => Promise<void> {
+export function useSignInToCindy(returnTo?: string): () => Promise<void> {
   const { mode, exitLocalMode } = useAuth();
   const navigate = useNavigate();
 
@@ -29,6 +29,6 @@ export function useSignInToCindy(): () => Promise<void> {
         // transition is pending. Do not leave the sign-in action as a no-op.
       }
     }
-    navigate('/login');
-  }, [mode, exitLocalMode, navigate]);
+    navigate('/login', returnTo ? { state: { returnTo } } : undefined);
+  }, [mode, exitLocalMode, navigate, returnTo]);
 }

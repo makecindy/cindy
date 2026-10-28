@@ -1,3 +1,5 @@
+import { collectXdtImageRefs, transformXdtRefs } from '../xdtRefs.js';
+
 interface Segment {
   kind: 'code' | 'text';
   content: string;
@@ -36,73 +38,18 @@ function convertTextSegment(segment: string, imageUrls: string[]): string {
   return wrapTables(withoutHtml);
 }
 
-/**
- * `line.replace(/!\[[^\]]*]\(((?:xdt-image|cindy-media):\/\/[^)]+)\)/g, ...)` 的
- * 线性扫描等价实现。原正则在「大量 `![` 前缀」的长行上会 O(n²) 回溯
- * （CodeQL js/polynomial-redos）；这里用单调前进的 `]`/`)` 查找指针保证线性。
- */
-function extractImageTokens(line: string, onUrl: (url: string) => void): { text: string; found: boolean } {
-  let out = '';
-  let found = false;
-  let i = 0;
-  let knownAltEnd = -1;
-  let knownClose = -1;
-  while (i < line.length) {
-    const start = line.indexOf('![', i);
-    if (start === -1) {
-      out += line.slice(i);
-      break;
-    }
-    if (knownAltEnd < start + 2) knownAltEnd = line.indexOf(']', start + 2);
-    if (knownAltEnd === -1) {
-      // 后面再无 ']',不可能闭合 alt,剩余原样保留
-      out += line.slice(i);
-      break;
-    }
-    const altEnd = knownAltEnd;
-    const urlStart = altEnd + 2;
-    let schemeLen = 0;
-    if (line.charCodeAt(altEnd + 1) === 0x28 /* ( */) {
-      if (line.startsWith('xdt-image://', urlStart)) schemeLen = 'xdt-image://'.length;
-      else if (line.startsWith('cindy-media://', urlStart)) schemeLen = 'cindy-media://'.length;
-    }
-    if (schemeLen === 0) {
-      // 该 '![' 不构成图片引用,跳过它继续找下一个
-      out += line.slice(i, start + 2);
-      i = start + 2;
-      continue;
-    }
-    if (knownClose < urlStart + schemeLen) knownClose = line.indexOf(')', urlStart + schemeLen);
-    if (knownClose === -1) {
-      // 后面再无 ')',任何后续引用都闭合不了,剩余原样保留
-      out += line.slice(i);
-      break;
-    }
-    if (knownClose === urlStart + schemeLen) {
-      // '://' 后紧跟 ')',URL 主体为空,原正则([^)]+)不算命中
-      out += line.slice(i, start + 2);
-      i = start + 2;
-      continue;
-    }
-    out += line.slice(i, start);
-    onUrl(line.slice(urlStart, knownClose));
-    found = true;
-    i = knownClose + 1;
-  }
-  return { text: out, found };
-}
-
 function extractXdtImageLines(segment: string, imageUrls: string[]): string {
   const lines = segment.split('\n');
   const kept: string[] = [];
 
   for (const line of lines) {
-    // 双协议:老 xdt-image + 媒体总仓 cindy-media(与 xdtRefs.XDT_IMAGE_REGEX 口径一致)。
-    const { text: withoutXdtImages, found: hasXdtImage } = extractImageTokens(line, (url) => {
-      imageUrls.push(url);
-    });
+    // 双协议:老 xdt-image + 媒体总仓 cindy-media。复用共享解析器:线性扫描,
+    // 且未闭合引用不会吞掉其后的合法图片与正文。
+    const refs = collectXdtImageRefs(line);
 
-    if (hasXdtImage) {
+    if (refs.length > 0) {
+      for (const ref of refs) imageUrls.push(ref.url);
+      const withoutXdtImages = transformXdtRefs(line, { image: () => '' });
       const cleanedLine = withoutXdtImages.replace(/[ \t]{2,}/g, ' ').trim();
       if (cleanedLine.length > 0) {
         kept.push(cleanedLine);

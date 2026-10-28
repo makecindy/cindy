@@ -115,6 +115,9 @@ it('materializes a separate native ChatGPT provider for each independent account
   expect(account.inheritModels).toBe(false);
   expect(account.api).toBe('openai-codex-responses');
   expect(account.headers).toMatchObject({ 'x-cindy-pi-provider-id': 'openai-second' });
+  expect(account.apiKeyEnvVar).not.toBe(builtin.apiKeyEnvVar);
+  const placeholderAccount = (envKey: string) => JSON.parse(Buffer.from(result.env[envKey]!.split('.')[1], 'base64url').toString())['https://api.openai.com/auth'].chatgpt_account_id;
+  expect(placeholderAccount(account.apiKeyEnvVar!)).not.toBe(placeholderAccount(builtin.apiKeyEnvVar!));
   expect(account.models.length).toBeGreaterThan(0);
   expect(account.models.every((model) => model.api === 'openai-codex-responses')).toBe(true);
   expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));

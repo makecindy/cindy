@@ -58,6 +58,10 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
 
+停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
+TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
+实现与回归见 `scripts/restart-desktop-remote.mjs` 和 `scripts/__tests__/restart-desktop-remote.test.mjs`。
+
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
 「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
 `local` mode）不是同一个概念。Agent 不得自行改用

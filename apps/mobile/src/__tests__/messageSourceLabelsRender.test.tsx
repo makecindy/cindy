@@ -27,11 +27,12 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style }: any) =>
     React.createElement(
       "div",
       {
         "data-testid": testID,
+        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
@@ -414,6 +415,30 @@ describe('completed message actions', () => {
     } finally { partial.unmount(); }
     const final = render([{ ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' }], props);
     expect(final).toContain('message.moreButton');
+  });
+
+  it('reserves the completed action row while an assistant reply streams', () => {
+    // A node-only assertion misses the regression where the empty row collapses.
+    // Compare production styles with the completed control's actual touch height.
+    const streaming = mount([
+      { ...msg('streaming', 'Working', { isStreaming: true }), role: 'assistant' },
+    ], { isSessionStreaming: true });
+    const completed = mount([
+      { ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' },
+    ]);
+    try {
+      const slot = streaming.host.querySelector('[data-testid="message.actionSlot"]');
+      const copy = completed.host.querySelector('[data-testid="message.copyButton"]');
+      expect(slot).not.toBeNull();
+      expect(copy).not.toBeNull();
+      const reservedHeight = Number(slot!.getAttribute('data-min-height'));
+      expect(reservedHeight).toBeGreaterThan(0);
+      expect(reservedHeight).toBe(Number(copy!.getAttribute('data-min-height')));
+      expect(streaming.host.querySelector('[data-testid="message.actionBar"]')).toBeNull();
+    } finally {
+      streaming.unmount();
+      completed.unmount();
+    }
   });
 
   it('places controls outside the bubble and forks the selected row exactly once', () => {

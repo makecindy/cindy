@@ -1,3 +1,4 @@
+import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-preset';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
@@ -387,6 +388,21 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         return [{ id: row.id, kind: String(row.kind), externalId: row.externalId ?? '', name: typeof row.name === 'string' ? row.name : '',
           avatar: typeof row.avatar === 'string' ? row.avatar : null, homeDeviceId: typeof row.homeDeviceId === 'string' && row.homeDeviceId ? row.homeDeviceId : null }];
       });
+    },
+    /** Same preset identity as Desktop. Read profile metadata only; never infer from a name/avatar. */
+    async cindyCompanionIds(actors: readonly ChatActor[], previous: readonly string[] = [], current = () => true): Promise<string[]> {
+      const ids: string[] = [];
+      for (const actor of actors) {
+        if (!current()) break;
+        if (actor.kind !== 'bot') continue;
+        if (actor.externalId === 'cindy-default') { ids.push(actor.externalId); continue; }
+        try {
+          const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actor.id));
+          const profile = rows?.find(row => row.key === 'companion.profile.v1')?.value as { templateId?: unknown; soul?: unknown } | undefined;
+          if (profile?.templateId === 'cindy' || (typeof profile?.soul === 'string' && inferBotTemplatePresetId(profile.soul) === 'cindy')) ids.push(actor.externalId);
+        } catch { if (previous.includes(actor.externalId)) ids.push(actor.externalId); }
+      }
+      return ids;
     },
     /** The main computer has uploaded the profile snapshot another computer builds the companion from. */
     async hasProfileSnapshot(actorId: string): Promise<boolean> {

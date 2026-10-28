@@ -138,6 +138,10 @@ describe('payloadSummary', () => {
       ],
     });
 
+    // 中间空行计入改动行；结尾换行不额外多算一行。
+    expect(buildPayloadToolDiff('Write', { file_path: '/repo/a.txt', content: 'a\n\nb' })?.insertions).toBe(3);
+    expect(buildPayloadToolDiff('Write', { file_path: '/repo/a.txt', content: 'a\n' })?.insertions).toBe(1);
+
     expect(buildPayloadToolDiff('Read', { file_path: '/repo/app.ts' })).toBeUndefined();
     expect(buildPayloadToolDiff('Edit', { old_string: 'a', new_string: 'b' })).toBeUndefined();
   });

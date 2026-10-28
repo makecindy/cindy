@@ -159,6 +159,7 @@ function SessionOptionsExpoSheet({
       onClose={onClose}
       onClosed={onClosed}
       nativeContent
+      nativeEditMode={page === 'list' && tagPage.sorting}
       testID="home.sessionActions"
     >
       {!tagsExpanded ? (
@@ -180,7 +181,9 @@ function SessionOptionsExpoSheet({
           expanded={tagsExpanded}
           onExpandedChange={setTagsExpanded}
           renderCompact={(state) => <NativeTagShortcuts state={state} />}
-          renderExpanded={(state) => <NativeTaskTagsExpanded state={state} />}
+          renderExpanded={(state) => (
+            <NativeTaskTagsExpanded state={state} onSortingChange={tagPage.onSortingChange} />
+          )}
           onPageChange={tagPage.onPageChange}
         />
       ) : null}

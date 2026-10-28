@@ -9,13 +9,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ handle: vi.fn(), latencyMs: 100, profiles: [] as unknown[], localGroupIds: [] as string[],
-  sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), page: [] as unknown[],
+  sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), cacheGeneration: 0, page: [] as unknown[],
   /** When the server reads its state and when the answer reaches the client, in ms after the request. */
   timing: null as null | ((route: string) => { serve: number; deliver: number }),
   offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void) }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
-vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download,
+  get cacheGeneration() { return fixture.cacheGeneration; } }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
@@ -112,7 +113,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 100;
-    fixture.timing = null; fixture.offline = false; fixture.onFrame = null;
+    fixture.timing = null; fixture.offline = false; fixture.onFrame = null; fixture.cacheGeneration = 0;
     fixture.page = [message];
     fixture.handle.mockImplementation(response);
     fixture.download.mockResolvedValue(null);
@@ -478,6 +479,85 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(1);
     const reread = await timed(() => service.getGroup(rooms[0]));
     expect(reread.value.ok && reread.value.group.messages.every(item => item.attachments.length === 1)).toBe(true);
+  });
+
+  // Unit regression: getGroup kept an image's now-deleted local URL forever after manual
+  // cleanup. Existing attachment tests only retried failed transfers, not successful copies
+  // invalidated by cleanup. Minimum input: one image, one PDF and a cache-generation change.
+  it('reloads only image attachments after their dedicated cache is cleared', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    const fileId = '60000000-0000-4000-8000-000000000202';
+    const file = { id: fileId, name: 'report.pdf', category: 'file', path: '/test/report.pdf', url: null };
+    fixture.page = [{ ...message, content: [mediaId, fileId].map(mediaId => ({ type: 'media', mediaId })) }];
+    let hash = 'a';
+    fixture.download.mockImplementation(async (_room: string, id: string) => id === fileId ? file
+      : { id, name: 'image.png', category: 'image', path: null, url: `cindy-media://blobs/${hash.repeat(64)}.png` });
+    await timed(() => service.getGroup(rooms[0]));
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('a'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    fixture.cacheGeneration++;
+    hash = 'b';
+    await timed(() => service.getGroup(rooms[0]));
+    const reloaded = await timed(() => service.getGroup(rooms[0]));
+    expect(reloaded.value.ok && reloaded.value.group.messages[0].attachments[0].url).toContain('b'.repeat(64));
+    expect(reloaded.value.ok && reloaded.value.group.messages[0].attachments[1]).toEqual(file);
+    expect(fixture.download.mock.calls.map(([, id]) => id)).toEqual([mediaId, fileId, mediaId]);
+  });
+
+  // PR #7442: cleanup must not duplicate or discard a pending ordinary file transfer.
+  // Unit, minimum input: one PDF still downloading when the image generation changes.
+  it('keeps a pending ordinary attachment projection across image cleanup', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000202';
+    const file = { id: mediaId, name: 'report.pdf', category: 'file', path: '/test/report.pdf', url: null };
+    let complete!: (value: typeof file) => void;
+    fixture.download.mockReturnValue(new Promise<typeof file>(resolve => { complete = resolve; }));
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    await timed(() => service.getGroup(rooms[0]));
+    fixture.cacheGeneration++;
+    await timed(() => service.getGroup(rooms[0]));
+    expect(fixture.download).toHaveBeenCalledTimes(1);
+    complete(file);
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0]).toEqual(file);
+  });
+
+  // Unit timing regression: preserving pending files must not retain a late image URL.
+  // Existing settled-image coverage cannot exercise cleanup before download completion.
+  it('retries a pending image immediately when it completes after cleanup', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    const image = { id: mediaId, name: 'image.png', category: 'image', path: null,
+      url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    let complete!: (value: typeof image) => void;
+    fixture.download.mockReturnValueOnce(new Promise<typeof image>(resolve => { complete = resolve; }))
+      .mockResolvedValue({ ...image, url: `cindy-media://blobs/${'b'.repeat(64)}.png` });
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    await timed(() => service.getGroup(rooms[0]));
+    fixture.cacheGeneration++;
+    complete(image);
+    const retrying = await timed(() => service.getGroup(rooms[0]));
+    expect(retrying.value.ok && retrying.value.group.messages[0].attachments[0].url).not.toBe(image.url);
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('b'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit: cleanup-fenced reads must recover at cleanup completion, not wait 30s.
+  // Existing timing coverage only changes generation before a download settles.
+  it('retries an image rejected during cleanup as soon as its generation changes', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    fixture.download.mockRejectedValueOnce(new Error('REMOTE_MEDIA_CACHE_CLEARED'))
+      .mockResolvedValue({ id: mediaId, name: 'image.png', category: 'image', path: null,
+        url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
+    await timed(() => service.getGroup(rooms[0]));
+    await timed(() => service.getGroup(rooms[0]));
+    expect(fixture.download).toHaveBeenCalledTimes(1);
+    fixture.cacheGeneration++;
+    await timed(() => service.getGroup(rooms[0]));
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('a'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
   });
 
   it('keeps attachment order, failures and a later retry when completions share one re-read', async () => {

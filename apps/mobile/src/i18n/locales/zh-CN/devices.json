@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 台可进入",
       "filterMetaWithUnavailable": "{{available}} 台可进入 · {{unavailable}} 台需处理",
       "showUnavailableReason": "展开的设备会显示不可用原因",
-      "emptyCopy": "在电脑端登录同一账号，并在设置里的远程控制打开“允许同账号设备控制本机”。",
+      "emptyCopy": "在电脑端登录同一账号，并在「设置 → 远程连接」中打开“允许同账号设备控制本机”。",
       "emptyTitle": "还没有可显示的电脑",
       "hideUnavailableA11y": "隐藏不可用电脑",
       "showUnavailableA11y": "显示不可用电脑",
@@ -338,7 +338,9 @@
       "doneUnread": "已完成未读",
       "running": "运行中",
       "close": "关闭",
-      "cancelRename": "取消重命名"
+      "cancelRename": "取消重命名",
+      "createdBy": "由 {{name}} 创建",
+      "ownedBy": "归属 {{name}}"
     },
     "accounts": {
       "title": "切换账号",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "无",
       "summarySeparator": "、",
-      "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。"
+      "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
+      "filterTeammatesHeading": "伙伴",
+      "filterAnySource": "不限来源",
+      "filterSelectedTeammates": "已选 {{count}} 位"
     },
     "search": {
       "placeholder": "搜索标题或内容…",

@@ -15,14 +15,26 @@ const target = { agent: 'codex' as const, providerId: 'openai', modelId: 'gpt-te
 const view = (limit: number | null) => ({ limit, isCustomized: limit !== null });
 const get = vi.fn();
 const set = vi.fn();
+const setCompaction = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   setDataOwnerGeneration('owner-a', 1);
   Object.assign(window, {
-    electronAPI: { maker: { getModelContextLimit: get, setModelContextLimit: set } },
+    electronAPI: { maker: { getModelContextLimit: get, setModelContextLimit: set, setModelCompaction: setCompaction } },
   });
 });
 describe('context editor request ownership', () => {
+  it('writes compaction separately from the window with the same owner stamp and reads native facts back', async () => {
+    get.mockResolvedValue(view(272_000));
+    setCompaction.mockResolvedValue(view(272_000));
+    const hook = renderHook(() => useModelContextLimit(target));
+    await act(async () => {});
+    await act(async () => { await hook.result.current.setCompaction(80); });
+    expect(setCompaction).toHaveBeenCalledWith(target, 80, { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect(set).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(2);
+    hook.unmount();
+  });
   it('does not let an old model read overwrite the current model', async () => {
     const old = deferred<ReturnType<typeof view>>();
     get.mockReturnValueOnce(old.promise).mockResolvedValueOnce(view(200_000));

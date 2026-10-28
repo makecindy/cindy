@@ -2,15 +2,15 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { expect, it } from 'vitest';
-import { sessions, messages, taskTags, sessionTaskTags } from '../schema';
-import { selectSessionListRows } from '../sessionQueries';
+import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../schema';
+import { selectSessionListRows, ordinaryTaskListFilter, flattenSessionReadRow } from '../sessionQueries';
 import type { DbClient } from '../client/DbClient';
 
 it('pages the actual list query across tied timestamps without skipping or repeating rows', async () => {
   const sqlite = new Database(':memory:');
   try {
     // Derive columns from production schema; no account DB or migrations are touched.
-    for (const table of [sessions, messages, taskTags, sessionTaskTags]) {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks]) {
       sqlite.exec(
         `CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
           .map((column) => `"${column.name}" ${column.getSQLType()}`)
@@ -48,4 +48,34 @@ it('pages the actual list query across tied timestamps without skipping or repea
   } finally {
     sqlite.close();
   }
+});
+
+// Unit: actual list SQL and attribution projection, including previously hidden existing lanes.
+it('lists linked teammate routine/channel tasks, keeping private lanes and hidden owners out', async () => {
+  const sqlite = new Database(':memory:');
+  try {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+      sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
+        .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+    }
+    sqlite.exec("INSERT INTO bot_profiles(id,status) VALUES ('owner','active'),('removed','deleting');");
+    const insert = sqlite.prepare("INSERT INTO sessions(id,source,status,updated_at,list_preview,list_message_count) VALUES (?, ?, ?,1,'',0)");
+    const link = sqlite.prepare('INSERT INTO bot_session_links(bot_id,session_id,role,route_key) VALUES (?,?,?,?)');
+    for (const role of ['routine', 'channel', 'canonical', 'group', 'thread']) {
+      insert.run(role, 'bot', role === 'routine' ? 'archived' : 'active');
+      link.run('owner', role, role, role === 'channel' ? 'im:feishu:chat' : null);
+    }
+    for (const id of ['unlinked', 'removed', 'hidden']) insert.run(id, 'bot', 'active');
+    link.run('removed', 'removed', 'routine', null);
+    link.run('owner', 'hidden', 'channel', null);
+    sqlite.exec("UPDATE sessions SET hidden_at=1 WHERE id='hidden'");
+    insert.run('ordinary', 'desktop', 'active');
+    const db = drizzle(sqlite) as unknown as DbClient['drizzle'];
+    const rows = await selectSessionListRows(db, ordinaryTaskListFilter(), 100);
+    expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'ordinary', 'routine']);
+    expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
+      .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
+    expect(flattenSessionReadRow(rows.find(row => row.session.id === 'routine')!).companion)
+      .toEqual({ id: 'owner', role: 'routine' });
+  } finally { sqlite.close(); }
 });

@@ -3,7 +3,7 @@
  *
  * 复用会话消息的附件条（MessageRenderer 的 AttachmentStrip）：图片按原始比例显示缩略图，
  * 经远程媒体从电脑取件，点开进入与聊天相同的看图器；文件是「类型图标 + 文件名」的小条。
- * 旧电脑文件仍提示在电脑打开；服务器图片授权后显示预览，点击时重新授权；文件使用短期下载地址。
+ * 旧电脑文件仍提示在电脑打开；服务器图片授权后显示预览，文本文件点击后在端内安全阅读。
  */
 import { useAuth } from '@/auth/AuthContext';
 import { openBrowserAsync } from 'expo-web-browser';
@@ -14,6 +14,7 @@ import { ActivityIndicator, Alert, StyleSheet, View, useWindowDimensions } from 
 import { useTranslation } from 'react-i18next';
 import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import { ImageLightbox } from './ImageLightbox';
+import { BotGroupTextAttachmentPreview, botGroupTextAttachmentPreviewKind } from './BotGroupTextAttachmentPreview';
 import { MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 import { AttachmentStrip } from './MessageRenderer';
 import { buildMessageContentLayout } from './messageContentLayout';
@@ -220,12 +221,19 @@ function ServerAttachments({ runs, visible, previewServerImages, align, layout, 
   const displayRuns = botGroupAttachmentRuns(runs.flatMap(run => run.kind === 'pending'
     ? [run.attachment] : run.attachments.map(item => previews[item.id] ?? { ...item, url: null })));
   const [image, setImage] = useState<BotGroupAttachment | null>(null);
+  const [textPreview, setTextPreview] = useState<{ id: string; name: string; kind: NonNullable<ReturnType<typeof botGroupTextAttachmentPreviewKind>> } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const open = async (id: string) => {
     if (pending.current) return;
+    const attachment = runs.flatMap(run => run.kind === 'ready' ? run.attachments : []).find(item => item.id === id);
+    const previewKind = attachment?.category === 'file' ? botGroupTextAttachmentPreviewKind(attachment.name) : null;
+    if (attachment && previewKind) {
+      setTextPreview({ id, name: attachment.name, kind: previewKind });
+      return;
+    }
     pending.current = true; setBusy(id);
     try {
       const value = await resolve(id);
@@ -274,6 +282,8 @@ function ServerAttachments({ runs, visible, previewServerImages, align, layout, 
       </View>)}
     {image?.url ? <ImageLightbox images={botGroupAttachmentGallery(image.id, [botGroupAttachmentForDisplay(image)])}
       initialUrl={image.url} onClose={() => setImage(null)} /> : null}
+    {textPreview ? <BotGroupTextAttachmentPreview key={textPreview.id} attachmentId={textPreview.id}
+      fileName={textPreview.name} kind={textPreview.kind} resolve={resolve} onClose={() => setTextPreview(null)} /> : null}
   </>;
 }
 

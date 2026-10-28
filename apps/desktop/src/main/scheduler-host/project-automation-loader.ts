@@ -50,6 +50,7 @@ export interface ProjectScheduleConfig {
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentDeviceId?: string;
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
@@ -459,6 +460,7 @@ function scheduleConfigToCreateInput(
     agentKind: config.agentKind ?? 'claude-code',
     // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
     modelAgentKind: config.modelAgentKind,
+    modelAgentDeviceId: config.modelAgentDeviceId,
     model: config.model,
     providerId: config.providerId,
     // 恒带 key：配置删掉运行位置时清除已保存的位置。
@@ -502,6 +504,7 @@ export function schedulesDiffer(
     schedule.intervalMs !== expected.intervalMs ||
     schedule.agentKind !== expected.agentKind ||
     schedule.modelAgentKind !== expected.modelAgentKind ||
+    schedule.modelAgentDeviceId !== expected.modelAgentDeviceId ||
     schedule.model !== expected.model ||
     (schedule.providerId ?? undefined) !== (expected.providerId ?? undefined) ||
     (schedule.agentDeviceId ?? undefined) !== (expected.agentDeviceId ?? undefined) ||
@@ -572,6 +575,9 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalNumber(config.intervalMs) &&
     optionalAgentKind(config.agentKind) &&
     optionalAgentKind(config.modelAgentKind) &&
+    (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&
+      (config.modelAgentDeviceId === '' || (config.modelAgentDeviceId.trim() !== '' &&
+        !!config.modelAgentKind && typeof config.providerId === 'string' && config.providerId.trim() !== '')))) &&
     (config.modelAgentKind === undefined || (typeof config.model === 'string' && config.model.trim() !== '')) &&
     optionalString(config.model) &&
     optionalString(config.providerId) &&

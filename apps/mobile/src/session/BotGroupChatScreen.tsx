@@ -5,7 +5,7 @@ import type { DurableOutboxRecord } from './durableOutbox';
 /**
  * 手机上的群聊页（docs/product-rules/bot-group-chat.md §8，对照桌面 BotGroupChatView.tsx）：
  * 顶栏（叠放头像、群名、成员名单、群设置）+ 多作者时间线 + 输入框。用户消息的附件见
- * BotGroupMessageAttachments（图片从电脑取缩略图，文件只显示名字）。
+ * BotGroupMessageAttachments（图片从电脑取缩略图，文件显示名称并按格式预览或交系统应用）。
  *
  * 群在电脑上，电脑执行全部规则；这里整页读电脑给的群快照（最新 100 条消息与涉及的安排），
  * 每次电脑推送变化就重读，不在本地拼时间线。分工的安排卡、交接文件、「下一步 · 继续」

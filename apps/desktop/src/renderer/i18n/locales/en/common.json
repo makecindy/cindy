@@ -74,6 +74,11 @@
       "stopped": "The local connection has stopped"
     }
   },
+  "attachmentAccessConfirmation": {
+    "title": "Confirm Attachment Access",
+    "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
+    "button": "Use Original File"
+  },
   "mailReader": {
     "showExternalImages": "Show External Images",
     "markReadFailed": "Could not sync read status. Check mailbox authorization and reopen this email.",
@@ -857,6 +862,135 @@
       "deleted": "Deleted the {{provider}} provider group"
     }
   },
+  "regionScreenshot": {
+    "editor": { "fitWidth": "Fit width", "loading": "Loading image…" },
+    "moveToolbar": "Move toolbar left or right",
+    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · C: copy color · Esc: exit",
+    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · R: last area · C: copy color · Esc: exit",
+    "copy": "Copy",
+    "cancel": "Exit Screenshot",
+    "captureFailed": "Could not capture the screen",
+    "permission": {
+      "title": "Screen Recording Permission Required",
+      "detail": "To take screenshots, allow {{appName}} in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen {{appName}}.",
+      "openSettings": "Open System Settings",
+      "later": "Not Now"
+    },
+    "undo": "Undo",
+    "redo": "Redo",
+    "pinToScreen": "Pin to Screen",
+    "pin": {
+      "copy": "Copy",
+      "save": "Save…",
+      "ask": "Ask {{appName}}",
+      "opacity": "Opacity",
+      "originalSize": "Original Size",
+      "passThrough": "Click Through",
+      "close": "Close",
+      "closeAll": "Close All Pins",
+      "unlock": "Restore Mouse Input"
+    },
+    "save": "Save",
+    "cindy": "Send to {{appName}}",
+    "tools": {
+      "rect": "Rectangle",
+      "ellipse": "Ellipse",
+      "line": "Line",
+      "arrow": "Arrow",
+      "pen": "Pen",
+      "marker": "Highlighter",
+      "text": "Text",
+      "mosaic": "Mosaic",
+      "blur": "Blur",
+      "step": "Number"
+    },
+    "ai": {
+      "ask": "Ask {{appName}}",
+      "translate": "Translate",
+      "explain": "Explain",
+      "extract": "Extract Text"
+    },
+    "size": {
+      "stroke": {
+        "0": "Thin",
+        "1": "Medium",
+        "2": "Thick"
+      },
+      "text": {
+        "0": "Small",
+        "1": "Medium",
+        "2": "Large"
+      },
+      "strength": {
+        "0": "Light",
+        "1": "Medium",
+        "2": "Strong"
+      }
+    },
+    "colors": {
+      "red": "Red",
+      "yellow": "Yellow",
+      "green": "Green",
+      "blue": "Blue",
+      "black": "Black",
+      "white": "White"
+    },
+    "magnifier": {
+      "copyHint": "C: copy color"
+    },
+    "saveFileName": "Screenshot",
+    "saveFailed": "Couldn't save the screenshot",
+    "prompt": {
+      "translate": "Recognize the text in this screenshot and translate it into English. Keep the original paragraphs and lists, and output only the translation. If the text is already in English, translate it into Simplified Chinese.",
+      "explain": "Explain what this screenshot shows. If it's an error, explain the cause and how to fix it. If it's a chart, code, or an interface, explain what it shows and the key points.",
+      "extract": "Extract the text from this screenshot exactly as written, keeping the original line breaks, paragraphs, and lists. Output tables as Markdown tables. Output only the extracted text."
+    },
+    "live": {
+      "scroll": "Scrolling Screenshot",
+      "video": "Record Screen",
+      "gif": "Record GIF",
+      "recording": "Recording…",
+      "preview": "Capture preview",
+      "cursor": "Show pointer",
+      "keys": "Show keys (includes typing)",
+      "start": "Start Recording",
+      "pause": "Pause",
+      "resume": "Resume",
+      "finish": "Finish",
+      "paused": "Recording paused",
+      "done": "Capture ready to save",
+      "saved": "Saved",
+      "copied": "Copied",
+      "copyFailed": "Could not copy. Try again or save the file.",
+      "scrollHint": "Scroll up or down in the selection, or choose Auto Scroll.",
+      "recordHint": "Draw on the preview to annotate the recording. No audio.",
+      "format": "Format",
+      "videoFormat": "Video (WebM)",
+      "prepareHint": "Starts after a 3-second countdown. No audio.",
+      "countdown": "Recording starts in {{count}}",
+      "countdownHint": "Starting shortly. Press Esc to cancel.",
+      "annotate": "Annotate",
+      "finishing": "Finishing…",
+      "replay": "Replay",
+      "previewUnavailable": "Preview unavailable. Save the clip or close the previous preview and try again.",
+      "playbackFailed": "Playback failed. You can still save the recording.",
+      "annotationNoRoom": "Leave more space beside the selection to open annotations.",
+      "overlap": "This part could not be joined. Scroll back a little, or finish with the captured content.",
+      "limit": "Capture limit reached. Finish and save this capture.",
+      "captureFailed": "Capture stopped. Resume to try again or save the captured portion.",
+      "encodeFailed": "Could not encode this recording. Close and start a new capture.",
+      "exportFailed": "Could not save this capture. Choose Save to try again.",
+      "keysUnavailable": "Key display is unavailable. On macOS, allow Input Monitoring for Cindy.",
+      "noRoom": "Cannot start. Select an area at least 32 × 32 pixels and leave room beside it for the preview.",
+      "image": "Screenshot",
+      "startScroll": "Start Scrolling Screenshot",
+      "autoScroll": "Auto Scroll",
+      "stopScroll": "Stop Scrolling",
+      "edit": "Edit",
+      "autoUnavailable": "Auto scrolling stopped. You can scroll manually in the selection.",
+      "autoPermission": "Auto scrolling needs Accessibility permission. Allow Cindy in System Settings and try again, or scroll manually in the selection."
+    }
+  },
   "privacyExit": {
     "status": "This computer is being remotely controlled through Cindy",
     "hint": "Click or press any key to disconnect…",
@@ -1182,6 +1316,7 @@
       "done": "Done",
       "running": "Running",
       "networkReconnecting": "({{attempt}}/{{maxAttempts}}) Connection interrupted — reconnecting…",
+      "callingTool": "Calling a tool…",
       "updatingTasks": "Updating tasks",
       "awaitingPermission": "Awaiting permission",
       "awaitingQuestion": "Awaiting your reply",
@@ -3604,6 +3739,12 @@
           "contextLimitHint": "Applies to all available engines for this model. Edit in whole K (1 K = 1,000 tokens); untouched values retain their precision. Saved changes apply to subsequent runs without interrupting a response. Actual capacity remains subject to the model service’s limits.",
           "contextLimitLocalMillionHint": "Native 256K (262,144 tokens), with optional expansion to 1M (1,000,000). If the service is running, restart it under Manage Service to apply changes; if stopped, they apply on next use. Longer inputs need more memory and take longer to process.",
           "contextLimitAria": "Context limit (thousands of tokens)",
+          "compaction": {
+            "title": "Automatic Compaction",
+            "hint": "Compact context at the selected usage percentage. Lower values compact earlier; engine limits still apply.",
+            "default": "{{pct}}% (Default)",
+            "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
+          },
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
@@ -6209,9 +6350,15 @@
         "conflict": "Conflicts with \"{{name}}\"",
         "voiceConflict": "Conflicts with the voice input shortcut",
         "composerVoiceConflict": "Conflicts with the voice input shortcut. Change either the composer send shortcut or the voice input shortcut.",
-        "menuAccelerator": "This combination cannot be registered as a menu shortcut"
+        "menuAccelerator": "This combination cannot be registered as a menu shortcut",
+        "globalUnusable": "This combination cannot be used as a system-wide shortcut",
+        "globalOccupied": "Already in use by another app. Choose a different combination."
       },
       "items": {
+        "region-screenshot": {
+          "label": "Screenshot",
+          "description": "Take a screenshot in any app, then annotate it, pin it to the screen, or send it to {{appName}}"
+        },
         "toggle-sidebar": {
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
@@ -6618,6 +6765,9 @@
         "installAria": "Install {{name}}"
       },
       "market": {
+        "publisherKind": {
+          "official": "Official"
+        },
         "scopeAria": "Filter plugin sources",
         "scope": {
           "all": "All",
@@ -6931,18 +7081,6 @@
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
         "residentDetail": "Uses a small amount of memory while idle; the process stops immediately when it is disabled or uninstalled.",
-        "harnessRead": "Read AI runtime information: {{name}}",
-        "harnessReadDetail": "Reads declared capabilities, usage, or context statistics. Excludes messages, tool arguments, results, and fixed instructions.",
-        "harnessMessages": "Read Messages in Linked Tasks",
-        "harnessMessagesDetail": "Reads user messages, AI replies, and saved history in approved tasks. Content may be sensitive. Excludes fixed instructions and hidden reasoning.",
-        "harnessToolContent": "Read Tool Arguments and Results",
-        "harnessToolContentDetail": "Reads tool arguments and results in approved tasks, which may contain file contents, commands, or sensitive information.",
-        "harnessEvents": "Observe AI runtime events: {{name}}",
-        "harnessEventsDetail": "Receives declared runtime events. Message and tool content require separate approval. Events may have gaps and are not a complete history.",
-        "harnessHooks": "Block AI operations: {{name}}",
-        "harnessHooksDetail": "May block at a supported pre-execution or permission boundary. Cannot approve on your behalf or rewrite arguments. After at most 1.5 seconds, normal permission handling continues.",
-        "harnessActions": "Control AI runtime: {{name}}",
-        "harnessActionsDetail": "Only connected, separately approved operations can be called.",
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
         "subscribeActivityDetail": "Sees only the timing: when thinking starts and ends, and when the AI is waiting for your approval or your answer. It never sees the reasoning text, the action awaiting approval, the command or file involved, the plan, the question, or your answer — and it cannot approve anything on your behalf.",
@@ -7369,6 +7507,203 @@
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
+      },
+      "contribution": {
+        "unreadReview": "New review result",
+        "viewReviewResult": "View review result for {{version}}",
+        "anonymous": "Publish anonymously",
+        "anonymousHint": "Hide public attribution for the entire plugin. When disabled, each version shows the original author’s name saved when it was submitted.",
+        "anonymousAuthorOnly": "Only the original author can change this",
+        "anonymousUnavailable": "Author settings unavailable",
+        "anonymousUpdateFailed": "Could not confirm the anonymity setting was saved. Refresh before trying again.",
+        "myPlugins": "Publish Plugin",
+        "publish": "Submit for Review",
+        "submitUpdate": "Submit New Version for Review",
+        "publishHint": "Publish only plugins you have permission to publish. Human approval is required for community listing.",
+        "preparing": "Preparing the installed plugin…",
+        "confirmSubmit": "Submit for Review",
+        "confirmPublic": "The current plugin package, including its code and declared permissions, will be submitted for human review. Public community distribution requires approval.",
+        "packageSize": "Package size: {{size}} bytes",
+        "refreshList": "Refresh List",
+        "refreshDetail": "Refresh Details",
+        "signInRequired": "Sign in to manage plugins you submit to the public marketplace.",
+        "permissionDenied": "This account cannot publish this plugin.",
+        "notFound": "This plugin is unavailable to the current account.",
+        "accountChanged": "The account changed. Refresh using the current account.",
+        "loadFailed": "Plugin information could not be loaded.",
+        "offline": "You are offline. Reconnect and refresh to see the latest result.",
+        "cachedResult": "Showing the last result for this account",
+        "lastRefreshed": "Last refreshed: {{time}}",
+        "search": "Search your plugins",
+        "filterLabel": "Filter your plugins",
+        "filter": {
+          "all": "All",
+          "pending": "Pending Review",
+          "needs_action": "Needs Attention",
+          "published": "Published"
+        },
+        "loading": "Loading…",
+        "empty": "No plugins submitted yet. Choose a plugin you developed and use, then submit it for review.",
+        "noMatches": "No plugins match this search or filter.",
+        "goPublish": "Publish Plugin",
+        "currentMarket": "Currently Published Version",
+        "inUseVersion": "In Use",
+        "localVersion": "Local version",
+        "localEnabled": "Enabled",
+        "localDisabled": "Disabled",
+        "submitVersion": "Submit {{version}} for review",
+        "installPublished": "Install published version",
+        "publishedContentUnavailable": "The current published version’s description and release notes are temporarily unavailable.",
+        "currentSubmission": "Current submission",
+        "localState": {
+          "missing": "Not installed on this computer",
+          "unavailable": "Local version temporarily unavailable"
+        },
+        "listedVersion": "Published",
+        "pendingVersion": "Pending Review",
+        "notInstalled": "Not Installed",
+        "versionUnknown": "Version Unknown",
+        "noPendingVersion": "No Pending Review",
+        "versionFacts": "Version Status",
+        "publishing": "Publishing",
+        "latestSubmission": "Latest Submission",
+        "noSubmission": "No submissions yet",
+        "marketVersion": "Published · {{version}}",
+        "market": {
+          "not_listed": "Not Listed",
+          "disabled": "Unlisted",
+          "archived": "Archived",
+          "release_unavailable": "Version Unavailable"
+        },
+        "review": {
+          "pending": "Pending Review",
+          "approved": "Approved",
+          "rejected": "Returned",
+          "published": "Published",
+          "superseded": "Replaced by a Later Submission",
+          "legacy_unverified": "Historical revision unavailable",
+          "current": "Result Unconfirmed",
+          "cancelled": "Cancelled"
+        },
+        "reason": "Reason",
+        "submittedContent": "Submitted Content",
+        "snapshotUnavailable": "The original content was not retained or can no longer be verified.",
+        "history": "Publishing History",
+        "loadMore": "Load More",
+        "loadMoreHistory": "Load More History",
+        "releaseId": "Release ID",
+        "revision": "Revision",
+        "technicalDetails": "Technical Details",
+        "outcome": {
+          "submitted_for_review": "Submitted for Review",
+          "metadata_updated": "Display Information Updated",
+          "unchanged": "Existing Result Returned"
+        },
+        "event": {
+          "submitted": "Submitted",
+          "metadata_updated": "Display Information Updated",
+          "approved": "Approved",
+          "rejected": "Returned",
+          "enabled": "Published",
+          "disabled": "Unlisted",
+          "current_changed": "Community Version Changed",
+          "revoked": "Version Revoked",
+          "cancelled": "Cancelled"
+        },
+        "source": {
+          "manual": "Manual Publishing",
+          "ai": "AI-Assisted Publishing",
+          "github_oidc": "Repository Publishing",
+          "console_upload": "Console Upload",
+          "member_upload": "Organization Publishing",
+          "server_template": "Template Publishing",
+          "community_upload": "Community Publishing",
+          "unknown": "Existing Publishing Channel"
+        },
+        "errors": {
+          "CONTRIBUTION_NOT_AUTHORIZED": "You do not have permission to publish this public plugin. Contact its maintainer; installation does not grant publishing rights.",
+          "CONTRIBUTION_REVISION_STALE": "The target version changed. Refresh and review it, then prepare again explicitly.",
+          "RELEASE_VERSION_CONFLICT": "This version cannot replace its existing runtime content. Update the plugin version before submitting.",
+          "PLUGIN_GHOST_ID_CONFLICT": "This plugin identifier is already in use. Choose a different identifier for a new plugin, or sign in with the original publishing account to update the existing plugin.",
+          "CONTRIBUTION_OPERATION_NOT_FOUND": "This account cannot view this submission.",
+          "PRECONDITION_FAILED": "This plugin cannot currently be submitted for review.",
+          "PERSONAL_CONTEXT_REQUIRED": "Sign in to manage plugins you submit to the public marketplace.",
+          "ACCOUNT_REAUTH_REQUIRED": "Your session is no longer valid. Sign in again before retrying.",
+          "PERMISSION_DENIED": "This account cannot publish this plugin.",
+          "OWNER_CHANGED": "The account changed. Refresh using the current account.",
+          "PLUGIN_NOT_FOUND": "This plugin is unavailable to the current account.",
+          "CONTRIBUTION_SUBMISSION_NOT_FOUND": "This plugin is unavailable to the current account.",
+          "NOT_FOUND": "This plugin is unavailable to the current account.",
+          "INTERNAL": "Request failed. Please try again.",
+          "MUTATION_CANCELLED": "The request was cancelled. Please try again.",
+          "CONTRIBUTION_IDEMPOTENCY_CONFLICT": "This submission differs from the original request. Refresh before submitting again.",
+          "PLUGIN_ARCHIVED": "Archived",
+          "RELEASE_REVOKED": "Version Revoked",
+          "INVALID_PARAMS": "The submission contains invalid information. Check the plugin details before submitting again.",
+          "PAYLOAD_TOO_LARGE": "The plugin package is too large. Reduce its size before submitting again.",
+          "RATE_LIMITED": "Too many requests. Please try again later.",
+          "JWKS_UNAVAILABLE": "Account verification is temporarily unavailable. Please try again later.",
+          "STORAGE_UNAVAILABLE": "File storage is temporarily unavailable. Please try again later.",
+          "PLUGIN_REPLICAS_NOT_READY": "The plugin service is temporarily unavailable. Please try again later.",
+          "UPLOAD_OBJECT_MISSING": "The uploaded plugin package was not found. Please submit it again.",
+          "UPLOAD_SIZE_MISMATCH": "The uploaded plugin package size does not match. Please submit it again.",
+          "UPLOAD_SHA256_MISMATCH": "The uploaded plugin package failed verification. Please submit it again.",
+          "PLUGIN_PACKAGE_INVALID": "The plugin package format is invalid. Check it before submitting again.",
+          "CONTRIBUTION_TARGET_MISMATCH": "The package does not match the submission target. Check the plugin ID and version.",
+          "PUBLISH_STORAGE_UNAVAILABLE": "File storage is temporarily unavailable. Please try again later.",
+          "PUBLISH_INTERNAL_ERROR": "The server could not process the request. Please try again later.",
+          "RELEASE_NOTES_REQUIRED": "Not submitted for review: Complete ghost.json.releaseNotes in the plugin source, install the updated plugin, then submit it for review.",
+          "VERSION_ALREADY_SUBMITTED": "This version was already submitted. Change the version number and install the updated plugin before submitting for review again.",
+          "PLUGIN_PENDING_RELEASE_EXISTS": "Another version is under review. View or cancel that review first.",
+          "CONTRIBUTION_PACKAGE_CHANGED": "The installed plugin changed after the summary was shown. Refresh and check it again."
+        },
+        "installForAccount": "The originally selected plugin installation could not be found. Select the plugin again in the current account and check it before submitting for review.",
+        "releaseSha": "Release package SHA-256",
+        "uploadedSha": "Uploaded package SHA-256",
+        "publishPlugin": "Publish Plugin",
+        "chooseLocal": "Choose a local plugin you developed, check its version, and submit it for review.",
+        "noLocalPlugins": "No installed plugins yet. Install and use a plugin you developed first.",
+        "noPublishablePlugins": "No installed plugins are available to publish. Install and use a plugin you developed, then check its installation identity and permission approval in the details.",
+        "unavailable": {
+          "officialGithubRequired": "Official public plugins cannot be submitted for review from the client. Submit changes through the GitHub repository to keep its source complete and support future maintenance.",
+          "reservedId": "Plugins using Cindy's reserved identifiers cannot be submitted from the client. Submit official public plugin changes through GitHub to keep repository source complete and maintainable.",
+          "privatePlugin": "Organization and private plugins cannot be converted to public community plugins.",
+          "identityPending": "The plugin installation identity is not confirmed yet. Publishing is unavailable.",
+          "approvalRequired": "The plugin permissions have not been approved. Complete the permission check in these details first.",
+          "installationUnavailable": "This plugin installation is unavailable. Reopen the original plugin details.",
+          "sourceUnverified": "This plugin’s installation source could not be verified. Open a local plugin you developed.",
+          "publishingPermissionRequired": "This account does not have permission to submit this plugin."
+        },
+        "intro": "Manage releases, updates and reviews for public marketplace plugins",
+        "pluginColumn": "Plugin",
+        "latestState": "Latest status",
+        "version": "Version",
+        "chooseVersion": "View version",
+        "submittedAt": "Submitted",
+        "approvedAt": "Approved",
+        "notApproved": "Not approved yet",
+        "timeUnavailable": "Not recorded",
+        "releaseNotes": "Release notes",
+        "versionUpdates": "Versions & Updates",
+        "versionManagement": "Manage Versions",
+        "versionContent": "Version content",
+        "loadMoreVersions": "Load more versions",
+        "notSubmitted": "Not submitted for review",
+        "submitVersion": "Submit {{version}} for review",
+        "publishingVersion": "Version for Review · {{version}}",
+        "refreshSummary": "Refresh publishing summary",
+        "versionConsumedHint": "Once a submission is accepted for review, its version number cannot be reused, even after cancellation or rejection.",
+        "cancelReview": "Cancel this review",
+        "cancelReviewTitle": "Cancel review of {{name}} {{version}}?",
+        "cancelReviewDescription": "The currently listed version stays available. Version {{version}} has been submitted and cannot be submitted again. Use a new version number.",
+        "keepReview": "Keep review",
+        "cancelledAt": "Cancelled at",
+        "cancelled": "Cancelled",
+        "cancelReviewCompleted": "Review cancelled. The currently listed version is unchanged.",
+        "cancelReviewAlreadyFinal": "Review already finished, so it was not cancelled. The actual result is shown below.",
+        "viewPendingVersion": "View version under review",
+        "submitFailed": "Submission failed",
+        "viewDetails": "View details"
       }
     },
     "mcp": {
@@ -9228,6 +9563,8 @@
   },
   "bots": {
     "workbench": {
+      "ownedMark": "Belongs to {{names}}",
+      "createdMark": "Created by {{names}}",
       "followingMark": "This task is looked after by {{names}}"
     },
     "glance": {
@@ -12793,7 +13130,36 @@
     }
   },
   "ccAgent": {
-    "sessionEntry": {"missing":"This session could not be found. It may have been deleted.","denied":"This account or computer cannot access this session.","failed":"Could not load this session.","back":"Back to Sessions","retry":"Reload Session"},
+    "sessionEntry": {
+      "missing": "This session could not be found. It may have been deleted.",
+      "denied": "This account or computer cannot access this session.",
+      "failed": "Could not load this session.",
+      "back": "Back to Sessions",
+      "retry": "Reload Session"
+    },
+    "contextRingPanel": {
+      "title": "Context",
+      "meaning": "What AI can refer to this turn: conversation, instructions and tool results.",
+      "used": "Used",
+      "available": "Plenty of room",
+      "elevated": "Filling up",
+      "nearLimit": "Near the limit",
+      "unknown": "No data yet",
+      "continueHint": "Keep going. No adjustment needed yet.",
+      "unknownHint": "Current usage appears when the model reports it.",
+      "tokens": "{{used}} / {{total}} tokens",
+      "compact": "Compact context",
+      "compactHelp": "Summarize earlier content to free space. Some details may be omitted.",
+      "adjust": "Adjust window",
+      "taskScope": "This Session",
+      "modelSettings": "Model Defaults",
+      "modelSettingsHint": "Change this model’s default window and limit. This also affects other sessions.",
+      "remoteModelSettings": "For lasting changes, edit model settings on the computer running this session.",
+      "costHint": "A larger window holds more content and may cost more.",
+      "technical": "Technical details",
+      "auto": "Automatic compaction",
+      "autoHelp": "Codex automatically compacts context near its compaction threshold."
+    },
     "contextWindowBudget": {
       "menuTitle": "Task context window",
       "triggerLabel": "Task context window, currently {{window}}",
@@ -13043,7 +13409,7 @@
       "selectFolderFailed": "Could not select folder. Try again.",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
+      "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}}, Teammates: {{creators}})",
       "organizeSidebar": "Sidebar settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
@@ -13108,6 +13474,9 @@
       "filterProjectOrderTip": {
         "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
       },
+      "filterCreatorsHeading": "Teammates",
+      "filterCreatorsAny": "Any source",
+      "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
       "filterAllProjects": "All projects",
       "filterHeading": "Filters",
@@ -13221,6 +13590,14 @@
         "description": "Restore {{count}} archived sessions in this chat group? They will move from Archived to Active.",
         "empty": "No archived sessions in this chat group can be restored"
       },
+      "automationArchiveAll": {
+        "description": "Archive {{count}} sessions created by this automation. The automation will continue to run as scheduled.",
+        "descriptionWithSkip": "Archive {{count}} sessions created by this automation, skipping {{skip}} sessions. The automation will continue to run as scheduled.",
+        "allPinnedOrRunning": "All sessions from this automation are pinned or running. Nothing to archive.",
+        "allPinned": "All sessions from this automation are pinned. Nothing to archive.",
+        "allRunning": "All sessions from this automation are running. Nothing to archive yet.",
+        "empty": "This automation has no sessions to archive."
+      },
       "archiveAll": {
         "title": "Archive all sessions",
         "confirm": "Archive all",
@@ -13230,6 +13607,7 @@
         "skipRunning": "{{count}} running",
         "skipPinned": "{{count}} pinned",
         "skipSeparator": ", ",
+        "skipped": "Skipped {{skip}} sessions",
         "archived_one": "Archived {{count}} session",
         "archived_other": "Archived {{count}} sessions",
         "partialFailure": "Archived {{ok}}, {{fail}} failed, please retry",
@@ -16371,6 +16749,7 @@
     "timezone": "Time Zone",
     "delete": "Delete Routine",
     "save": "Save Routine",
+    "saved": "Routine saved",
     "deleteConfirm": "Delete this routine and cancel its pending runs?",
     "keep": "Keep Routine",
     "openTask": "Open Session",

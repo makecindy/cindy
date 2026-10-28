@@ -19,7 +19,7 @@ const TEAMMATES = 'teammates';
 export const VISUAL_TEAMMATE_SESSION_ID = 'visual-teammate-session';
 const MINUTE = 60_000;
 const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minutesAgo: number; avatar: RemoteCollectionItem['display']['avatar']; working?: boolean; following?: string[] }> = [
-  { id: 'visual-bot-cindy', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
+  { id: 'cindy-default', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
     avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' }, working: true,
     // Task rows show the follow mark (`ui-mock` tasks): one shared with LiZi, so the mark picks by name.
     following: ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`] },
@@ -40,6 +40,12 @@ const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minu
 const FIXTURE_NOW = Date.now();
 
 export function teammateVisualFixture(channel: string, args: unknown[], now = FIXTURE_NOW): unknown {
+  if (channel === 'maker:bot-delegations:list') {
+    const bot = teammates.find(item => args[0] === `${VISUAL_TEAMMATE_SESSION_ID}:${item.id}`);
+    const ids = bot?.id === 'cindy-default' ? ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`]
+      : bot?.id === 'visual-bot-lizi' ? [`${UI_MOCK_ID_PREFIX}english`, `${UI_MOCK_ID_PREFIX}archived`] : [];
+    return { ok: true, delegations: ids.map(childSessionId => ({ requestingBotId: bot!.id, childSessionId })) };
+  }
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
@@ -65,9 +71,9 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
     revision: 'visual-1', display: { title: '任务入口演示群' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
-      id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'visual-bot-cindy', name: 'Cindy', status: 'active' }],
+      id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }],
       messages: [], plans: [], createdAt: now, updatedAt: now,
-      round: { status: 'running', canContinue: false, speakers: [{ botId: 'visual-bot-cindy', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
+      round: { status: 'running', canContinue: false, speakers: [{ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
     } }],
   };
   // Existing connection/session records for exercising both native settings entries.
@@ -105,7 +111,10 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
         avatar: bot.avatar,
         ...(bot.working ? { generation: { phase: 'replying', startedAt: now - MINUTE } } : {}),
       },
-      links: (bot.following ?? []).map((sessionId) => ({ rel: 'following', target: { kind: 'session' as const, sessionId } })),
+      links: [
+        { rel: 'conversation', target: { kind: 'session' as const, sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } },
+        ...(bot.following ?? []).map((sessionId) => ({ rel: 'following', target: { kind: 'session' as const, sessionId } })),
+      ],
       revision: 'visual-1',
     })),
   } satisfies RemoteCollectionListResponse;

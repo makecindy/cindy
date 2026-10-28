@@ -50,6 +50,7 @@ function viewFor(caseName: string): NightlyLearningView {
 }
 
 mountPage({
+  route: '/',
   host: (ctx) => {
     let view = viewFor(ctx.case);
     const routines = [

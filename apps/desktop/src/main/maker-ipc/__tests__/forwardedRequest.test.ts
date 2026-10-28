@@ -72,8 +72,8 @@ describe('host-owned forwarded request', () => {
   });
 
   // Incident 2026-10-23: a relayed "可以提交 pr" reached the task with no verifiable owner
-  // authority. Only a relay admitted in a verified owner turn becomes the receiver's intent,
-  // and the mark never travels with the receipt into a later, unverified relay.
+  // authority. The same verified request must survive another accepted relay,
+  // while merely reading an old receipt cannot revive it.
   it('marks only a host-verified owner relay, without changing the wire body', async () => {
     const verified = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, true);
     const plain = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, false);
@@ -85,7 +85,13 @@ describe('host-owned forwarded request', () => {
     expect(readForwardedRequestSource({ ...plain.autoReviewUserText.request, ownerVerified: 'yes' })?.ownerVerified).toBeUndefined();
     const carried = await captureAgentRequest('child', 'more', { clientId: 'c1', delegatedRequest: verified.autoReviewUserText.request }, async () => [], true, false);
     expect(carried.autoReviewUserText.request?.userText).toBe('可以提交 pr');
-    expect(verifiedOwnerRequestText(carried.autoReviewUserText)).toBeUndefined();
+    expect(verifiedOwnerRequestText(carried.autoReviewUserText)).toBe('可以提交 pr');
+    expect(carried.autoReviewUserText.request).toEqual(verified.autoReviewUserText.request);
+    const historical = await captureAgentRequest('child', 'more', null, async () => [{
+      clientId: 'c1', role: 'user', content: verified.message,
+      agentMeta: { autoReviewUserText: verified.autoReviewUserText },
+    }], true, false);
+    expect(verifiedOwnerRequestText(historical.autoReviewUserText)).toBeUndefined();
     const missing = await captureAgentRequest('caller', 'analysis', null, async () => [], true, true);
     expect(missing.autoReviewUserText.request).toEqual({ userText: null });
   });

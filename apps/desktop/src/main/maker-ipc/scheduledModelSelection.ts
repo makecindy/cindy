@@ -8,6 +8,8 @@ import { isIpcError } from '../../shared/ipc-errors';
 /** A saved automation choice, applied only while its target's send lock is held. */
 export interface ScheduledModelSelection {
   agentKind: AgentKind;
+  /** Undefined inherits a bound task; null explicitly selects the task host. */
+  agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: Effort | null;
@@ -47,8 +49,21 @@ export function createScheduledModelScope(deps: {
       let row = await deps.read(sessionId);
       assertOwner(owner);
       if (!row) return undefined;
+      const reuseBaseline = async (existing: ScheduledModelBaseline, captured: NonNullable<typeof row>) => {
+        // Older baselines predate location overrides. Capture the current location
+        // before this automation can move it, without replacing the owner's model.
+        if (existing.agentDeviceId === undefined) {
+          const written = await deps.write(sessionId,
+            { ...existing, agentDeviceId: captured.profile.agentDeviceId ?? null }, captured.profileRevision, captured.baseline);
+          assertOwner(owner);
+          if (written === false) {
+            throw new ScheduledModelSelectionBusyError('Companion profile changed during baseline upgrade');
+          }
+        }
+        return existing.scopeId;
+      };
       const existing = parseScheduledModelBaseline(row.baseline);
-      if (existing && !existing.pendingBotProfileVersion) return existing.scopeId;
+      if (existing && !existing.pendingBotProfileVersion) return reuseBaseline(existing, row);
       const profileRevision = row.profileRevision;
       // Settings may have committed while their asynchronous runtime refresh is
       // still queued. Align the owner under this same send lease before capture.
@@ -66,9 +81,10 @@ export function createScheduledModelScope(deps: {
       if (prepared?.pendingBotProfileVersion) {
         throw new ScheduledModelSelectionBusyError('Permanent model selection is still pending');
       }
-      if (prepared) return prepared.scopeId;
+      if (prepared) return reuseBaseline(prepared, row);
       const scopeId = deps.createId();
-      const written = await deps.write(sessionId, { ...row.profile, effort: row.profile.effort || null, scopeId }, profileRevision, row.baseline);
+      const written = await deps.write(sessionId, { ...row.profile, agentDeviceId: row.profile.agentDeviceId ?? null,
+        effort: row.profile.effort || null, scopeId }, profileRevision, row.baseline);
       assertOwner(owner);
       if (written === false) throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before scope creation');
       return scopeId;
@@ -129,9 +145,9 @@ export class ScheduledModelSelectionBusyError extends Error {}
 
 interface ScheduledModelTarget {
   agentKind: AgentKind;
+  agentDeviceId?: string | null;
   status: string;
   remoteHostId?: string | null;
-  agentDeviceId?: string | null;
   orcaRole?: string | null;
 }
 
@@ -139,10 +155,14 @@ interface ScheduledModelTarget {
 export function assertScheduledHarnessSupported(
   target: ScheduledModelTarget | null,
   agentKind: AgentKind | undefined,
+  agentDeviceId?: string | null,
 ): void {
-  if (target?.status !== 'active' || !agentKind || target.agentKind === agentKind) return;
-  // Orca Lead/Worker use the ordinary handoff transaction, including restoration
-  // before the next manual send. Only SSH still lacks cross-Harness handoff.
+  if (target?.status !== 'active') return;
+  const changesHarness = agentKind && target.agentKind !== agentKind;
+  const changesDevice = agentDeviceId !== undefined && agentDeviceId !== (target.agentDeviceId ?? null);
+  if (!changesHarness && !changesDevice) return;
+  // Ordinary Orca Lead/Worker use the existing handoff for both axes, including
+  // restoration before the next manual send. SSH still cannot change either.
   if (target.remoteHostId) {
     throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'SSH automation targets must keep their current Harness');
   }
@@ -173,12 +193,20 @@ export function resolveScheduledModelSelection(
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */
 export function createScheduledModelSelectionResolver(deps: {
   readRemoteProviders: (deviceId: string, agent: AgentKind, model: string, providerId: string | null) => Promise<ProviderView[]>;
+  readSshCodexProviders: (hostId: string) => Promise<ProviderView[]>;
   resolveLocalSelection: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
 }) {
   return async (selection: ScheduledModelSelection, target?: ScheduledModelTarget | null): Promise<ScheduledModelSelection> => {
-    if (target?.agentDeviceId && !target.remoteHostId) {
+    // SSH Codex discovers native models on its host. A controller's catalog
+    // cannot establish that a frozen remote choice is obsolete.
+    if (target?.remoteHostId && selection.agentKind === 'codex') {
+      return resolveScheduledModelSelection(selection, await deps.readSshCodexProviders(target.remoteHostId));
+    }
+    const agentDeviceId = selection.agentDeviceId === undefined
+      ? target?.agentDeviceId : selection.agentDeviceId;
+    if (agentDeviceId && !target?.remoteHostId) {
       const providers = await deps.readRemoteProviders(
-        target.agentDeviceId, selection.agentKind, selection.model, selection.providerId,
+        agentDeviceId, selection.agentKind, selection.model, selection.providerId,
       );
       return resolveScheduledModelSelection(selection, providers);
     }
@@ -206,12 +234,17 @@ export async function applyScheduledModelSelection(
     return selection;
   }
   if (deps.isBusy()) throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
-  assertScheduledHarnessSupported(target, selection.agentKind);
-  // Automation changes model preferences within the bound task's execution location.
-  // Persisted baselines from older clients have no location of their own.
-  const resolved = await deps.resolveSelection(selection, target);
-  if (target.agentKind !== resolved.agentKind) {
-    const result = await deps.switchHarness(resolved);
+  assertScheduledHarnessSupported(target, selection.agentKind, selection.agentDeviceId);
+  const resolved = await deps.resolveSelection({ ...selection,
+    ...(selection.agentDeviceId === undefined && target.agentDeviceId !== undefined
+      ? { agentDeviceId: target.agentDeviceId } : {}),
+  }, target);
+  const changesDevice = (target.agentDeviceId ?? null) !== (resolved.agentDeviceId ?? null);
+  if (target.agentKind !== resolved.agentKind || changesDevice) {
+    // The handoff treats an explicit location as a relocation request. Preserve
+    // engine-only switching for execution-device Workers without relaxing that boundary.
+    const { agentDeviceId: _location, ...harnessSelection } = resolved;
+    const result = await deps.switchHarness(changesDevice ? resolved : harnessSelection);
     if (!result.engineReady || result.retryPending) throwIpcError('HARNESS_SWITCH_NOT_READY', 'Scheduled Harness switch did not become ready');
   }
   await deps.applyModel(resolved);

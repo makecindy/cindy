@@ -5,10 +5,11 @@
  * @vitest-environment jsdom
  */
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string, options?: { value?: string }) => options?.value !== undefined ? `${options.value} ${key}` : key, i18n: { language: 'en' } }),
 }));
 // The public share action reads the current account; these detail/install cases
@@ -75,6 +76,18 @@ describe('MarketPluginDetailView', () => {
     expect(container.textContent).not.toContain('settings.ghosts.usage.title');
   });
 
+  it('puts purpose and capabilities before version changes, which start collapsed', () => {
+    renderDetail({ manifest: { ...manifest, releaseNotes: 'Changes in 1.3.11', tools: [{ name: 'calendar', description: 'Read events' }] } });
+    const summary = screen.getByText('settings.ghosts.contribution.versionUpdates');
+    const updates = summary.closest('details')!;
+    expect(updates.open).toBe(false);
+    expect(screen.getByText('Connect Google Calendar').compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('calendar').compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.releaseNotes · 1.3.11' }).closest('details')).toBe(updates);
+    fireEvent.click(summary);
+    expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.releaseNotes · 1.3.11' })).toBeTruthy();
+  });
+
   it('shows the marketing description outside the conflict state', () => {
     renderDetail();
     const description = screen.getByText('Connect Google Calendar');
@@ -96,8 +109,8 @@ describe('MarketPluginDetailView', () => {
 
     const reason = screen.getByText('settings.ghosts.market.replaceDescription');
     expect(reason.id).toBeTruthy();
-    // 冲突态下正文让位给原因,不再显示营销描述。
-    expect(screen.queryByText('Connect Google Calendar')).toBeNull();
+    // 替换提示不能遮掉插件本身的用途。
+    expect(screen.getByText('Connect Google Calendar')).toBeTruthy();
 
     const action = screen.getByRole('button', {
       name: /settings\.ghosts\.market\.replace$/,

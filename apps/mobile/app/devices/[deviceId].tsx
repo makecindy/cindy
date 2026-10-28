@@ -1,3 +1,5 @@
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
@@ -327,7 +329,8 @@ function DeviceDetailScreenContent() {
 
   const syncSessions = useCallback(async () => {
     if (!deviceId) return;
-    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope;
+    const owner = getMobileAuthOwner();
+    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope && isMobileAuthOwnerCurrent(owner);
     if (!isCurrentQuery()) return;
     setLoading(true);
     setError(null);
@@ -335,7 +338,7 @@ function DeviceDetailScreenContent() {
       const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
-        return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
+        const sessions = await invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
           LIST_LIMIT,
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。
@@ -343,6 +346,15 @@ function DeviceDetailScreenContent() {
           // 首拉 / reseed / 筛选重拉都是权威快照，不并入被控端写前查询。
           { includePinned: true, fresh: true },
         ]);
+        return readTeammateTasks({ invoke, deviceId, deviceName, scope: JSON.stringify([owner, deviceId, listQueryScope]),
+          sessions: Array.isArray(sessions) ? sessions : [], previous: remoteSessionStore.getHomeSessions(),
+          status: requestedListFilter, limit: LIST_LIMIT, current: isCurrentQuery,
+          publishInitial: rows => {
+            if (isCurrentQuery() && remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+              remoteSessionStore.setDeviceSessions(deviceId, deviceName, rows);
+            }
+          },
+        });
       });
       if (!isCurrentQuery()) return;
       if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {

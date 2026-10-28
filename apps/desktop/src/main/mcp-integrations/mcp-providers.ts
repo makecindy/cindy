@@ -126,6 +126,7 @@ import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
+import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
@@ -627,6 +628,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       runtimeCapabilities: deps.runtimeCapabilities,
+      productHelpDocs: HELP_KNOWLEDGE,
       // Install / auto-update requests become owner-only Host cards (see agent-app-update/).
       appUpdate: createAgentAppUpdateCallbacks((sessionId, sessionInstanceId) =>
         deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true),

@@ -299,12 +299,11 @@ describe('Shared create project picker', () => {
     expect(toggleHandler.indexOf('setWtEnabled(enabled)')).toBeGreaterThan(
       toggleHandler.indexOf("'maker:apply-new-maker-worktree-pref'"),
     );
+    // 镜像与切设备重置共用一个按帧判定的落点(行为见 deviceLinkDraftDefaults.test.ts)。
     expect(newMakerDraftRouteSource).toContain(
-      "if (typeof remotePreference === 'boolean') setWtEnabled(remotePreference);",
+      'const next = resolveDeviceLinkWorktreeEnabled(previous, frame);',
     );
-    expect(newMakerDraftRouteSource).toContain(
-      'if (isDeviceLinkDraft) setWtEnabled(false);',
-    );
+    expect(newMakerDraftRouteSource).toContain('if (next !== null) setWtEnabled(next);');
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
     const sendGuardStart = newMakerDraftRouteSource.indexOf(
       '&& selectedWorktree.confirmedIneligible !== true',

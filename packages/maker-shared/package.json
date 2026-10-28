@@ -13,6 +13,7 @@
     "./agent-input-projection": "./src/agentInputProjection.ts",
     "./auto-review-intent": "./src/autoReviewIntent.ts",
     "./agent-task": "./src/agentTask.ts",
+    "./bot-template-preset": "./src/botTemplatePreset.ts",
     "./branding": "./src/branding.ts",
     "./brand-identity": "./src/brandIdentity.ts",
     "./chat-quotes": "./src/chatQuotes.ts",

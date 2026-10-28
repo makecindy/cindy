@@ -937,3 +937,18 @@ visible 复用当前账号模型选择器的用户开关与目录默认值；隐
 不向插件提供设备私钥、账号 token 或其他插件数据，不为通道增加远程 Renderer IPC。
 接口和失败语义见 `FORGE_GUIDE` §4.10.2，协议与兼容边界见
 [协议兼容](protocol-compatibility.md#插件资料设备同步)。
+
+## 社区插件贡献入口
+
+个人作者可从来源可核实且已批准的本地 root 插件详情提交审核；已有公开插件的后续版本通过“发布插件”管理页提交，并核对当前提交授权。安装或运行批准本身不授予发布权。Host 复用导出快照原语和现有包自检，
+不弹保存/选文件框，不接受任意路径或独立资料。准备绑定原物理实例、安装目录、批准版本与账号；
+登录意图也须核对这些证据，不按同 ID 替换为另一个账号安装。私域 ledger 关联不可转 public；
+合法 public Broker 声明仍由服务端既有 public 规则与精确 ACL 判断，不靠声明直接拒绝。
+
+个人工具与旧企业 Forge 发布是独立能力入口。任务权限只决定是否可以执行公开写入，不决定
+public 身份归属；共享访客及插件托管/errand 任务与其 Worker 沿既有 restricted helper surface，
+不能借用 Host 个人发布能力。普通个人用户任务和正常 Worker 不因此被封禁。
+
+详见 [客户端实现与验证边界](../plugin-community-contribution.md) 和
+[HTTP 契约](../plugin-community-contribution-contract.md)。此改动涉及打包原语和授权边界，仍须人工 review
+及本规则第 5 节的插件基座白名单确认后方可合并；本地代码检查不替代该门禁。

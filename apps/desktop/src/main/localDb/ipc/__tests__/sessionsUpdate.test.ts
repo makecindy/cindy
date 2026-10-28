@@ -218,6 +218,8 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,

@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { resolveHistoryScope } from './_history_scope.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
@@ -249,13 +250,6 @@ export function registerSearchChatHistoryTool(
       });
     },
   });
-}
-
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
 }
 
 /**

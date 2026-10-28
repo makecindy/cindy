@@ -359,17 +359,23 @@ describe('MCP App message authorization', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('rechecks card authorization after accepted persistence and blocks vendor dispatch', async () => {
+  // PR #6830 / unit: route validation adds an await after persistence; card
+  // revocation during that await must still block the actual dispatch.
+  it.each(['persistence', 'route'] as const)('rechecks card authorization after %s and blocks vendor dispatch', async (stage) => {
     let visible = true;
     const dispatch = vi.fn();
     const guard = vi.fn(async () => { if (!visible) throw new Error('MCP_APP_CARD_UNAVAILABLE'); });
     const { deps, session } = createDeps({
       prepareProductTurn: () => dispatch,
-      createDbMessage: vi.fn(async () => { visible = false; }),
+      createDbMessage: vi.fn(async () => { if (stage === 'persistence') visible = false; }),
+      assertScheduledDispatchRoute: async () => { if (stage === 'route') visible = false; },
     });
     await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'App text', undefined, {
       [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
       [MCP_APP_MESSAGE_GUARD]: guard,
+      ...(stage === 'route' ? {
+        origin: { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'Follow up', runId: 'r' },
+      } : {}),
       persistUserMessage: { clientId: 'app-input', content: 'App text' },
     })).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
     expect(guard).toHaveBeenCalledTimes(2);
@@ -3547,6 +3553,34 @@ describe('session-agent-switch handoff injection', () => {
       agentMeta: stored!.agentMeta as Record<string, unknown> }])).toBe(request);
   });
 
+  // #7424 / unit: the trusted queue and accepted transaction must persist the exact pasted owner request.
+  // Adjacent reference tests did not cover paste ranges; the minimal old failure stamps '' for text + ranges.
+  it.each([false, true])('preserves pasted authorization through queue and persistence (deviceLink=%s)', async deviceLink => {
+    const text = '允许本地修改和测试，但不要 push、不要发布。';
+    const content = { text, pastedTextRanges: [{ start: 0, end: text.length }] };
+    const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-request', text,
+      persistedContent: content, files: [],
+    } as unknown as AgentInputQueuedMessage, deviceLink);
+    expect(queued.autoReviewUserText).toBe(text);
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', text, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: queued.autoReviewUserText,
+      persistUserMessage: { clientId: queued.clientId, content, delivery: 'turn' },
+    });
+    expect(vi.mocked(session.send).mock.lastCall?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe(text);
+    expect(vi.mocked(deps.createDbMessage).mock.lastCall?.[1].agentMeta?.autoReviewUserText).toBe(text);
+  });
+
+  it.each([false, true])('rejects pasted authorization when persisted and wire text diverge (deviceLink=%s)', deviceLink => {
+    const persisted = { text: '允许 push。', pastedTextRanges: [{ start: 0, end: 6 }] };
+    for (const persistedContent of [persisted, JSON.stringify(persisted)]) {
+      const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-mismatch', text: '不要 push。',
+        persistedContent, files: [],
+      } as unknown as AgentInputQueuedMessage, deviceLink);
+      expect(queued.autoReviewUserText).toBe('');
+    }
+  });
+
   // unit: a forwarded quote must survive persistence without becoming permission.
   it('persists host request evidence without restoring the target previous grant', async () => {
     const { deps, session } = createDeps({ readAutoReviewHistory: async () => [{
@@ -3626,6 +3660,32 @@ describe('session-agent-switch handoff injection', () => {
       await pending;
       expect(vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
     }
+  });
+
+  // PR #6830 / unit: the accepted queue callback runs before history/vision
+  // preparation. Existing cases changed only permissions. A remote source
+  // suspended during history loading must reject the transaction before vendor send.
+  it('rejects a scheduled remote route disabled after acceptance', async () => {
+    let suspended = false;
+    const vendor = vi.fn();
+    const { deps, session } = createDeps({
+      readAutoReviewHistory: async () => { suspended = true; return []; },
+      assertScheduledDispatchRoute: async (sessionId) => {
+        expect(sessionId).toBe('session-1');
+        if (suspended) throw new Error('REMOTE_AGENT_UNAVAILABLE');
+      },
+    });
+    vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      await opts?.resolveAutoReviewUserIntent?.();
+      opts?.onDispatching?.();
+      vendor();
+      return { accepted: true };
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Follow up', undefined, {
+      origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'Follow up', runId: 'r' },
+    })).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+    expect(vendor).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('restores scheduled intent from owner history, not the prompt (unavailable=%s)', async (unavailable) => {

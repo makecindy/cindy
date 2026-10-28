@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 台を開けます",
       "filterMetaWithUnavailable": "{{available}} 台を開けます · {{unavailable}} 台は対応が必要です",
       "showUnavailableReason": "デバイスを展開すると利用できない理由を確認できます",
-      "emptyCopy": "コンピューターで同じアカウントにログインし、設定のリモートコントロールで「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
+      "emptyCopy": "コンピューターで同じアカウントにログインし、「設定 → リモート接続」で「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
       "emptyTitle": "表示できるコンピューターはまだありません",
       "hideUnavailableA11y": "利用できないコンピューターを非表示",
       "showUnavailableA11y": "利用できないコンピューターを表示",
@@ -338,7 +338,9 @@
       "doneUnread": "完了・未読",
       "running": "実行中",
       "close": "閉じる",
-      "cancelRename": "名前の変更をキャンセル"
+      "cancelRename": "名前の変更をキャンセル",
+      "createdBy": "{{name}} が作成",
+      "ownedBy": "{{name}} に所属"
     },
     "accounts": {
       "title": "アカウントを切り替え",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "なし",
       "summarySeparator": "、",
-      "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。"
+      "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。",
+      "filterTeammatesHeading": "パートナー",
+      "filterAnySource": "すべての作成元",
+      "filterSelectedTeammates": "{{count}} 人を選択"
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",

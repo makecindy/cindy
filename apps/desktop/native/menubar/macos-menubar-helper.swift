@@ -2508,7 +2508,7 @@ struct ActivityRow: View {
                : activity.preview)
             .font(.system(size: 11.5))
             .foregroundStyle(Palette.ink2)
-            .lineLimit(2)
+            .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
@@ -2519,7 +2519,6 @@ struct ActivityRow: View {
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .help(activity.title + "\n" + activity.status + "\n" + activity.preview)
   }
 
   private func timeLabel(now: Date) -> String {

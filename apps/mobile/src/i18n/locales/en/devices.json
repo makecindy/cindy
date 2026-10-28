@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} available",
       "filterMetaWithUnavailable": "{{available}} available · {{unavailable}} need attention",
       "showUnavailableReason": "Expand a device to see why it is unavailable",
-      "emptyCopy": "Sign in to the same account on your computer, then enable “Allow same-account devices to control this computer” under Remote Control in Settings.",
+      "emptyCopy": "Sign in to the same account on your computer, then enable “Allow same-account devices to control this computer” under Settings → Remote Connection.",
       "emptyTitle": "No computers to show yet",
       "hideUnavailableA11y": "Hide unavailable computers",
       "showUnavailableA11y": "Show unavailable computers",
@@ -338,7 +338,9 @@
       "doneUnread": "Completed, unread",
       "running": "Running",
       "close": "Close",
-      "cancelRename": "Cancel rename"
+      "cancelRename": "Cancel rename",
+      "createdBy": "Created by {{name}}",
+      "ownedBy": "Belongs to {{name}}"
     },
     "accounts": {
       "title": "Switch account",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "None",
       "summarySeparator": ", ",
-      "filterEmptyCopy": "Adjust or reset Filters in Display settings."
+      "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
+      "filterTeammatesHeading": "Teammates",
+      "filterAnySource": "Any source",
+      "filterSelectedTeammates": "{{count}} selected"
     },
     "search": {
       "placeholder": "Search titles or content…",

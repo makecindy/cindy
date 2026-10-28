@@ -22,6 +22,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { toast } from '@/lib/toast';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -598,6 +599,7 @@ export function BotRoutines({
                   );
                   setSelected(saved.id);
                   setDraft(saved);
+                  toast.success(t('routines.saved'));
                 });
               }}
             >

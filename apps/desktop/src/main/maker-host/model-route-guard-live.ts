@@ -25,6 +25,7 @@ import {
 } from '@cindy/model-providers';
 
 import { resolveNewTaskDefaultRoute } from '../../shared/draftModelCalibration.js';
+import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
@@ -306,17 +307,17 @@ export async function resolveLenientSessionRoute(
  */
 export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
-  location?: { agentDeviceId: string },
+  readRemoteProviders?: (agentDeviceId: string) => Promise<ProviderView[]>,
 ): Promise<ScheduledModelSelection> {
-  if (location?.agentDeviceId) {
-    const { readRemoteProviderRoute } = await import('../remote-agent/controller/deviceCatalog.js');
-    const { provider } = await readRemoteProviderRoute({
-      agentDeviceId: location.agentDeviceId,
-      agentKind: selection.agentKind,
-      providerId: selection.providerId,
-      model: selection.model,
-    });
-    return resolveScheduledModelSelection({ ...selection, providerId: provider.id }, [provider]);
+  if (selection.agentDeviceId) {
+    if (!readRemoteProviders) throw new Error('Scheduled remote model resolution is not available');
+    let views: ProviderView[] = [];
+    const rejection = await checkDeviceRoute(async () => {
+      views = await readRemoteProviders(selection.agentDeviceId!);
+      return views;
+    }, selection.agentKind, selection.providerId, selection.model);
+    if (rejection) throw new Error(`Scheduled remote model route unavailable: ${rejection}`);
+    return resolveScheduledModelSelection(selection, views);
   }
   const providers = await getDesktopProviderService().listProviders({
     allowSideEffects: false, catalog: getActiveCatalog(),

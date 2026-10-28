@@ -353,6 +353,25 @@ export interface ProxyOptions {
     readonly url: string;
     readonly headers: Readonly<Record<string, string>>;
   }) => string | null;
+  /** Optional host authentication immediately before opening an upstream socket.
+   * Replaces outbound headers, preserving only host-approved handshake metadata.
+   * The signal revokes pending and established connections with the owning runtime.
+   * authorize rechecks mutable route ownership before forwarding each outbound chunk,
+   * without decoding frames or changing compression negotiation.
+   * Omitted by existing callers, whose forwarding remains unchanged.
+   */
+  prepareWebSocketRequest?: (ctx: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => Promise<{
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    authorize?: () => boolean;
+    /** Observe a complete, bounded HTTP upgrade refusal without consuming its body. */
+    onUpgradeFailure?: (status: number, body: string) => Promise<void>;
+    /** Connection-bound message guards; requires webSocketTransforms (uncompressed negotiation). */
+    transforms?: () => { outbound: Transform; inbound: Transform };
+  }>;
   /**
    * 对带稳定 thread id、且此前已真实完成过上游 101 的 WebSocket 重连启用 Cindy 侧保活。
    * proxy 会先用已证明一致的协商参数接住该条客户端 socket，再以有界退避回探上游；只要

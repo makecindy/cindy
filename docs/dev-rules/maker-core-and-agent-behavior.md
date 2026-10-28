@@ -104,7 +104,8 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
-Pi 读取独立的设置页百分比，在每次启动或恢复任务时冻结并写成原生 `compaction.reserveTokens`，由 Pi 按
+Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
+Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
 `contextWindow - reserveTokens` 处理 threshold 压缩，并在 provider 报 context overflow 时按原生
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
@@ -227,6 +228,26 @@ Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 h
 本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+本机外部 Codex 导入完成历史快照交接后、调用原生恢复前，必须将 paginated 历史的
+`rollout-cindy-adopted-*` 名称恢复为原生规范文件名（#7436）。保留原名中的 thread ID
+及可选的独立 rollout ID，不修改历史内容。存量错误路径在已记录的历史根和 SQLite 根内
+修复：不覆盖地建立同 inode 的规范名称、条件更新 SQLite 指针，返回规范路径；修复阶段不写位置索引，
+避免读取后替换覆盖另一进程的最新记录。旧索引仍能通过同 inode 别名恢复，由正常原生线程登记更新索引；
+保留旧名称，使中断重试与已打开的 writer 不会丢失追加内容。遇到另一份规范文件或状态
+已被其它操作切换时明确失败，不覆盖、不重新导入子历史，也不从聊天投影重建。
+带 `history_base` 的分页历史恢复前必须补齐所引用的完整祖先链，按原生 rollout ID
+（可能不同于 thread ID）查找，并保留原始字节、序号与归档位置。存量导入缺少祖先时，
+仅从与已选子历史的原文件名、首条元数据完全匹配的外部 HOME 补齐；已有 SQLite 指针指向自定义目录时，
+在交接指针前将来源根与子历史首条元数据原子保存到私有副本旁的 `.source.json`，中断重试仍使用该来源。
+来源记录不覆盖，且不能绕过子历史匹配和祖先校验；无记录的旧导入仍走候选目录发现。来源不明确、
+祖先缺失／越界／循环或已有副本的引用范围冲突时明确失败。已有子历史和祖先的后续
+追加不被替换；已有祖先仍使用 Cindy 旧文件名时，通过同 inode 规范名称复用，不能另拷贝
+导致父任务恢复冲突。整链先校验，再从最早祖先开始不覆盖发布，中断可重试。补齐后外部 HOME
+不可用也能恢复。异步复制后重查 SQLite 指针和位置索引，不能覆盖并发归档或切换。
+只读归档／导出查询不触发修复。Windows 扩展盘符与 UNC 路径在相对路径计算前统一表示。
+实现见 `maker-host/codex-local-sessions.ts`、`codex-thread-locations.ts`；默认回归在
+`main/__tests__/codexLocalSessions.test.ts`，真实恢复与下一轮发送在同目录的
+`codexLocalSessions.native.test.ts`（显式指定 `CINDY_CODEX_TEST_BINARY`，隔离目录与本机模型服务）。
 归档状态以 Cindy 的 `sessions.status` 为准。Codex 经原生 `thread/archive` /
 `thread/unarchive` 同步历史位置与索引，成功后更新线程位置记录；禁止直接改原生 SQLite
 或搬动 rollout，也不能为归档触发历史复制／重建。启动时补齐存量状态，忙碌任务、离线

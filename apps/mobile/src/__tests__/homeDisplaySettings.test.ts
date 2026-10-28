@@ -79,6 +79,17 @@ describe('home content filters (desktop 筛选 parity)', () => {
     ],
   });
 
+  it('filters by multiple teammate identities, preserves pinned rows and excludes unknown shared owners', () => {
+    const filters: HomeContentFilters = { ...NO_FILTERS, teammates: ['cindy', 'filo'],
+      teammateKey: row => row.session.id === 'chat-cc' ? 'cindy' : row.session.id === 'p2-pi' ? 'filo' : undefined };
+    const result = applyHomeContentFilters(fixture, filters, NOW);
+    expect(result.chats.map(row => row.session.id)).toEqual(['chat-cc']);
+    expect(result.projects.map(row => row.key)).toEqual(['p2']);
+    expect(result.pinned).toBe(fixture.pinned);
+    expect(activeContentFilterCount(filters)).toBe(1);
+    expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], filters, NOW).map(row => row.id)).toEqual(['known']);
+  });
+
   it('returns the same presentation when nothing is filtered', () => {
     expect(applyHomeContentFilters(fixture, NO_FILTERS, NOW)).toBe(fixture);
     expect(activeContentFilterCount(NO_FILTERS)).toBe(0);
@@ -212,7 +223,7 @@ describe('task info and retained Home behavior', () => {
   it('counts each dialogue automation run in the actual display-menu input', () => {
     const projectFilterUniverse = { chats: [item('normal'), { ...item('automation'), automationGroup: { sessionCount: 4 } }], projects: [] };
     const options = surfaceValue('homeDisplayPullDownActions', { useMemo, projectFilterUniverse,
-      selectedDeviceId: null, displayMenuState: {}, t: (key: string) => key,
+      selectedDeviceId: null, teammateOptions: [], displayMenuState: {}, t: (key: string) => key,
       buildHomeDisplayPullDownActions: (value: unknown) => value });
     expect(options.dialogueCount).toBe(5);
   });

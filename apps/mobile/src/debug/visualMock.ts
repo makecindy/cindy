@@ -297,7 +297,11 @@ async function visualMockInvoke<T = unknown>(
       return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
         ? '继续跟进 PR #4670' : null } as T;
     case 'local-db:sessions:list':
-      return visualMockSessions(args[0] as string | undefined) as T;
+      return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
+    case 'local-db:history:query':
+      return { ok: true, sessions: visualMockSessions('all').filter(row => row.source === 'bot'), hasMore: false } as T;
+    case 'local-db:sessions:get-many':
+      return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:list':
@@ -524,6 +528,10 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
     status: row.status,
     agentKind: row.agentKind,
     source: row.source,
+    // Overlay existing catalog tasks with exact ownership, just as the mock host's
+    // runtime overlays running/queued state. No extra task titles or private data.
+    ...(row.id === 'visual-automation-running' ? { source: 'bot', companion: { id: 'cindy-default', role: 'routine' } } : {}),
+    ...(row.id === 'ui-mock-long-title' ? { source: 'bot', companion: { id: 'visual-bot-lizi', role: 'channel', channel: 'telegram' } } : {}),
     pinnedAt: row.pinnedAt === null ? null : iso(row.pinnedAt),
     userSendAt: iso(row.userSendAt),
     createdAt: iso(row.createdAt),

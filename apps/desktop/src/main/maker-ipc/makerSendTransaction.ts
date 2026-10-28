@@ -187,7 +187,7 @@ export function stampTrustedDesktopQueuedOrigin(
   // Keep the complete input until the shared atomic history budget is applied.
   // Pre-compacting a revocation would leave older grants beside an omission marker.
   if (ordinary) explicitUserItem.autoReviewUserText =
-    readAutoReviewUserText(item.persistedContent) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
+    readAutoReviewUserText(item.persistedContent, item.text) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
   if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
   const receipt: TrustedDesktopPiCommandSnapshot = {
     version: 1,
@@ -392,6 +392,8 @@ export interface MakerSendTransactionDeps {
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
   readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistoryMessage[]>;
   readScheduledPermissions?(sessionId: string): Promise<{ permissionMode: unknown; planModeEnabled: unknown } | null>;
+  /** Scheduler-only final route check, after asynchronous send preparation. */
+  assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
   ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
@@ -1845,11 +1847,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       : undefined);
                   // Session awaits this existing authorization hook after all
                   // preparation (including vision), immediately before dispatch.
+                  if (scheduledOrigin) await deps.assertScheduledDispatchRoute?.(sessionId);
                   await assertAppCurrent();
                   return intent;
                 },
               }
-            : resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
+            : resolveScheduledIntent ? { resolveAutoReviewUserIntent: async () => {
+                const intent = await resolveScheduledIntent();
+                await deps.assertScheduledDispatchRoute?.(sessionId);
+                return intent;
+              } } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
           ...(so[AUTO_REVIEW_DELEGATED_CONTINUATION] ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined

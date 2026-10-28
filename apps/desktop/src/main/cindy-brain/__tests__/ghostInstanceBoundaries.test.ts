@@ -45,7 +45,6 @@ function harness() {
     pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
     getGhostNodeRuntimeBroker: () => ({ stop }), getGhostSubscriptionGateway: () => ({ dropGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
-    harnessSlotSingleton: null,
     getGhostLibrarySlot: () => ({ disposeGhost: vi.fn() }),
     suspendGhostUnreadProjection: vi.fn(), refreshMivoLibraryExtraDirGrant: async () => {},
     broadcastGhostsChanged: vi.fn(),

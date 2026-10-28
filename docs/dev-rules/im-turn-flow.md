@@ -56,7 +56,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
 | 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram/X）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
 | 观察事件 | `turnPresenter`（buffer-replace）+ 流式 handle | `turnObserver`（finalized-segments）+ 进度发射器 | 共用流程（presenter 已同源；两个正文累积引擎有意不同） |
-| 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信、Agent 自己唤醒；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
+| 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信；后台唤醒继承当前 Session 最近实际派发的来源，Cindy 输入及内部协调不回传；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
 | 表情 | `TurnState` 的 ack 句柄 | `ackReactions`（msg.op react） | 渠道适配（出站载体不同，档位语义同源） |
 | 交互 | `beginInteractionRoute` + `pendingInteractions` + 渠道卡片 | `beginInteractionRoute` + `interactions.ts`（30 分钟超时）+ 卡片发布器 | 共用流程（路由与语义层已同源；超时差异见台账缺口 2g） |
 | 收尾 | `handleTurnDoneAsync` / `handleTurnErrorAsync` → 流式 handle finalize | `execute` 收口 → `turnCarrier.publishFinal` → `turn.end`（持久出箱） | 共用流程的收口骨架 + 渠道出站载体 |

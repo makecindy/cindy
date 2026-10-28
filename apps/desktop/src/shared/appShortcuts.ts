@@ -28,9 +28,11 @@ export interface AppShortcutCombo {
 /**
  * 冲突检测域: app 与一切重叠; workdir-doc 与 browser / composer 也重叠, 因为
  * 文件预览可同屏挂载右侧浏览器和 chat rail, 且在 window capture 阶段消费快捷键。
+ * global = 系统级全局快捷键 (main 用 globalShortcut 注册, Cindy 不在前台也生效),
+ * Cindy 在前台时同样先于应用内监听截走按键, 因此与一切重叠。
  * 仅用于改绑冲突判定, 不做展示分组。
  */
-export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer';
+export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer' | 'global';
 
 export const APP_SHORTCUT_IDS = [
   'toggle-sidebar',
@@ -51,6 +53,7 @@ export const APP_SHORTCUT_IDS = [
   'browser-forward',
   'browser-reload',
   'cycle-permission-mode',
+  'region-screenshot',
   'switch-session-1',
   'switch-session-2',
   'switch-session-3',
@@ -156,6 +159,23 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     descriptionKey: 'settings.shortcuts.items.toggle-sidebar.description',
     rebindable: true,
     getDefaultCombos: (platform) => [modCombo('KeyB', platform)],
+  },
+  // 全局框选截图: Cindy 不在前台也生效，可复制、保存、贴图或交给新任务。默认键避开系统截图
+  // (macOS ⇧⌘3/4/5/6、Windows Win+Shift+S) 与常见 IM 截图键 (Windows: Ctrl+Alt+A、
+  // Alt+A、Ctrl+Shift+A; macOS: 飞书 ⇧⌘A、微信 / QQ ⌃⌘A)。macOS 不用 ⇧⌘S: 它是几乎所有
+  // 应用的「存储为」, 全局注册会把它从每个应用里拿走。暂不支持 Linux (Wayland 无可靠的
+  // 全局快捷键与静默截屏)。
+  {
+    id: 'region-screenshot',
+    scope: 'global',
+    labelKey: 'settings.shortcuts.items.region-screenshot.label',
+    descriptionKey: 'settings.shortcuts.items.region-screenshot.description',
+    rebindable: true,
+    platforms: ['darwin', 'win32'],
+    getDefaultCombos: (platform) =>
+      platform === 'darwin'
+        ? [combo('KeyA', { ctrl: true, shift: true })]
+        : [combo('KeyA', { alt: true, shift: true })],
   },
   {
     id: 'cycle-permission-mode',
@@ -734,6 +754,27 @@ export function isAppShortcutComboBindable(comboValue: AppShortcutCombo): boolea
   return /^F([1-9]|1[0-9]|2[0-4])$/.test(comboValue.code);
 }
 
+/** 单修饰 (mac ⌘ / 其它 Ctrl) + 这些键是所有应用的编辑惯例键, 全局占用会让别的应用失灵。 */
+const GLOBAL_EDITING_CODES = new Set(['KeyA', 'KeyC', 'KeyV', 'KeyX', 'KeyY', 'KeyZ']);
+
+/**
+ * global scope 条目的额外约束: 必须能表达为 Electron accelerator (globalShortcut
+ * 只认 accelerator, 表达不了 = 绑定了也永远不触发), 且不得占用编辑惯例键 ——
+ * 全局快捷键会在所有应用里截走按键。系统保留键另由 keyboardReserved 判定。
+ */
+export function isGlobalAppShortcutComboUsable(
+  comboValue: AppShortcutCombo,
+  platform: string,
+): boolean {
+  if (comboToElectronAccelerator(comboValue, platform) === null) return false;
+  const editingModifier = platform === 'darwin' ? comboValue.meta : comboValue.ctrl;
+  const otherModifiers =
+    platform === 'darwin'
+      ? comboValue.ctrl || comboValue.alt || comboValue.shift
+      : comboValue.meta || comboValue.alt || comboValue.shift;
+  return !(editingModifier && !otherModifiers && GLOBAL_EDITING_CODES.has(comboValue.code));
+}
+
 export function appShortcutCombosEqual(a: AppShortcutCombo, b: AppShortcutCombo): boolean {
   return (
     a.code === b.code &&
@@ -746,9 +787,9 @@ export function appShortcutCombosEqual(a: AppShortcutCombo, b: AppShortcutCombo)
 
 const OVERLAPPING_SCOPE_PAIRS = new Set(['browser:workdir-doc', 'composer:workdir-doc']);
 
-/** 冲突检测域判定: app 与一切重叠; workdir-doc 与 browser / composer 同屏重叠。 */
+/** 冲突检测域判定: app / global 与一切重叠; workdir-doc 与 browser / composer 同屏重叠。 */
 export function appShortcutScopesOverlap(a: AppShortcutScope, b: AppShortcutScope): boolean {
-  if (a === 'app' || b === 'app' || a === b) return true;
+  if (a === 'app' || b === 'app' || a === 'global' || b === 'global' || a === b) return true;
   const pair = [a, b].sort().join(':');
   return OVERLAPPING_SCOPE_PAIRS.has(pair);
 }

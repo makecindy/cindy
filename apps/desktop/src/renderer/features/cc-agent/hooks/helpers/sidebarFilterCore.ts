@@ -29,6 +29,9 @@ const log = createLogger('SidebarFilterCore');
 
 export const STATUS_KEY = 'cc-agent.sidebar.filter.status';
 export const PROJECTS_KEY = 'cc-agent.sidebar.filter.projects';
+export const CREATORS_KEY = 'cc-agent.sidebar.filter.creators';
+export type FilterCreators = 'all' | string[];
+
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
@@ -140,6 +143,40 @@ export function loadProjects(ownerId: string | null): FilterProjects {
     return cleaned;
   }
   return 'all';
+}
+
+/** Creator keys contain both the computer and Bot identity, and are scoped to the signed-in owner. */
+export function loadCreators(ownerId: string | null): FilterCreators {
+  const raw = readSidebarOwnerStorage(CREATORS_KEY, ownerId);
+  if (!raw) return 'all';
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return 'all';
+    const keys = [...new Set(value.filter((key): key is string => typeof key === 'string' && key.length > 0))];
+    return keys.length ? keys : 'all';
+  } catch { return 'all'; }
+}
+
+export function persistCreators(value: FilterCreators, ownerId: string | null): void {
+  writeSidebarOwnerStorage(CREATORS_KEY, ownerId, JSON.stringify(value));
+}
+
+/** Canonicalize both per-device and older cloud-companion selections after discovery. */
+export function normalizeTaskCreators(
+  selected: FilterCreators,
+  options: readonly { filterKey?: string; filterMemberKeys?: readonly string[] }[],
+): FilterCreators {
+  if (selected === 'all') return selected;
+  const aliases = new Map(options.flatMap(bot => bot.filterKey
+    ? (bot.filterMemberKeys ?? []).map(member => [member, bot.filterKey!] as const) : []));
+  const next = [...new Set(selected.map(key => aliases.get(key) ?? key))];
+  return next.length === selected.length && next.every((key, i) => key === selected[i]) ? selected : next;
+}
+
+export function nextCreatorsAfterToggle(previous: FilterCreators, key: string): FilterCreators {
+  if (previous === 'all') return [key];
+  const next = previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key];
+  return next.length ? next : 'all';
 }
 
 /* ============================== persist ============================== */

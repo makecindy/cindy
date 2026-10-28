@@ -32,12 +32,24 @@ export function hidesScheduledTranscript(
 
 /** Run-scoped presentation gate. Raw provider events still reach the scheduler and usage ledger. */
 const quietRuns = new Map<string, string>();
+const visibleRuns = new Set<string>();
 
 export function beginQuietScheduledOutput(scheduleId: string, runId: string): () => void {
   quietRuns.set(runId, scheduleId);
   return () => {
     if (quietRuns.get(runId) === scheduleId) quietRuns.delete(runId);
+    visibleRuns.delete(runId);
   };
+}
+
+/** Presentation only: keep the scheduler origin and its execution authority intact. */
+export function revealScheduledOutput(origin: SendOrigin | undefined): void {
+  if (origin?.kind === 'scheduler' && origin.runId
+    && quietRuns.get(origin.runId) === origin.scheduleId) visibleRuns.add(origin.runId);
+}
+
+export function hasVisibleScheduledOutput(runId: string): boolean {
+  return visibleRuns.has(runId);
 }
 
 export function isQuietScheduledOutput(event: AgentEvent): boolean {
@@ -45,6 +57,7 @@ export function isQuietScheduledOutput(event: AgentEvent): boolean {
   return (
     origin?.kind === 'scheduler' &&
     typeof origin.runId === 'string' &&
+    !visibleRuns.has(origin.runId) &&
     quietRuns.get(origin.runId) === origin.scheduleId
   );
 }

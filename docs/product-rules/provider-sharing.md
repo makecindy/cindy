@@ -224,6 +224,14 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
   2026-10-22（用户裁决）：右栏同时只读显示那台电脑上该账号的剩余额度，与本机详情复用同一张额度卡；
   仅订阅类连接读到数据时显示，不提供重置或打开用量网页等管理操作，也不受分享的「允许查看剩余额度」开关控制。
   供应商组只在成员里分别显示，不在顶层合并或代取某一台的额度。
+  同账号电脑上的 Codex 额度经已有 `maker:usage:codex-rate-limits` 实时读取，按电脑与供应商账号共享缓存和在途请求。
+  详情、模型选择器左栏和模型行打开且页面可见时约每 60 秒复查，关闭或隐藏后停止；换账号丢弃旧结果。
+  详情与左栏取账号通用额度，模型行按模型选择额度桶；ChatGPT 网页额度仍读原有 WHAM 槽。
+  旧电脑不支持实时通道或读取失败时回退原快照，回退也失败时保留已有数据；「数据更新于」保留数据实际读取的时间。
+  快照通道成功返回空账号时清除已有额度（例如远端退出账号），不把明确清空当成读取失败。
+  分享来源仍按 §7.5 的独立授权读取。实现见
+  [useRemoteDeviceUsage.ts](../../apps/desktop/src/renderer/hooks/useRemoteDeviceUsage.ts)，回归见
+  [useDeviceProviderSubscriptionCard.test.ts](../../apps/desktop/src/renderer/components/settings/__tests__/useDeviceProviderSubscriptionCard.test.ts)。
   实现见 [OwnRemoteProviders.tsx](../../apps/desktop/src/renderer/components/settings/OwnRemoteProviders.tsx)，
   回归见 [OwnRemoteProviders.test.tsx](../../apps/desktop/src/renderer/components/settings/__tests__/OwnRemoteProviders.test.tsx)。
 - **分享给我的供应商**单独一组「分享给我的供应商」，没有分享时整组不显示：每条用分享者头像标明来自谁，
@@ -426,6 +434,12 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
    实现：Claude Code 用 SDK `tools` 白名单，Codex 按功能清单关闭白名单之外的功能，Pi 只放行 Cindy
    扩展注册的工具（`packages/maker-core/src/agents/{shared/device-hosted,codex/device-hosted-guest,pi/cindy-bridge-source}.ts`）；
    受邀者电脑上的 WebFetch 见 `apps/desktop/src/main/remote-agent/executor/webFetch.ts`。
+   **重建同样保持隔离**（2026-10-27）：Codex 原生 `thread/fork` 会重新加载进程默认配置，不能
+   假定它继承源线程的覆盖项。回退／编辑重发必须和正常启动、恢复一样带上任务的执行环境、远程 MCP
+   路由与完整能力隔离配置。受邀者复制历史的一次性 fork 不接入任何本机 MCP 或连接器，不能检查
+   功能清单时拒绝创建子线程，用后关闭独立进程；子线程正式恢复时再接入受邀者工具。
+   回归：`packages/maker-core/src/agents/codex/__tests__/device-hosted-guest{,.native}.test.ts`，
+   覆盖回退后续发、历史复制与功能检查失败；真实 Codex 0.159.2 验证本机默认能力不会重新进入受邀者线程。
 6. **受邀者隐私**：申请前明确告知对话与文件内容会经过分享者的电脑，并保存在实际运行任务的那台电脑上
    （有供应商组时可能是分享者安排的其他电脑）。运行中疑似工具循环时，与分享者自己的任务一样，由运行任务
    那台电脑的辅助模型复核：用户目标与最新要求、主模型已有的公开行动说明，以及最近十余次工具调用的

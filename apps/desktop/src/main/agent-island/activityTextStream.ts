@@ -1,3 +1,5 @@
+import { richAnswerText, splitRichAnswer } from '@cindy/maker-shared/rich-answer';
+
 export const AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH = 280;
 
 type ActivityTextStreamMode = 'pending' | 'plain' | 'structured' | 'structured-extracted';
@@ -7,6 +9,7 @@ export interface ActivityTextStreamState {
   rawChunks: string[];
   rawPreview: string;
   rawPreviewHasPendingWhitespace: boolean;
+  rawPreviewHasPendingNewline: boolean;
   jsonClosingStack: Array<'}' | ']'>;
   jsonInString: boolean;
   jsonEscapePending: boolean;
@@ -27,6 +30,7 @@ export function createActivityTextStreamState(): ActivityTextStreamState {
     rawChunks: [],
     rawPreview: '',
     rawPreviewHasPendingWhitespace: false,
+    rawPreviewHasPendingNewline: false,
     jsonClosingStack: [],
     jsonInString: false,
     jsonEscapePending: false,
@@ -96,7 +100,7 @@ export function appendActivityTextStream(
     if (extracted) {
       state.mode = 'structured-extracted';
       if (metrics) metrics.normalizationCodeUnits += extracted.length;
-      state.structuredDisplayText = normalizePlainActivityText(extracted);
+      state.structuredDisplayText = normalizePlainActivityText(richAnswerText(extracted));
       releaseStructuredParserState(state);
       return state.structuredDisplayText;
     }
@@ -127,7 +131,7 @@ function appendRetainedRawChunk(state: ActivityTextStreamState, chunk: string): 
 }
 
 export function normalizeActivityText(text: string): string {
-  return normalizePlainActivityText(extractActivityDisplayText(text));
+  return normalizePlainActivityText(richAnswerText(extractActivityDisplayText(text)));
 }
 
 function appendRawPreview(
@@ -141,13 +145,19 @@ function appendRawPreview(
     if (metrics) metrics.normalizationCodeUnits += 1;
     const codeUnit = chunk[index] ?? '';
     if (/\s/.test(codeUnit)) {
-      if (state.rawPreview) state.rawPreviewHasPendingWhitespace = true;
+      if (state.rawPreview) {
+        state.rawPreviewHasPendingWhitespace = true;
+        if (codeUnit === '\n' || codeUnit === '\r') state.rawPreviewHasPendingNewline = true;
+      }
       continue;
     }
 
     if (state.rawPreviewHasPendingWhitespace) {
-      state.rawPreview += ' ';
+      // Keep fence/operation boundaries until rich content has been projected to text.
+      // The retained prefix remains bounded; final events normalize the full answer.
+      state.rawPreview += state.rawPreviewHasPendingNewline ? '\n' : ' ';
       state.rawPreviewHasPendingWhitespace = false;
+      state.rawPreviewHasPendingNewline = false;
       if (state.rawPreview.length >= AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH) return;
     }
 
@@ -230,7 +240,24 @@ function releaseStructuredParserState(state: ActivityTextStreamState): void {
 }
 
 function rawPreviewText(state: ActivityTextStreamState): string {
-  return state.rawPreview.trim();
+  // A fence header may itself arrive in several deltas. Do not leave that
+  // temporary header as the last visible activity when the rich block is empty.
+  let source = state.rawPreview;
+  const tail = source.match(/(^|\n)(`+|~+)([^\n]*)$/);
+  if (tail && 'cindy-ui'.startsWith(tail[3].trim())) {
+    const start = tail.index! + tail[1].length;
+    const opening = tail[2][0].repeat(Math.max(3, tail[2].length)) + 'cindy-ui\n';
+    // Let the shared fence parser distinguish a new opening from an ordinary
+    // closing fence or an example nested inside a larger code fence.
+    const candidate = source.slice(0, start) + opening;
+    // A bare fence after prose is ambiguous (it may close an inline example).
+    // Wait for a language prefix before hiding it; an answer-start fence is safe.
+    if ((tail[3].trim() || start === 0)
+      && splitRichAnswer(candidate).some(part => part.kind === 'rich' && part.key === start)) {
+      source = source.slice(0, start);
+    }
+  }
+  return normalizePlainActivityText(richAnswerText(source));
 }
 
 function normalizePlainActivityText(text: string): string {

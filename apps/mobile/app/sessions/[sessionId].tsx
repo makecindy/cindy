@@ -339,6 +339,7 @@ import {
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
+import { useComposerPressFallback } from '@/session/composerPressFallback';
 import { useComposerDock } from '@/session/composerMorph';
 import { DockKeyboardLift, DockKeyboardViewportSpacer } from '@/session/ComposerDockKeyboardFollow';
 import { useComposerPillOpen } from '@/session/useComposerPillOpen';
@@ -7367,6 +7368,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           setModelSheetOpen(false);
           setPermissionSheetOpen(true);
         }}
+        pressInFallback
         style={[
           styles.composerInlineToolButton,
           permissionSheetOpen && styles.composerToolButtonActive,
@@ -7536,6 +7538,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         setContextSheetView('main');
         setContextSheetOpen(true);
       }}
+      pressInFallback
       style={[
         styles.composerInlineToolButton,
         composerLayout.attachment.active && styles.composerToolButtonActive,
@@ -7624,6 +7627,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       disabled={composerStopDisabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={stopSession}
+      pressInFallback
       pressedStyle={styles.sendButtonPressed}
       style={[
         styles.sendButton,
@@ -7664,6 +7668,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
           onPress={send}
+          pressInFallback
           pressedStyle={styles.sendButtonPressed}
           style={[
             styles.sendButton,
@@ -12693,6 +12698,11 @@ interface RouteActionButtonProps {
   onPressIn?: PressableProps['onPressIn'];
   onPressOut?: PressableProps['onPressOut'];
   onResponderMove?: PressableProps['onResponderMove'];
+  /**
+   * 按下即生效的兜底(仅安卓启用):平台中途取消手势时 onPress 永不到达(按钮只闪
+   * 一下就没了),宽限到期后照样触发。正常松手仍然立即触发。详见 composerPressFallback。
+   */
+  pressInFallback?: boolean;
   /** responder 被系统/滚动终止时的回调(正常松手不触发);语音按钮用它撤销按下即录。 */
   onTouchCancel?: PressableProps['onTouchCancel'];
   pressedStyle?: StyleProp<ViewStyle>;
@@ -12717,6 +12727,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   onPressOut,
   onResponderMove,
   onTouchCancel,
+  pressInFallback = false,
   pressedStyle,
   style,
   testID,
@@ -12725,6 +12736,27 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   const resolvedDisabledStyle = disabledStyle === undefined ? styles.sendButtonDisabled : disabledStyle;
   const resolvedPressedStyle = pressedStyle === undefined ? styles.routeButtonPressed : pressedStyle;
   const interactionDisabled = disabled || busy || !onPress;
+  const pressFallback = useComposerPressFallback({
+    // 仅安卓启用:要修的是安卓中途取消手势;iOS 保持纯松手触发,长按不提前发送。
+    enabled: Platform.OS === 'android' && pressInFallback && !interactionDisabled,
+    onPress: () => onPress?.(),
+  });
+  const handlePressIn = useCallback((event: GestureResponderEvent) => {
+    pressFallback.beginPress(event.nativeEvent.pageX, event.nativeEvent.pageY);
+    onPressIn?.(event);
+  }, [onPressIn, pressFallback]);
+  const handlePress = useCallback(() => {
+    // 兜底已经先执行过动作:正常松手不再重复执行。
+    if (pressFallback.finishPress()) return;
+    onPress?.();
+  }, [onPress, pressFallback]);
+  // 漂移撤销必须走 Pressable 的官方 onPressMove 通道:RN 0.86.3 的 Pressable
+  // 不解构 onResponderMove(落入 restProps),render 时 {...eventHandlers} 在后
+  // 把它整个覆盖——挂 onResponderMove 的 move 处理器在真机上收不到事件,
+  // 12pt 漂移兑底形同虚设(划过发送键 300ms 后会误发)。
+  const handlePressMove = useCallback((event: GestureResponderEvent) => {
+    pressFallback.movePress(event.nativeEvent.pageX, event.nativeEvent.pageY);
+  }, [pressFallback]);
   return (
     <Pressable
       ref={ref}
@@ -12741,8 +12773,9 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
       hitSlop={hitSlop}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
-      onPress={interactionDisabled ? undefined : onPress}
-      onPressIn={interactionDisabled ? undefined : onPressIn}
+      onPress={interactionDisabled ? undefined : handlePress}
+      onPressIn={interactionDisabled ? undefined : handlePressIn}
+      onPressMove={interactionDisabled ? undefined : handlePressMove}
       onPressOut={interactionDisabled ? undefined : onPressOut}
       onResponderMove={interactionDisabled ? undefined : onResponderMove}
       onTouchCancel={interactionDisabled ? undefined : onTouchCancel}
@@ -12791,6 +12824,7 @@ function ComposerRuntimePill({
       disabled={disabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={onPress}
+      pressInFallback
       style={styles.composerRuntimePill}
       testID={testID}
     >

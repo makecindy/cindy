@@ -21,6 +21,7 @@ import {
   Maximize2,
   Minimize2,
   Mic,
+  Square,
   Minus,
   Pencil,
   Plus,
@@ -1000,21 +1001,21 @@ type AskUserQuestionCardProps = {
   touchLayout: InteractionTouchLayout;
 };
 
-function AskCardVoiceButton({ listening, starting, disabled, onPress }: { listening: boolean; starting: boolean; disabled?: boolean; onPress: () => void }) {
+function AskCardVoiceButton({ listening, starting, stopping, disabled, onPress }: { listening: boolean; starting: boolean; stopping: boolean; disabled?: boolean; onPress: () => void }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   return (
     <Pressable
-      accessibilityLabel={listening || starting ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
+      accessibilityLabel={stopping ? t('session.presentation.composer.stop.processing') : listening || starting ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
       accessibilityRole="button"
-      accessibilityState={{ busy: starting, disabled: Boolean(disabled) }}
+      accessibilityState={{ busy: starting || stopping, disabled: Boolean(disabled) }}
       disabled={disabled}
       hitSlop={8}
       onPress={onPress}
       style={{ alignItems: 'center', height: 44, justifyContent: 'center', width: 44 }}
       testID="interaction.ask.voice"
     >
-      {starting ? <ActivityIndicator color={colors.textSecondary} size="small" /> : <Mic color={colors.textSecondary} size={iconSize.md} />}
+      {starting || stopping ? <ActivityIndicator color={colors.textSecondary} size="small" /> : listening ? <Square color={colors.textSecondary} fill={colors.textSecondary} size={iconSize.sm} /> : <Mic color={colors.textSecondary} size={iconSize.md} />}
     </Pressable>
   );
 }
@@ -1059,8 +1060,9 @@ function AskUserQuestionForm({
   const voice = useAskCardVoice({
     deviceId,
     getText: () => answerTextRef.current,
-    setText: (value) => {
+    setText: (value, selection) => {
       answerTextRef.current = value;
+      if (selection) selectionRef.current = selection;
       onStartAnswer();
       setCustomInput(value);
     },
@@ -1105,6 +1107,7 @@ function AskUserQuestionForm({
     );
     setSelectedLabels(next.selectedLabels);
     setCustomInput(next.customInput);
+    selectionRef.current = { start: next.customInput.length, end: next.customInput.length };
     setShowCustomInput(next.showCustomInput);
   }, [answers, current, currentIndex]);
 
@@ -1313,14 +1316,14 @@ function AskUserQuestionForm({
                   onStartAnswer();
                   setCustomInput(text);
                 }}
-                onSelectionChange={(event) => { selectionRef.current = event.nativeEvent.selection; }}
+                onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
                 placeholderTextColor={colors.textPlaceholder}
                 style={styles.inlineInput}
                 testID="interaction.ask.customInput"
                 value={customInput}
               />
-              <AskCardVoiceButton listening={voice.listening} starting={voice.starting} disabled={voice.stopping || voiceSubmitting} onPress={beginVoice} />
+              <AskCardVoiceButton listening={voice.listening} starting={voice.starting} stopping={voice.stopping} disabled={busy || voice.stopping || voiceSubmitting} onPress={beginVoice} />
             </View>
           ) : (
             <View style={[styles.customInputRow, { gap: touchLayout.actionGap }]}>
@@ -1347,7 +1350,7 @@ function AskUserQuestionForm({
               >
                 <Text style={styles.optionCustom}>{t('interaction.panel.customAnswerButtonText')}</Text>
               </InteractionTouchButton>
-              <AskCardVoiceButton listening={voice.listening} starting={voice.starting} disabled={voice.stopping || voiceSubmitting} onPress={beginVoice} />
+              <AskCardVoiceButton listening={voice.listening} starting={voice.starting} stopping={voice.stopping} disabled={busy || voice.stopping || voiceSubmitting} onPress={beginVoice} />
             </View>
           )}
         </View>
@@ -1367,14 +1370,14 @@ function AskUserQuestionForm({
               onStartAnswer();
               setCustomInput(text);
             }}
-            onSelectionChange={(event) => { selectionRef.current = event.nativeEvent.selection; }}
+            onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
             placeholder={t('interaction.panel.answerInput')}
             placeholderTextColor={colors.textPlaceholder}
             style={styles.inlineInput}
             testID="interaction.ask.textInput"
             value={customInput}
           />
-          <AskCardVoiceButton listening={voice.listening} starting={voice.starting} disabled={voice.stopping || voiceSubmitting} onPress={beginVoice} />
+          <AskCardVoiceButton listening={voice.listening} starting={voice.starting} stopping={voice.stopping} disabled={busy || voice.stopping || voiceSubmitting} onPress={beginVoice} />
         </View>
       )}
 

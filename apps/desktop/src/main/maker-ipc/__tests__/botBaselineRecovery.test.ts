@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import type { ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { checkDeviceRoute } from '../../remote-agent/controller/deviceRouteCheck';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
-import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
@@ -14,7 +16,7 @@ function fixture() {
   const saved: ScheduledModelSelection = { agentKind: 'pi', model: 'saved', providerId: 'current', effort: null, fastMode: false };
   const old = JSON.stringify({ ...saved, providerId: 'removed', scopeId: 'old' });
   const state = { chain: [{ harness: 'pi' as const, model: saved.model, providerId: saved.providerId, effort: '' as const, fastMode: false }],
-    current: { ...saved }, hasRuntimeOverride: true, scheduledModelBaseline: old as string | null };
+    current: { ...saved }, hasRuntimeOverride: true, followsCindyDefault: false, scheduledModelBaseline: old as string | null };
   let owner = 'one';
   let activeBot = true;
   let restoreError: Error | null = createIpcError('MODEL_SELECTION_UNAVAILABLE', 'old source unavailable');
@@ -68,6 +70,27 @@ describe('automatic companion baseline recovery', () => {
     expect(h.state.current.providerId).toBe('xai');
     expect(h.state.scheduledModelBaseline).toBeNull();
     expect(h.clear).toHaveBeenCalledWith('bot', h.old);
+  });
+  it.each([false, true])('preserves a later runtime fallback after recovery (default=%s)', async (followsCindyDefault) => {
+    const h = fixture();
+    h.state.followsCindyDefault = followsCindyDefault;
+    await h.scope.restore('bot');
+    h.state.current = { ...h.saved, model: 'working-fallback' };
+    await h.reconcile('bot', true);
+    await h.reconcile('bot', true);
+    expect(h.stage).toHaveBeenCalledTimes(1);
+    expect(h.state.current.model).toBe('working-fallback');
+    expect(await h.reconcile.preview('bot')).toEqual(h.state.current);
+  });
+  it('keeps recovery state when the configuration source changes during application', async () => {
+    const h = fixture();
+    h.stage.mockImplementation(async (_id, route) => {
+      h.state.current = { ...route };
+      h.state.followsCindyDefault = true;
+    });
+    await expect(h.scope.restore('bot')).rejects.toThrow('changed');
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.state.scheduledModelBaseline).toBe(h.old);
   });
   it('retains recovery state when the resolved provider does not land', async () => {
     const h = fixture();
@@ -208,6 +231,63 @@ it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes af
   expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
   expect(cleared.agentKind).toBe(agentKind === 'claude-code' ? 'cc' : agentKind);
   expect(cleared.runtimeEffective).toEqual(recovered);
+});
+describe('SSH baseline restoration through production profile application', () => {
+  it.each(['valid-remote-only', 'absent-on-host', 'host-offline'] as const)('%s uses the SSH catalog before deciding recovery', async (outcome) => {
+    const saved: ScheduledModelSelection = { agentKind: 'codex', model: 'profile-model', providerId: 'openai', effort: 'low', fastMode: false };
+    const frozen = { ...saved, model: 'remote-override', effort: 'high' as const, fastMode: true };
+    const original = JSON.stringify({ ...frozen, scopeId: 'ssh-run' });
+    let baseline: string | null = original;
+    let applied: ScheduledModelSelection | undefined;
+    const views = [{ id: 'openai', connected: true, agents: ['codex'], source: 'user', routing: { codex: {} }, models: { codex: [{
+      id: outcome === 'absent-on-host' ? 'profile-model' : frozen.model,
+      efforts: ['low', 'high'], defaultEffort: 'low', supportsFastMode: true,
+    }] } }] as ProviderView[];
+    const ssh = vi.fn(async () => {
+      if (outcome === 'host-offline') throw new Error('SSH connection closed');
+      return views;
+    });
+    const local = vi.fn(async () => { throw createIpcError('MODEL_SELECTION_UNAVAILABLE', 'not in local catalog'); });
+    const apply = registeredFunction('applyScheduledProfile', {
+      applyScheduledModelSelection, createScheduledModelSelectionResolver, resolveScheduledModelSelection,
+      readSshCodexModelList, listSshCodexProviders: ssh,
+      agentSwitchDeps: { getSessionRow: async () => ({ agentKind: 'codex', status: 'active', remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }) },
+      dbToMakerAgentKind: (kind: string) => kind,
+      isSessionInTurn: () => false, maker: { getSession: () => undefined },
+      readUsableAgentDeviceProviders: vi.fn(() => { throw new Error('must not query another computer'); }),
+      assertModelRouteUsable: local, resolveScheduledModelSelectionLive: local,
+      applySessionRuntimeSelection: async (_id: string, model: string, providerId: string, axes: Pick<ScheduledModelSelection, 'effort' | 'fastMode'>) => {
+        applied = { ...frozen, model, providerId, ...axes };
+        return {};
+      },
+      runtimeSelectionRequiresModelWindowConfirmation: () => false,
+    });
+    const recover = vi.fn(async () => { applied = saved; baseline = null; return true; });
+    const scope = createScheduledModelScope({
+      createId: () => 'new', isBusy: () => false,
+      read: async () => ({ profile: saved, baseline }),
+      write: async () => { baseline = null; },
+      apply: async (id, route) => { await apply(id, route); },
+      recoverUnavailableBaseline: recover,
+    });
+    if (outcome === 'host-offline') {
+      await expect(scope.restore('ssh-bot')).rejects.toMatchObject({ code: 'SSH_EXEC_FAILED' });
+      expect(baseline).toBe(original);
+      expect(applied).toBeUndefined();
+      expect(recover).not.toHaveBeenCalled();
+    } else {
+      await scope.restore('ssh-bot');
+      expect(baseline).toBeNull();
+      if (outcome === 'valid-remote-only') {
+        expect(applied).toEqual(frozen);
+        expect(recover).not.toHaveBeenCalled();
+      } else {
+        expect(recover).toHaveBeenCalledWith('ssh-bot', original);
+      }
+    }
+    expect(ssh).toHaveBeenCalledWith('ssh-builder');
+    expect(local).not.toHaveBeenCalled();
+  });
 });
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };

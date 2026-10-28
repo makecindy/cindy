@@ -594,6 +594,7 @@ import { readFileBytesForPreview } from './fileReadBytes.js';
 import { copyPngToClipboard } from './pngClipboard.js';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL } from '../shared/pngClipboard.js';
 import { copyTextToClipboard } from './textClipboard.js';
+import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClipboard.js';
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
@@ -978,6 +979,7 @@ import {
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
+import { startBinaryBackgroundUpdates } from './agent-binaries/background-update.js';
 import { registerCrossAgentConvertIpc } from './cross-agent-convert/ipc.js';
 import { registerFileBrowserIpc } from './file-browser/index.js';
 import { disposeHtmlPreviews } from './file-browser/html-preview-ipc.js';
@@ -985,6 +987,7 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
+import { initRegionScreenshot, stopRegionScreenshot } from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -1154,6 +1157,7 @@ import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteract
 import { registerPluginMarketIpc, syncDefaultMarketPlugins, refreshForegroundMarketPlugins } from './plugin-market/registerIpc.js';
 import { getPluginMarketService } from './plugin-market/service.js';
 import { StableOwnerPostCommitStep } from './stableOwnerPostCommit.js';
+import { registerPluginContributionsIpc } from './plugin-contributions/registerIpc.js';
 import { registerPluginPublisherIpc } from './plugin-publisher/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
@@ -2558,6 +2562,7 @@ setRemotePluginManagementServices({
 registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
+registerPluginContributionsIpc();
 setAppSessionCommitBoundaryHook(() => {
   cancelLocalAgentConfirmations();
   // 进行中的 Claude Code 登录属于旧 owner:结束 CLI 子进程,不让它在新 owner 下完成。
@@ -4569,6 +4574,10 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+
+  // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
+  initRegionScreenshot();
+  app.once('will-quit', stopRegionScreenshot);
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(
@@ -6681,6 +6690,7 @@ const registerIpcHandlers = () => {
 
     // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
     await registerMakerIpcsAfterSplash();
+    startBinaryBackgroundUpdates();
 
     return {
       claudeCode: { status: 'passed' as const, path: claudeRes.path },
@@ -8177,57 +8187,6 @@ const registerIpcHandlers = () => {
   // shell out to the OS clipboard helpers to get a real "copy of file"
   // that paste-into-folder accepts. spawn (no shell) is used to keep the
   // path argument out of any shell-quote interpretation.
-
-  /** Windows: PowerShell `Set-Clipboard -LiteralPath` writes CF_HDROP. */
-  function copyFileToClipboardWindows(absPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // Single-quoted PS string is literal except for `'` itself; double it
-      // to escape. Path can contain spaces, `$`, backticks, etc. — all safe
-      // inside single quotes.
-      const escaped = absPath.replace(/'/g, "''");
-      const psCommand = `Set-Clipboard -LiteralPath '${escaped}'`;
-      const proc = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psCommand], {
-        windowsHide: true,
-      });
-      let stderr = '';
-      proc.stderr.on('data', (d) => {
-        stderr += d.toString();
-      });
-      proc.on('error', reject);
-      proc.on('exit', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(stderr.trim() || `Set-Clipboard exited ${code}`));
-      });
-    });
-  }
-
-  /**
-   * macOS: AppleScript `set the clipboard to (POSIX file …)` writes the
-   * NSPasteboardTypeFileURL pasteboard entry. The path is passed as an
-   * AppleScript argv to avoid in-script escaping.
-   */
-  function copyFileToClipboardMacOS(absPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const proc = spawn('osascript', [
-        '-e',
-        'on run argv',
-        '-e',
-        'set the clipboard to (POSIX file (item 1 of argv))',
-        '-e',
-        'end run',
-        absPath,
-      ]);
-      let stderr = '';
-      proc.stderr.on('data', (d) => {
-        stderr += d.toString();
-      });
-      proc.on('error', reject);
-      proc.on('exit', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(stderr.trim() || `osascript exited ${code}`));
-      });
-    });
-  }
 
   // Right-click → "open file folder". Accepts xdt-image:// / xdt-video:// URLs
   // (resolved via the matching cache store) or an absolute file path. On

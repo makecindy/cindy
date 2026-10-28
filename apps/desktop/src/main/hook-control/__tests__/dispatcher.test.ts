@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import {
   Session,
+  TurnDispatchRejectedError,
   type AgentEvent,
   type AgentSessionHandle,
   type Capabilities,
@@ -19,8 +20,8 @@ import {
 import { observeHookTurn } from '../turnObserver';
 import {
   onChannelTurn,
-  publishChannelTurn,
-  publishProviderInitiatedTurn,
+  createChannelTurnObserver,
+  withChannelTurnSource,
 } from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
 import { setMainLocale } from '../../i18n';
@@ -379,13 +380,12 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
       handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
     // Production wiring: maker-ipc/sessionTurnObserver.ts.
     session.setTurnLifecycleObserver({
-      beforeProviderStart: () => publishChannelTurn(session, 'starting'),
-      onUndispatched: () => publishChannelTurn(session, 'undispatched'),
+      ...createChannelTurnObserver(session),
       onTerminal: () => undefined,
-      onProviderInitiatedTurn: () => { void publishProviderInitiatedTurn(session); },
     });
     return {
       session,
+      handle,
       continuations,
       /** One provider event; a terminal `done` without keepRunning flips the handle idle. */
       async emit(event: Partial<AgentEvent>, opts: { keepRunning?: boolean } = {}) {
@@ -405,13 +405,13 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
     });
   }
 
-  it('relays each wake-up after the hook turn once, never desktop turns or subagent output', async () => {
-    const externalKey = 'telegram:group:bot:-100200:user-7:g1';
+  it.each(['telegram:group:bot:-100200:user-7:g1', 'slack:T:C:1.2'])(
+    '%s keeps desktop-started background results in Cindy after a channel turn', async (externalKey) => {
     let live: ReturnType<typeof wakeableSession> | undefined;
     const run = vi.fn(async (req: HookRunRequest): Promise<HookRunOutcome> => {
       live = wakeableSession(req.sessionId);
       const observer = hookSessionObserver(live.session, req.onTurnTerminal);
-      await live.session.send(req.prompt);
+      await live.session.send(req.prompt, { origin: { kind: 'user', surface: 'im' } });
       await observer.finished;
       return { status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 };
     });
@@ -476,6 +476,32 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
       await h.emit({ type: 'done' });
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(turnEnds()).toHaveLength(3);
+      // Regression: a task created in Slack later runs tests from Cindy. Their completion
+      // wakes the provider without Session.send; it must inherit the desktop destination.
+      for (const report of ['Desktop test results.', 'Desktop final report.']) {
+        await h.emit({ type: 'text', data: { text: report, isFinal: true } });
+        await h.emit({ type: 'done' });
+        expect(turnEnds()).toHaveLength(3);
+      }
+      // A failed channel send must not turn the previous desktop work into channel output.
+      vi.mocked(h.handle.send).mockRejectedValueOnce(new TurnDispatchRejectedError('rejected'));
+      await expect(h.session.send('rejected channel request', { origin: { kind: 'user', surface: 'im' } }))
+        .resolves.toEqual({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      await expect(h.session.send('failed channel request', {
+        origin: { kind: 'user', surface: 'im' },
+        beforeProviderStart: async () => { throw new Error('preflight failed'); },
+      })).rejects.toThrow('preflight failed');
+      await h.emit({ type: 'text', data: { text: 'More desktop results.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds()).toHaveLength(3);
+
+      // An actual new other-task request changes the destination again, including later wakes.
+      await withChannelTurnSource(h.session.id, 'other-task', () => h.session.send('other task request'));
+      await h.emit({ type: 'text', data: { text: 'Other task result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      await h.emit({ type: 'text', data: { text: 'Other task background result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds().slice(-2)).toEqual([[true, 'Other task result.'], [true, 'Other task background result.']]);
       expect(run).toHaveBeenCalledOnce();
       expect(c.ofType('turn.end').filter((frame) => frame.payload.background).every(
         (frame) => frame.payload.externalKey === externalKey && frame.payload.sessionId === h.session.id,

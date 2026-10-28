@@ -97,16 +97,6 @@ export function ghostIdForLogicWebContents(webContentsId: number): string | null
   return logicWebContentsToGhost.get(webContentsId) ?? null;
 }
 
-/** Capture one logic page, so delayed hook replies cannot cross a runtime restart. */
-export function captureGhostLogicSource(ghostId: string): () => boolean {
-  const id = [...logicWebContentsToGhost].find(([, value]) => value === ghostId)?.[0];
-  return () => {
-    if (id === undefined || logicWebContentsToGhost.get(id) !== ghostId) return false;
-    const wc = webContents.fromId(id);
-    return !!wc && !wc.isDestroyed();
-  };
-}
-
 /**
  * 下行投递:把管子消息发到某意识的电子脑逻辑页('ghost-pipe:message')。
  * false = 逻辑页不在线(未拉起/刚死),由派发器折叠成结构化失败。

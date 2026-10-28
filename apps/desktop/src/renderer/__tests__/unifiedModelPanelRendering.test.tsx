@@ -65,7 +65,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
 
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 vi.mock('@/hooks/useModelRouteDevices', () => ({
-  useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    devices: leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : [],
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+  }),
 }));
 
 const workerCapabilities = vi.hoisted(() => ({ byAgent: {} as Record<string, AgentCapabilities> }));
@@ -4244,6 +4247,67 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
+import { BotTaskModelEditor } from '@/features/bots/BotTaskModelEditor';
+
+describe('teammate settings selected location catalog', () => {
+  const originalProviders = providersRef.providers;
+  const share = 'share:settings-test';
+  const models = [
+    { id: 'google/gemini-4-argon', name: 'Shared Gemini', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' },
+    { id: 'gpt-6.1-terra', name: 'Shared Terra', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' },
+  ];
+  beforeEach(() => {
+    remoteProvidersRef.providers = [{
+      id: 'xd', name: 'Shared gateway', source: 'builtin', connected: true, remoteInvocationEnabled: true,
+      agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+      models: { codex: models },
+    }];
+    workerCapabilities.byAgent.codex = {
+      availableModels: models.map(({ name, ...model }) => ({ ...model, displayName: name })),
+      hasFastMode: false, effortLevels: [], permissionModes: [],
+    };
+  });
+  afterEach(() => {
+    providersRef.providers = originalProviders;
+    remoteProvidersRef.providers = [];
+    workerCapabilities.byAgent = {};
+  });
+
+  it.each(['primary', 'backup', 'task'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+    for (const model of models) {
+      const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
+        effort: 'high', fastMode: false, agentDeviceId: share };
+      const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
+      const view = render(position === 'task'
+        ? <BotTaskModelEditor value={route} onChange={vi.fn()} />
+        : <BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
+      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
+      expect(picker.textContent).toContain(model.name);
+      expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');
+      expect(picker.getAttribute('title')).toContain(model.name);
+      expect(picker.textContent).toContain('高');
+      fireEvent.click(picker);
+      const menu = await screen.findByRole('listbox');
+      expect(within(menu).getAllByText(model.name).length).toBeGreaterThan(0);
+      view.unmount();
+    }
+  });
+
+  it('uses the selected shared name rather than a same-ID local model', () => {
+    const model = models[0]!;
+    providersRef.providers = [{
+      id: 'xd', name: 'Local gateway', source: 'builtin', connected: true,
+      agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+      models: { codex: [{ ...model, name: 'Local Gemini', efforts: ['low'], defaultEffort: 'low' }] },
+    }];
+    const view = render(<BotModelChainEditor value={[{ harness: 'codex', providerId: 'xd', model: model.id,
+      effort: 'high', fastMode: false, agentDeviceId: share }]} onChange={vi.fn()} />);
+    const picker = view.container.querySelector('button[aria-haspopup="listbox"]')!;
+    expect(picker.textContent).toContain('Shared Gemini');
+    expect(picker.textContent).not.toContain('Local Gemini');
+    expect(picker.textContent).toContain('高');
+  });
+});
 
 describe('Teammate settings with the real model picker', () => {
   it('opens the real config and saves the selected source, harness, effort and Fast as one route', async () => {

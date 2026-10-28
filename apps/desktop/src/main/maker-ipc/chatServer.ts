@@ -668,7 +668,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     });
   }
-  const media = createChatMedia(api, current, deps.log, { allowLoopback: !app.isPackaged && process.env.XDT_ISOLATED === '1' && config.baseUrl === 'http://127.0.0.1:3018' });
+  const media = createChatMedia(api, current, config.baseUrl, deps.log, { allowLoopback: !app.isPackaged && process.env.XDT_ISOLATED === '1' && config.baseUrl === 'http://127.0.0.1:3018' });
   const threads = createThreadProjection<Message>({
     threadPage: (roomId, rootId, limit, before) => history()?.page<Message>(roomId,
       new URLSearchParams({ threadRootId: rootId, limit: String(limit), ...(before ? { before } : {}) }))
@@ -1337,7 +1337,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // request never rejects a room/Thread; subsequent reads retry after a backoff.
   // Until the bytes are here the view keeps a named placeholder in its place, so
   // a slow or failed download is shown as such instead of disappearing.
-  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number }>();
+  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; imageCacheCleared?: boolean }>();
   // A page's attachments settle close together; one re-read of the room and sidebar shows
   // them all instead of one full re-read per file.
   const attachmentRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1359,13 +1359,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const mediaId = parsed.data;
         const key = `${roomId}:${mediaId}`;
         let cached = downloads.get(key);
+        // Image cleanup does not own ordinary files, including still-pending transfers.
+        if (cached && cached.generation !== media.cacheGeneration
+          && (cached.value?.category === 'image' || cached.imageCacheCleared)) cached = undefined;
         if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
-          cached = { retryAt: Infinity };
+          cached = { retryAt: Infinity, generation: media.cacheGeneration };
           downloads.set(key, cached);
           const entry = cached;
           void media.download(roomId, mediaId).then(value => {
-            if (current()) entry.value = value;
-          }).catch(() => { entry.retryAt = Date.now() + 30000; })
+            if (!current()) return;
+            if (value.category === 'image' && entry.generation !== media.cacheGeneration) entry.retryAt = 0;
+            else entry.value = value;
+          }).catch(error => {
+            entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
+            entry.retryAt = entry.generation !== media.cacheGeneration ? 0 : Date.now() + 30000;
+          })
             .finally(() => attachmentsChanged(roomId));
         }
         view.attachments.push(cached.value ?? placeholder(cached.retryAt === Infinity ? 'loading' : 'unavailable'));

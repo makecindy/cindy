@@ -68,7 +68,9 @@ afterEach(() => {
 });
 
 describe('pinned section running indicator', () => {
-  it.each(['text', 'list', 'card'])('updates while expanded or collapsed in %s mode', (mode) => {
+  // Regression: an expanded PinnedSection with one running task must stay still.
+  // Existing unit coverage expected breathing in both states; exercise the real header toggle.
+  it.each(['text', 'list', 'card'])('only pulses while collapsed in %s mode', (mode) => {
     view.mode = mode;
     const entries = [entry(session('pinned'))];
     const { container, rerender } = render(<PinnedSection {...props(entries)} />);
@@ -76,8 +78,12 @@ describe('pinned section running indicator', () => {
     rerender(<PinnedSection {...props(entries, ['other'])} />);
     expect(isRunning(container)).toBe(false);
     rerender(<PinnedSection {...props(entries, ['pinned'])} />);
+    expect(isRunning(container)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
     expect(isRunning(container)).toBe(true);
     expect(container.querySelector('svg.session-status-breathing')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+    expect(isRunning(container)).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
     expect(isRunning(container)).toBe(true);
     rerender(<PinnedSection {...props(entries)} />);
@@ -96,6 +102,8 @@ describe('pinned section running indicator', () => {
     const { container, rerender } = render(
       <PinnedSection {...props([projectEntry], ['child-24'])} />,
     );
+    expect(isRunning(container)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
     expect(isRunning(container)).toBe(true);
     rerender(<PinnedSection {...props([], ['child-24'])} />);
     expect(container.innerHTML).toBe('');
@@ -109,6 +117,10 @@ describe('pinned section running indicator', () => {
     act(() => applyRemoteSessionActivity('device-b', { sessionId: 'same', phase: 'running' }));
     expect(isRunning(container)).toBe(false);
     act(() => applyRemoteSessionActivity('device-a', { sessionId: 'same', phase: 'running' }));
+    expect(isRunning(container)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+    expect(isRunning(container)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
     expect(isRunning(container)).toBe(true);
     act(() =>
       applyRemoteSessionActivity('device-a', { sessionId: 'same', phase: 'needs-interaction' }),
@@ -142,8 +154,9 @@ describe('pinned section running indicator', () => {
       }
       markSessionStarting(task.id);
       const { container } = render(<StartingPinned />);
-      expect(isRunning(container)).toBe(true);
+      expect(isRunning(container)).toBe(false);
       fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+      expect(isRunning(container)).toBe(true);
       act(() => applyRemoteSessionActivity('device-b', { sessionId: task.id, phase: 'running' }));
       expect(getStartingSessionIds().has(task.id)).toBe(true);
       act(() => applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'running' }));

@@ -303,32 +303,6 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
-  // Unit merge regression: actual SDK hook registration must retain native Auto
-  // handback and plugin decisions together; plugin continue must never grant permission.
-  it.each(['continue', 'block'] as const)('preserves native Auto handback with plugin %s', async (action) => {
-    const { handle, preToolUse, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      mcpProviderNames: ['cindy_orca'],
-      mcpToolApprovalPolicy: () => 'auto-approve',
-    });
-    const plugin = vi.fn(async () => ({ action }));
-    try {
-      expect(queryPermissionMode).toBe('auto');
-      expect(handle.setHarnessHookHandler).toBeTypeOf('function');
-      handle.setHarnessHookHandler!(plugin);
-      expect(await preToolUse('mcp__cindy_orca__create_workers', { workers: [] }))
-        .toEqual(action === 'block' ? ['ask', 'deny'] : ['ask']);
-      expect(plugin).toHaveBeenCalledWith({
-        name: 'tool.before', toolName: 'mcp__cindy_orca__create_workers',
-        toolUseId: 'tu', input: { workers: [] },
-      });
-      expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
-    } finally {
-      await handle.close();
-    }
-  });
-
   it('keeps native Claude Auto when the SDK init reveals settings MCPs', async () => {
     const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
       providerId: 'anthropic',

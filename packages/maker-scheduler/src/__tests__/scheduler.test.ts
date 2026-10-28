@@ -225,6 +225,91 @@ describe('Scheduler', () => {
     await expect(h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: '' })).rejects.toThrow(/Harness/);
   });
 
+  // Unit: old-client prompt edits preserve remote routing, but incomplete model
+  // edits cannot silently keep a different device's credentials.
+  it('preserves a saved shared route on partial edits and validates complete changes', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi',
+      modelAgentDeviceId: 'shared:owner', providerId: 'shared-provider', model: 'remote-model' });
+    expect((await h.scheduler.update(saved.id, { prompt: 'new prompt' })).modelAgentDeviceId).toBe('shared:owner');
+    await expect(h.scheduler.update(saved.id, { model: 'other-model' })).rejects.toThrow('newer client');
+    // Main's older location field cannot silently edit a pinned override.
+    await expect(h.scheduler.update(saved.id, { agentDeviceId: 'studio' })).rejects.toThrow('newer client');
+    expect((await h.scheduler.get(saved.id))?.model).toBe('remote-model');
+    expect((await h.scheduler.update(saved.id, { modelAgentDeviceId: '', model: 'local-model' })).modelAgentDeviceId).toBe('');
+    await expect(h.scheduler.create({ ...baseInput, modelAgentDeviceId: 'shared:owner' })).rejects.toThrow('remote model selection');
+  });
+
+  // Unit, PR #6830 review: a legacy bound automation has no explicit Harness.
+  // A location-only local patch used to save successfully but still run remotely.
+  it('rejects an incomplete local selection on a bound automation without changing its saved route', async () => {
+    const legacy = { ...baseInput, agentKind: 'codex' as const, targetSessionId: 'remote-task', model: 'same-model', providerId: 'openai' };
+    const saved = await h.scheduler.create(legacy);
+    await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: '' })).rejects.toThrow('bound task');
+    expect(await h.scheduler.get(saved.id)).toEqual(saved);
+    await expect(h.scheduler.create({ ...legacy, modelAgentDeviceId: '' })).rejects.toThrow('bound task');
+    expect(await h.scheduler.update(saved.id, { modelAgentDeviceId: '', modelAgentKind: 'codex' }))
+      .toMatchObject({ modelAgentDeviceId: '', modelAgentKind: 'codex', model: 'same-model' });
+    const followed = await h.scheduler.update(saved.id, {
+      modelAgentDeviceId: undefined, modelAgentKind: undefined, model: undefined, providerId: undefined,
+    });
+    expect(followed.modelAgentDeviceId).toBeUndefined();
+    expect(followed.modelAgentKind).toBeUndefined();
+  });
+
+  // Unit: persistent schedules become bound after their first run. Accepting an
+  // incomplete local selection must not make that required internal update fail.
+  it('requires an executable local selection before a persistent automation first binds', async () => {
+    const persistent = { ...baseInput, persistentSession: true, modelAgentDeviceId: '', model: 'local-model' };
+    await expect(h.scheduler.create(persistent)).rejects.toThrow('bound task');
+    const saved = await h.scheduler.create({ ...persistent, modelAgentKind: 'codex' });
+    expect(await h.scheduler.update(saved.id, { targetSessionId: 'first-run-task' }))
+      .toMatchObject({ targetSessionId: 'first-run-task', modelAgentDeviceId: '', modelAgentKind: 'codex' });
+  });
+
+  // Unit (model-selector-unified.md §3): update/runNow must preserve an active
+  // run and history while later runs use the saved route. The former one-way
+  // case missed same-model/provider remote -> local -> remote -> local changes,
+  // including clearing effort/Fast; no real timers or vendor calls are needed.
+  it('applies repeated location changes only to later runs', async () => {
+    let finish!: (value: FireResult) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const calls: Schedule[] = [];
+    const local = makeHarness({ runnerImpl: async (schedule) => {
+      calls.push(schedule);
+      if (calls.length > 1) return { sessionId: `task-${calls.length}` };
+      entered();
+      return new Promise<FireResult>((resolve) => { finish = resolve; });
+    } });
+    const saved = await local.scheduler.create({ ...baseInput, model: 'original' });
+    const run = local.scheduler.runNow(saved.id);
+    await started;
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'same-provider', effort: 'xhigh' as const, fastMode: 'ultrafast' as const };
+    const onHost = { ...remote, modelAgentDeviceId: '', effort: undefined, fastMode: false };
+    await local.scheduler.update(saved.id, remote);
+    expect(calls[0]).toMatchObject({ model: 'original' });
+    expect(calls[0].modelAgentDeviceId).toBeUndefined();
+    finish({ sessionId: 'original-task' });
+    await run;
+    await local.scheduler.runNow(saved.id);
+    expect(calls[1]).toMatchObject(remote);
+    const firstHistory = await local.scheduler.listRuns(saved.id, 10);
+    for (const route of [onHost, remote, onHost]) {
+      expect(await local.scheduler.update(saved.id, route)).toMatchObject(route);
+      await local.scheduler.runNow(saved.id);
+      expect(calls.at(-1)).toMatchObject(route);
+    }
+    expect(calls[0]).toMatchObject({ model: 'original' });
+    expect(calls[0].modelAgentDeviceId).toBeUndefined();
+    expect(calls[1]).toMatchObject(remote);
+    for (const previous of firstHistory) {
+      expect((await local.scheduler.listRuns(saved.id, 10)).find((r) => r.id === previous.id)).toEqual(previous);
+    }
+    expect((await local.scheduler.listRuns(saved.id, 10)).map((r) => r.sessionId).sort())
+      .toEqual(['original-task', 'task-2', 'task-3', 'task-4', 'task-5']);
+  });
+
   it('create() computes nextFireAt and adds to active map', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     // From 00:00:30, next minute boundary = 00:01:00
@@ -600,6 +685,24 @@ describe('Scheduler', () => {
     await expect(
       h.scheduler.create({ ...baseInput, prompt: '   ' }),
     ).rejects.toThrow('prompt is required for agent execution mode');
+  });
+
+  // Review regression (unit): script sessions.dispatch only resolves local
+  // defaults. Reject remote routes before persistence instead of charging a
+  // same-id local provider; prior shape tests did not cover a remote selection.
+  it('rejects remote model routes in scripts and preserves the saved automation', async () => {
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'openai' };
+    const script = { executionMode: 'script' as const, workspaceKind: 'project' as const,
+      workingDir: '/repo', scriptConfig: { command: 'node run.mjs', capabilities: ['sessions.dispatch' as const] } };
+    await expect(h.scheduler.create({ ...baseInput, ...remote, ...script })).rejects.toThrow('script execution does not support remote model sources');
+    const saved = await h.scheduler.create({ ...baseInput, ...remote, agentDeviceId: 'legacy-studio' });
+    await expect(h.scheduler.update(saved.id, script)).rejects.toThrow('script execution does not support remote model sources');
+    expect(await h.scheduler.get(saved.id)).toEqual(saved);
+    // The explicit local choice remains supported; no new gate on local scripts.
+    expect(await h.scheduler.update(saved.id, { ...script, modelAgentDeviceId: '' })).toMatchObject({
+      ...script, ...remote, modelAgentDeviceId: '',
+    });
   });
 
   it('recurring fire updates lastFiredAt and recomputes nextFireAt', async () => {

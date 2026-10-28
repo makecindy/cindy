@@ -56,6 +56,9 @@ function bodyMessages() {
     { seq: 1, version: 1, op: 'create', id: 'title', kind: 'heading', props: { text: '发布前检查' } },
     { seq: 2, op: 'create', id: 'literal', kind: 'text', props: { text: '保留 <name>、*literal* 和 & 符号' } },
     { seq: 3, op: 'create', id: 'list', kind: 'markdown', props: { text: '- 正文可以阅读\n- **重点**保持格式' } },
+    { seq: 4, op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://blobs/fixture-image.png', alt: '图片说明保留', caption: '图片标题保留' } },
+    { seq: 5, op: 'create', id: 'unnamed-image', kind: 'image', props: { src: '/private/tmp/fixture-image.png' } },
+    ...['image', 'video', 'audio'].map((kind, index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: `https://example.test/public-${kind}` } })),
   ].map(item => JSON.stringify(item)).join('\n') + '\n```';
   return [
     message({ id: 'body-user', sequence: 1, content: '请整理发布前检查', createdAt: T0 }),

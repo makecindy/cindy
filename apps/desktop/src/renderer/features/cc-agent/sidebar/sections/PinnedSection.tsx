@@ -363,7 +363,7 @@ export function PinnedSection({
           aria-hidden
           className={cn(
             'absolute left-1.5 inline-flex shrink-0',
-            hasRunningSession
+            collapsed && hasRunningSession
               ? 'text-[var(--status-bar-accent)] session-status-breathing'
               : 'text-[var(--sidebar-list-muted)]',
           )}

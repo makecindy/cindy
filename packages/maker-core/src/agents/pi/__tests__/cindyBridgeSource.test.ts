@@ -53,13 +53,12 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const helperStart = source.indexOf('let textOnlyTurnActive = false');
   const helperEnd = source.indexOf('function currentPermissionState', helperStart);
-  const harnessHookStart = source.indexOf('  const runHarnessHook =');
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   let permissionReads = 0;
   const compiled = ts.transpileModule(
-    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(harnessHookStart, handlerEnd),
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   runInNewContext(compiled, {
@@ -2498,7 +2497,7 @@ describe('Pi same-turn library native mapping', () => {
 });
 
 
-it('applies native Fast only to the exact declared connection and fails closed on invalid host replies', async () => {
+it.each(['openai-responses', 'openai-codex-responses'])('applies native Fast only to the exact declared %s connection and fails closed on invalid host replies', async api => {
   const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(');
   const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
   const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
@@ -2510,7 +2509,7 @@ it('applies native Fast only to the exact declared connection and fails closed o
   } });
   const ctx = { ui: { input: async () => { if (reply instanceof Error) throw reply; return reply; } } };
   const original = { model: 'gpt-6-sol', reasoning: { effort: 'high' }, input: 'hello' };
-  const model = { provider: 'relay-a', id: 'gpt-6-sol', api: 'openai-responses' };
+  const model = { provider: 'relay-a', id: 'gpt-6-sol', api };
   expect(await adapt(original, model, ctx)).toEqual({ ...original, service_tier: 'priority' });
   expect(await adapt(original, { ...model, provider: 'relay-b' }, ctx)).toBeUndefined();
   expect(await adapt(original, { ...model, id: 'other-model' }, ctx)).toBeUndefined();

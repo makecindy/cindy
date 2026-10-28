@@ -474,7 +474,10 @@ const MOBILE_MESSAGE_DRAW_DISTANCE = 800;
 const FOLDABLE_HEADER_HIT_SLOP = { bottom: 10, left: 4, right: 4, top: 10 };
 
 function mobileMessageListItemType(item: MobileMessageRenderItem): MobileMessageRenderItem['type'] {
-  return item.type;
+  // A confirmed local send keeps the same logical row as its optimistic bubble.
+  // Reusing the message pool preserves the measured height while the item data
+  // changes from pending_send to the persisted message.
+  return item.type === 'pending_send' ? 'message' : item.type;
 }
 
 function resolveMobileMessageHistoryAnchorOffset(
@@ -3564,7 +3567,7 @@ function MessageBubble({
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
-  // 流式回复不挂操作行或状态占位；任务运行状态由底部状态栏展示。
+  // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
@@ -3686,6 +3689,11 @@ function MessageBubble({
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0 || canShare;
+  const reserveActionSlot = !shareSelectionActive
+    && !actions.companion
+    && isStreamingAssistant
+    && !item.message.systemCardType
+    && !hasActions;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
@@ -4131,15 +4139,16 @@ function MessageBubble({
           else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
-        }} /> : hasActions ? (
+        }} /> : hasActions || reserveActionSlot ? (
         <View
           style={[
             styles.messageActionBar,
+            reserveActionSlot && styles.messageActionSlot,
             actionBar.align === 'right' ? styles.userMessageActionBar : styles.agentMessageActionBar,
           ]}
-          testID="message.actionBar"
+          testID={hasActions ? 'message.actionBar' : 'message.actionSlot'}
         >
-          {actionBar.items.map((id) => {
+          {hasActions ? actionBar.items.map((id) => {
             if (id === 'time') return timeText;
             if (id === 'cost') return costText;
             if (id === 'more') {
@@ -4191,8 +4200,8 @@ function MessageBubble({
               );
             }
             return null;
-          })}
-          {canShare && !actionBar.items.includes('copy') ? (
+          }) : null}
+          {hasActions && canShare && !actionBar.items.includes('copy') ? (
             <MessageShareButton
               buttonSize={actionBar.buttonSize}
               iconSize={actionBar.iconSize}
@@ -9418,6 +9427,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     marginTop: 0,
   },
+  // Keep the row occupied while a reply streams so completion controls can appear
+  // without changing the message's measured height in the middle of a turn.
+  messageActionSlot: { minHeight: MESSAGE_CONTROL_TOUCH_SIZE },
   userMessageActionBar: { justifyContent: 'flex-end' },
   agentMessageActionBar: { justifyContent: 'flex-start' },
   messageIconAction: {

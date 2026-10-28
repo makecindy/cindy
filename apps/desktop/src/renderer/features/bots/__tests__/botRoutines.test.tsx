@@ -11,10 +11,13 @@ vi.mock('react-i18next', () => ({
 }));
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn(async () => true) }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm }) }));
+const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: { success: toastSuccess, error: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 import { BotRoutines } from '../BotRoutines';
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  toastSuccess.mockClear();
 });
 it('saves the visible edited instructions before running, and preserves every trigger', async () => {
   const routine: Routine = {
@@ -134,6 +137,7 @@ it('saves enabled state and does not run a routine just by saving', async () => 
   fireEvent.click(screen.getByRole('switch', { name: 'routines.enabled' }));
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
   await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ enabled: false }), 'daily'));
+  expect(toastSuccess).toHaveBeenCalledWith('routines.saved');
   expect(api.runNow).not.toHaveBeenCalled();
   await waitFor(() => expect((screen.getByRole('button', { name: 'routines.back' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'routines.back' }));

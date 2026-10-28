@@ -120,6 +120,28 @@ describe('versioned cache with the Expo adapter', () => {
 });
 
 describe('bounded temporary media downloads', () => {
+  it('reports an over-limit download after cancelling and cleaning its temporary file', async () => {
+    io.resumable.mockReturnValue(new Promise(() => {}));
+    const onTooLarge = vi.fn();
+    const read = vi.fn(async () => 'unexpected');
+    const result = withDownloadedRemoteMediaFile(
+      'https://example.com/large.txt',
+      'text/plain',
+      8,
+      read,
+      new AbortController().signal,
+      onTooLarge,
+    );
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledOnce());
+    io.progress({ totalBytesWritten: 9 });
+    expect(await result).toBeNull();
+    expect(onTooLarge).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
+    expect(io.cancel).toHaveBeenCalled();
+    expect(io.deleteAsync).toHaveBeenCalled();
+    expect(io.remove).toHaveBeenCalledOnce();
+  });
+
   it('keeps a preview copy alive after transport staging expires, until its owner releases it', async () => {
     const { recordPeerMedia, releasePeerMedia } = await import('@/device-link/peerFileRegistry');
     const dispose = vi.fn();
@@ -172,6 +194,23 @@ describe('bounded temporary media downloads', () => {
     const read = vi.fn();
     expect(await withDownloadedRemoteMediaFile('https://example.com/image', 'image/png', 8, read)).toBeNull();
     expect(read).not.toHaveBeenCalled();
+    expect(io.remove).toHaveBeenCalledOnce();
+  });
+
+  it('reads an empty text file when the caller explicitly allows it', async () => {
+    io.size = 0;
+    const read = vi.fn(async file => 'read-' + file.size);
+    const result = await withDownloadedRemoteMediaFile(
+      'https://example.com/empty.json',
+      'application/json',
+      8,
+      read,
+      undefined,
+      undefined,
+      { allowEmpty: true },
+    );
+    expect(result).toBe('read-0');
+    expect(read).toHaveBeenCalledOnce();
     expect(io.remove).toHaveBeenCalledOnce();
   });
 

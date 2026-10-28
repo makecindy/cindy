@@ -25,7 +25,6 @@ import { canContinueFailedTurn } from '@cindy/maker-shared/synthetic-trigger';
  * F-FP-5:   workingDir read-only display
  */
 
-import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import {
   Profiler,
   useCallback,
@@ -167,7 +166,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
-import { ContextWindowBudgetChip } from '@/components/status/ContextWindowBudgetChip';
+import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
@@ -219,6 +218,7 @@ import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionT
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
+import { WorkingDirectoryTip } from './WorkingDirectoryTip';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
 import {
@@ -307,7 +307,7 @@ import {
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
-import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
+import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import {
@@ -6304,24 +6304,11 @@ function CCAgentSessionContent({
                       </div>
                     </Tip>
                   ) : (
-                    <Tip
-                      text={
-                        composerDir ? (
-                          session?.remoteHostId ? (
-                            // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
-                            // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
-                            // SSH alias (HostConfig.id), 不需要额外 lookup。
-                            <>
-                              <div>Host: {session.remoteHostId}</div>
-                              <div>{composerDir}</div>
-                            </>
-                          ) : (
-                            composerDir
-                          )
-                        ) : null
-                      }
-                      mono
-                      side="top"
+                    <WorkingDirectoryTip
+                      path={composerDir}
+                      deviceId={remoteDeviceId ?? session?.deviceLinkDeviceId}
+                      deviceName={session?.deviceLinkDeviceName}
+                      remoteHostId={session?.remoteHostId}
                     >
                       {isRemoteWorktreeSession ? (
                         <div className="flex min-w-0 items-center gap-1.5">
@@ -6337,7 +6324,7 @@ function CCAgentSessionContent({
                           {workingDirChipContent}
                         </button>
                       )}
-                    </Tip>
+                    </WorkingDirectoryTip>
                   )}
 
                   {/* Right: Context capacity indicator */}
@@ -6364,29 +6351,12 @@ function CCAgentSessionContent({
                       deviceLinkDeviceId={remoteDeviceId ?? null}
                       usageAccount={usageAccount}
                     />
-                    {/* device-link 远程任务的档位走 maker:set-context-window-budget 隧道命令，
-                        在偏好文件落盘并应用到活实例；老被控端不支持时由 chip 提示版本不支持。
-                        当前档位与可选档位一起来自权威边界查询（本地 main / 远程被控端）。 */}
-                    {sessionId && (
-                      <ContextWindowBudgetChip
-                        sessionId={sessionId}
-                        contextTokens={agentStatus.contextTokens}
-                        model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                        providerId={
-                          agentSwitchIntent
-                            ? agentSwitchIntent.providerId
-                            : (session?.providerId ?? null)
-                        }
-                        agentKind={normalizeDbAgentKind(displayAgentKind)}
-                        providers={{ providers }}
-                        deviceId={remoteDeviceId}
-                        disabled={readOnly || !session}
-                      />
-                    )}
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
-                      providerId={session?.providerId}
+                      providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
+                      providers={{ providers }}
+                      disabled={readOnly || !session}
                       contextTokens={agentStatus.contextTokens}
                       model={agentSwitchIntent?.model ?? session?.model ?? ''}
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
@@ -6966,197 +6936,4 @@ function RunningStatusBar({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ContextCapacityRing — circular token usage indicator
-// ---------------------------------------------------------------------------
-
-/** Format a token count with K/M suffix: 200000 → "200K", 1000000 → "1M". */
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
-  }
-  return n.toString();
-}
-
-/**
- * 从 maker capabilities cache 查模型 contextWindow。
- * 拿不到时返回 undefined，由 display resolver 兜底到 200K。
- */
-function getModelContextWindow(
-  model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
-  deviceId?: string,
-): number | undefined {
-  const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
-  return found?.contextWindow;
-}
-
-function ContextCapacityRing({
-  isRunning,
-  sessionId,
-  providerId,
-  contextTokens,
-  model,
-  vendorKey,
-  sdkContextWindow,
-  verifiedContextWindow,
-  deviceId,
-  onCompact,
-}: {
-  isRunning?: boolean;
-  sessionId?: string;
-  providerId?: string | null;
-  contextTokens: number;
-  model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
-  /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
-  sdkContextWindow: number;
-  verifiedContextWindow?: number | null;
-  /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
-  deviceId?: string;
-  /** 提供时圆环可点击 — 点击后(经用户确认)向 agent 发送 /compact 压缩上下文。 */
-  onCompact?: () => void;
-}) {
-  const { t } = useTranslation();
-  const [contextInspection, setContextInspection] = useState(0);
-  const codexContext = useCodexContextWindow({
-    enabled: vendorKey === 'codex' && !deviceId && Boolean(sessionId),
-    providerId,
-    modelId: model,
-    sessionId,
-    reportedWindow: sdkContextWindow,
-    refreshKey: `${isRunning}:${contextInspection}`,
-  });
-  const contextWindow = resolveDisplayContextWindow({
-    sdkContextWindow,
-    verifiedContextWindow,
-    runtimeWindowAuthoritative: vendorKey === 'codex',
-    nativeContextWindow: codexContext?.contextWindow,
-    nativeContextPending: codexContext?.pendingApply,
-    modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
-  });
-  const pct =
-    contextWindow > 0
-      ? Math.min(Math.max(Math.round((contextTokens / contextWindow) * 100), 0), 100)
-      : 0;
-
-  // Ring geometry: outer diameter 20px, strokeWidth 2.5
-  const size = 20;
-  const strokeWidth = 2.5;
-  const radius = (size - strokeWidth) / 2; // 8.75
-  const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (circumference * pct) / 100;
-
-  // Color thresholds per spec
-  const fillColor =
-    pct > 90
-      ? 'var(--error-flat)'
-      : pct > 70
-        ? 'var(--warning-fg)'
-        : 'var(--msg-tool-card-chevron)';
-
-  const usedTokens = Math.max(0, contextTokens);
-  const tooltipText =
-    contextWindow > 0
-      ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`
-      : 'No context data yet';
-
-  const ringContent = (
-    <>
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        className="shrink-0"
-        aria-hidden="true"
-        focusable="false"
-      >
-        {/* Track (background circle) */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--msg-tool-card-border)"
-          strokeWidth={strokeWidth}
-        />
-        {/* Fill arc — starts at 12 o'clock, sweeps clockwise */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={fillColor}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </svg>
-      <span className="text-12 font-medium leading-none" style={{ color: fillColor }}>
-        {contextWindow > 0 ? `${pct}%` : '—'}
-      </span>
-    </>
-  );
-
-  return (
-    <Tip
-      text={
-        onCompact ? (
-          <>
-            <div>{tooltipText}</div>
-            <div>{t('ccAgent.layout.contextRing.compactHint')}</div>
-          </>
-        ) : vendorKey === 'codex' ? (
-          // Native Codex manages compaction; this control only reads its capacity.
-          <>
-            <div>
-              {codexContext?.pendingApply
-                ? t('ccAgent.layout.contextRing.codexPendingHint')
-                : tooltipText}
-            </div>
-            <div>
-              {codexContext
-                ? t('settings.providers.models.advanced.codexContextValues', {
-                    total: codexContext.contextWindow.toLocaleString(),
-                    usable: codexContext.usableContextWindow.toLocaleString(),
-                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
-                  })
-                : t('settings.providers.models.advanced.codexContextUnknown')}
-            </div>
-            <div>{t('ccAgent.layout.contextRing.codexAutoHint')}</div>
-          </>
-        ) : (
-          tooltipText
-        )
-      }
-    >
-      {onCompact ? (
-        <button
-          type="button"
-          onClick={onCompact}
-          aria-label={t('ccAgent.layout.contextRing.compactHint')}
-          className="flex shrink-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-75 active:opacity-60"
-        >
-          {ringContent}
-        </button>
-      ) : (
-        <div
-          className="flex shrink-0 items-center gap-1"
-          onMouseEnter={() => {
-            if (vendorKey === 'codex') setContextInspection((n) => n + 1);
-          }}
-        >
-          {ringContent}
-        </div>
-      )}
-    </Tip>
-  );
-}
 import { isSharedTaskPeer } from '@cindy/device-link';

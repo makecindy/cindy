@@ -220,6 +220,48 @@ describe('conversationSearch remote project aliases', () => {
   });
 });
 
+describe('conversationSearch workingDir filtering', () => {
+  it('retains Windows drive and UNC case variants without merging POSIX paths', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    mocks.searchChatHistoryHybrid.mockResolvedValue({
+      hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+      nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+    });
+    try {
+      const rows = [
+        ['drive', 'C:/work/repo'],
+        ['unc', '//SERVER/Share/Work/Repo'],
+        ['other', 'C:/work/other'],
+        ['posix-lower', '/work/repo'],
+        ['posix-upper', '/Work/Repo'],
+      ] as const;
+      rows.forEach(([id, workingDir], index) => {
+        insertSearchSession(db, id, index + 1, null);
+        db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(workingDir, id);
+      });
+
+      const windows = await searchConversations({
+        query: 'needle',
+        semanticMode: 'keyword',
+        filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
+      });
+      expect(windows.results.map((item) => item.session.id).sort()).toEqual(['drive', 'unc']);
+
+      const posix = await searchConversations({
+        query: 'needle',
+        semanticMode: 'keyword',
+        filters: { workingDirs: ['/work/repo'] },
+      });
+      expect(posix.results.map((item) => item.session.id)).toEqual(['posix-lower']);
+    } finally {
+      clearCurrentDbClient(client);
+      db.close();
+    }
+  });
+});
+
 describe('conversationSearch recent activity SQL filtering', () => {
   it('filters the SQLite session candidates before title and content matching', async () => {
     const db = createSearchDb();

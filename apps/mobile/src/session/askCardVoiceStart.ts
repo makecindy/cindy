@@ -45,7 +45,7 @@ export async function startAskCardDictation(input: {
   isAppActive?: () => boolean;
   subscribeToAppState?: (listener: AppStateListener) => () => void;
   getText: () => string;
-  setText: (value: string) => void;
+  setText: (value: string, selection?: MobileVoiceSelection) => void;
   getSelection: () => MobileVoiceSelection;
   onListening: () => void;
   onRunCreated?: (run: { stop: () => Promise<void>; cancel: () => Promise<void> }) => void;
@@ -105,7 +105,7 @@ export async function startAskCardDictation(input: {
     initialDraft,
     initialSelection: input.getSelection(),
     readCurrentDraft: input.getText,
-    onDraftChanged: (text) => input.setText(text),
+    onDraftChanged: (text, selection) => input.setText(text, selection),
     onStateChanged: (state) => {
       if (state === 'listening') input.onListening();
     },

@@ -33,7 +33,7 @@ function git(cwd: string, ...args: string[]) {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+      env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' },
     },
   ).trim();
 }
@@ -45,6 +45,11 @@ function commit(cwd: string, file: string, content: string) {
 }
 beforeAll(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-branch-sync-'));
+  // Git for Windows does not accept Node's \\.\nul as a config file. An empty
+  // fixture also isolates production syncBranch calls from the user's config.
+  fs.writeFileSync(path.join(root, 'gitconfig'), '');
+  vi.stubEnv('GIT_CONFIG_GLOBAL', path.join(root, 'gitconfig'));
+  vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
   seed = path.join(root, 'seed');
   remote = path.join(root, 'remote.git');
   fs.mkdirSync(seed);
@@ -53,7 +58,10 @@ beforeAll(() => {
   git(root, 'clone', '--bare', seed, remote);
   git(seed, 'remote', 'add', 'origin', remote);
 });
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  vi.unstubAllEnvs();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 function fixture() {
   const branch = `case-${++sequence}`;
   const repo = path.join(root, branch);
@@ -82,6 +90,26 @@ it('fetches and fast-forwards the checked-out branch while preserving unrelated 
   expect(fs.readFileSync(path.join(f.repo, 'base'), 'utf8')).toBe(`remote-${f.branch}`);
   expect(fs.readFileSync(path.join(f.repo, 'keep'), 'utf8')).toBe('uncommitted');
   expect(result.status.dirtyFiles).toBe(1);
+});
+// Regression: unpack-objects is silent while receiving a single large blob.
+// The real sync entry must select a receiver that emits byte progress even for
+// fewer than 100 objects; fake progress tests cannot detect the wrong Git mode.
+it('reports receiving progress for a small object count instead of silently unpacking it', async () => {
+  const f = fixture();
+  f.advance();
+  const original = gitModule.gitExec;
+  const progress: string[] = [];
+  const spy = vi.spyOn(gitModule, 'gitExec').mockImplementation(async (...args) => {
+    const result = await original(...args);
+    if (args[0].includes('--progress')) progress.push(result.stderr);
+    return result;
+  });
+  try {
+    expect((await syncBranch(f.req)).updated).toBe(1);
+    expect(progress.join('')).toMatch(/Receiving objects:.*100%/);
+  } finally {
+    spy.mockRestore();
+  }
 });
 it('updates an unchecked local ref without changing the current checkout', async () => {
   const f = fixture();

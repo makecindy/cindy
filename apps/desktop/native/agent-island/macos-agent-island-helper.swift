@@ -1656,7 +1656,6 @@ private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
 private let compactIslandMinContentWidth: CGFloat = 80
-private let compactCollapseLeadingReservedWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
@@ -5869,9 +5868,8 @@ final class AgentIslandController {
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
   }
 
-  /// The screen rectangle where the collapsed island sat. After expand, that
-  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
-  /// Clicking it should fold the island back; toolbar / title live outside it.
+  /// Keep the full compact footprint clickable, including its notch-side wings.
+  /// The leading title/mascot is passive; only the trailing toolbar owns clicks.
   private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
     let layout = interaction.startLayout
     let footprintWidth = compactCollapseFootprintWidth(layout: layout)
@@ -5880,15 +5878,8 @@ final class AgentIslandController {
     guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
       return false
     }
-    let visualMinX = centerX - layout.width / 2
     let visualMaxX = centerX + layout.width / 2
-    let sideChrome = layout.hasHardwareNotch
-      ? max(0, (layout.width - layout.notchWidth) / 2)
-      : 0
-    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
-    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
-    return clickX > visualMinX + leadingReserved
-      && clickX < visualMaxX - trailingReserved
+    return clickX < visualMaxX - compactCollapseTrailingReservedWidth
   }
 
   private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {

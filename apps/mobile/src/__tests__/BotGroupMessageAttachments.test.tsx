@@ -78,6 +78,18 @@ vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+vi.mock('@/session/BotGroupTextAttachmentPreview', async () => {
+  const React = await import('react');
+  return {
+    ...await vi.importActual<object>('@/session/BotGroupTextAttachmentPreview'),
+    BotGroupTextAttachmentPreview: ({ attachmentId, fileName, kind }: { attachmentId: string; fileName: string; kind: string }) =>
+      React.createElement('div', {
+        'data-testid': 'groupChat.server.textAttachmentPreview',
+        'data-attachment-id': attachmentId,
+        'data-kind': kind,
+      }, fileName),
+  };
+});
 vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
@@ -250,6 +262,35 @@ describe('group attachments the computer has not fetched yet', () => {
     expect(resolveServerMedia).toHaveBeenLastCalledWith('photo');
     expect(host.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/photo');
     expect(openBrowserAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens HTML, Markdown and JSON server files in the in-app preview instead of the browser', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const names: Record<string, string> = { html: 'report.html', markdown: 'notes.md', json: 'summary.json' };
+    const resolveServerMedia = vi.fn(async (id: string) => ({
+      ...ready(id, names[id]!),
+      url: 'https://example.invalid/signed/' + id,
+    }));
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'text-files', align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia,
+      attachments: Object.entries(names).map(([id, name]) => ready(id, name)),
+    })));
+
+    for (const [index, [id, name, kind]] of [
+      ['html', names.html, 'html'],
+      ['markdown', names.markdown, 'markdown'],
+      ['json', names.json, 'json'],
+    ].entries()) {
+      const chip = host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')[index]!;
+      await act(async () => chip.click());
+      const preview = host.querySelector('[data-testid="groupChat.server.textAttachmentPreview"]');
+      expect(preview?.textContent).toBe(name);
+      expect(preview?.getAttribute('data-attachment-id')).toBe(id);
+      expect(preview?.getAttribute('data-kind')).toBe(kind);
+    }
+    expect(openBrowserAsync).not.toHaveBeenCalled();
   });
 
   it('keeps the sent order: neighbours of one kind share a strip, each pending one stands alone', () => {

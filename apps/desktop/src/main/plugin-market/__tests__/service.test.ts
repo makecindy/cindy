@@ -600,6 +600,40 @@ function sameReleaseRecoveryHarness(
   return { ...h, item, evidence, dir };
 }
 
+describe('workflow display author projection', () => {
+  it.each(['verified', 'missing', 'mismatch'] as const)('binds older-version attribution only to verified installed package evidence (%s)', async state => {
+    const h = sameReleaseRecoveryHarness('market', 'legacy');
+    h.evidence.packageSha256 = h.item.currentRelease.sha256;
+    h.item.scope = 'public'; h.item.organizationId = null; h.item.namespace = null;
+    runtime.ghosts[0] = { ...runtime.ghosts[0], namespace: null,
+      approval: { state: 'approved', revision: 'public-fixture' } };
+    h.ledger.upsertInstallation(recordForTest(h.item, {
+      namespace: null, manifestDigest: ghostManifestDigest(h.evidence.approvedManifest),
+    }));
+    if (state === 'missing') runtime.approvedInstallEvidence.mockReturnValue(null);
+    if (state === 'mismatch') h.evidence.packageSha256 = 'c'.repeat(64);
+    h.item.displayAuthor = 'Current name';
+    const installedRelease = h.item.currentRelease;
+    h.item.currentRelease = { ...h.item.currentRelease, id: 'release-2', version: '2.0.0', sha256: 'b'.repeat(64) };
+    const item = (await h.service.snapshot({ discoveryOnly: true })).items[0];
+    expect(item.installState).toBe('update-available');
+    expect(item.author).toBe('Current name');
+    expect(item.installedAuthor).toBe(state === 'verified' ? null : undefined);
+    if (state === 'verified') {
+      h.item.currentRelease = installedRelease;
+      expect((await h.service.snapshot({ discoveryOnly: true })).items[0].installedAuthor).toBe('Current name');
+    }
+  });
+  it.each([
+    { displayAuthor: '名'.repeat(100), expected: '名'.repeat(100) },
+    { displayAuthor: null, expected: null },
+    { displayAuthor: undefined, expected: 'Cindy' },
+  ])('uses the workflow name and preserves old-server compatibility (%j)', async ({ displayAuthor, expected }) => {
+    const h = harness([summary({ displayAuthor })]);
+    expect((await h.service.snapshot({ discoveryOnly: true })).items[0].author).toBe(expected);
+  });
+});
+
 describe('same-release legacy organization source recovery', () => {
   it.each([
     { source: 'legacy-adopted', layout: 'legacy', hasPackage: false },

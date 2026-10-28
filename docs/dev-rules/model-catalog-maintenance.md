@@ -101,6 +101,14 @@ V6 请求使用 `registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1
 （真实 HTTP 目录→解析→三接口出站、快照冷恢复）、`codexProxyHost`、`piProviderTransport`。
 “客户端已实现”“服务已部署”“账号真实推理通过”是三个独立结论。
 
+Agnes AI 离线副本与 Server 正本同步：四个聊天型号用官方 Messages / Responses / Chat 接口，
+Messages 使用域名根路径（适配器追加 `/v1/messages`），Responses / Chat 保留 `/v1` base，
+模型发现保持 `/v1/models`；不能把三接口机械地写成同一个 base，否则 Messages 会重复 `/v1`。
+Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,000，输出 65,536。
+原有连接仅补缺失资料，不重置显式窗口、协议或启用开关。三个图片、两个视频型号本次仅收录
+身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
+可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
+
 ### Gateway 复杂价目展示
 
 Model Access V5 通过 `X-Cindy-Model-Capabilities: display_pricing` 协商可选 `displayPricing`。

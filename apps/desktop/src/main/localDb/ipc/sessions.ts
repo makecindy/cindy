@@ -46,6 +46,7 @@ import { sessions, messages } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
   selectSessionListRows,
+  ordinaryTaskListFilter,
   selectSessionWithCount,
   selectSessionsByIds,
   flattenSessionReadRow,
@@ -84,7 +85,6 @@ import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/share
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
-  DESKTOP_TASK_LIST_SESSION_SOURCES,
   DESKTOP_VISIBLE_SESSION_SOURCES,
   isRetainableProjectSession,
 } from '../../../shared/sessionSource.js';
@@ -1611,10 +1611,7 @@ export function registerSessionIpc(
         // 只从来源任务的审查卡片打开,不进普通任务列表(用量历史仍包含)。
         // 插件后台隐藏任务(hidden_at 非空)同样不进任务列表,只在插件详情页「后台任务」
         // 查看与接手;手机/远控经 device-link 调同一 handler,口径一致。
-        const sourceFilter = and(
-          inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
-          isNull(sessions.hiddenAt),
-        );
+        const sourceFilter = ordinaryTaskListFilter();
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
         const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere(), ids ? inArray(sessions.id, ids) : undefined), cap, before);

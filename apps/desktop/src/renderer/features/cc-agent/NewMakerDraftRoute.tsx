@@ -302,7 +302,9 @@ import {
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
+  resolveDeviceLinkWorktreeEnabled,
   type DeviceLinkDraftSelection,
+  type DeviceLinkWorktreeEnabledFrame,
   type RemoteDraftDefaults,
 } from './deviceLinkDraftDefaults';
 import { recallAgentDeviceSelection, rememberAgentDeviceSelection } from './agentDeviceDraftMemory';
@@ -1648,20 +1650,24 @@ export function NewMakerDraftRoute() {
   // 记忆——不做 baseRepo/资格点亮门槛、没有任何自动开关。环境合格性只影响
   // checkbox 禁用态；用户已勾选且当前项目尚不能创建 worktree 时，handleSend
   // 必须保留草稿并提示，不能静默创建普通 session，也不能改写用户记忆。
+  // 切设备的重置与镜像必须在同一个 effect 里按帧判定(resolveDeviceLinkWorktreeEnabled):
+  // 设备域浏览器会在切设备的同一批更新里直接 seed 新设备快照，分成两个 effect 时
+  // 后执行的重置会把刚镜像的 true 压回 false，之后再无快照变化能恢复。
+  const wtEnabledFrameRef = useRef<DeviceLinkWorktreeEnabledFrame | null>(null);
   useEffect(() => {
+    const previous = wtEnabledFrameRef.current;
+    const frame: DeviceLinkWorktreeEnabledFrame = {
+      deviceId: effectiveDeviceLinkDeviceId ?? null,
+      remoteDraftState,
+    };
+    wtEnabledFrameRef.current = frame;
     if (!isDeviceLinkDraft) {
       setWtEnabled(draft.worktreeEnabled);
       return;
     }
-    if (remoteDraftState.status !== 'ready') return;
-    const remotePreference = remoteDraftState.value?.worktreeEnabled;
-    if (typeof remotePreference === 'boolean') setWtEnabled(remotePreference);
-  }, [isDeviceLinkDraft, draft.worktreeEnabled, remoteDraftState]);
-  // 放在同步 effect 后面:切设备的首帧 remoteDraftState 可能仍属于上一台设备，
-  // 先处理旧快照再重置，保证它不能把新设备的默认 false 覆盖回去。
-  useEffect(() => {
-    if (isDeviceLinkDraft) setWtEnabled(false);
-  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId]);
+    const next = resolveDeviceLinkWorktreeEnabled(previous, frame);
+    if (next !== null) setWtEnabled(next);
+  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, draft.worktreeEnabled, remoteDraftState]);
 
   // A device-link checkbox write remains a create gate until the controlled
   // endpoint's defaults mirror confirms the requested boolean. A mismatching

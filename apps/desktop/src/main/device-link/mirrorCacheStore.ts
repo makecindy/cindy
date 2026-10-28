@@ -275,6 +275,11 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
     out[key] =
       typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
   }
+  const companion = input.companion;
+  if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
+    out.companion = { id: companion.id, role: companion.role,
+      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}) };
+  }
   return out;
 }
 

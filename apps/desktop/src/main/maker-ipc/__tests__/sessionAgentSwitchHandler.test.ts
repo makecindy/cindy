@@ -17,6 +17,7 @@ import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -1652,6 +1653,39 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       })).resolves.toMatchObject({ switched: true });
     expect(userMove.calls).toEqual([]);
     expect(staged.calls).toEqual([]);
+  });
+
+  // PR #6830 merge regression, unit: the scheduled entry materialized inherited
+  // null and turned a same-computer Harness switch into a forbidden Worker move.
+  // Earlier tests entered the handoff directly. Exercise both production entries;
+  // an actual location change must still fail before runtime or database mutation.
+  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker keeps its location boundary: %j', async (agentDeviceId) => {
+    const h = relocationHarness({ agentDeviceId: null, orcaRole: null,
+      orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }),
+    });
+    const choice: ScheduledModelSelection = { agentKind: 'codex', agentDeviceId,
+      model: 'gpt-5.5', providerId: 'openai', effort: null, fastMode: false };
+    const applyModel = vi.fn(async () => {});
+    const result = applyScheduledModelSelection(choice, {
+      getTarget: async () => ({ agentKind: 'claude-code', agentDeviceId: null, status: 'active' }),
+      isBusy: () => false,
+      resolveSelection: async (value) => value,
+      switchHarness: (value) => performSessionAgentSwitch({ ...h.deps, pendingSwitches: undefined }, {
+        sessionId: 's1', targetAgentKind: value.agentKind, model: value.model,
+        agentDeviceId: value.agentDeviceId, providerId: value.providerId,
+        effort: value.effort, fastMode: value.fastMode, applyNow: true, configStaged: true,
+      }),
+      applyModel,
+    });
+    if (agentDeviceId) {
+      await expect(result).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+      expect(h.calls).toEqual([]);
+      expect(applyModel).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: null });
+      expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'codex' }));
+      expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: null }));
+    }
   });
 
   it('协同 Lead 离开远程电脑:关闭旧远程会话遇链路错误仍提交新位置', async () => {

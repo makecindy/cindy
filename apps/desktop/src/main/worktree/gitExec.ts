@@ -90,6 +90,10 @@ export interface GitExecOpts {
    * 省略 = 不超时。
    */
   timeoutMs?: number;
+  /** Optional inactivity budget for Git --progress stderr (LC_ALL=C). Only
+   * advancing object/delta/byte counters renew it; unrelated output does not.
+   * Independent of timeoutMs/deadlineAtMs, which remain absolute ceilings. */
+  idleTimeoutMs?: number;
   /** Optional absolute performance.now() deadline shared by ownership repair and retries. */
   deadlineAtMs?: number;
   signal?: AbortSignal;
@@ -286,6 +290,7 @@ function execFileOnce(
     // 后代还活着时提前结束 Promise,调用方随即发起的 git 操作与残留进程争锁。
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let reaper: ReturnType<typeof setTimeout> | undefined;
     let groupPoll: ReturnType<typeof setInterval> | undefined;
     let finishWatchdog: ReturnType<typeof setTimeout> | undefined;
@@ -297,6 +302,7 @@ function execFileOnce(
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
       if (reaper !== undefined) clearTimeout(reaper);
       if (groupPoll !== undefined) clearInterval(groupPoll);
       if (finishWatchdog !== undefined) clearTimeout(finishWatchdog);
@@ -424,6 +430,51 @@ function execFileOnce(
     child.once('error', handleChildProcessError);
     child.stdout?.once('error', handleChildProcessError);
     child.stderr?.once('error', handleChildProcessError);
+
+    // --progress emits CR-delimited records even without a terminal. Preserve
+    // split records, but never retain arbitrary stderr or credentials here.
+    if (opts?.idleTimeoutMs && opts.idleTimeoutMs > 0) {
+      const idleMs = opts.idleTimeoutMs;
+      let pending = '';
+      const counters = new Map<string, { objects: number; bytes: number }>();
+      const renew = () => {
+        if (settled || timedOut) return;
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          startTreeCleanup((gone) => new GitExecError({
+            args,
+            exitCode: null,
+            stdout: '',
+            timedOut: true,
+            cleanupUnconfirmed: !gone,
+            stderr: `no Git progress for ${idleMs}ms; process tree ${gone ? 'terminated' : 'cleanup unconfirmed'}`,
+          }));
+        }, idleMs);
+      };
+      const onProgress = (chunk: Buffer | string) => {
+        if (settled || timedOut) return;
+        const records = (pending + chunk.toString()).split(/[\r\n]/);
+        pending = records.pop()!.slice(-1024);
+        for (const record of records) {
+          const match = /^(?:remote:\s*)?(Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Checking connectivity):\s*(?:\d+%\s*\((\d+)\/\d+\)|(\d+))(?:,\s*([\d.]+)\s*(bytes|KiB|MiB|GiB))?/.exec(record.trim());
+          if (!match) continue;
+          const objects = Number(match[2] ?? match[3]);
+          const units: Record<string, number> = { bytes: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 };
+          const bytes = Number(match[4] ?? 0) * (units[match[5]] ?? 1);
+          const previous = counters.get(match[1]);
+          if (!previous || objects > previous.objects || bytes > previous.bytes) {
+            counters.set(match[1], {
+              objects: Math.max(objects, previous?.objects ?? 0),
+              bytes: Math.max(bytes, previous?.bytes ?? 0),
+            });
+            renew();
+          }
+        }
+      };
+      child.stderr?.on('data', onProgress);
+      child.once('close', () => child.stderr?.removeListener('data', onProgress));
+      renew();
+    }
 
     function startTreeCleanup(
       createFailure: (treeConfirmedGone: boolean) => GitExecError,

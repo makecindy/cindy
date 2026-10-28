@@ -9,52 +9,94 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
   <a href="https://github.com/makecindy/cindy/actions/workflows/ci.yml"><img src="https://github.com/makecindy/cindy/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-22.x-brightgreen.svg" alt="Node.js 22.x" /></a>
-  <a href="https://pnpm.io"><img src="https://img.shields.io/badge/pnpm-10-orange.svg" alt="pnpm" /></a>
 </p>
 
 <p align="center">
-  🌐 <a href="https://cindy.cn">中国大陆版</a> | <a href="https://cindy.app">国际版</a>
+  <strong><a href="https://cindy.cn/download">下载中国大陆版</a></strong> &nbsp;·&nbsp; <strong><a href="https://cindy.app/download">下载国际版</a></strong> &nbsp;·&nbsp; <a href="CONTRIBUTING.md">一起共创</a> &nbsp;·&nbsp; <a href="SUPPORT.md">使用帮助</a>
 </p>
 
 <p align="center">
-  ⬇️ <a href="https://cindy.cn/download/">中国大陆版下载</a> | <a href="https://cindy.app/download/">国际版下载</a>
+  <a href="https://cindy.cn">中国大陆官网</a> &nbsp;·&nbsp; <a href="https://cindy.app">国际版官网</a>
 </p>
 
+Cindy 是一个**开源、开箱即用的 AI Agent**。连接你的多台电脑与手机，把熟悉的
+Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙伴。
 
-Cindy 是一个开源、开箱即用的 AI Agent。她把多套 Harness、模型和工具收进同一个
-持续成长的伙伴，在真实工程和软件里把任务做完。一开始就好用，任你打扮，任你培养。
+## 所有设备，同一个 Cindy。
 
-Cindy 运行在你自己的电脑上，使用你本地的文件和已登录的应用。首批兼容
-**Claude Code** 与 **Codex** 两套 Agent Harness——更多 Harness 正在接入，自研
-Harness 也在酝酿。模型与 Harness 自由组合、同一任务中随时切换，工作现场、记忆、
-Skill 和工具始终连续；一个任务还可以由不同 Harness × 模型组合的多个 agent
-规划、并行执行、独立 review。她能操作浏览器、电脑和手机，并支持从 IM 和
-定时任务派活。
+办公室的电脑、家里的主机、随身笔记本和手机，连在一起用。
 
-本仓库是 Cindy 的开源**客户端** —— 桌面端、手机端及其共享 packages，以 pnpm
-monorepo 组织。
+- **换屏幕，不换任务。** 在另一台设备打开同一个任务，继续对话、访问文件，不用重新搬运资料。
+- **不只共享画面，也共享模型。** 其他电脑上配置好的订阅、API 供应商和本地模型，开启远程访问后也能调用。
+- **手机，也是电脑的遥控器。** 内置远程桌面，需要时直接打开应用、输入和操作自己的电脑。
 
-客户端本身免费使用，源码以 Apache-2.0 开源。模型供给按你的方式来：官方服务
-登录即用、按量透明扣减；一键授权你已有的 **Claude Code / Codex Coding Plan**，
-不必重复付费；也可以接你自己的 API key 或本地模型。具体的服务说明、价格和下载
-入口请按所在区域查看[中国大陆官网](https://cindy.cn/#pricing)或[国际版官网](https://cindy.app/#pricing)。
+**你的电脑，变身免费的服务器，全球畅联。** 不用另租服务器，也不必自己搭服务。
 
-## 任你培养
+<details>
+<summary>连接与数据如何处理</summary>
 
-开源，不只是看得见，更是改得动：
+远程访问自己的电脑，需要电脑在线、设备登录同一账号，并开启相应权限。
+模型共享需要允许对应供应商被远程调用，远程桌面也有独立的授权与系统权限。
+项目文件仍在原电脑上，可远程访问不等于整盘自动同步。云伙伴的对话、记忆、
+自有 Skill 和共享附件会通过 Cindy 服务同步；模型供应商会处理发送给它的请求。
+模型和服务费用仍按相应规则计费。
 
-- **她记住的规矩（Memory）**——纠正一次，下次自动做对，多套 Harness 共用同一份记忆。
-- **她做事的方法（Skill）**——教一次，反复使用；发布给团队、让同事直接继承的能力正在打造。
-- **她工作的节奏（Automation）**——周期任务自己排班、执行、汇报。
-- **她够得到的系统（MCP）**——把内部工具和业务系统接进来。
-- **她的功能与外观（Plugin）**——用插件改变功能、界面和交互，并通过开放市场分享（正在打造）。
-- **她本身（Source）**——审计、fork、二次开发，把通用改进以 Apache-2.0 贡献回来。
+</details>
 
-开箱即用，不是开箱即定型——欢迎从 [`CONTRIBUTING.md`](CONTRIBUTING.md) 开始，
-一起打造 Cindy。
+## 熟悉的 Agent，更顺手的体验。
 
-## 本仓包含什么
+已经在用 Claude Code 或 Codex？Cindy 把它们和 **Pi** 放在一起，再加入对交互、
+多设备访问、工具协作的理解。
+
+| Harness | 带来的能力 |
+| --- | --- |
+| **Claude Code** | 熟悉的 Claude Code 工作方式，接上 Cindy 的界面与工具。 |
+| **Codex** | Codex 的代码工作流，与其他 Agent 在同一个产品里配合。 |
+| **Pi** | 轻量、开源、可扩展，原生支持多种模型供应商。 |
+
+在支持的组合中选择 Harness 和模型，随任务需要切换。任务仍留在 Cindy，
+跨 Harness 时会交接或重建引擎上下文，并非把不同引擎的内部状态原样搬过去。
+
+**一个不够？让她带队。** 把规划、并行执行和独立 Review 交给不同 Agent，
+围绕同一个目标和验收标准一起开工。
+
+## 在真实工具里，把工作做完。
+
+使用你的文件、浏览器和软件，从交办到检查结果，都在工作的现场。
+回答也不只有文字：**图表、交互控件和丰富的 HTML 内容**，都能出现在对话里。
+
+把重复的事情设成**自动化**，或者从接入的 Slack、飞书等聊天渠道交办。
+通过 **Skill、插件和 MCP**，继续连接自己的工具与工作方法。
+
+## 一开始就好用，任你打扮，任你培养。
+
+- **培养自己的伙伴。** 给她角色、指令、Skill 和日常工作：代码审阅、资料研究、项目跟进，都可以有专门的搭档。
+- **让经验留下来。** 把偏好和知识留在记忆中，把有效的方法写成可复用、可分享的 Skill。
+- **把能力接进来。** 从 SkillHub 发现 Skill 和插件，连接自己的工具，也可以从[官方插件](https://github.com/makecindy/cindy-official-plugins)开始开发。
+- **一起打磨 Cindy。** 审计、fork、改进交互、修复问题，或者贡献一个有用的集成。客户端以 Apache-2.0 开源。
+
+开源，不只是看得见，更是改得动。[一起打造 Cindy →](CONTRIBUTING.md)
+
+## 用你已经有的，开始就好。
+
+**客户端免费。** 授权已有的 Claude Code、Codex 等受支持订阅，接自己的 API key，
+或者使用本地模型；也可以选择 Cindy 官方模型服务。已有订阅仍按供应商的限额和
+规则使用，软件免费不等于模型调用无限量。
+
+**macOS · Windows · Linux · iOS · Android**
+
+[下载中国大陆版](https://cindy.cn/download) · [下载国际版](https://cindy.app/download)
+· [中国大陆定价](https://cindy.cn/pricing) · [国际版定价](https://cindy.app/pricing)
+
+Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.md)。
+
+---
+
+## 给开发者
+
+本仓库包含 Cindy 的开源**桌面端、手机端及其共享 packages**，以 pnpm monorepo 组织。
+
+### 本仓包含什么
 
 | 路径 | 说明 |
 | --- | --- |
@@ -67,16 +109,16 @@ monorepo 组织。
 
 | 使用方式 | 账号要求 | 可用范围 |
 | --- | --- | --- |
-| 远程托管 | Cindy 云端账号 | 使用 Cindy 的完整托管服务；[中国大陆定价](https://cindy.cn/#pricing) · [国际版定价](https://cindy.app/#pricing)。 |
+| 远程托管 | Cindy 云端账号 | 使用 Cindy 的完整托管服务；[中国大陆定价](https://cindy.cn/pricing) · [国际版定价](https://cindy.app/pricing)。 |
 | 跳过登录 | 无需登录 Cindy 账号 | 在登录页选择「跳过登录」即可使用本机 agent 功能，应用内显示为「未登录」。依赖服务端的能力在该状态下不可用。 |
 
-## 前置要求
+### 前置要求
 
 - **Node.js** 22.x
 - **pnpm** 10.x（暂不支持 v11）
 - **Git LFS**
 
-## 开始开发
+### 开始开发
 
 开发者安装、Git LFS、依赖更新和权限说明统一见
 [`CONTRIBUTING.md`](CONTRIBUTING.md)。插件通过 SkillHub 或手动安装。
@@ -90,7 +132,7 @@ git lfs pull
 pnpm install
 ```
 
-## 开发入口
+### 开发入口
 
 ```bash
 # 中国大陆版 Cindy 账号
@@ -113,7 +155,7 @@ agent；进入后应用内的账号状态显示为「未登录」。依赖服务
 同样来自官方 CDN）。这是有意的设计——外部开发者不需要自建服务端，用 dev
 构建登录自己的 Cindy 账号即可直接对着官方服务器开发和测试。
 
-## 架构
+### 架构
 
 - [`DESIGN.md`](DESIGN.md) —— 视觉设计系统、颜色 token 与 UI 规范
 - [`docs/README.md`](docs/README.md) —— 完整文档与规则索引

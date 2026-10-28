@@ -927,9 +927,6 @@
     "apps/desktop/src/renderer/voice-input/__tests__/VoiceInputSection.recordingGate.test.ts": {
       "sourceReads": 9
     },
-    "apps/desktop/src/renderer/voice-input/__tests__/WebMicAudioEngine.keepAliveIdle.test.ts": {
-      "resetModules": 1
-    },
     "apps/mobile/src/__tests__/agentCapabilitiesCache.test.ts": {
       "resetModules": 1
     },

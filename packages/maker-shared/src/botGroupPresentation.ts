@@ -382,6 +382,18 @@ export function botGroupPathBasename(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** Public media stay accessible without granting group bodies local media authority. */
+function publicMediaLink(src: string): string | null {
+  try {
+    const url = new URL(src);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    // Keep the URL inside one autolink; descriptions continue through literal text.
+    return `<${url.href.replace(/[<>\\]/g, char => encodeURIComponent(char))}>`;
+  } catch {
+    return null;
+  }
+}
+
 /** Display-only body fragments. Literal component text never becomes Markdown syntax. */
 export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageView['authorKind']): Array<{ kind: 'text' | 'markdown'; content: string }> {
   if (authorKind !== 'bot') return [{ kind: 'markdown', content }];
@@ -404,7 +416,12 @@ export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageV
       const label = richString(node, 'label');
       if (['image', 'video', 'audio', 'svg'].includes(node.kind)) {
         // Group body has no task-local media authority. Keep its description readable.
-        add([label, richString(node, 'alt'), richString(node, 'caption'), richString(node, 'src')].filter(Boolean).join('\n'));
+        const description = [label, richString(node, 'alt'), richString(node, 'caption')].filter(text => text.trim()).join('\n');
+        // A neutral type marker is not a promise that an attachment was delivered.
+        const placeholder = node.kind === 'image' ? '🖼' : node.kind === 'video' ? '🎞' : node.kind === 'audio' ? '♪' : '◇';
+        add(description || placeholder);
+        const link = publicMediaLink(richString(node, 'src'));
+        if (link) add(link, 'markdown');
       } else {
         const markdown = richMarkdown(node);
         if (markdown !== null) {

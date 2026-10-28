@@ -8420,6 +8420,10 @@ describe("Pi provider-aware model routing", () => {
     const config = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR!, "models.json"), "utf8"));
     expect(config.providers["native-openai"].headers["x-cindy-pi-provider-id"]).toBe("openai");
     expect(config.providers["native-account-b"].headers["x-cindy-pi-provider-id"]).toBe("account-b");
+    expect(JSON.parse(captured.env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS!)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'native-openai', cachedCodex: true }),
+      expect.objectContaining({ id: 'native-account-b', cachedCodex: true }),
+    ]));
     expect(subagentAccounts).toEqual(expect.arrayContaining(["openai", "account-b"]));
     for (const account of ["account-b", "openai"]) {
       await handle.setModel!(model, { providerId: account });

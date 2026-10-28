@@ -528,6 +528,27 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     });
 
+  it('applies a model compaction policy in native Pi and detects a later policy change', { timeout: 30_000 }, async () => {
+    let pct: number | null = 75;
+    const deps = buildDeps();
+    deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+    deps.resolveModelCompactionPct = (provider, model) => provider === 'xd' && model === 'pi-test-model' ? pct : null;
+    const agent = new PiAgent(deps);
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-model-compaction-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await agent.startSession({ sessionId: 'model-compaction-native', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = 80;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+      await handle.close();
+      handle = await agent.startSession({ sessionId: 'model-compaction-native-next', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = null;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+    } finally { await handle?.close(); rmSync(workingDir, { recursive: true, force: true }); }
+  });
+
   it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
     'loads global %s with native precedence and keeps the prompt stable across turns',
     { timeout: 60_000 },

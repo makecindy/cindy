@@ -784,7 +784,7 @@ export function startCompanionCloud(input: {
         const profile = await profileOf(actor.id).catch(() => null);
         if (isCindyCompanion(actor.externalId, profile)) copies.push({ botId: actor.externalId, name: actor.name, homeDeviceId: actor.homeDeviceId ?? null });
       }
-      return copies.length > 1 ? copies : [];
+      return copies;
     },
 
     async mergeCindy(keepBotId, fromBotIds) {

@@ -36,6 +36,10 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
+// Keep the real attachment components; only replace native reader and filesystem surfaces for jsdom.
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {

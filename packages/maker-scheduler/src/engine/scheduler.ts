@@ -56,9 +56,21 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model' | 'agentDeviceId'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  // A bound agent run only overrides its task's location with an explicit model
+  // selection. Reject a local-only patch instead of silently inheriting remote.
+  if (schedule.modelAgentDeviceId === '' && (schedule.targetSessionId || schedule.persistentSession) &&
+    (schedule.executionMode ?? 'agent') === 'agent' &&
+    (!schedule.modelAgentKind || !schedule.model?.trim())) {
+    throw new Error('Explicit scheduled Agent location for a bound task requires a Harness and model');
+  }
+  if (schedule.modelAgentDeviceId !== undefined && (
+    typeof schedule.modelAgentDeviceId !== 'string' ||
+    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+      !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
+  )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
     if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
@@ -70,10 +82,10 @@ function validateScheduleExecutionShape(
     if (typeof schedule.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.agentDeviceId)) {
       throw new Error('agentDeviceId must be a valid device id');
     }
-    if ((schedule.executionMode ?? 'agent') === 'script') {
+    if (schedule.modelAgentDeviceId === undefined && (schedule.executionMode ?? 'agent') === 'script') {
       throw new Error('script execution does not support agentDeviceId');
     }
-    if (!schedule.model?.trim()) {
+    if (schedule.modelAgentDeviceId === undefined && !schedule.model?.trim()) {
       throw new Error('agentDeviceId requires an explicit model');
     }
   }
@@ -86,6 +98,9 @@ function validateScheduleExecutionShape(
       throw new Error('invalid schedule: prompt is required for agent execution mode');
     }
     return;
+  }
+  if (schedule.modelAgentDeviceId) {
+    throw new Error('script execution does not support remote model sources; select a local model before switching modes');
   }
   if (!schedule.scriptConfig?.command.trim()) {
     throw new Error('script execution requires a non-empty command');
@@ -124,7 +139,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -1398,6 +1413,13 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    // Old clients can rename an automation without losing its route. A model edit,
+    // however, must carry the location once one has been explicitly selected.
+    if (existing.modelAgentDeviceId !== undefined && patch.modelAgentDeviceId === undefined &&
+      !Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId', 'agentDeviceId'] as const).some(
+        (key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== existing[key],
+      )) throw new Error('Editing this scheduled model route requires a newer client');
     // Agent-only quiet reporting does not apply when changing to script mode.
     // Keep explicit invalid combinations subject to the existing validation.
     if (patch.executionMode === 'script' && existing.executionMode !== 'script'

@@ -1,3 +1,4 @@
+import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
 import { admitTaskAction, assertTaskActionCurrent, TaskActionAuthorizationError } from '../../../maker-ipc/taskActionAuthorization';
 import { formatForwardedRequest } from '../../../../shared/forwardedRequest';
@@ -56,6 +57,7 @@ import {
 } from '../../schema';
 
 // Host preference storage is outside this database/runtime integration test.
+vi.mock('../sessionCreatedBroadcast.js', () => ({ emitSessionCreated: vi.fn(), emitSessionListChangedLocally: vi.fn() }));
 vi.mock('electron-store', () => ({ default: class {
   private values = new Map<string, unknown>();
   get(key: string, fallback?: unknown) { return this.values.get(key) ?? fallback; }
@@ -2043,18 +2045,20 @@ describe('Bot canonical Session lifecycle', () => {
     );
   });
 
-  it('creates one hidden IM channel lane per route key, projects it as `channel` and keeps it out of history search', async () => {
+  it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
       expectedProfileVersion: 1,
     });
+    vi.mocked(emitSessionCreated).mockClear();
     const routeKey = 'im:telegram:777:g:-100123';
     const first = await ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: '[TG·群] 100123' });
     expect(first).toMatchObject({ ok: true, created: true });
     if (!first.ok) throw new Error(first.message);
     await expect(ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'ignored' }))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
+    expect(emitSessionCreated).toHaveBeenCalledExactlyOnceWith(first.sessionId);
     await expect(findBotChannelLaneSession('bot-1', routeKey)).resolves.toBe(first.sessionId);
     const canonical = h.sqlite!.prepare(
       'SELECT working_dir AS workingDir, model, permission_mode AS permissionMode FROM sessions WHERE id = ?',

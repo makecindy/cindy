@@ -62,7 +62,7 @@
       "filterMeta": "{{available}}대 접속 가능",
       "filterMetaWithUnavailable": "{{available}}대 접속 가능 · {{unavailable}}대 확인 필요",
       "showUnavailableReason": "기기를 펼치면 사용할 수 없는 이유가 표시됩니다",
-      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 설정의 원격 제어에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
+      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 '설정 → 원격 연결'에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
       "emptyTitle": "표시할 컴퓨터가 아직 없습니다",
       "hideUnavailableA11y": "사용할 수 없는 컴퓨터 숨기기",
       "showUnavailableA11y": "사용할 수 없는 컴퓨터 표시",
@@ -338,7 +338,9 @@
       "doneUnread": "완료·읽지 않음",
       "running": "실행 중",
       "close": "닫기",
-      "cancelRename": "이름 변경 취소"
+      "cancelRename": "이름 변경 취소",
+      "createdBy": "{{name}}이(가) 생성",
+      "ownedBy": "{{name}} 소속"
     },
     "accounts": {
       "title": "계정 전환",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "없음",
       "summarySeparator": ", ",
-      "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다."
+      "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다.",
+      "filterTeammatesHeading": "파트너",
+      "filterAnySource": "모든 출처",
+      "filterSelectedTeammates": "{{count}}명 선택"
     },
     "search": {
       "placeholder": "제목 또는 내용 검색…",

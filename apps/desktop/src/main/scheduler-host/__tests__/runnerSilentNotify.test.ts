@@ -54,7 +54,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
-import { projectQuietScheduledOutput } from '../silent-output.js';
+import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -194,6 +194,18 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+  });
+
+  it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const promise = runner.fire(baseSchedule({ source: 'bot', recurring }), createFireContext());
+    await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());
+    const sent = JSON.stringify(vi.mocked(h.session.send).mock.calls[0][0]);
+    expect(sent.includes('[Routine checkpoint]')).toBe(recurring);
+    expect(sent).toContain('check the PR status');
+    h.emit({ type: 'done', data: { result: '' } });
+    await promise;
   });
 
   it('passes successful precheck output only to model input, keeping stored instructions intact', async () => {
@@ -562,6 +574,42 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
     },
   );
+
+  it.each([true, false].flatMap(silenced => [true, false].map(terminalOnly => ({ silenced, terminalOnly }))))(
+    'persists an owner-promoted reply once (silenced=$silenced, terminalOnly=$terminalOnly)',
+    async ({ silenced, terminalOnly }) => {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced });
+      const promise = runner.fire(baseSchedule({ source: 'bot', silentWhenIdle: true }), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      h.emit({ type: 'text', data: { text: 'Hidden preamble' } });
+      revealScheduledOutput({ kind: 'scheduler', scheduleId: 'schedule-1', scheduleName: 'Check', runId: 'run-1' });
+      if (!terminalOnly) h.emit({ type: 'text', data: { text: 'Owner reply', isFinal: true } });
+      h.emit({ type: 'done', data: { result: 'Owner reply' } });
+      await promise;
+      const repairs = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+      // The normal text pipeline persists streamed replies; only a done-only reply needs repair.
+      expect(repairs).toHaveLength(terminalOnly ? 1 : 0);
+      if (terminalOnly) expect(repairs[0][1].content).toBe('Owner reply');
+      expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+      expect(hasVisibleScheduledOutput('run-1')).toBe(false);
+    },
+  );
+
+  it.each([true, false])('repairs a hidden Claude block followed by a visible fallback tail (silenced=%s)', async (silenced) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced });
+    const promise = runner.fire(baseSchedule({ source: 'bot', silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'claude-code', data: { text: 'Hidden prefix ', isFinal: true } });
+    revealScheduledOutput({ kind: 'scheduler', scheduleId: 'schedule-1', scheduleName: 'Check', runId: 'run-1' });
+    h.emit({ type: 'text', source: 'claude-code', data: { text: 'visible tail' } });
+    h.emit({ type: 'done', source: 'claude-code', data: { result: 'Hidden prefix visible tail' } });
+    await promise;
+    const repairs = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0][1].content).toBe('Hidden prefix visible tail');
+  });
 
   it('does not broadcast or notify into a new owner after persisting the final report', async () => {
     const h = createSessionHarness(acceptingSend());

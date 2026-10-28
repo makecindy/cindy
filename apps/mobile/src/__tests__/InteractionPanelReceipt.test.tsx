@@ -79,7 +79,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('lucide-react-native', async () => {
   const { createElement } = await import('react');
   return { ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
-    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Pencil: () => null, Plus: () => null };
+    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Square: ({ color }: { color: string }) => createElement('span', { 'data-stop-color': color }), Pencil: () => null, Plus: () => null };
 });
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -136,7 +136,7 @@ async function type(id: string, value: string) {
 
 // #6778, unit: render the real card/hook and start/stop dictation. Earlier tests
 // only checked labels and clicks, missing the invisible inverse-colour mic.
-// Preserve the existing unfilled control; only startup replaces the mic.
+// Preserve the unfilled control; distinguish startup, recording and processing.
 // Minimal input: one question in each answer layout, in either theme.
 it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answer layouts', async (mode) => {
   theme.mode = mode;
@@ -170,7 +170,7 @@ it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answe
     expect(button().getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
     expect(button().getAttribute('aria-busy')).toBe('false');
     expect(style()).toEqual(idleStyle);
-    expect(micColor()).toBe(colors.textSecondary);
+    expect(button().querySelector('[data-stop-color]')!.getAttribute('data-stop-color')).toBe(colors.textSecondary);
     await click('interaction.ask.voice');
     expect(button().getAttribute('aria-label')).toBe('session.screen.voiceStartInput');
     expect(style()).toEqual(idleStyle);
@@ -242,6 +242,38 @@ it('queues a submit before the voice handle exists without pretending to record'
   await act(async () => finish());
   expect(resolveInteraction).toHaveBeenCalledOnce();
   expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('最终回答');
+});
+
+// Unit: real answer card/hook, fake microphone. Earlier fixtures never returned
+// the controller's caret with a transcript, so a second take inserted at the
+// stale selection instead of following the previous sentence.
+it('continues a second dictation after the first sentence and shows processing while stopping', async () => {
+  const selections: unknown[] = [];
+  let finish!: () => void;
+  voiceStarter.start.mockImplementation(async (input) => {
+    selections.push(input.getSelection());
+    input.onListening();
+    return {
+      stop: () => new Promise<void>((resolve) => {
+        finish = () => { input.setText('第一句', { start: 3, end: 3 }); resolve(); };
+      }),
+      cancel: async () => undefined,
+    };
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?' }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await click('interaction.ask.voice');
+  await click('interaction.ask.voice');
+  const button = host.querySelector('[data-testid="interaction.ask.voice"]')!;
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  await act(async () => finish());
+  await click('interaction.ask.voice');
+  expect(selections).toEqual([{ start: 0, end: 0 }, { start: 3, end: 3 }]);
+  expect(resolveInteraction).not.toHaveBeenCalled();
 });
 
 it.each(['stop', 'live'] as const)('retains text and permits manual correction after a %s failure', async (failure) => {

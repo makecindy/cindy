@@ -24,7 +24,6 @@ import type {
   SendOrigin,
 } from '../types/events.js';
 import type { ContextUsageData } from '../types/context-usage.js';
-import type { HarnessHookHandler, HarnessHookRequest } from '../types/harness-capabilities.js';
 import {
   coerceSessionPermissionUpdates,
   createSessionPermissionUpdate,
@@ -105,8 +104,6 @@ export interface CodexMcpThreadContextArgs {
   /** Host-owned app-server thread lineage. */
   mcpCallerKind: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested: boolean;
-  /** Host callback for the native mcp_tool Hook; never model-supplied. */
-  nativeHarnessHook?: (input: unknown, metadata: unknown) => Promise<Record<string, unknown>>;
   /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
   sessionInstanceId?: string;
   workingDir: string;
@@ -982,6 +979,12 @@ export interface AgentDeps {
   /** Host working budget for this route (user override, optionally catalog default).
    * Missing means the adapter uses its route/native defaults. */
   resolveModelContextLimit?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
+  /** Host-resolved model percentage. Hosts without a policy retain their runtime defaults. */
+  resolveModelCompactionPct?: (
     providerId: string | null | undefined,
     modelId: string,
   ) => number | null;
@@ -2372,13 +2375,6 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
-  /** Adapter reports only hooks actually installed before native execution. */
-  readonly harnessHooks?: ReadonlyArray<HarnessHookRequest['name']>;
-  /** Actual running executable version, only when confirmed by its adapter. */
-  readonly runtimeVersion?: string;
-  setHarnessHookHandler?(handler: HarnessHookHandler): () => void;
-  /** Native-owned compaction coordination; plain compactSession alone is not sufficient. */
-  requestHarnessCompaction?(): Promise<ManualCompactResult>;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;

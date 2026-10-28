@@ -3075,6 +3075,13 @@ function applyAssistantTextLine(
     ? normalizeActivityText(rawText)
     : appendActivityTextStream(session.assistantStream, rawText);
   if (!text) {
+    const lineId = session.assistantStreamLineId;
+    if (lineId) {
+      session.activityLines = session.activityLines.filter(line => line.id !== lineId);
+      if (session.messagePreview?.line.id === lineId) session.messagePreview = null;
+      session.messagePreviewQueue = session.messagePreviewQueue.filter(line => line.id !== lineId);
+      session.assistantStreamLineId = null;
+    }
     if (isFinal) {
       clearAssistantStream(session);
     }

@@ -64,6 +64,10 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     expect(perfHarness).toContain("const recycle = params.recycle === '1';");
     expect(listSource).toContain('recycleItems={recycleItems}');
     expect(listSource).toContain('getItemType={mobileMessageListItemType}');
+    // Confirmation must stay in the same LegendList pool as the optimistic row;
+    // changing its type would discard the measured cell just as the persisted
+    // message replaces the pending bubble.
+    expect(source).toContain("return item.type === 'pending_send' ? 'message' : item.type;");
     expect(source).toContain('useRecyclingState');
     // 可见性必须由 cell 自己订阅。把可见 key 集合放进 React Context 会在每个
     // onViewableItemsChanged 回调里广播给所有已挂载长消息，快滑时造成整窗重渲染、GC 和白屏。

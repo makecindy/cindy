@@ -1,3 +1,4 @@
+import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
@@ -1126,12 +1127,9 @@ export const sessionsStore = {
    */
   prependCreated(session: Session): void {
     if (!session?.id) return;
-    // Bot canonical sessions have their own sidebar/history projection. They must
-    // never leak into the regular desktop Session cache through the optimistic
-    // prepend path (the IPC list already excludes source='bot').
-    if (session.source === 'bot') return;
-    // /review 审查任务同样不进普通任务列表,只从来源任务的审查卡片打开。
-    if (session.source === 'review') return;
+    // Canonical/private companion chats keep their own entry; linked routine and
+    // channel tasks share the ordinary list, matching the host projection.
+    if (!isOrdinaryTaskListSession(session)) return;
     // 已转入后台的任务不经本地插入回到列表。
     if (hiddenSessionIds.has(session.id)) return;
     // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览

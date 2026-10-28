@@ -112,7 +112,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133, 134]);
       expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(columnNames(db, 'sessions')).toContain('last_activity_at');
@@ -272,6 +272,35 @@ describeMigrationReplay('migration replay', () => {
             }]);
           }
           expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('104');
+        }
+      } finally {
+        rmSync(stagedDir, { recursive: true, force: true });
+        cleanup();
+      }
+    },
+  );
+
+  // Migration tier: upgrading an existing automation must preserve its content
+  // and legacy inheritance; partial fixtures and an already-added column are safe.
+  it.each(['missing table', 'legacy table', 'existing column'])(
+    'replays the scheduled Agent location migration with %s', (state) => {
+      const { db, cleanup } = createTempDb();
+      const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-scheduled-agent-location-'));
+      try {
+        db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+        const migration = listMigrations(drizzleDir()).find((item) => item.fileName.endsWith('_schedule_model_location.sql'))!;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        mkdirSync(path.join(stagedDir, 'scripts'));
+        copyFileSync(migration.tsScriptPath!, path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)));
+        if (state !== 'missing table') {
+          db.exec("CREATE TABLE schedules (id TEXT PRIMARY KEY, prompt TEXT); INSERT INTO schedules VALUES ('old', 'keep this prompt');");
+          if (state === 'existing column') db.exec("ALTER TABLE schedules ADD model_agent_device_id TEXT; UPDATE schedules SET model_agent_device_id = 'shared:owner';");
+        }
+        for (let replay = 0; replay < 2; replay += 1) {
+          runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+          if (state === 'missing table') expect(tableExists(db, 'schedules')).toBe(false);
+          else expect(db.prepare('SELECT * FROM schedules').all()).toEqual([{ id: 'old', prompt: 'keep this prompt',
+            model_agent_device_id: state === 'existing column' ? 'shared:owner' : null }]);
         }
       } finally {
         rmSync(stagedDir, { recursive: true, force: true });

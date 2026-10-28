@@ -39,11 +39,13 @@ it('retains fresh executions when cached history changes during load', async () 
 });
 
 describe('direct Chat Server client', () => {
-  // Unit: topic loads already cached replies but still fetched the root on every open.
-  it('reuses the durable root and reply page when reopening a topic', async () => {
+  // Unit: reuse cached topic history, but refresh live execution state on every open.
+  it('reuses the durable root and reply page while refreshing executions when reopening a topic', async () => {
+    let executionStatus = 'running';
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
       if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(20) }];
       if (path.endsWith(`/messages/${id(20)}`)) return message(20);
       if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
       return [];
@@ -53,9 +55,13 @@ describe('direct Chat Server client', () => {
       store: { read: async () => saved, write: async (_, state) => { saved = state ?? undefined; } } });
     const client = createChatServerClient(request, undefined, async () => history);
     const first = await client.load(id(1), undefined, id(20));
+    expect(chatGroupView(first, id(10)).round.speakers).toMatchObject([{ executionId: id(30), executionStatus: 'running' }]);
+    executionStatus = 'stopping';
     request.mockClear();
-    expect((await client.load(id(1), undefined, id(20))).messages).toEqual(first.messages);
+    const reopened = await client.load(id(1), undefined, id(20));
+    expect(reopened.messages).toEqual(first.messages);
     expect(first.messages.map(m => m.id)).toEqual([id(21), id(20)]);
+    expect(chatGroupView(reopened, id(10)).round.speakers).toMatchObject([{ executionId: id(30), executionStatus: 'stopping' }]);
     // History stays cached while the existing live execution and failure reads
     // still refresh. No snapshot, root or reply-page request may be repeated.
     const refreshedPaths = request.mock.calls.map(([path]) => path.split('?')[0]);
@@ -488,4 +494,18 @@ it('projects waiting and stopping executions without inventing task IDs or losin
   expect(view.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
     [id(30), 'needs_input', null], [id(31), 'stopping', null],
   ]);
+});
+
+// Unit: cross-device Cindy filters use profile identity, including exact legacy presets.
+it('reads Cindy preset identity without inferring from names and retains known IDs on transient failure', async () => {
+  const { CINDY_DEFAULT_IDENTITY } = await import('@cindy/maker-shared/bot-template-preset');
+  const request = vi.fn(async (_path: string, _method?: string, _body?: unknown, actorId?: string) => {
+    if (actorId === id(4)) throw new Error('offline');
+    return [{ key: 'companion.profile.v1', value: actorId === id(1) ? { templateId: 'cindy' }
+      : actorId === id(2) ? { soul: CINDY_DEFAULT_IDENTITY } : { name: 'Cindy', soul: 'custom' } }];
+  });
+  const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
+  const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
+  expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
+  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
 });

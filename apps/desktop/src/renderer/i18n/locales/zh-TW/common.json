@@ -74,6 +74,11 @@
       "stopped": "本機連線已停止"
     }
   },
+  "attachmentAccessConfirmation": {
+    "title": "確認附件存取",
+    "message": "Cindy 無法讀取這個附件。請選擇原始檔案，確認後繼續傳送這則訊息；取消會保留草稿。",
+    "button": "使用原始檔案"
+  },
   "mailReader": {
     "showExternalImages": "顯示外部圖片",
     "markReadFailed": "未能同步已讀狀態，請檢查信箱授權後重新開啟。",
@@ -845,6 +850,135 @@
       "deleted": "已刪除 {{provider}} 的供應商組"
     }
   },
+  "regionScreenshot": {
+    "editor": { "fitWidth": "適合寬度", "loading": "正在載入圖片…" },
+    "moveToolbar": "左右拖動工具列",
+    "hint": "按一下選取視窗或元素，拖曳框選 · 滾輪切換範圍 · 空白鍵全螢幕 · C 複製顏色 · Esc 結束",
+    "hintWithLast": "按一下選取視窗或元素，拖曳框選 · 滾輪切換範圍 · 空白鍵全螢幕 · R 上次區域 · C 複製顏色 · Esc 結束",
+    "copy": "複製",
+    "cancel": "結束截圖",
+    "captureFailed": "無法擷取螢幕",
+    "permission": {
+      "title": "需要螢幕錄製權限",
+      "detail": "截圖需要在「系統設定 > 隱私權與安全性 > 螢幕與系統錄音」中允許 {{appName}}，開啟後請重新開啟 {{appName}}。",
+      "openSettings": "打開系統設定",
+      "later": "暫不開啟"
+    },
+    "undo": "復原",
+    "redo": "重做",
+    "pinToScreen": "釘選到螢幕",
+    "pin": {
+      "copy": "複製",
+      "save": "儲存…",
+      "ask": "問 {{appName}}",
+      "opacity": "不透明度",
+      "originalSize": "原始大小",
+      "passThrough": "滑鼠穿透",
+      "close": "關閉",
+      "closeAll": "關閉所有釘選圖片",
+      "unlock": "恢復滑鼠操作"
+    },
+    "save": "儲存",
+    "cindy": "交給 {{appName}}",
+    "tools": {
+      "rect": "矩形",
+      "ellipse": "橢圓",
+      "line": "直線",
+      "arrow": "箭頭",
+      "pen": "畫筆",
+      "marker": "螢光筆",
+      "text": "文字",
+      "mosaic": "馬賽克",
+      "blur": "模糊",
+      "step": "編號"
+    },
+    "ai": {
+      "ask": "問 {{appName}}",
+      "translate": "翻譯",
+      "explain": "解釋",
+      "extract": "擷取文字"
+    },
+    "size": {
+      "stroke": {
+        "0": "細",
+        "1": "中",
+        "2": "粗"
+      },
+      "text": {
+        "0": "小",
+        "1": "中",
+        "2": "大"
+      },
+      "strength": {
+        "0": "弱",
+        "1": "中",
+        "2": "強"
+      }
+    },
+    "colors": {
+      "red": "紅色",
+      "yellow": "黃色",
+      "green": "綠色",
+      "blue": "藍色",
+      "black": "黑色",
+      "white": "白色"
+    },
+    "magnifier": {
+      "copyHint": "C 複製顏色"
+    },
+    "saveFileName": "截圖",
+    "saveFailed": "無法儲存截圖",
+    "prompt": {
+      "translate": "請辨識這張截圖中的文字並翻譯成繁體中文，保留原有的段落和清單結構，只輸出譯文。如果原文已經是中文，就翻譯成英文。",
+      "explain": "請解釋這張截圖的內容。如果是錯誤訊息，說明原因與解決方法；如果是圖表、程式碼或介面，說明它在表達什麼、有哪些重點。",
+      "extract": "請將這張截圖中的文字原樣擷取出來，保留原有的換行、段落和清單；表格以 Markdown 表格輸出。只輸出擷取的文字。"
+    },
+    "live": {
+      "scroll": "捲動截圖",
+      "video": "錄影",
+      "gif": "錄製 GIF",
+      "recording": "正在錄製…",
+      "preview": "擷取預覽",
+      "cursor": "顯示滑鼠指標",
+      "keys": "顯示按鍵（包含輸入內容）",
+      "start": "開始錄製",
+      "pause": "暫停",
+      "resume": "繼續",
+      "finish": "完成",
+      "paused": "錄影已暫停",
+      "done": "擷取完成，可以儲存",
+      "saved": "已儲存",
+      "copied": "已複製",
+      "copyFailed": "複製失敗，可以重試或儲存檔案。",
+      "scrollHint": "在選取範圍內向上或向下捲動，也可點擊自動捲動",
+      "recordHint": "在預覽上繪製標註，標註會出現在錄影中。不錄製聲音",
+      "format": "格式",
+      "videoFormat": "影片 (WebM)",
+      "prepareHint": "點擊開始後倒數 3 秒，不錄製聲音。",
+      "countdown": "{{count}} 秒後開始錄製",
+      "countdownHint": "即將開始，按 Esc 取消。",
+      "annotate": "標註",
+      "finishing": "正在完成…",
+      "replay": "重新播放",
+      "previewUnavailable": "無法開啟預覽。可直接儲存，或關閉上一個預覽後重試。",
+      "playbackFailed": "無法播放，仍可儲存錄製檔案。",
+      "annotationNoRoom": "選取區域旁空間不足，無法展開標註。",
+      "overlap": "這一段未能接上。可稍往回捲動，或完成已擷取的部分。",
+      "limit": "已達擷取上限，請完成並儲存這段內容",
+      "captureFailed": "擷取已停止，可以繼續重試或儲存已擷取內容",
+      "encodeFailed": "錄製內容編碼失敗，請關閉後重新錄製",
+      "exportFailed": "儲存失敗，請再次選擇儲存",
+      "keysUnavailable": "按鍵顯示無法使用。macOS 請為 Cindy 開啟輸入監控權限",
+      "noRoom": "無法開始。請選取至少 32 × 32 像素的範圍，並在旁邊留出預覽空間。",
+      "image": "截圖",
+      "startScroll": "開始捲動截圖",
+      "autoScroll": "自動捲動",
+      "stopScroll": "停止捲動",
+      "edit": "編輯",
+      "autoUnavailable": "自動捲動已停止，可在選取範圍內手動捲動",
+      "autoPermission": "自動捲動需要「輔助使用」權限。請在系統設定中允許 Cindy 後再試，也可以在選取範圍內手動捲動"
+    }
+  },
   "privacyExit": {
     "status": "正在透過 Cindy 被遠端控制",
     "hint": "點擊螢幕或按任意鍵，確認後中斷連線",
@@ -1170,6 +1304,7 @@
       "done": "完成",
       "running": "執行中",
       "networkReconnecting": "（{{attempt}}/{{maxAttempts}}）網路連線中斷，正在重新連線…",
+      "callingTool": "正在呼叫工具…",
       "updatingTasks": "正在更新任務",
       "awaitingPermission": "等待授權",
       "awaitingQuestion": "等待你的回覆",
@@ -3574,6 +3709,12 @@
           "contextLimitHint": "套用至此模型所有可用引擎。以整數 K 編輯（1 K = 1,000 tokens）；未編輯時保留精確值。儲存後用於後續執行，不影響正在產生的內容。實際可用長度仍受模型服務限制。",
           "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可選擴展至 1M（1,000,000）。服務執行時需在「管理服務」中重新啟動以套用變更；已停止時，下次使用自動生效。長輸入會增加記憶體用量和等待時間。",
           "contextLimitAria": "上下文上限（千 tokens）",
+          "compaction": {
+            "title": "自動壓縮",
+            "hint": "占用達到所選比例時整理上下文。比例越低，越早壓縮；實際時機仍受引擎限制。",
+            "default": "{{pct}}%（預設）",
+            "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
+          },
           "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
           "restoreDefault": "恢復預設",
@@ -6178,9 +6319,15 @@
         "conflict": "與「{{name}}」衝突",
         "voiceConflict": "與語音輸入快捷鍵衝突",
         "composerVoiceConflict": "與語音輸入快捷鍵衝突，請修改傳送或語音輸入快捷鍵。",
-        "menuAccelerator": "該組合鍵無法註冊為選單快捷鍵"
+        "menuAccelerator": "該組合鍵無法註冊為選單快捷鍵",
+        "globalUnusable": "此組合鍵不能用作全域快捷鍵",
+        "globalOccupied": "已被其他應用程式佔用，請換一個組合鍵"
       },
       "items": {
+        "region-screenshot": {
+          "label": "截圖",
+          "description": "在任何應用程式中截圖，可以加上標註、釘選到螢幕，或交給 {{appName}} 處理"
+        },
         "toggle-sidebar": {
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
@@ -6587,6 +6734,9 @@
         "installAria": "安裝 {{name}}"
       },
       "market": {
+        "publisherKind": {
+          "official": "官方"
+        },
         "scopeAria": "篩選插件來源",
         "scope": {
           "all": "全部",
@@ -6900,18 +7050,6 @@
         "codeDetail": "在獨立沙箱中執行，無法訪問你的檔案與網路。",
         "resident": "常駐執行(生效後即啟動，不呼叫也保持後臺處理程序)",
         "residentDetail": "空閒時也佔用少量記憶體；停用或解除安裝後進程立即關閉。",
-        "harnessRead": "讀取 AI 執行資訊：{{name}}",
-        "harnessReadDetail": "依宣告範圍讀取能力目錄、用量或上下文統計。不包含訊息、工具參數、結果或固定指令正文。",
-        "harnessMessages": "讀取已關聯任務的訊息",
-        "harnessMessagesDetail": "可讀取已獲准任務的使用者訊息、AI 回覆及已儲存歷史，其中可能包含敏感內容。不包含固定指令或隱藏思考。",
-        "harnessToolContent": "讀取工具參數和結果",
-        "harnessToolContentDetail": "可讀取已獲准任務的工具參數和結果，其中可能包含檔案內容、命令或敏感資訊。",
-        "harnessEvents": "旁聽 AI 執行動態：{{name}}",
-        "harnessEventsDetail": "依宣告範圍接收執行事件。訊息及工具正文須另行批准；事件可能有缺漏，不能作為完整歷史。",
-        "harnessHooks": "可阻止 AI 操作：{{name}}",
-        "harnessHooksDetail": "可在支援的執行前或審批邊界阻止操作，不能代你批准或改寫參數。最多等待 1.5 秒；逾時後繼續原有審批。",
-        "harnessActions": "控制 AI 執行：{{name}}",
-        "harnessActionsDetail": "只能呼叫已接通並個別批准的執行操作。",
         "subscribeTopics": "旁聽你的任務動態(每輪往來與任務事件，不含訊息內容)",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",
         "subscribeActivityDetail": "只知道時機：思考何時開始與結束，以及 AI 何時在等你批准或等你回答。看不到思考內容、待批准的操作、涉及的命令與檔案、計劃正文、問題與你的答案，也無法代你批准。",
@@ -7338,6 +7476,203 @@
         "downloadsValue": "{{value}} 下載",
         "usesValue": "{{value}} 使用",
         "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。下方個人呼叫僅統計本機目前帳戶，口徑不同。"
+      },
+      "contribution": {
+        "unreadReview": "有新的審核結果",
+        "viewReviewResult": "查看 {{version}} 審核結果",
+        "anonymous": "匿名發布",
+        "anonymousHint": "隱藏整款插件的公開署名，可隨時修改。關閉後顯示各版本送審時儲存的原作者暱稱。",
+        "anonymousAuthorOnly": "僅原作者可修改",
+        "anonymousUnavailable": "作者設定暫不可用",
+        "anonymousUpdateFailed": "無法確認匿名設定是否已儲存，請重新整理後再試。",
+        "myPlugins": "發佈插件",
+        "publish": "提交審核",
+        "submitUpdate": "提交新版本審核",
+        "publishHint": "僅限有權發佈的插件，審核通過後在社群上架。",
+        "preparing": "正在準備目前安裝的插件…",
+        "confirmSubmit": "提交審核",
+        "confirmPublic": "目前插件套件及其中的程式碼、宣告的權限將提交人工審核，審核通過後可在社群公開分發。",
+        "packageSize": "套件大小：{{size}} 位元組",
+        "refreshList": "重新整理列表",
+        "refreshDetail": "重新整理詳情",
+        "signInRequired": "登入後即可管理你向公開市場提交的插件。",
+        "permissionDenied": "目前帳號無權發佈此插件。",
+        "notFound": "目前帳號無法查看此插件。",
+        "accountChanged": "帳號已切換，請使用目前帳號重新整理。",
+        "loadFailed": "暫時無法讀取插件資訊。",
+        "offline": "目前離線，請連線後重新整理以查看最新結果。",
+        "cachedResult": "目前顯示此帳號上次查詢的結果",
+        "lastRefreshed": "上次重新整理：{{time}}",
+        "search": "搜尋我的插件",
+        "filterLabel": "篩選我的插件",
+        "filter": {
+          "all": "全部",
+          "pending": "待審核",
+          "needs_action": "需要處理",
+          "published": "已上架"
+        },
+        "loading": "正在載入…",
+        "empty": "還沒有提交過插件。選擇自己開發並使用的插件，提交審核。",
+        "noMatches": "沒有符合搜尋或篩選條件的插件。",
+        "goPublish": "去發佈",
+        "currentMarket": "目前上架版本",
+        "inUseVersion": "使用中",
+        "localVersion": "本機版本",
+        "localEnabled": "已啟用",
+        "localDisabled": "已停用",
+        "submitVersion": "提交 {{version}} 審核",
+        "installPublished": "安裝已上架版本",
+        "publishedContentUnavailable": "暫時無法讀取目前上架版本的介紹和更新說明。",
+        "currentSubmission": "目前提交",
+        "localState": {
+          "missing": "本機未安裝",
+          "unavailable": "暫時無法讀取本機版本"
+        },
+        "listedVersion": "已上架",
+        "pendingVersion": "待審核",
+        "notInstalled": "未安裝",
+        "versionUnknown": "版本未知",
+        "noPendingVersion": "無待審核版本",
+        "versionFacts": "版本狀態",
+        "publishing": "發佈管理",
+        "latestSubmission": "最近提交",
+        "noSubmission": "尚無提交",
+        "marketVersion": "已上架 · {{version}}",
+        "market": {
+          "not_listed": "尚未上架",
+          "disabled": "已下架",
+          "archived": "已封存",
+          "release_unavailable": "版本暫時無法使用"
+        },
+        "review": {
+          "pending": "待審核",
+          "approved": "審核通過",
+          "rejected": "已退回",
+          "published": "已上架",
+          "superseded": "已由後續提交取代",
+          "legacy_unverified": "歷史修訂無法核實",
+          "current": "處理結果尚未確認",
+          "cancelled": "已取消"
+        },
+        "reason": "處理原因",
+        "submittedContent": "已提交內容",
+        "snapshotUnavailable": "原提交內容未留存或已無法核實。",
+        "history": "發佈紀錄",
+        "loadMore": "載入更多",
+        "loadMoreHistory": "載入更多歷史",
+        "releaseId": "版本紀錄 ID",
+        "revision": "修訂權杖",
+        "technicalDetails": "技術詳情",
+        "outcome": {
+          "submitted_for_review": "已提交審核",
+          "metadata_updated": "展示資訊已更新",
+          "unchanged": "內容未變，已傳回既有結果"
+        },
+        "event": {
+          "submitted": "已提交",
+          "metadata_updated": "展示資訊已更新",
+          "approved": "審核通過",
+          "rejected": "已退回",
+          "enabled": "已上架",
+          "disabled": "已下架",
+          "current_changed": "市場版本已切換",
+          "revoked": "版本已撤銷",
+          "cancelled": "已取消"
+        },
+        "source": {
+          "manual": "手動發佈",
+          "ai": "AI 協助發佈",
+          "github_oidc": "儲存庫發佈",
+          "console_upload": "控制台上傳",
+          "member_upload": "企業發佈",
+          "server_template": "範本發佈",
+          "community_upload": "社群發佈",
+          "unknown": "既有發佈管道"
+        },
+        "errors": {
+          "CONTRIBUTION_NOT_AUTHORIZED": "沒有此公開插件的提交權限，請聯絡維護者。安裝插件不授予發佈權。",
+          "CONTRIBUTION_REVISION_STALE": "目標版本已變更，請重新整理並核對內容後重新準備。",
+          "RELEASE_VERSION_CONFLICT": "此版本不能覆寫既有執行內容，請修改插件版本後再提交。",
+          "PLUGIN_GHOST_ID_CONFLICT": "這個插件識別碼已被使用。發佈新插件請更換識別碼；更新既有插件請使用原發佈帳號。",
+          "CONTRIBUTION_OPERATION_NOT_FOUND": "目前帳號無法查看這次提交。",
+          "PRECONDITION_FAILED": "目前插件無法提交審核。",
+          "PERSONAL_CONTEXT_REQUIRED": "登入後即可管理你向公開市場提交的插件。",
+          "ACCOUNT_REAUTH_REQUIRED": "登入狀態已失效，請重新登入後再試。",
+          "PERMISSION_DENIED": "目前帳號無權發佈此插件。",
+          "OWNER_CHANGED": "帳號已切換，請使用目前帳號重新整理。",
+          "PLUGIN_NOT_FOUND": "目前帳號無法查看此插件。",
+          "CONTRIBUTION_SUBMISSION_NOT_FOUND": "目前帳號無法查看此插件。",
+          "NOT_FOUND": "目前帳號無法查看此插件。",
+          "INTERNAL": "請求失敗，請稍後重試。",
+          "MUTATION_CANCELLED": "請求已取消，請重新操作。",
+          "CONTRIBUTION_IDEMPOTENCY_CONFLICT": "提交請求與原紀錄不一致，請重新整理後再提交。",
+          "PLUGIN_ARCHIVED": "已封存",
+          "RELEASE_REVOKED": "版本已撤銷",
+          "INVALID_PARAMS": "提交資訊有誤，請檢查插件資訊後重新提交。",
+          "PAYLOAD_TOO_LARGE": "插件套件過大，請縮小後重新提交。",
+          "RATE_LIMITED": "請求過於頻繁，請稍後再試。",
+          "JWKS_UNAVAILABLE": "帳號驗證服務暫時無法使用，請稍後再試。",
+          "STORAGE_UNAVAILABLE": "檔案儲存服務暫時無法使用，請稍後再試。",
+          "PLUGIN_REPLICAS_NOT_READY": "插件服務暫時無法使用，請稍後再試。",
+          "UPLOAD_OBJECT_MISSING": "找不到已上傳的插件套件，請重新提交。",
+          "UPLOAD_SIZE_MISMATCH": "上傳的插件套件大小不符，請重新提交。",
+          "UPLOAD_SHA256_MISMATCH": "上傳的插件套件驗證失敗，請重新提交。",
+          "PLUGIN_PACKAGE_INVALID": "插件套件格式無效，請檢查後重新提交。",
+          "CONTRIBUTION_TARGET_MISMATCH": "插件套件與提交目標不符，請檢查插件 ID 和版本。",
+          "PUBLISH_STORAGE_UNAVAILABLE": "檔案儲存服務暫時無法使用，請稍後再試。",
+          "PUBLISH_INTERNAL_ERROR": "伺服器處理失敗，請稍後再試。",
+          "RELEASE_NOTES_REQUIRED": "尚未送審：請在插件原始碼的 ghost.json.releaseNotes 中補齊更新說明，安裝更新後重新提交審核。",
+          "VERSION_ALREADY_SUBMITTED": "此版本已經送審，請更改版本號並安裝更新後重新提交審核。",
+          "PLUGIN_PENDING_RELEASE_EXISTS": "此插件已有版本正在審核，請先查看或取消該次審核。",
+          "CONTRIBUTION_PACKAGE_CHANGED": "本機插件在摘要顯示後發生變更，請重新整理摘要後核對。"
+        },
+        "installForAccount": "找不到原先選取的插件安裝。請在目前帳號下重新選取插件，確認後再提交審核。",
+        "releaseSha": "實際版本套件 SHA-256",
+        "uploadedSha": "本次上傳套件 SHA-256",
+        "publishPlugin": "發佈插件",
+        "chooseLocal": "選擇自己開發的本機插件，核對版本後提交審核。",
+        "noLocalPlugins": "還沒有已安裝插件。請先安裝並使用自己開發的插件。",
+        "noPublishablePlugins": "沒有可發佈的已安裝插件。請先安裝並使用自己開發的插件，並在詳情確認安裝身分和權限核准狀態。",
+        "unavailable": {
+          "officialGithubRequired": "官方公開插件不支援在用戶端提交審核。請透過 GitHub 儲存庫提交修改，以確保儲存庫原始碼完整，便於後續維護。",
+          "reservedId": "此插件使用 Cindy 保留識別碼，不能在用戶端提交審核。官方公開插件請透過 GitHub 儲存庫提交修改，以確保原始碼完整，便於後續維護。",
+          "privatePlugin": "此插件來自組織或私域，不能轉為社群公開發佈。",
+          "identityPending": "插件安裝身分尚未確認，暫時無法發佈。",
+          "approvalRequired": "此插件尚未完成權限核准，請先在此詳情完成確認。",
+          "installationUnavailable": "目前的插件安裝無法使用，請重新開啟原插件詳情。",
+          "sourceUnverified": "無法確認此插件的安裝來源。請開啟自己開發的本機插件。",
+          "publishingPermissionRequired": "目前帳號沒有此插件的提交權限。"
+        },
+        "intro": "管理公開市場插件的發佈、更新與審核狀態",
+        "pluginColumn": "插件",
+        "latestState": "最新狀態",
+        "version": "版本",
+        "chooseVersion": "查看版本",
+        "submittedAt": "送審時間",
+        "approvedAt": "通過時間",
+        "notApproved": "尚未通過",
+        "timeUnavailable": "未記錄",
+        "releaseNotes": "更新說明",
+        "versionUpdates": "版本與更新",
+        "versionManagement": "版本管理",
+        "versionContent": "版本內容",
+        "loadMoreVersions": "載入更多版本",
+        "notSubmitted": "尚未送審",
+        "submitVersion": "提交 {{version}} 審核",
+        "publishingVersion": "本次送審 · {{version}}",
+        "refreshSummary": "重新整理發布摘要",
+        "versionConsumedHint": "送審成功受理後，此版本號無法再次使用；取消或退回後也需要更改版本號。",
+        "cancelReview": "取消本次審核",
+        "cancelReviewTitle": "取消 {{name}} {{version}} 的審核？",
+        "cancelReviewDescription": "取消不影響目前上架版本。{{version}} 已經提交審核，之後必須使用新版本號再提交。",
+        "keepReview": "繼續審核",
+        "cancelledAt": "取消時間",
+        "cancelled": "已取消",
+        "cancelReviewCompleted": "已取消本次審核。目前上架版本不受影響。",
+        "cancelReviewAlreadyFinal": "審核已經完成，本次未取消。下方顯示實際審核結果。",
+        "viewPendingVersion": "查看正在審核的版本",
+        "submitFailed": "提交失敗",
+        "viewDetails": "查看詳情"
       }
     },
     "mcp": {
@@ -9196,6 +9531,8 @@
   },
   "bots": {
     "workbench": {
+      "ownedMark": "所屬夥伴：{{names}}",
+      "createdMark": "由 {{names}} 建立",
       "followingMark": "{{names}}在跟進這個任務"
     },
     "glance": {
@@ -12739,7 +13076,36 @@
     }
   },
   "ccAgent": {
-    "sessionEntry": {"missing":"找不到這條任務，它可能已被刪除。","denied":"目前帳號或電腦無法存取這條任務。","failed":"未能載入這條任務。","back":"返回任務列表","retry":"重新載入任務"},
+    "sessionEntry": {
+      "missing": "找不到這條任務，它可能已被刪除。",
+      "denied": "目前帳號或電腦無法存取這條任務。",
+      "failed": "未能載入這條任務。",
+      "back": "返回任務列表",
+      "retry": "重新載入任務"
+    },
+    "contextRingPanel": {
+      "title": "上下文",
+      "meaning": "AI 本輪可參考的內容，包括對話、指令與工具結果。",
+      "used": "已使用",
+      "available": "空間充足",
+      "elevated": "占用較高",
+      "nearLimit": "接近上限",
+      "unknown": "尚無資料",
+      "continueHint": "可以繼續對話，暫時無需調整。",
+      "unknownHint": "收到模型的用量資料後，這裡會顯示目前占用。",
+      "tokens": "{{used}} / {{total}} tokens",
+      "compact": "壓縮上下文",
+      "compactHelp": "概括較早內容，騰出空間。部分細節可能省略。",
+      "adjust": "調整視窗",
+      "taskScope": "本任務",
+      "modelSettings": "模型預設設定",
+      "modelSettingsHint": "修改此模型的預設視窗及上限，也會影響其他任務。",
+      "remoteModelSettings": "長期調整需前往執行此任務的電腦，修改模型設定。",
+      "costHint": "較大的視窗可容納更多內容，也可能增加費用。",
+      "technical": "技術詳情",
+      "auto": "自動壓縮",
+      "autoHelp": "Codex 會在接近壓縮門檻時自動整理上下文。"
+    },
     "contextWindowBudget": {
       "menuTitle": "任務上下文視窗",
       "triggerLabel": "任務上下文視窗，目前 {{window}}",
@@ -12989,7 +13355,7 @@
       "selectFolderFailed": "選擇目錄失敗，請重試",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}，夥伴：{{creators}}）",
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
@@ -13054,6 +13420,9 @@
       "filterProjectOrderTip": {
         "custom": "用滑鼠拖動專案列調整順序，組內任務仍按上面的排序"
       },
+      "filterCreatorsHeading": "夥伴",
+      "filterCreatorsAny": "不限來源",
+      "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",
       "filterAllProjects": "所有專案",
       "filterHeading": "篩選",
@@ -13167,6 +13536,14 @@
         "description": "將恢復此對話群組內 {{count}} 個已歸檔任務。恢復後將從「已歸檔」列表移除，並回到「活躍」列表。",
         "empty": "此對話群組內沒有可恢復的任務"
       },
+      "automationArchiveAll": {
+        "description": "將歸檔此自動化產生的 {{count}} 個任務。自動化仍會按排程執行。",
+        "descriptionWithSkip": "將歸檔此自動化產生的 {{count}} 個任務，略過{{skip}}的任務。自動化仍會按排程執行。",
+        "allPinnedOrRunning": "此自動化的任務全部已置頂或正在執行，無可歸檔項目",
+        "allPinned": "此自動化的任務全部已置頂，不會歸檔",
+        "allRunning": "此自動化的任務全部正在執行，暫無可歸檔項目",
+        "empty": "此自動化沒有可歸檔的任務"
+      },
       "archiveAll": {
         "title": "歸檔全部任務",
         "confirm": "歸檔全部",
@@ -13176,6 +13553,7 @@
         "skipRunning": "{{count}} 個執行中",
         "skipPinned": "{{count}} 個已置頂",
         "skipSeparator": "、",
+        "skipped": "已略過{{skip}}的任務",
         "archived_one": "已歸檔 {{count}} 個任務",
         "archived_other": "已歸檔 {{count}} 個任務",
         "partialFailure": "已歸檔 {{ok}} 個，{{fail}} 個失敗，請重試",
@@ -16315,6 +16693,7 @@
     "timezone": "時區",
     "delete": "刪除例行任務",
     "save": "儲存例行任務",
+    "saved": "例行任務已儲存",
     "deleteConfirm": "刪除這條例行任務，並取消等待中的執行？",
     "keep": "保留例行任務",
     "openTask": "查看任務",

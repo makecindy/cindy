@@ -98,7 +98,8 @@ it('marks plugin dispatch and every queue fallback with the host-only receipt', 
   const dispatch = source.slice(start, end);
   expect(dispatch).toContain("message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
-  expect(queues).toHaveLength(4);
+  // Verified create handoffs add a fifth durable entry; all must retain provenance.
+  expect(queues).toHaveLength(5);
   for (const call of queues) {
     expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
     // 插件来源随每个入队回退分支传递(含 queued-before-dispatch 竞态),排队项不丢插件身份。
