@@ -9,6 +9,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   type AgentKind,
+  type AgentSkillCommand,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
@@ -36,7 +37,7 @@ import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
@@ -46,6 +47,8 @@ import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { buildUiLanguageErrorNote } from '../uiLanguageErrorNote';
 import * as mcpApps from '../../mcp-apps/runtime.js';
 import { createWireNoteMemory } from '../wireNoteMemory';
+import { createCindyLearnInvocationCapture } from '../../learn-host/captureInvocation';
+import { createLearnInvocationGrantConsumer } from '../../learn-host/invocationGrant';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -693,6 +696,94 @@ describe('maker SEND transaction', () => {
       }),
       undefined,
     );
+  });
+
+  // #7381: exercise the real Main capture through accepted-send persistence.
+  // Existing tests inject a ready grant and cannot detect Pi's namespaced alias
+  // being rejected before the provider sees the pin. Unit tier, one user turn.
+  it('persists and consumes the trusted Pi /cindy:learn invocation exactly once', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'learn-send-invocation-'));
+    try {
+      const skillFile = path.join(root, 'SKILL.md');
+      await fs.writeFile(skillFile, '---\nname: learn\n---\nLearn.\n');
+      const session = createSession({ agentKind: 'pi' });
+      const builtInSkill: AgentSkillCommand = {
+        kind: 'agent-skill', name: 'learn', source: 'user',
+        path: skillFile, runtimeCommandName: 'skill:learn',
+      };
+      let skills = [builtInSkill];
+      let currentSession = session;
+      let enabled = true;
+      let replaceDuringDiscovery = false;
+      const capture = createCindyLearnInvocationCapture({
+        getSession: () => currentSession,
+        builtInSkillDescriptors: () => [{ name: 'learn', absolutePath: root, nativeClaudePath: root }],
+        isSkillEnabled: () => enabled,
+        canGrantUnqualifiedClaudeInvocation: async () => true,
+        listSkills: async () => {
+          if (replaceDuringDiscovery) currentSession = createSession({ agentKind: 'pi' });
+          return { skills };
+        },
+      });
+      const { deps } = createDeps({ getSession: () => session, captureCindyLearnInvocation: capture });
+      await createMakerSendTransaction(deps).sendToAgentAccepted(
+        session.id,
+        '/cindy:learn release flow',
+        undefined,
+        { persistUserMessage: { clientId: 'learn-alias', content: '/cindy:learn release flow' } },
+      );
+
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: session.instanceId,
+        resolvedSkillPath: await fs.realpath(skillFile),
+      };
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({ agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }) }),
+        undefined,
+      );
+      expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn', path: grant.resolvedSkillPath,
+      });
+      let consumed = false;
+      const consume = createLearnInvocationGrantConsumer(
+        async () => ({ messageId: 'learn-alias', text: '/cindy:learn release flow', grant }),
+        async () => {
+          if (consumed) return false;
+          consumed = true;
+          return true;
+        },
+      );
+      const request = { callerSessionId: session.id, input: 'release flow', sourceKind: 'freetext' as const };
+      await expect(consume(request, 'replaced-instance')).resolves.toMatchObject({
+        ok: false, errorCode: 'USER_REQUEST_REQUIRED',
+      });
+      await expect(consume(request, session.instanceId)).resolves.toEqual({ ok: true });
+      await expect(consume(request, session.instanceId)).resolves.toMatchObject({
+        ok: false, errorCode: 'USER_REQUEST_REQUIRED',
+      });
+
+      // A namespaced alias is not proof of source or runtime identity.
+      const custom = { ...builtInSkill, builtIn: true, path: path.join(root, 'custom', 'SKILL.md') };
+      for (const candidates of [
+        [custom],
+        [builtInSkill, { ...builtInSkill }],
+        [{ ...builtInSkill, runtimeCommandName: 'cindy:learn' }],
+      ]) {
+        skills = candidates;
+        await expect(capture(session, '/cindy:learn release flow', '/cindy:learn release flow')).resolves.toBeNull();
+      }
+      skills = [builtInSkill];
+      enabled = false;
+      await expect(capture(session, '/cindy:learn release flow', '/cindy:learn release flow')).resolves.toBeNull();
+      enabled = true;
+      await expect(capture(session, '/cindy:learn other input', '/cindy:learn release flow')).resolves.toBeNull();
+      replaceDuringDiscovery = true;
+      await expect(capture(session, '/cindy:learn release flow', '/cindy:learn release flow')).resolves.toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('does not mint a Learn grant when a colliding custom Skill won at dispatch', async () => {

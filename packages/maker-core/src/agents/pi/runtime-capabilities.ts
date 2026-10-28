@@ -198,7 +198,7 @@ export function preparePinnedPiSkillInvocation(
   pinnedSkill: { readonly name: string; readonly path: string },
   manifest: PiRuntimeCapabilityManifest | undefined,
 ): string {
-  const invocation = /^\/(?:skill:)?([^\s/]+)([\s\S]*)$/i.exec(text.trim());
+  const invocation = /^\/(?:(?:skill|cindy):)?([^\s/]+)([\s\S]*)$/i.exec(text.trim());
   if (!invocation?.[1] || invocation[1].toLowerCase() !== pinnedSkill.name.toLowerCase()) {
     throw new Error('The pinned Skill does not match the Pi command');
   }

@@ -605,11 +605,8 @@ import {
   builtInSkillDescriptors,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled } from '../skillhub/activationPreferences.js';
-import {
-  parseDirectLearnInvocation,
-  canGrantUnqualifiedClaudeLearnInvocation,
-  type CindyLearnInvocationGrant,
-} from '../learn-host/invocationGrant.js';
+import { canGrantUnqualifiedClaudeLearnInvocation } from '../learn-host/invocationGrant.js';
+import { createCindyLearnInvocationCapture } from '../learn-host/captureInvocation.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -18200,66 +18197,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
     materializeDirectSendOssAttachments,
-    captureCindyLearnInvocation: async (session, persistedContent, dispatchedText) => {
-      const invocationText = visibleMessageTextForConversationSearch(
-        'user',
-        typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
-      );
-      const persistedInvocation = parseDirectLearnInvocation(invocationText);
-      const dispatchedInvocation = parseDirectLearnInvocation(dispatchedText);
-      if (
-        !persistedInvocation
-        || !dispatchedInvocation
-        || JSON.stringify(persistedInvocation) !== JSON.stringify(dispatchedInvocation)
-      ) return null;
-      if (
-        session.remoteHostId
-        || maker.getSession(session.id) !== session
-        || (session.getStatus && session.getStatus() !== 'active')
-      ) return null;
-
-      if (session.agentKind === 'claude-code'
-        && !/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-        && !await canGrantUnqualifiedClaudeLearnInvocation(session.id)) return null;
-
-      const descriptors = builtInSkillDescriptors(
+    captureCindyLearnInvocation: createCindyLearnInvocationCapture({
+      getSession: (sessionId) => maker.getSession(sessionId),
+      builtInSkillDescriptors: () => builtInSkillDescriptors(
         app.getPath('userData'),
         app.getPath('appData'),
-      );
-      const learnDescriptor = descriptors.find((descriptor) => descriptor.name === 'learn');
-      if (!learnDescriptor || !isCindySkillEnabled(learnDescriptor.absolutePath)) return null;
-
-      const result = session.agentKind === 'claude-code'
-        ? await maker.listAgentRuntimeSkills(session.agentKind, {
+      ),
+      isSkillEnabled: isCindySkillEnabled,
+      canGrantUnqualifiedClaudeInvocation: canGrantUnqualifiedClaudeLearnInvocation,
+      listSkills: (session) => session.agentKind === 'claude-code'
+        ? maker.listAgentRuntimeSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
           runtimeConfigDir: process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'),
         })
-        : await maker.listAgentSkills(session.agentKind, {
+        : maker.listAgentSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
-        });
-      if (result.errors?.length || maker.getSession(session.id) !== session) return null;
-      const learnCandidates = activeCindyBuiltInAgentSkills(
-        result.skills,
-        descriptors,
-        isCindySkillEnabled,
-      ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-        && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-          || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
-      if (
-        learnCandidates.length !== 1
-        || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
-      ) return null;
-
-      const resolvedSkillPath = await fsp.realpath(learnCandidates[0]!.path!);
-      if (maker.getSession(session.id) !== session) return null;
-      return {
-        version: 1,
-        sessionInstanceId: session.instanceId,
-        resolvedSkillPath,
-      } satisfies CindyLearnInvocationGrant;
-    },
+        }),
+    }),
     createDbMessage: createUserMessageDurably,
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>

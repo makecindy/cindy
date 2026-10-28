@@ -480,6 +480,9 @@ describe('shared-model native fork', () => {
       await restarted.handle(controller, { op: 'open', runId: RUN_2, agentKind, payload: { json: openPayload('task-3', {
         options: { model: 'claude-opus', resumeSessionId: 'native-child-2' },
       }) } });
+      // open acknowledges receipt before Windows filesystem preparation finishes.
+      // Observe the real startup handshake before asserting its metadata.
+      await waitForStarted(restarted, controller, RUN_2);
       await vi.waitFor(async () => {
         const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
         expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
@@ -771,7 +774,8 @@ describe('#6479 bounded resume projection', () => {
       });
       try {
         await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'pi', payload: { json: payload() } });
-        await vi.waitFor(() => expect(started).toHaveLength(1));
+        await waitForStarted(host, controller, RUN_1);
+        expect(started).toHaveLength(1);
         if (controller === GUEST) {
           await vi.waitFor(() => expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId)));
         }
@@ -783,7 +787,8 @@ describe('#6479 bounded resume projection', () => {
           expect(started).toHaveLength(1);
         }
         await host.handle(controller, { op: 'open', runId: RUN_2, agentKind: 'pi', payload: { json: payload(nativeId) } });
-        await vi.waitFor(() => expect(started).toHaveLength(2));
+        await waitForStarted(host, controller, RUN_2);
+        expect(started).toHaveLength(2);
         const resumed = started[1].input;
         expect.soft(resumed.options.userPrompt).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
         expect.soft(resumed.personalInstructions).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);

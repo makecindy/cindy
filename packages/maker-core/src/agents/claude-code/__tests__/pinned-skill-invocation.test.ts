@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe('preparePinnedClaudeSkillInvocation', () => {
-  it.each(['/learn release flow', '/skill:learn release flow'])(
+  it.each(['/learn release flow', '/skill:learn release flow', '/cindy:learn release flow'])(
     'keeps the original %s invocation while loading the attested file',
     async (input) => {
       const skillFile = await writeSkill();

@@ -32,7 +32,7 @@ export async function preparePinnedClaudeSkillInvocation(
   }
 
   const invocation = new RegExp(
-    `^/(?:skill:)?${escapeRegExp(pinned.name)}(?:\\s+([\\s\\S]*))?$`,
+    `^/(?:(?:skill|cindy):)?${escapeRegExp(pinned.name)}(?:\\s+([\\s\\S]*))?$`,
     'i',
   ).exec(input.trim());
   if (!invocation) {
