@@ -164,6 +164,7 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  onDirectInputDispatched?: (sessionId: string) => void | Promise<void>;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
@@ -925,6 +926,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
       // Keep the handoff for retries until the target actually accepts it. It is
       // model-only context: dbContent and any requeued message stay unchanged.
       if (pendingHandoff && sendResult.accepted) deps.consumePendingHandoff?.(session.id);
+      if (sendResult.accepted) await deps.onDirectInputDispatched?.(session.id);
       return sendResult;
     },
     { source, context },

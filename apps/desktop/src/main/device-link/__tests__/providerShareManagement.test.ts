@@ -12,7 +12,7 @@ const host = vi.hoisted(() => ({
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn() }));
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberHistory: vi.fn(), memberTokenSnapshot: vi.fn(), pricing: vi.fn() }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -45,8 +45,9 @@ vi.mock('../../usage/turnCostCalculator.js', () => ({ computePriceQuoteTurnMoney
 vi.mock('../../usage/providerPartyUsageStore.js', () => ({
   currentProviderPartyUsageStore: () => ({ history: usageStores.ownHistory }),
 }));
-vi.mock('../providerShareUsageStore.js', () => ({
-  getProviderShareUsageStore: () => ({ history: usageStores.memberHistory }),
+vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../providerShareUsageStore.js')>(),
+  getProviderShareUsageStore: () => ({ history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
 vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: vi.fn() }));
@@ -125,6 +126,8 @@ beforeEach(() => {
   host.snapshot.mockReturnValue([{ requests: [{ requestId: 'r1' }], members: [{ memberId: 'm1' }] }]);
   usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [] }, relays: [] });
   usageStores.memberHistory.mockReturnValue([]);
+  usageStores.memberTokenSnapshot.mockReturnValue({ available: true, models: [],
+    windowStart: '2026-10-11', windowEnd: '2026-10-17', nextWindowAt: new Date(2026, 9, 18).getTime() });
   startProviderShareRuntime(vi.fn());
 });
 
@@ -367,7 +370,7 @@ describe('remote model access management', () => {
   it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
     const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
     const result = await executeProviderShareManagementCommand(command);
-    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function));
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined);
     expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
     expect(api.setMember).not.toHaveBeenCalled();
   });

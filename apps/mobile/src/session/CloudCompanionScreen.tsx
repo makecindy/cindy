@@ -216,7 +216,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
       {messages.map((message, index) => {
         const attachments = message.attachments.length
           ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} align={message.fromCompanion ? 'left' : 'right'}
-            onResolveRemoteMedia={noRemoteMedia} resolveServerMedia={room.media} /> : null;
+            onResolveRemoteMedia={noRemoteMedia} resolveServerMedia={room.media} previewServerImages={false} /> : null;
         if (!message.fromCompanion) return <View key={message.id} style={styles.userRow} testID="cloudCompanion.message.user">
           <View style={styles.userColumn}>
             {message.text ? <View style={[styles.userBubble, userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border }]}>

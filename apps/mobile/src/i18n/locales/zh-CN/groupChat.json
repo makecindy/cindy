@@ -1,8 +1,8 @@
 {
   "title": "群聊",
   "memberSeparator": "、",
-  "memberCount_one": "{{count}} 位伙伴",
-  "memberCount_other": "{{count}} 位伙伴",
+  "memberCount_one": "{{count}} 位成员",
+  "memberCount_other": "{{count}} 位成员",
   "organizer": "负责人",
   "waitingConfirm": "{{name}}在等你确认",
   "loadFailedTitle": "无法加载这个群聊",
@@ -97,6 +97,8 @@
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
     "stepUnavailable": "{{name}}现在不可用，这一步没法做",
     "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
+      "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
       "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。",
       "MODEL_UNAVAILABLE": "{{name}}无法回复：当前没有可用模型。\n请在伙伴设置中选择已连接的可用模型后重新发送。",
       "AUTH_REQUIRED": "{{name}}无法回复：模型连接需要重新认证。\n请在设置中重新连接对应模型来源后重新发送。",
@@ -141,6 +143,7 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
   },
@@ -197,20 +200,25 @@
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
     "memberActions": "{{name}} 的操作",
-    "managementComputer": "管理电脑",
     "retry": "重试",
-    "reconnect": "重连",
     "conflict": "群设置已更新，请核对后再保存。输入已保留。",
     "archive": "归档群聊",
     "archiveConfirmTitle": "归档「{{name}}」？",
     "archiveNote": "仅群主可归档。归档后不能继续发消息，历史消息保留。",
-    "managementStatus": {
-      "ready": "已连接",
-      "loading": "连接中…",
-      "noHost": "已断开",
-      "permission": "无管理权限",
-      "upgrade": "需更新电脑端",
-      "unavailable": "设置读取失败"
+    "description": "群简介",
+    "descriptionSaveFailed": "群简介未保存",
+    "makeAdmin": "设为管理员",
+    "removeAdmin": "取消管理员",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理员",
+      "member": "成员",
+      "guest": "访客"
+    },
+    "cloudStatus": {
+      "loading": "正在读取群设置…",
+      "permission": "只有群主和管理员可以修改这些设置",
+      "unavailable": "群设置读取失败，请重试"
     }
   },
   "errors": {
@@ -246,6 +254,15 @@
     "loadFailed": "暂时无法读取群聊，请重试。",
     "loadOlder": "加载更早的消息",
     "attachmentFailed": "附件打开失败，请重试。",
+    "attachmentPreviewLoading": "正在读取附件…",
+    "attachmentPreviewFailed": "无法预览此附件，请重试。",
+    "attachmentPreviewTooLarge": "附件超过 10 MB，手机上无法预览。",
+    "attachmentPreviewBinary": "此附件不是可阅读的文本，无法预览。",
+    "attachmentPreviewTruncated": "预览最多显示 10,000 行、100,000 个字符。",
+    "attachmentPreviewEmpty": "此文件为空。",
+    "attachmentPreviewRetry": "重试",
+    "attachmentPreviewOpenOutside": "在浏览器中打开",
+    "attachmentPreviewClose": "关闭附件预览",
     "previewUnavailable": "暂时无法读取消息预览",
     "endpointUnavailable": "群聊服务配置暂不可用，请重试。"
   },

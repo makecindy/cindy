@@ -156,7 +156,12 @@ export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace
       result[key] = pathToFileURL(workspace.resolve(foreign)).href;
     } else result[key] = workspace.resolve(item);
   }
-  if (Array.isArray(result.argv)) result.argv = result.argv.map((part) => typeof part === 'string' ? workspace.mapCommand(part, resolveExecutorShell().dialect) : part);
+  if (Array.isArray(result.argv)) result.argv = result.argv.map((part, index) => {
+    if (typeof part !== 'string') return part;
+    // argv[0] is passed directly to the OS as an executable name, so Shell quoting would
+    // become part of the filename. Only expand a registered workspace alias here.
+    return index === 0 ? workspace.mapAlias(part) : workspace.mapCommand(part, resolveExecutorShell().dialect);
+  });
   if (typeof result.command === 'string') result.command = workspace.mapCommand(result.command, resolveExecutorShell().dialect);
   if (result.sandbox !== undefined) result.sandbox = mapExecServerSandbox(result.sandbox, workspace);
   return mapFileData ? mapExecServerFileData(result, workspace, method) : result;

@@ -1,4 +1,5 @@
 import { readChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
+import { useChatOutboxDelivery } from '@/chat/useChatOutboxDelivery';
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Alert, AppState } from "react-native";
 import { useAuth } from "@/auth/AuthContext";
@@ -75,6 +76,7 @@ export function MobileOutboxBridge() {
   const runnerRef = useRef<ReturnType<
     typeof createDurableOutboxDelivery
   > | null>(null);
+  useChatOutboxDelivery(accountId);
   useEffect(() => {
     try {
       initializeComposerAttachmentStage();

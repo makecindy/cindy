@@ -3,15 +3,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 
 const fetchMock = vi.hoisted(() => vi.fn());
+const host = vi.hoisted(() => ({ packaged: false, endpoint: 'http://127.0.0.1:43340' }));
+vi.mock('electron', () => ({ app: { get isPackaged() { return host.packaged; } } }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => host.endpoint }));
 vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
 
 import { downloadVerifiedPlugin } from '../download';
 
 const files: string[] = [];
+beforeEach(() => { host.packaged = false; host.endpoint = 'http://127.0.0.1:43340'; });
 
 afterEach(() => {
   fetchMock.mockReset();
@@ -32,6 +36,26 @@ function expected(bytes: Buffer) {
 }
 
 describe('downloadVerifiedPlugin', () => {
+  it('downloads the exact local development object and still verifies its bytes', async () => {
+    const bytes = Buffer.from('local fixture');
+    fetchMock.mockResolvedValue(new Response(bytes));
+    const file = target();
+    await downloadVerifiedPlugin('http://127.0.0.1:43340/dev-local/object?key=fixture', expected(bytes), file);
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true);
+  });
+  it.each(['packaged', 'remote', 'other-port', 'other-path'] as const)('rejects %s HTTP before making a request', async boundary => {
+    host.packaged = boundary === 'packaged';
+    const url = boundary === 'remote' ? 'http://remote.example/dev-local/object' : boundary === 'other-port'
+      ? 'http://127.0.0.1:43341/dev-local/object' : boundary === 'other-path' ? 'http://127.0.0.1:43340/private' : 'http://127.0.0.1:43340/dev-local/object';
+    await expect(downloadVerifiedPlugin(url, expected(Buffer.from('fixture')), target())).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_FAILED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('never follows a redirect from an allowed local object', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:43341/dev-local/object' } }));
+    await expect(downloadVerifiedPlugin('http://127.0.0.1:43340/dev-local/object', expected(Buffer.from('fixture')), target())).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_FAILED' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('accepts a package above the former 8 MiB market limit', async () => {
     const bytes = Buffer.alloc(9 * 1024 * 1024, 7);
     fetchMock.mockResolvedValue(new Response(bytes));

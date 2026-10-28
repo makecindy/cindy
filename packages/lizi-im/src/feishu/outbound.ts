@@ -1764,6 +1764,7 @@ export async function uploadImage(absPath: string): Promise<string | null> {
 
 export interface ResolvedReplyMessage {
   replyContext: NonNullable<IMMessageEvent['replyContext']>;
+  attachments?: AttachmentRef[];
 }
 
 function renderReplyMessageText(
@@ -1793,13 +1794,8 @@ function replaceFetchedMentions(
 }
 
 /**
- * 精确读取一条飞书普通回复所引用的原消息。全程 pin 到开始时的 client;
- * 账号换代后调用方会用 connection generation 丢弃结果, 不会串进新账号。
- *
- * 任何读取、解析失败都降级为 null, 当前 turn 继续走既有群历史上下文路径。
- * 跨群 parent_id fail closed, 防止异常事件带出别处内容。被引附件只渲染
- * [图片]/[文件] 占位, 不在 transport 层提前下载或并入当前消息附件:正文要先
- * 经 host 的注入扫描, 且引用附件不应按触发消息语义落库。
+ * Fetch a quote (including merge-forward descendants) from the originating chat.
+ * Keep resource ownership for the host to download after screening the text.
  */
 export async function resolveReplyMessage(
   messageId: string,
@@ -1807,8 +1803,19 @@ export async function resolveReplyMessage(
 ): Promise<ResolvedReplyMessage | null> {
   const c = S().client;
   if (!c) return null;
+  return resolveReplyWithClient(c, messageId, expectedChatId);
+}
+
+async function resolveReplyWithClient(
+  c: Lark.Client,
+  messageId: string,
+  expectedChatId: string,
+  readBudget = { remaining: 21 },
+): Promise<ResolvedReplyMessage | null> {
   const log = getLog();
   try {
+    if (readBudget.remaining <= 0) return null;
+    readBudget.remaining--;
     const res = await c.im.v1.message.get({
       params: { user_id_type: 'open_id', with_sender_name: true },
       path: { message_id: messageId },
@@ -1818,32 +1825,62 @@ export async function resolveReplyMessage(
       log.warn(`[feishu/outbound] reply context fetch rejected: ${rejected}`);
       return null;
     }
-    const item = res.data?.items?.[0];
-    if (!item || item.deleted) return null;
-    if (item.chat_id !== expectedChatId) {
-      log.warn('[feishu/outbound] reply context dropped: parent message belongs to another chat');
-      return null;
-    }
-
-    const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
-    const text = replaceFetchedMentions(
-      renderReplyMessageText(parsed),
-      item.mentions,
-    );
+    const items = res.data?.items ?? [];
+    const root = items.find((item) => item.message_id === messageId);
+    if (!root || root.deleted || root.chat_id !== expectedChatId) return null;
+    const authorOf = (item: typeof root): string =>
+      (item.sender?.sender_name || (item.sender?.sender_type === 'app' ? 'bot' : 'user'))
+        .replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    const attachments: AttachmentRef[] = [];
+    const visited = new Set<string>();
+    const render = async (item: typeof root): Promise<string> => {
+      if (!item.message_id || item.deleted || visited.has(item.message_id)) return '';
+      // The envelope is checked against the triggering chat above. Forwarded
+      // children belong through upper_message_id, even when their original chat differs.
+      visited.add(item.message_id);
+      if (item.msg_type === 'merge_forward') {
+        let children = items.filter((child) => child.upper_message_id === item.message_id);
+        // Some responses include only the immediate level. Fetch deeper envelopes
+        // with the same client; never follow arbitrary message IDs from body text.
+        if (!children.length && item !== root && readBudget.remaining > 0) {
+          try {
+            readBudget.remaining--;
+            const nested = await c.im.v1.message.get({
+              params: { user_id_type: 'open_id', with_sender_name: true },
+              path: { message_id: item.message_id },
+            });
+            if (!feishuBusinessRejectReason(nested)) {
+              const extra = nested.data?.items ?? [];
+              for (const child of extra) {
+                if (!items.some((known) => known.message_id === child.message_id)) items.push(child);
+              }
+              children = items.filter((child) => child.upper_message_id === item.message_id);
+            }
+          } catch {
+            // Preserve a visible unreadable marker and all readable siblings.
+          }
+        }
+        const lines: string[] = [];
+        for (const child of children) {
+          const text = await render(child);
+          if (text) lines.push(`[${authorOf(child)}] ${text}`);
+        }
+        return lines.length ? `[合并转发消息]\n${lines.join('\n')}`
+          : readBudget.remaining <= 0 ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：未能读取子消息]';
+      }
+      const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
+      attachments.push(...parsed.attachments.map((ref) => ({ ...ref, messageId: item.message_id })));
+      return replaceFetchedMentions(renderReplyMessageText(parsed), item.mentions);
+    };
+    const text = await render(root);
     if (!text) return null;
-
-    const isBot = item.sender?.sender_type === 'app';
-    const author = item.sender?.sender_name?.trim() || (isBot ? 'bot' : 'user');
     return {
       replyContext: {
-        author,
+        author: authorOf(root),
         text,
-        ...(parsed.attachments.length ? {
-          unavailableAttachments: parsed.attachments.map((attachment) =>
-            `引用${attachment.kind === 'image' ? '图片' : attachment.fileName}：仅提供原消息记录，未下载文件内容`),
-        } : {}),
-        ...(isBot ? { isBot: true } : {}),
+        ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),
       },
+      ...(attachments.length ? { attachments } : {}),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1875,8 +1912,7 @@ export interface ChatHistoryPage {
 
 /**
  * 按页拉群/话题历史(群 lane 触发时 adapter 拼上下文用)。倒序拉一页, 返回
- * 页内升序。话题 lane 传 threadId 走 thread 容器, 只回本话题消息; 群主流
- * 不传, 调用方自行按 thread_id 过滤(chat 容器会混入话题消息)。
+ * 页内升序。展开转发前按 threadId 筛选; 缺省只保留群主流。
  *
  * 需要「获取群组中所有消息」权限。**失败(权限不足/网络)直接抛错** — 调用方
  * 需要区分「真的没有历史」与「拉取失败」来做降级提示, 不能吞成空数组。
@@ -1887,6 +1923,9 @@ export async function fetchChatHistoryPage(args: {
   threadId?: string;
   pageToken?: string;
   pageSize?: number;
+  excludeMessageId?: string;
+  /** Mutable per-turn allowance, shared by every page and nested message.get. */
+  mergeForwardReadBudget?: { remaining: number };
 }): Promise<ChatHistoryPage> {
   const c = S().client;
   if (!c) throw new Error('feishu client not bound');
@@ -1905,13 +1944,20 @@ export async function fetchChatHistoryPage(args: {
   }
   const items = res.data?.items ?? [];
   const out: RecentChatMessage[] = [];
+  const readBudget = args.mergeForwardReadBudget ?? { remaining: 20 };
   for (const item of items) {
     if (!item.message_id || item.deleted) continue;
+    if (item.message_id === args.excludeMessageId || (item.thread_id ?? '') !== (args.threadId ?? '')) continue;
     const msgType = item.msg_type ?? '';
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (
+    if (msgType === 'merge_forward') {
+      const exhausted = readBudget.remaining <= 0;
+      const resolved = exhausted ? null : await resolveReplyWithClient(c, item.message_id, args.chatId, readBudget);
+      text = resolved?.replyContext.text ?? (exhausted ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：读取失败]');
+      attachments = resolved?.attachments ?? [];
+    } else if (
       msgType === 'text' ||
       msgType === 'post' ||
       msgType === 'image' ||

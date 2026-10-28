@@ -188,10 +188,10 @@ export function registerSendToSessionTool(
         .string()
         .min(1)
         .describe(
-          "要发送的消息。伙伴代用户下达任务要求时，宿主另附可核实的用户原话；只补充必要上下文，保留原意和范围，不复述授权、不要求对方回传。普通任务与自动化消息按正文发送。",
+          "要发送的消息。当前输入属于主人请求或已核实转交时，宿主保留同一份用户原话；只补充必要上下文，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传按正文发送。",
         ),
       message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
-        "委派子任务发给发起伙伴默认 coordination：送达模型但内部文字不进正文或通知。user-visible 用于用户要求的结果、需要用户介入的消息。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系。正常完成自动回传，无需重发。",
+        "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",
       ),
       title: z
         .string()

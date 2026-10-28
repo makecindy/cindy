@@ -71,6 +71,23 @@ describe('remote model permissions', () => {
     await expect(make().set('p', [], undefined, () => {})).rejects.toThrow();
     expect(fs.existsSync(filePath())).toBe(false);
   });
+  it('persists member budgets atomically, preserves them for older clients, and keeps the owner exempt', async () => {
+    const policy = { rules: [{ id: 'a', models: ['astra'], maxPercent: 30 }], recommendedModel: 'terra', basis: 'member-input-output-7d' as const, enabled: false };
+    await make().set('p', null, 'alice', () => {}, policy);
+    expect(make().read('p', 'alice').memberBudget).toEqual(policy);
+    expect(make().read('p').memberBudget).toBeNull();
+    expect(make().read('p', 'bob').memberBudget).toBeNull();
+    await make().set('p', ['astra', 'terra'], 'alice', () => {});
+    expect(make().read('p', 'alice').memberBudget).toEqual(policy);
+    await make().set('p', null, 'alice', () => {}, null);
+    expect(make().read('p', 'alice').memberBudget).toBeNull();
+  });
+  it('denies damaged member rules without changing owner access', () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    fs.writeFileSync(filePath(), JSON.stringify({ providers: { p: { members: {}, budgets: [] } } }));
+    expect(make().allows('p', 'astra', 'alice')).toBe(false);
+    expect(make().allows('p', 'astra')).toBe(true);
+  });
   it.each([{}, ['x', 'x'], [''], [' x'], [42], Array(4097).fill('m')])('refuses malformed model selections %#', (value) => {
     expect(isRemoteModelSelection(value)).toBe(false);
   });

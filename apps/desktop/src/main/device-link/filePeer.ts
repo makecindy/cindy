@@ -34,6 +34,7 @@ import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
 import { resolveAuthorizedMedia } from './mediaFetch';
+import { mimeOf } from './mediaMime';
 import { readDeviceLinkSettings } from './settings-store';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
 import { captureFilePeerScope, invalidateFilePeerScopes } from './filePeerScope';
@@ -495,23 +496,10 @@ async function handleFilePeerRequest(
       if (!stat.isFile() || stat.size > (authorized.maxBytes ?? FILE_PEER_MAX_BYTES))
         throw new Error('FILE_PEER_SIZE');
       const ticket = randomUUID();
-      const ext = (authorized.uploadExtHint ?? path.extname(authorized.absPath)).toLowerCase();
-      const mimeType =
-        authorized.mimeType ??
-        (
-          {
-            '.html': 'text/html',
-            '.htm': 'text/html',
-            '.png': 'image/png',
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.webp': 'image/webp',
-            '.svg': 'image/svg+xml',
-            '.gif': 'image/gif',
-            '.pdf': 'application/pdf',
-          } as Record<string, string>
-        )[ext] ??
-        'application/octet-stream';
+      const ext = (authorized.uploadExtHint ?? path.extname(authorized.absPath)).replace(/^\./, '').toLowerCase();
+      // Keep direct downloads aligned with mediaFetch, including video/audio.
+      const mimeType = authorized.mimeType ??
+        (ext === 'html' || ext === 'htm' ? 'text/html' : mimeOf(ext));
       const source: Source = {
         connection: r.connection,
         file,

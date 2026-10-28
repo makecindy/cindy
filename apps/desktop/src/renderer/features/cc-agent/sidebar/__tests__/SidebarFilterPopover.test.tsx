@@ -43,6 +43,10 @@ vi.mock('@cindy/maker-shared/project-order-sync', () => ({
 
 function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebarFilterReturn {
   return {
+    creators: 'all',
+    creatorOptions: [],
+    toggleCreator: vi.fn(),
+    setCreatorsAll: vi.fn(),
     status: 'active',
     projects: 'all',
     projectsAsSet: null,
@@ -196,4 +200,20 @@ describe('sidebar display settings menu', () => {
     ).toEqual(['项目', '对话']);
     expect(filter.groupDevice).toBe(true);
   });
+});
+
+it('keeps the creator submenu open for multiple selections and exposes an all reset', async () => {
+  const filter = makeFilter({ creators: ['[null,"a"]'], creatorOptions: [
+    { id: 'a', name: 'Dash', avatar: '', avatarColor: 'blue' },
+    { id: 'a', name: 'Dash', deviceId: 'remote', deviceName: 'Laptop', avatar: '', avatarColor: 'blue' },
+  ] });
+  render(<Preview filter={filter} />);
+  await openSubmenu(/^筛选/);
+  const submenu = await openSubmenu(/^伙伴/);
+  expect(within(submenu).getByRole('menuitemcheckbox', { name: 'Dash' }).getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(within(submenu).getByRole('menuitemcheckbox', { name: 'Dash Laptop' }));
+  expect(filter.toggleCreator).toHaveBeenCalledWith('["remote","a"]');
+  expect(screen.getAllByRole('menu')).toHaveLength(3);
+  fireEvent.click(within(submenu).getByRole('menuitem', { name: '不限来源' }));
+  expect(filter.setCreatorsAll).toHaveBeenCalledOnce();
 });

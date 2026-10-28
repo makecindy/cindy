@@ -26,6 +26,8 @@ const defaultPrefs = {
   manualProjectOrder: [],
   projectFilter: 'all',
   projectFilterOwner: '',
+  teammateFilter: 'all',
+  teammateFilterOwner: '',
   vendorFilter: 'all',
   lastActivityFilter: 'all',
   viewMode: 'list',
@@ -33,6 +35,14 @@ const defaultPrefs = {
 } as const;
 
 describe('homeViewPreferenceStore', () => {
+  it('persists teammate multi-selection for its owner and resets without changing project choices', async () => {
+    const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: ['cindy', 'filo'] }, projectFilter: { owner: OWNER, value: ['project'] } });
+    expect((await readHomeViewPreferences(OWNER)).teammateFilter).toEqual(['cindy', 'filo']);
+    expect((await readHomeViewPreferences('another-owner')).teammateFilter).toBe('all');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: 'all' } });
+    expect(await readHomeViewPreferences(OWNER)).toMatchObject({ teammateFilter: 'all', projectFilter: ['project'] });
+  });
   it('does not overwrite saved grouping when the merge read fails', async () => {
     const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
     await saveHomeViewPreferences({ groupByProject: false, groupDialogue: true });
@@ -117,6 +127,8 @@ describe('homeViewPreferenceStore', () => {
     };
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({
       ...expected,
+      teammateFilter: 'all',
+      teammateFilterOwner: '',
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({

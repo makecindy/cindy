@@ -93,6 +93,27 @@ afterEach(() => {
 // have no direct-share member. Minimum: an authorized same-account controller
 // binding a guest-isolated task. Verify the real proxy grant, including revocation.
 describe('guest proxy binding for direct shares and same-account group relays', () => {
+  it('enforces a changed member budget on the next request and exempts same-account callers', async () => {
+    let blocked = true;
+    const checks: Array<string | undefined> = [];
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [view('spark', ['opus', 'sonnet'])],
+      guestAccess: () => ({ providerId: 'spark', memberId: 'alice' }), ownerAllowed: () => true, providerAllowed: () => true,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null, memberBudget: { enabled: true, rules: [{}] } }) },
+      memberBudgetAllows: async (_provider, model, member) => { checks.push(member); return !member || !blocked || model === 'sonnet'; },
+    });
+    const guest = await binder({ kind: 'claude-code', hostSessionId: 'guest-budget', providerId: 'spark', controller: providerShareGuestPeer('share', 'alice', 'phone'), isCurrent: () => true });
+    const owner = await binder({ kind: 'claude-code', hostSessionId: 'owner-budget', providerId: 'spark', controller: 'owner-device', isCurrent: () => true });
+    expect(guest!.modelIds).toEqual(['opus', 'sonnet']);
+    blocked = false;
+    checks.length = 0;
+    expect(await guest!.allowsModel!('opus')).toBe(true);
+    blocked = true;
+    expect(await guest!.allowsModel!('opus')).toBe(false);
+    expect(await guest!.allowsModel!('sonnet')).toBe(true);
+    expect(await owner!.allowsModel!('opus')).toBe(true);
+    expect(checks).toEqual(['alice', 'alice', 'alice', undefined]);
+  });
   // Unit: an async authorization response must not resurrect a replaced binding.
   it('rejects a failed grant query or one arriving after the task binding was released', async () => {
     let finish!: (allowed: boolean) => void;

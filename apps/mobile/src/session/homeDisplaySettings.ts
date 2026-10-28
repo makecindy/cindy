@@ -5,7 +5,7 @@ import { formatRemoteMoney, resolveSessionTotalMoney } from './remoteMoney';
 /**
  * 首页「显示」菜单里与桌面侧栏对齐的设置(筛选 / 显示 / 任务信息)。
  * 语义逐项照搬桌面 SidebarFilterPopover:
- *   - 筛选只含项目 / Harness / 最近活跃,不动任务状态;
+ *   - 筛选包含项目 / 伙伴 / Harness / 最近活跃,不动任务状态;
  *   - 显示 = 文字(单行)/ 列表(带预览行);
  *   - 任务信息复选,行内渲染顺序 = 勾选先后。
  */
@@ -40,6 +40,8 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface HomeContentFilters {
   projects: HomeProjectFilter;
+  teammates?: HomeProjectFilter;
+  teammateKey?: (item: RemoteSessionListItem) => string | undefined;
   vendor: HomeVendorFilter;
   lastActivity: HomeLastActivityFilter;
 }
@@ -95,6 +97,7 @@ export function projectFilterIncludes(filter: HomeProjectFilter, key: string): b
 
 export function activeContentFilterCount(filters: HomeContentFilters): number {
   return (filters.projects !== 'all' ? 1 : 0)
+    + (filters.teammates && filters.teammates !== 'all' ? 1 : 0)
     + (filters.vendor !== 'all' ? 1 : 0)
     + (filters.lastActivity !== 'all' ? 1 : 0);
 }

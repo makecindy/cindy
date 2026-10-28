@@ -113,6 +113,24 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### Android 组字与发送快照
+
+WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
+DOM，保留输入法组字与光标。点击发送后，在发送防重锁内等待编辑器返回当前完整
+`ComposerDocument`，再做空内容判断、命令解析和入队，不依赖失焦或 `compositionend` 的顺序。
+等待期间账号、设备、任务、编辑器或排队编辑目标变化时取消本次提交；读取失败、超时或
+粘贴尚未替换完成时保留输入并提示重试，不回退到旧草稿发送。语音结果、独立快捷发送和
+显式传入的文档保持各自的快照来源，iOS 原生编辑器保留现有原生路径。
+快照回包在写回编辑器状态或草稿之前核对调用方作用域；不能只在 `await` 返回后检查，
+否则取消排队编辑与下一帧渲染之间到达的旧快照会覆盖已恢复的原草稿。
+取消排队编辑时同步向编辑器应用暂存的个人草稿，立即轮换文档标识；不能只等待下一帧
+传入新 props，否则迟到的普通 `change` 消息也可能写回旧内容。恢复不主动聚焦或弹出键盘。
+
+实现：`ComposerRichInput.tsx`、`composerRichInputHtml.ts` 与 `app/sessions/[sessionId].tsx`；
+回归：`composerRichInputLifecycle.test.tsx`、`composerRichInputHtml.test.ts`。Android 模拟器
+可用 mock 模式配合 CDP `Input.imeSetComposition` 检查点击原生发送按钮后的完整文本；
+它不替代三星真机键盘或真实跨设备送达验收。
+
 ### 相册选图与 iCloud 原图
 
 iOS 的系统选图器在确认后立即把选中项交给现有附件队列。首帧预览只读取本机小缩略图，

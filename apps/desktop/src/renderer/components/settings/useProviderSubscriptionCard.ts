@@ -112,7 +112,7 @@ function useRemoteProviderSubscriptionCard(
   const { t, i18n } = useTranslation();
   const source = provider && deviceId ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
-  const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId);
+  const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: true });
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId);
   const [nowMs, setNowMs] = useState(Date.now);

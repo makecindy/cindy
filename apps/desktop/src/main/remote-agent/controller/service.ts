@@ -23,6 +23,7 @@ import type {
   StartSessionOptions,
 } from '@cindy/maker-core';
 import { resolveMemoryScopeKey } from '@cindy/maker-core';
+import { createLogger } from '../../logger.js';
 
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -154,6 +155,8 @@ export function remoteAgentPollerFor(
 /** Maker 的 startDeviceAgentSession 实现。 */
 export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const log = deps.logger.child('remote-agent');
+  // Agent 统一流有突发限流；启动阶段日志必须完整落在 main 流，才能解释慢启动。
+  const startupLog = createLogger('remote-agent:startup');
   const pollerFor = (deviceId: string): RemoteAgentPoller => remoteAgentPollerFor(deviceId, deps.remoteInvoke, log);
   // 每台运行 Agent 的电脑一个连接池：对方按这台设备计名额，池里算的是本机在那台上开着的连接；
   // 闲置多久可以让出按那台主人设置的闲置收回时长(打开前与主动让出前从 caps 读)。
@@ -262,7 +265,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
       mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
       newId: randomUUID,
-      log,
+      log: {
+        debug: (message, fields) => startupLog.debug(message, fields),
+        info: (message, fields) => log.info(message, fields),
+        warn: (message, fields) => log.warn(message, fields),
+      },
     });
   };
 }

@@ -63,7 +63,7 @@
 7. 任务完成后,可用不带 `proxyServer` 的 `{action:"start"}` 明确恢复普通直连模式。代理 A 切代理 B、代理切直连都会重启浏览器;重复同一代理则保持当前进程。
 
 #### Token 效率(按"最省 → 兜底"的顺序选路)
-1. **先查有没有现成配方**:操作某个站之前,**先 `action: "siteguide"`**——带 `site`(站点 host)看该站内置指南 / 配方;**不确定有哪些站时,`siteguide` 不带 `site` 会列出全部内置站点 + 可用配方目录**(`sites:[{site,recipes,auth}]`)。命中且未 suspended 的配方就 `action: "recipe"`(`recipeId`+`inputs`)组合执行并检查结果,优先于手动 snapshot/extract。注意 `siteguide` 是我们内置的站点指南,**不是去抓网站自己的 `/sitemap.xml`**——不要为此去 navigate / curl `sitemap.xml`。
+1. **优先复用配方**: `open/navigate` 会随结果给出最多三个本地 `recipeSuggestions`，可带简短 `intent` 收窄；同任务相同站点/意图且目录未变不重复提示，不另起模型请求。自行判断业务、账号与参数是否适用，再显式 `recipe(recipeId,inputs)`；候选在真实执行通过校验后返回 `verified:true`，需启用时用 `saveRecipe` 保存同一草稿，不重复试跑。已知 id 直接复用，无须先导航或查目录。缺少合适候选时可用 `siteguide` + `site` 看完整站点指南，不要默认加载全部目录；`siteguide` 不是网站的 sitemap.xml。
 2. **数据型页面优先读接口,别扒 DOM**:很多列表 / 详情背后是 JSON API,读接口比扒渲染后的 DOM 又稳又省。
    - ① `action: "requests"`(带**具体** `filter`,如 `/api/quotes`;别用太宽的 `api`,会撞 `fonts.googleapis.com` 之类)看页面发了哪些 XHR/fetch、拿到接口 URL。这是读**已发生**请求的清单。
    - ② 读 body:**GET 接口最稳的姿势是直接 `navigate` 到该 URL**,再用 `extract`(`fields:{ data:"body" }`)或 snapshot 读返回的 JSON。
@@ -71,6 +71,10 @@
 3. **要可点击元素 / 探索结构,用 scoped snapshot**:`snapshot` 用来理解页面、拿交互元素的 `ref`,也是**写 `extract` 选择器前确认真实结构**的手段;输出过大时用 `selector` 限定区域 + `compact: true` / `interactive: true` / `limit` / `maxChars` 收窄(scoped snapshot 已经把 role/name/value/ref 结构化带出,很多场景够用)。
 4. **要精确字段 / 干净 JSON 才用 `extract`**:snapshot 不够精准(要取某属性、按子选择器拆字段)时,用 `action: "extract"` 一次性提结构化记录(`from` + `multiple` 提列表)。**关键:`fields` 的简写 string 是纯 CSS 选择器(取 textContent);取属性用 `{selector,attr}`,取链接用 `{selector,type:"href"}`——别把属性拼进选择器(`"h3 a@title"` 非法)、别写自然语言。** 不确定选择器就先 scoped snapshot 看结构再写。
 5. **慎用 screenshot**:只有需要视觉确认(布局 / 图像内容)时才 `action: "screenshot"`;链接要看真实 URL 时 snapshot 带 `urls: true`,元素位置重要时才 `labels: true`。
+
+重复流程才考虑学习：宿主仅留存站点、操作种类和次数，不保留输入、脚本、选择器或业务结果。`learningOpportunity` 只是重复形状提示，不证明业务相同；结合当前成功步骤判断收益。有价值或用户明确要求长期复用时才调用 `recipeHelp` 加载编写手册；偶发任务无需总结，不另起模型。仅由明确读取步骤组成的新候选可延后到下一次真实任务验证，交互和任意脚本须当次验证，详见 `recipeHelp`；正常 guard/expect 只运行代码，失效最多修订一轮，失败回普通操作。写操作不得为测试重放。
+
+大结果返回结构摘要和 `fullResult`，不是完整事实；用 `readResult(resultId,offset,maxChars)` 补读（`nextOffset:null` 表示结束），不猜省略内容或 ref。原文只留当前工具会话最近四份、每份最多 200 万字符；更大结果沿用明确截断，需缩小读取范围。`advisory` 是代码发现的可疑输出，不自动认定业务错误。
 
 #### 两种浏览器模式(先认环境,再谈登录)
 
@@ -117,6 +121,8 @@
 | `extract` | 按字段 schema 从 DOM 提结构化数据(列表/详情,优于全页 snapshot) |
 | `requests` / `responseBody` | 看页面已发生的 XHR/fetch 列表(可 `filter`) / 等待并读下一个匹配响应的 body(先发起再触发;读 GET JSON 优先直接 navigate 到该 URL) |
 | `recipe` / `siteguide` | 跑某站现成配方(`recipeId`+`inputs`) / 取某站内置指南(`site`,含入口/关键页/可用配方;非 sitemap.xml) |
+| `recipeHelp` / `saveRecipe` | 按需加载编写手册 / 保存已验证配方或新的只读候选 |
+| `readResult` | 按引用和字符偏移补读当前工具会话保留的大结果原文 |
 | `screenshot` | 仅在需要视觉确认时用 |
 | `console` / `pdf` / `upload` / `dialog` | 控制台日志 / 导出 PDF / 上传文件 / 处理原生弹窗 |
 

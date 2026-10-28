@@ -4276,6 +4276,39 @@ describe('Session permission mode leases', () => {
 });
 
 describe('Maker invalid-resume persistence bridge', () => {
+  // PR #7684: a visible local app uses createSession, unlike the private bridge.
+  // Exercise late invalid-history detection during Session.send: it must not
+  // clear the app's saved native id or authorize an automatic replay (unit).
+  it.each(['claude-code', 'pi'] as const)('does not recover or replay a visible %s local app session', async (agentKind) => {
+    const storage = createStorage();
+    const replay = vi.fn();
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      const handle = createHandle({ id: 'sdk-old', agentKind });
+      handle.send = vi.fn(async () => {
+        if (await opts.onInvalidResumeSession?.('sdk-old')) replay();
+        else throw new Error('native history unavailable');
+      });
+      return handle;
+    });
+    const maker = new Maker({
+      agents: { [agentKind]: createAgent(startSession, agentKind) },
+      storage,
+      logger: createLogger(),
+    });
+    const session = await maker.createSession({
+      id: 'visible-local-app', agentKind, workingDir: '/repo', model: 'm',
+      resumeSessionId: 'sdk-old',
+      [LOCAL_AGENT_CLIENT]: { url: 'http://127.0.0.1:1', token: 'invalid-fixture', hostToolsOnly: true },
+    });
+    try {
+      await expect(session.send('app input')).rejects.toThrow('native history unavailable');
+      expect(replay).not.toHaveBeenCalled();
+      expect((await storage.get(session.id))?.sdkSessionId).toBe('sdk-old');
+    } finally {
+      await session.close();
+    }
+  });
+
   it('injects a compare-and-clear callback for resumed Claude sessions', async () => {
     const storage = createStorage();
     await storage.create({

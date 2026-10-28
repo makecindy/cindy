@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { resolveHistoryScope } from './_history_scope.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
@@ -47,6 +48,7 @@ const ROLE_VALUES = [
 const DEFAULT_QA_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const satisfies readonly HistoryRole[];
 
 const DESCRIPTION = [
+  'sessions 元数据中的 sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
   HISTORY_DEVICE_DESCRIPTION,
   '跨所有 session 用自然语言语义检索历史聊天记录, 返回相关命中 + 上下文窗口的原始数据。',
   '',
@@ -217,7 +219,10 @@ export function registerSearchChatHistoryTool(
           if (h.vectorDistance !== null) out.vectorDistance = h.vectorDistance;
           return out;
         }),
-        sessions: result.sessions,
+        sessions: Object.fromEntries(Object.entries(result.sessions).map(([id, meta]) => [id, {
+          ...meta,
+          ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(id) } : {}),
+        }])),
         vector_used: result.vectorUsed,
         ...(result.vectorSkipReason ? { vector_skip_reason: result.vectorSkipReason } : {}),
         pool_size: result.poolSize,
@@ -245,13 +250,6 @@ export function registerSearchChatHistoryTool(
       });
     },
   });
-}
-
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
 }
 
 /**

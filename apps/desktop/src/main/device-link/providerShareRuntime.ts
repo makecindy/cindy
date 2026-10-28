@@ -1,5 +1,7 @@
+import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
+import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
+import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.js';
@@ -369,7 +371,10 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       const scope = { providerId: value.providerId, ...(memberId !== undefined ? { memberId } : {}) };
       if (value.action === 'get-model-access') return { action: value.action, ...scope };
       if (!isRemoteModelSelection(value.models)) throwIpcError('INVALID_PARAMS', 'Invalid remote model selection');
-      return { action: value.action, ...scope, models: value.models === null ? null : [...value.models] };
+      if (value.memberBudget !== undefined && (!memberId || (value.memberBudget !== null && !isProviderShareMemberBudget(value.memberBudget))))
+        throwIpcError('INVALID_PARAMS', 'Invalid member budget');
+      return { action: value.action, ...scope, models: value.models === null ? null : [...value.models],
+        ...(value.memberBudget !== undefined ? { memberBudget: value.memberBudget as import('../../shared/providerShareBudget.js').ProviderShareMemberBudget | null } : {}) };
     }
     case 'get-visibility':
     case 'quota-account':
@@ -777,8 +782,22 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       assertScope();
       const provider = providers.find((entry) => entry.id === command.providerId);
       if (!provider) throwIpcError('NOT_FOUND', 'This provider is no longer available');
+      const budgetAvailable = supportsMemberBudget(provider);
+      const recommendationModelIds = [...new Set(Object.values(provider.models).flatMap(models => (models ?? []).filter(model => !model.disabled).map(model => model.id)))];
+      const budgetModelIds = recommendationModelIds.filter(id => id === unifiedModelKeyId(id)
+        || !recommendationModelIds.includes(unifiedModelKeyId(id)));
       if (command.action === 'set-model-access') {
-        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope);
+        if (command.memberBudget?.rules.length && !budgetAvailable) throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for this provider group');
+        if (command.memberBudget) {
+          const previous = remoteModelAccess.read(command.providerId, command.memberId).memberBudget;
+          const retained = new Set(previous?.rules.flatMap(rule => rule.models) ?? []);
+          if (command.memberBudget.rules.some(rule => rule.models.some(model => !budgetModelIds.includes(model) && !retained.has(model))))
+            throwIpcError('INVALID_PARAMS', 'This model does not support percentage budgets');
+          const recommended = command.memberBudget.recommendedModel;
+          if (recommended && !recommendationModelIds.includes(recommended) && recommended !== previous?.recommendedModel)
+            throwIpcError('INVALID_PARAMS', 'The recommended model is unavailable');
+        }
+        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget);
         assertScope();
         await revalidateRemoteModelAccess();
         assertScope();
@@ -790,7 +809,11 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       for (const entries of [...Object.values(provider.models), ...PROVIDER_MEDIA_FIELDS.map(field => provider[field])]) for (const model of entries ?? []) {
         if (!model.disabled) availableModels.set(model.id, { id: model.id, name: model.name || model.id });
       }
+      assertScope();
       return { version: 1, ...remoteModelAccess.read(command.providerId, command.memberId),
+        providerName: provider.name,
+        budgetSupported: true, budgetAvailable, budgetModelIds, recommendationModelIds,
+        ...(command.memberId ? { budgetStatus: readMemberBudgetStatus(command.providerId, command.memberId, true) ?? undefined } : {}),
         availableModels: [...availableModels.values()] } satisfies RemoteModelAccessView;
     }
     case 'get-visibility':
@@ -1023,6 +1046,9 @@ export function registerProviderShareIpc(): void {
     owner: () => ({ displayName: getAuthState().user?.name ?? '', avatarUrl: getAuthState().user?.avatar ?? null }),
     history: usageHistory,
     quota: readProviderShareQuota,
+    budget: async (providerId, memberId) => {
+      return readMemberBudgetStatus(providerId, memberId);
+    },
   });
   setProviderShareAccess({
     remoteModels: (providerId) => {

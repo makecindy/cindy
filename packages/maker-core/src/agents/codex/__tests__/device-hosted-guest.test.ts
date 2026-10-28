@@ -256,6 +256,8 @@ async function startHosted(fixture: Fixture) {
         };
       case Method.ThreadResume:
         return { thread: { id: 'resume-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir };
+      case Method.ThreadFork:
+        return { thread: { id: 'fork-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai' };
       case Method.TurnStart:
         return { turn: { id: 'turn-1' } };
       default:
@@ -327,7 +329,7 @@ async function startHosted(fixture: Fixture) {
   return {
     started, request, getHost, getGhostRosterPrompt, getContactsPromptState, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
-    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome,
+    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome, agent, workingDir,
   };
 }
 
@@ -349,6 +351,90 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // Provider sharing §9.5: even a history-only native fork initializes MCP and
+  // connectors. Existing fork tests covered proxy/history ownership only.
+  // Minimal input: one guest source and a native turn anchor; tier: unit.
+  it.each([false, true])('isolates history-only guest forks before allocating a child (feature inspection fails: %s)', async (inspectionFails) => {
+    const fixture = await startHosted({ guest: true });
+    const handle = await fixture.started;
+    await handle.close();
+    fixture.request.mockClear();
+    if (inspectionFails) {
+      const baseRequest = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method, params) => {
+        if (method === Method.ExperimentalFeatureList) throw new Error('feature inspection failed');
+        return baseRequest(method, params);
+      });
+    }
+    const forked = fixture.agent.forkSdkSession({
+      sourceSdkSessionId: 'guest-source', upToMessageId: undefined,
+      lastTurnId: 'kept-turn', workingDir: fixture.workingDir,
+      hostedGuestHome: fixture.guestHome, providerId: SHARED_PROVIDER.providerId,
+    });
+    if (inspectionFails) {
+      await expect(forked).rejects.toThrow('feature inspection failed');
+      expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadFork)).toBe(false);
+    } else {
+      await expect(forked).resolves.toMatchObject({ newSdkSessionId: 'fork-thread-id' });
+      expect(threadParams(fixture.request, Method.ThreadFork)).toMatchObject({
+        config: {
+          'mcp_servers.local_docs.enabled': false,
+          'mcp_servers.cindy_contacts.enabled': false,
+          'plugins."configured@personal".enabled': false,
+          'features.apps': false,
+          'features.hooks': false,
+          'features.future_local_tool': false,
+          'memories.use_memories': false,
+        },
+      });
+    }
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    expect(fixture.getHost).toHaveBeenLastCalledWith(undefined, expect.anything(), expect.objectContaining({
+      nativeStorageOnly: true,
+    }));
+  });
+
+  // Provider sharing §9.5: rewind must retain the consumer's MCP transport and
+  // guest isolation. Startup-only coverage missed that native fork reloads host
+  // defaults. Minimal input: a hosted session rewound at a persisted turn anchor;
+  // tier: unit, through startSession -> commitRewindFiles -> send.
+  it.each([false, true])('keeps the task tool route and capability scope after rewind (guest: %s)', async (guest) => {
+    const fixture = await startHosted({ guest });
+    const handle = await fixture.started;
+    const initial = threadParams(fixture.request, Method.ThreadStart);
+
+    await expect(handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1, lastTurnId: 'kept-turn' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+
+    const fork = threadParams(fixture.request, Method.ThreadFork);
+    expect(fork).toMatchObject({
+      threadId: 'start-thread-id',
+      lastTurnId: 'kept-turn',
+      approvalPolicy: initial.approvalPolicy,
+      sandbox: initial.sandbox,
+      environments: initial.environments,
+      config: {
+        'mcp_servers.local_docs.enabled': false,
+        'mcp_servers.cindy_contacts.enabled': true,
+        'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
+      },
+    });
+    expect(fork.config).toEqual(initial.config);
+    if (guest) expect(fork.config).toMatchObject({
+      'features.apps': false,
+      'features.hooks': false,
+      'features.plugins': false,
+      'features.future_local_tool': false,
+      'memories.use_memories': false,
+    });
+
+    await handle.send({ type: 'user', content: 'continue after rewind' });
+    expect(threadParams(fixture.request, Method.TurnStart)).toMatchObject({
+      threadId: 'fork-thread-id', environments: initial.environments,
+    });
+    await handle.close();
+  });
+
   it.each([false, true])('isolates this computer\'s capabilities from a shared user (resume: %s)', async (resume) => {
     const fixture = await startHosted({ guest: true, resume });
     const handle = await fixture.started;

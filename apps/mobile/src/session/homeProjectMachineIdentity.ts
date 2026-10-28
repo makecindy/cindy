@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import type { DeviceLinkContextValue } from '@/device-link/DeviceLinkContext';
 import type { MobileHomePresentation } from './mobileHome';
 
@@ -20,21 +21,14 @@ export function buildHomeProjectMachineIdentities(
   const filters = new Map(home.deviceFilters.map((device) => [device.deviceId, device]));
   const deviceName = (project: MobileHomePresentation['projects'][number]) =>
     (filters.get(project.deviceId)?.label ?? project.deviceName).trim();
-  const idsByName = new Map<string, Set<string>>();
-  for (const project of home.projects) {
-    const name = deviceName(project).toLowerCase();
-    if (!project.deviceId || !name) continue;
-    const ids = idsByName.get(name) ?? new Set<string>();
-    ids.add(project.deviceId);
-    idsByName.set(name, ids);
-  }
+  const devices = home.projects.flatMap((project) => project.deviceId
+    ? [{ deviceId: project.deviceId, name: deviceName(project) }] : []);
   const identities = new Map<string, HomeProjectMachineIdentity>();
   for (const project of home.projects) {
     if (!project.deviceId) continue;
     const name = deviceName(project);
-    const ambiguous = name && (idsByName.get(name.toLowerCase())?.size ?? 0) > 1;
     identities.set(project.key, {
-      displayLabel: ambiguous ? `${name} · ${project.deviceId}` : name || project.deviceId,
+      displayLabel: deviceDisplayName(project.deviceId, name, devices),
       // A remounted list paints cached projects before its device roster arrives.
       // Missing/stale roster rows and failed list reads are not connection evidence.
       disconnected: connection.status !== 'online'

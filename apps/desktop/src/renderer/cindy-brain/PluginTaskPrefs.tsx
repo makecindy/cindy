@@ -19,8 +19,8 @@ import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { getEffortForModel, getFastModeForModel } from '@/state/newMakerDraft';
 import type { Effort } from '@/lib/userPreferences.types';
-
-const PERMISSION_ALLOWED = new Set(['ask', 'acceptEdits', 'auto']);
+import type { GhostErrandPermissionMode } from '../../shared/ghost.js';
+import { isPluginTaskPermissionMode, PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
 
 /** Values accepted by the ordinary model picker and Host configuration. */
 const TASK_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
@@ -31,7 +31,7 @@ interface TaskConfig {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string;
-  permissionMode?: 'ask' | 'plan' | 'acceptEdits' | 'auto';
+  permissionMode?: GhostErrandPermissionMode;
   workingDir?: string;
 }
 
@@ -267,22 +267,21 @@ export function PluginTaskPrefs({
                 fallbackModeLabel={
                   permissionMode === 'plan'
                     ? t('settings.ghosts.detail.errandPrefs.legacyPermission')
-                    : undefined
+                    : permissionMode === 'acceptEdits'
+                      ? t('newChat.permissionSelector.modes.claude-code.acceptEdits.label')
+                      : undefined
                 }
                 vendorKey={vendor}
                 triggerVariant="field"
                 ariaContext={t('settings.ghosts.detail.errandPrefs.permission')}
-                disabledModes={{
-                  default: t('settings.ghosts.detail.errandPrefs.permissionDisabled'),
-                  bypassPermissions: t('settings.ghosts.detail.errandPrefs.permissionDisabled'),
-                }}
+                allowedModes={PLUGIN_TASK_PERMISSION_MODES.filter(
+                  (mode) => !remote || remote.value.permissionModes.includes(mode),
+                )}
                 onPermissionModeChange={(mode) => {
-                  // disabledModes 已灰置非法档;这里再执一道白名单(UI 不是安全边界,
-                  // 存储层与协议层各有一道,三道口径一致)。
-                  if (!PERMISSION_ALLOWED.has(mode)) return;
+                  if (!isPluginTaskPermissionMode(mode)) return;
                   save({
                     ...config,
-                    permissionMode: mode as 'ask' | 'acceptEdits' | 'auto',
+                    permissionMode: mode,
                   });
                 }}
               />

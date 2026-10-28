@@ -241,3 +241,20 @@ describe('UsageTracker.markContextOverflow', () => {
     expect(tracker.snapshot().contextTokens).toBe(272_000);
   });
 });
+
+// Request receipts must survive turn resets and merge repeated partial frames exactly once.
+it('retains per-model metering across turn boundaries without recounting split frames', () => {
+  const tracker = new UsageTracker();
+  tracker.upsertApiCallUsage('one', { model: 'astra', inputTokens: 10, outputTokens: 0 });
+  tracker.upsertApiCallUsage('one', { model: 'astra', inputTokens: 10, outputTokens: 4 });
+  const first = tracker.getRequestMetering();
+  tracker.endTurn();
+  tracker.beginTurn();
+  tracker.ingestApiCallUsage({ model: 'sol', inputTokens: 3, outputTokens: 2 });
+  const next = tracker.getRequestMetering();
+  expect(next.epoch).toBe(first.epoch);
+  expect(next.models).toMatchObject([
+    { model: 'astra', inputTokens: 10, outputTokens: 4 },
+    { model: 'sol', inputTokens: 3, outputTokens: 2 },
+  ]);
+});

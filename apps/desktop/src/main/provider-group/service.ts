@@ -8,8 +8,8 @@
  *    恢复：按退避最多重试 5 次，恢复了就留在原电脑继续，都不行再换。别的电脑上的组读不到(常见是任务就在组所在
  *    电脑上、它自己断了)时换不了电脑，只等任务所在那台恢复。
  * 3. **发送前**：已归组的任务所在那台现在不能用时，先交接到下一台，这条消息直接发到新电脑；离线时同样先等。
- *    用户自己发消息前确认过换号(电脑与手机的提示，或这个任务选过「以后自动换」)时，先换到那台再发
- *    (2026-10-21 用户裁决：换号会丢一部分上下文，只在用户知情确认时换)。
+ *    用户自己发消息时，同账号换号优先自动恢复原生历史，实际需要摘要才确认；共享来源沿用确认或已记住的选择
+ *    (2026-10-28 用户裁决，电脑与手机共用)。
  *
  * 没归过组、但正用着组那一项的老任务(建组前就在用，或运行过之后才换到组那一项)在启动 Agent 前纳入组，
  * 不挪动它；当时没纳入的(一直开着、或启动时问不到组所在电脑)出错时再补上，然后照常换电脑。
@@ -1021,7 +1021,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   }
 
   /**
-   * 发送前换号(用户确认过，provider-groups.md §6.2「任务进行中换号」)：任务所在那台能用，只是 `target` 的配额更该先用。
+   * 发送前换号(provider-groups.md §6.2「任务进行中换号」)：任务所在那台能用，只是 `target` 的配额更该先用。
    * 只试这一台，不记「这一轮试过」(原电脑没出问题，之后出错时仍可以换回来)；它此刻接不了或交接失败就照常发到原电脑、
    * 不报错，这台 PROVIDER_GROUP_REBALANCE_BACKOFF_MS 内不再提议。交接期间进行中行显示「正在换一台电脑继续」，
    * 分隔条写明是为了先用那台的配额。
@@ -2004,7 +2004,13 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         rebalanceExclusion(source, binding.providerId, config, current),
       );
       if (!target) return null;
-      return { kind: deps.readAutoRebalance?.(sessionId) ? 'auto' : 'ask', ...target };
+      const member = config.members.find((candidate) => candidate.key === target.memberKey);
+      const route = member ? source.routeOf(member, row.providerId) : null;
+      const ownDevices = route && !isProviderShareAgentDeviceId(row.agentDeviceId)
+        && !isProviderShareAgentDeviceId(route.agentDeviceId);
+      // Same-account relocation tries the native history first. The switch handler asks
+      // only if it would actually need a summary, including a native resume failure.
+      return { kind: ownDevices || deps.readAutoRebalance?.(sessionId) ? 'auto' : 'ask', ...target };
     },
 
     async rebalanceDecision(sessionId, memberKey, remember, clientId) {

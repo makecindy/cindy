@@ -155,6 +155,7 @@ describe('messageHandler early user-message persist', () => {
     expect(turnArgs(h.runAgentTurn).channelNoteSource).toEqual({
       chatKind: 'group',
       chatId: 'oc_chat',
+      senderIsOwner: true,
       senderId: 'ou_y',
     });
     expect(turnArgs(h.runAgentTurn).text).toBe('出行要注意什么吗');

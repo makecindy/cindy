@@ -5,7 +5,7 @@ import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
-import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -34,7 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { readModelContextLimit } from './model-context-limit-store.js';
+import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
@@ -104,7 +104,7 @@ import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
-import { readPiCompactionPct } from './compaction-settings-store.js';
+import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
@@ -184,11 +184,13 @@ const PI_NATIVE_APIS = new Set<PiNativeApi>([
  * authenticated loopback proxy replaces it with the real host-owned token and
  * account id before forwarding upstream.
  */
-function piOpenaiProxyPlaceholderJwt(): string {
+function piOpenaiProxyPlaceholderJwt(providerId = 'openai'): string {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
-    'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+    // Pi caches sockets by native session + account id, without comparing headers.
+    // Separate logical accounts must therefore have separate placeholder identities.
+    'https://api.openai.com/auth': { chatgpt_account_id: providerId === 'openai' ? 'cindy-pi-proxy' : `cindy-pi-proxy:${providerId}` },
   })}.`;
 }
 
@@ -727,8 +729,12 @@ export function buildPiSubscriptionNativeProviders(
       retainedProviderId === account.id ? retainedOpenAiModel : null,
     ).providers.find((provider) => provider.sourceProviderId === brand);
     if (!projected) continue;
+    const openaiKeyEnv = brand === 'openai'
+      ? `CINDY_PI_KEY_OPENAI_PROXY_${Buffer.from(account.id).toString('hex').toUpperCase()}` : undefined;
+    if (openaiKeyEnv) env[openaiKeyEnv] = piOpenaiProxyPlaceholderJwt(account.id);
     providers.push({
       ...projected,
+      ...(openaiKeyEnv ? { apiKeyEnvVar: openaiKeyEnv } : {}),
       id: `${brand === 'openai' ? 'openai-codex' : brand}-${account.id}`,
       sourceProviderId: account.id,
       name: account.name,
@@ -876,7 +882,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     userDataPath: app.getPath('userData'),
   };
   Object.defineProperty(config, 'piAutoCompactThresholdPct', {
-    get: () => readPiCompactionPct(),
+    get: () => DEFAULT_MODEL_COMPACTION_PCT,
     enumerable: true,
     configurable: false,
   });
@@ -1437,9 +1443,14 @@ export function buildPiNativeProvidersFromConfigs(
         // bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
         // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
+        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
+        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        const nativeGoogleBaseUrl =
+          modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
+            ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
         const modelBaseUrl =
           m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
+          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1686,6 +1697,16 @@ export function resolvePiCindyGatewayModelApi(
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+// #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.
+// Keep this Gateway policy independent of whether a Pi catalog version lists the model.
+const PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS = new Set([
+  'deepseek/deepseek-v4.1-flash',
+  'deepseek/deepseek-flash',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-vision-exp',
+  'deepseek/deepseek-v4-flash',
+]);
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
@@ -1703,6 +1724,13 @@ export function resolvePiCindyGatewayModelSpec(
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (
+    api === 'openai-completions' &&
+    PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS.has(modelId) &&
+    compat?.requiresReasoningContentOnAssistantMessages === undefined
+  ) {
+    compat = { ...compat, requiresReasoningContentOnAssistantMessages: true };
+  }
   if (api === 'anthropic-messages') compat = pruneAnthropicCompatForGateway(compat);
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
@@ -1939,6 +1967,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);
       return source ? readModelContextLimit('pi', source, modelId)
         ?? resolveModelDefaultContextWindow(catalog, 'pi', source, modelId) : null;
+    },
+    resolveModelCompactionPct: (providerId, modelId) => {
+      const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
+      return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
     },
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),

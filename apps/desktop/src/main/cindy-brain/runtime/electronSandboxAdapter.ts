@@ -269,9 +269,13 @@ export function setGhostMediaModelsProvider(
   ghostMediaModelsProvider = provider;
 }
 
-let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostAgentModelsProvider: ((ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<import('../../../shared/pluginModelPicker.js').PluginModelPickerResult>) | null = null;
+export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
+  ghostModelPickerProvider = provider;
+}
 export function setGhostAgentModelsProvider(
-  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+  provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
   ghostAgentModelsProvider = provider;
 }
@@ -570,13 +574,43 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === '/model-picker') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (request.method !== 'POST') return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        if (!ghostModelPickerProvider) return new Response(null, { status: 503, headers });
+        let options: unknown;
+        try {
+          const body = await readBoundedBodyText(request);
+          if (body.length > 4096) return new Response(null, { status: 400, headers });
+          options = JSON.parse(body || '{}');
+        } catch { return new Response(null, { status: 400, headers }); }
+        // Page authors cannot choose a different phone or impersonate a logic request.
+        if (!options || typeof options !== 'object' || Array.isArray(options) ||
+            Object.keys(options).some(key => key !== 'initial')) return new Response(null, { status: 400, headers });
+        const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
+        if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+        return new Response(JSON.stringify(result), { status: 200, headers });
+      }
       if (url.pathname === '/agent-models') {
         const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
         if (request.method !== 'GET') return new Response(null, { status: 405, headers });
-        if (url.search) return new Response(null, { status: 400, headers });
+        const keys = [...url.searchParams.keys()];
+        const ids = url.searchParams.getAll('agent_device_id');
+        let agentDeviceId: string | undefined;
+        if (keys.length > 0) {
+          if (keys.length !== 1 || keys[0] !== 'agent_device_id' || ids.length !== 1) {
+            return new Response(null, { status: 400, headers });
+          }
+          const id = ids[0];
+          if (!id || id.length > 128) return new Response(null, { status: 400, headers });
+          agentDeviceId = id;
+        }
         if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
         try {
-          const result = await ghostAgentModelsProvider(storagePart);
+          const result = agentDeviceId === undefined
+            ? await ghostAgentModelsProvider(storagePart)
+            : await ghostAgentModelsProvider(storagePart, agentDeviceId);
           if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(JSON.stringify(result), {
             status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,

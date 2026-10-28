@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ProviderShareBudgetStatus } from './providerShareBudget';
 import type { ProviderUsageDayView } from './providerShare';
 
 export const PROVIDER_SHARE_INSIGHTS_CHANNEL = 'provider-share:insights:v1';
@@ -50,6 +51,7 @@ export interface ProviderShareUsageDetails {
 
 export interface ProviderShareInsights {
   version: 1;
+  memberBudget?: ProviderShareBudgetStatus | null;
   capabilities: ProviderShareVisibility;
   status: {
     quota: 'disabled' | 'ready' | 'unavailable';
@@ -99,6 +101,17 @@ const quotaAccount = z.object({
 const status = z.enum(['disabled', 'ready', 'unavailable']);
 const schema = z.object({
   version: z.literal(1),
+  memberBudget: z.object({
+    state: z.enum(['recorded', 'empty', 'unavailable']), enabled: z.boolean(),
+    windowStart: z.iso.date(), windowEnd: z.iso.date(), nextWindowAt: timestamp,
+    totalTokens: number.min(0).nullable(),
+    recommendedModel: z.string().max(512).nullable(),
+    rules: z.array(z.object({
+      id: z.string().max(512), models: z.array(z.string().max(512)).length(1),
+      tokens: number.min(0).nullable(), usedPercent: number.min(0).max(100).nullable(),
+      limitPercent: number.positive().max(100), wouldBlock: z.boolean(), blocked: z.boolean(),
+    })).max(32),
+  }).nullable().optional(),
   capabilities: z.object({ quota: z.boolean(), usage: z.boolean() }),
   status: z.object({
     quota: status,

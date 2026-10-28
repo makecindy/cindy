@@ -564,7 +564,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const firePromise = runner.fire(baseSchedule(), ctx);
 
     await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
-    await vi.waitFor(() => expect(beforeDispatchUserTurn).toHaveBeenCalledWith('scheduler-session'));
+    await vi.waitFor(() => expect(beforeDispatchUserTurn).toHaveBeenCalledWith('scheduler-session', undefined));
     expect(order).toEqual(['send', 'persist']);
 
     releaseBaseline?.();

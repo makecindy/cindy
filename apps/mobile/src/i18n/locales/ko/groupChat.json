@@ -1,8 +1,8 @@
 {
   "title": "그룹 채팅",
   "memberSeparator": ", ",
-  "memberCount_one": "동료 {{count}}명",
-  "memberCount_other": "동료 {{count}}명",
+  "memberCount_one": "멤버 {{count}}명",
+  "memberCount_other": "멤버 {{count}}명",
   "organizer": "담당자",
   "waitingConfirm": "{{name}} 님이 확인을 기다리고 있어요",
   "loadFailedTitle": "이 그룹 채팅을 불러올 수 없습니다",
@@ -97,6 +97,8 @@
     "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
     "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
     "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동료의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+      "REMOTE_TOTAL_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 원격 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다.\n해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
       "IMAGE_INPUT_UNSUPPORTED": "{{name}}이(가) 답변하지 못했습니다. 현재 모델은 이미지를 지원하지 않습니다.\n이미지 지원 모델로 전환하거나 설정 → 개인화 → 비전 브리지에서 비전 모델을 활성화하고 설정한 뒤 메시지를 다시 보내세요.",
       "MODEL_UNAVAILABLE": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.\n동료 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요.",
       "AUTH_REQUIRED": "{{name}}이(가) 답변하지 못했습니다. 모델 연결에 재인증이 필요합니다.\n설정에서 모델 제공자에 다시 연결한 뒤 메시지를 다시 보내세요.",
@@ -141,6 +143,7 @@
     "allDone": "모두 완료"
   },
   "speaking": {
+    "stopping": "중지 중…",
     "planning": "역할을 나누는 중…",
     "step": "작업 중…"
   },
@@ -197,20 +200,25 @@
     "add": "동료 추가",
     "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다",
     "memberActions": "{{name}} 작업",
-    "managementComputer": "관리 컴퓨터",
     "retry": "다시 시도",
-    "reconnect": "재연결",
     "conflict": "그룹 설정이 변경되었습니다. 확인한 후 다시 저장해 주세요. 입력 내용은 유지됩니다.",
     "archive": "그룹 채팅 보관",
     "archiveConfirmTitle": "“{{name}}” 그룹을 보관할까요?",
     "archiveNote": "그룹 소유자만 보관할 수 있습니다. 새 메시지를 보낼 수 없게 되지만 기록은 유지됩니다.",
-    "managementStatus": {
-      "ready": "연결됨",
-      "loading": "연결 중…",
-      "noHost": "연결 끊김",
-      "permission": "읽기 전용",
-      "upgrade": "업데이트 필요",
-      "unavailable": "설정을 읽을 수 없음"
+    "description": "그룹 소개",
+    "descriptionSaveFailed": "그룹 소개를 저장하지 못했습니다.",
+    "makeAdmin": "관리자로 지정",
+    "removeAdmin": "관리자 해제",
+    "roles": {
+      "owner": "소유자",
+      "admin": "관리자",
+      "member": "멤버",
+      "guest": "게스트"
+    },
+    "cloudStatus": {
+      "loading": "설정 불러오는 중…",
+      "permission": "그룹 소유자와 관리자만 이 설정을 변경할 수 있습니다.",
+      "unavailable": "그룹 설정을 불러오지 못했습니다. 다시 시도하세요."
     }
   },
   "errors": {
@@ -246,6 +254,15 @@
     "loadFailed": "그룹 채팅을 불러올 수 없습니다. 다시 시도해 주세요.",
     "loadOlder": "이전 메시지 불러오기",
     "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
+    "attachmentPreviewLoading": "첨부 파일을 불러오는 중…",
+    "attachmentPreviewFailed": "이 첨부 파일을 미리 볼 수 없습니다. 다시 시도하세요.",
+    "attachmentPreviewTooLarge": "파일이 10MB를 초과해 모바일에서 미리 볼 수 없습니다.",
+    "attachmentPreviewBinary": "이 첨부 파일은 읽을 수 있는 텍스트가 아니어서 미리 볼 수 없습니다.",
+    "attachmentPreviewTruncated": "미리보기는 최대 10,000줄, 100,000자까지 표시합니다.",
+    "attachmentPreviewEmpty": "이 파일은 비어 있습니다.",
+    "attachmentPreviewRetry": "다시 시도",
+    "attachmentPreviewOpenOutside": "브라우저에서 열기",
+    "attachmentPreviewClose": "첨부 파일 미리보기 닫기",
     "previewUnavailable": "미리보기를 불러올 수 없습니다",
     "endpointUnavailable": "그룹 채팅 서비스 설정을 사용할 수 없습니다. 다시 시도해 주세요."
   },

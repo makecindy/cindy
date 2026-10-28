@@ -22,6 +22,7 @@
  *     (它属于 session lifecycle 不属于 usage)
  */
 
+import { randomUUID } from 'node:crypto';
 import type { UsageSnapshot } from '../../types/events.js';
 
 /**
@@ -53,7 +54,32 @@ export interface UsageSegment {
   complete?: boolean;
 }
 
+export class RequestUsageTracker {
+  private meteringEpoch = randomUUID();
+  private meteringModels = new Map<string, UsageSegment>();
+
+  /** Runtime-cumulative receipts. Independent of turn resets, context and display cost. */
+  snapshot() {
+    return { epoch: this.meteringEpoch, models: [...this.meteringModels.values()].map(row => ({ ...row })) };
+  }
+
+  ingest(usage: UsageSegment): void {
+    const model = usage.model ?? 'unknown';
+    const previous = this.meteringModels.get(model);
+    this.meteringModels.set(model, {
+      model,
+      inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+      cacheReadTokens: (previous?.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
+      cacheCreateTokens: (previous?.cacheCreateTokens ?? 0) + (usage.cacheCreateTokens ?? 0),
+    });
+  }
+
+}
+
 export class UsageTracker {
+  private requestMeter = new RequestUsageTracker();
+  getRequestMetering() { return this.requestMeter.snapshot(); }
   // ── turn 累计 ────────────────────────────────────────────────────────────
   // 每次 ingestApiCallUsage 累加, endTurn 后由 resetCurrentTurn 清零。
   // 老链路对标: agentManager.ts:2362-2365 currentTurn{Input,Output,CacheRead,CacheCreate}Tokens
@@ -147,6 +173,13 @@ export class UsageTracker {
         : {}),
     };
     this.currentTurnSegments[existingIndex] = merged;
+    this.requestMeter.ingest({
+      model: merged.model,
+      inputTokens: merged.inputTokens - existing.inputTokens,
+      outputTokens: merged.outputTokens - existing.outputTokens,
+      cacheReadTokens: (merged.cacheReadTokens ?? 0) - (existing.cacheReadTokens ?? 0),
+      cacheCreateTokens: (merged.cacheCreateTokens ?? 0) - (existing.cacheCreateTokens ?? 0),
+    });
     this.applyUsageDelta(
       {
         inputTokens: merged.inputTokens - existing.inputTokens,
@@ -185,6 +218,7 @@ export class UsageTracker {
       this.currentTurnSegmentIndex.set(normalized.id, this.currentTurnSegments.length);
     this.currentTurnSegments.push(normalized);
     this.applyUsageDelta(normalized, true);
+    this.requestMeter.ingest(normalized);
   }
 
   private applyUsageDelta(

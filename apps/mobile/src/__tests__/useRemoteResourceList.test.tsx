@@ -22,6 +22,7 @@ vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<ty
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
   readRemoteResourceSnapshot: h.snapshot, cacheRemoteResourceItems: h.persist,
+  peekRemoteResourceSnapshot: () => undefined,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
 }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({
@@ -47,6 +48,18 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 describe('shared real resource list', () => {
+  it('fills a slow disk shard after another computer replied, without reviving its deleted rows', async () => {
+    vi.useFakeTimers();
+    let finish!: (snapshot: unknown) => void;
+    h.snapshot.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    h.list.mockImplementation(async (_invoke, host) => host.deviceId === 'mac'
+      ? { items: [] } : new Promise(() => {}));
+    await render();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await act(async () => finish({ home: [], items: { teammates: [cached(targets[0], 'deleted'), cached(targets[1], 'saved-pc')] }, read: {} }));
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['saved-pc']);
+    expect(result.isOnline(targets[1])).toBe(false);
+  });
   // Regression: one sleeping computer raised a section-wide warning on a healthy phone.
   // Unit: real roster hook, cached offline shard + a successful online shard.
   it('keeps known offline computers without reporting a failed refresh and reads them on return', async () => {

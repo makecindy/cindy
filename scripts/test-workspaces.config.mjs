@@ -99,6 +99,7 @@ const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
+  'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
 ];
 const mobileGuardInclude = [
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.

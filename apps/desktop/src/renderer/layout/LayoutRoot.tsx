@@ -847,9 +847,14 @@ interface LayoutRootProps {
    * 统一开关(2026-07-08 Lizi 实测:设置页右缘冒出意识面板)。
    */
   suppressNonChatPanels?: boolean;
+  /** right-tabs 可保留挂载但不占宽度；窗口左边缘应归其后第一个实际在场的面板。 */
+  rightTabsCollapsed?: boolean;
 }
 
-export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = {}): ReactNode {
+export function LayoutRoot({
+  suppressNonChatPanels = false,
+  rightTabsCollapsed = false,
+}: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
   // 已装意识的面板首帧前同步注册:与内置面板同帧就位;未装意识的存档残留
@@ -947,6 +952,9 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     // 容器的 flex 子项。接管态只留 chat-main(见 LayoutRootProps)。
     const ledger = activeSplitLedger(content.children);
     const visible = ledger.entries.filter((e) => !suppressNonChatPanels || containsChat(e.node));
+    const leftmostIndex = visible.findIndex(
+      ({ node }) => !(rightTabsCollapsed && node.type === 'pane' && node.panelKind === 'right-tabs'),
+    );
     // 撑满态:目标 pane 独占一行(自身经 PanelMaximizeContext 切成 flex-1),
     // 兄弟收成 0 宽裁切 —— 保持挂载不动 display:webview 卸载丢 webContents,
     // display:none 对 webview 也不友好;分割线整组不画。树账本(fraction/顺序)
@@ -1048,7 +1056,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
             <NodeView
               node={entry.node}
               fillPane
-              atWindowLeft={i === 0}
+              atWindowLeft={i === leftmostIndex}
               liveFractions={liveFractions}
               maximizedKind={null}
               chatOnly={suppressNonChatPanels}
@@ -1062,7 +1070,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
           <NodeView
             key={entry.node.id}
             node={entry.node}
-            atWindowLeft={i === 0}
+            atWindowLeft={i === leftmostIndex}
             liveFractions={liveFractions}
             maximizedKind={null}
             onLive={setLiveFractions}

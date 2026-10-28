@@ -12,6 +12,27 @@ import {
 } from "@/session/remoteMedia";
 
 describe("mobile remote media", () => {
+  // Regression: video streaming forced OSS even when authenticated peer bytes
+  // were available. Retention must finish before the staging lease is released.
+  it.each([false, true])('owns peer video playback beyond its staging lifetime (copy fails=%s)', async (fails) => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const staged = { ossKey: '', mimeType: 'video/mp4', size: 3 };
+    const dispose = vi.fn();
+    recordPeerMedia(staged, 'file:///staging/clip.mp4', dispose);
+    const fetchRemoteMedia = vi.fn(async () => staged);
+    const retainLocalVideo = vi.fn(async (media: import('@/session/remoteMedia').MobileResolvedRemoteMedia) => {
+      expect(dispose).not.toHaveBeenCalled();
+      if (fails) throw new Error('disk full');
+      return { ...media, url: 'file:///retained/clip.mp4', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
+    });
+    const result = resolveMobileRemoteMedia({ kind: 'video', url: 'xdt-file://open?path=/clip.mp4' }, {
+      fetchRemoteMedia, presignGet: vi.fn(), retainLocalVideo,
+    });
+    if (fails) await expect(result).rejects.toThrow('disk full');
+    else await expect(result).resolves.toMatchObject({ url: 'file:///retained/clip.mp4', previewable: true });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith('xdt-file://open?path=/clip.mp4', expect.objectContaining({ stream: false, revalidate: true }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
   it('retains a background fallback and releases its staging copy and cloud object', async () => {
     const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
     const local = { ossKey: '', mimeType: 'application/pdf', size: 3 };

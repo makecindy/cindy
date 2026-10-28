@@ -39,7 +39,7 @@ export interface ComposerRichInputConfig {
 /**
  * The editor intentionally has no network dependencies. Native owns the
  * semantic document; this page owns IME/selection and reports normalized DOM
- * changes after composition commits.
+ * changes without replacing the active IME's DOM on native acknowledgements.
  */
 export function buildComposerRichInputHtml(config: ComposerRichInputConfig): string {
   const bootstrap = JSON.stringify(config).replace(/</g, '\\u003c');
@@ -186,8 +186,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   };
   const render = (documentValue, focusAfter) => {
     // Programmatic DOM replace (inserting a directory chip, applying a draft)
-    // can drop compositionend. If composing stays true, later input is visible
-    // but never posted, so the send button stays disabled.
+    // can drop compositionend. Clear its selection guard for the new document.
     composing = false;
     applying = true;
     reportUserSelection = false;
@@ -309,7 +308,9 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     post({ type: 'height', height });
   };
   const notify = () => {
-    if (applying || composing) return;
+    // Preedit is visible draft content too. Native acknowledges these documents
+    // without rendering them back into this DOM, preserving the IME and caret.
+    if (applying) return;
     const value = readDocument();
     const signature = JSON.stringify(value);
     if (signature !== lastSignature) {
@@ -579,6 +580,12 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
 
   window.cindyComposer = {
     ping(id) { post({ type: 'pong', id }); },
+    snapshot(requestId) {
+      // A read barrier, not a blur/DOM replacement: Send must await this reply,
+      // even if the last input/change event is still crossing the native bridge.
+      const pendingPaste = Array.from(pasteMarkers.values()).some(({ marker }) => root.contains(marker));
+      post({ type: 'snapshot', requestId, documentId, document: readDocument(), pendingPaste });
+    },
     applyDocument(value, focusAfter, caret, nextDocumentId) {
       if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
       render(value, focusAfter === true && !caret);

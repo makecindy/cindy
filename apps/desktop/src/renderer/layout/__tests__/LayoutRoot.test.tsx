@@ -307,6 +307,64 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect(screen.getAllByTestId('layout-divider')).toHaveLength(3);
   });
 
+  // Bug:左置 right-tabs 收起后仍挂载，曾遮蔽聊天列的窗口左边缘标记，导致上方页签组
+  // 不给 ChromeActions 留 no-drag 命中洞。现有测试只有展开布局；最小输入为零宽 right-tabs
+  // + 带上方页签组的聊天列。经真实 LayoutRoot 验证面板消费的边缘合同及展开恢复；tier:unit。
+  it('左置 right-tabs 收起时将窗口左边缘交给聊天列，重新展开后收回', () => {
+    registerPanelKind({
+      kind: 'tab-group:top',
+      Component: () => (
+        <div
+          data-testid="p-top"
+          data-window-left={String(usePaneAtWindowLeft())}
+          data-window-top={String(usePaneAtWindowTop())}
+        />
+      ),
+      collapseMemory: 'none',
+    });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          { fraction: 0.3, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+          {
+            fraction: 0.7,
+            node: {
+              type: 'split',
+              id: 'chat-column',
+              direction: 'column',
+              children: [
+                { fraction: 0.35, node: { type: 'pane', id: 'top', panelKind: 'tab-group:top' } },
+                { fraction: 0.65, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const view = (collapsed: boolean) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={collapsed} />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(false));
+    const retainedRight = screen.getByTestId('p-right');
+    expect(screen.getByTestId('p-top').getAttribute('data-window-left')).toBe('false');
+
+    rendered.rerender(view(true));
+    expect(screen.getByTestId('p-top').getAttribute('data-window-left')).toBe('true');
+    expect(screen.getByTestId('p-top').getAttribute('data-window-top')).toBe('true');
+    expect(screen.getByTestId('p-right')).toBe(retainedRight);
+
+    rendered.rerender(view(false));
+    expect(screen.getByTestId('p-top').getAttribute('data-window-left')).toBe('false');
+    expect(screen.getByTestId('p-right')).toBe(retainedRight);
+    expect(setLayoutMock).not.toHaveBeenCalled();
+  });
+
   // 测试价值
   // - 生产入口与可观察结果:LayoutRoot 渲染「聊天列」(chat-main 与上下页签组同在一层
   //   column split);可观察的是聊天列作为根级弹性区域(flex-1、不吃像素宽)、列内有横缝、

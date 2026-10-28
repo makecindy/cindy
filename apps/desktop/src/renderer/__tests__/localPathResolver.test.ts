@@ -247,6 +247,15 @@ describe('resolveToolFilePath (agent tool-input path absolutizer)', () => {
 });
 
 describe('resolveLocalPathSmart', () => {
+  // #7303: an explicit retry must reach the host's refresh option, not just
+  // bypass this module's render cache (the real cache regression lives in main).
+  it('passes explicit refresh through the existing resolution IPC', async () => {
+    const resolvePath = vi.fn().mockResolvedValue({ status: 'none', candidates: [] });
+    vi.stubGlobal('window', { electronAPI: { resolvePath } });
+    await resolveLocalPathSmart('report.pdf', '/repo', { refresh: true });
+    expect(resolvePath).toHaveBeenCalledWith({ href: 'report.pdf', workingDir: '/repo', refresh: true });
+  });
+
   it('passes decoded native paths to the main-process resolver for file URLs', async () => {
     const resolvePath = vi.fn().mockResolvedValue({
       status: 'unique',

@@ -90,7 +90,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行可指定电脑（device，查询可传 all）；新建、检查脚本安装、当前运行的通知设置只在本机。本机定时任务可指定每次新建任务时 Agent 在哪台电脑或分享来的供应商上运行（schedule_list_models 查位置与模型）。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行可指定电脑（device，查询可传 all）；新建、检查脚本安装、当前运行的通知设置只在本机。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(

@@ -19,6 +19,7 @@ import type {
 import type { TelegramApiClient, TgFile, TgMediaFile, TgMessage, TgMessageEntity, TgUser } from './api.js';
 import { audioVideoMimeOf, classifyInboundAttachment } from '../inboundKind.js';
 import { encodeMessageId } from './codec.js';
+import { telegramMessageText, telegramReplyText } from './messageText.js';
 
 /** Bot API getFile 的官方下载上限(20MB), 超过标注 oversize 不下载。 */
 const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
@@ -74,7 +75,7 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
       name: displayNameOf(m.from),
       ...(m.from?.is_bot ? { isBot: true } : {}),
     },
-    text: m.text ?? m.caption ?? '',
+    text: telegramMessageText(m),
     ...(fileNames.length > 0 ? { fileNames } : {}),
     sentAt: m.date * 1000,
   };
@@ -205,23 +206,24 @@ export interface NormalizeContext {
  */
 export function replyContextOf(
   m: TgMessage,
-): { author: string; text: string; isBot?: boolean } | null {
+): { messageId: string; author: string; text: string; isBot?: boolean } | null {
   const replied = m.reply_to_message;
   if (!replied) return null;
   // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
   // 那和把它写进本地池是同一次外传。与官方 bot「被引消息受保护则原文与附件
   // 都不外传」同一语义。触发轮次本身照常跑, 只是不带原文。
   if (replied.has_protected_content === true || m.has_protected_content === true) return null;
-  let text = replied.text ?? replied.caption ?? '';
+  let text = telegramReplyText(m);
   if (!text) {
     if (replied.photo && replied.photo.length > 0) text = '[图片]';
     else if (replied.document) text = `[文件: ${replied.document.file_name ?? 'document'}]`;
     else if (replied.voice) text = '[语音消息]';
     else if (replied.video) text = '[视频]';
     else if (replied.sticker) text = `[贴纸${replied.sticker.emoji ? ` ${replied.sticker.emoji}` : ''}]`;
-    else return null; // 服务消息等无内容形态, 不构造空引用
+    else text = '[引用消息的正文无法读取]';
   }
   return {
+    messageId: String(replied.message_id),
     author: displayNameOf(replied.from),
     text,
     ...(replied.from?.is_bot ? { isBot: true } : {}),

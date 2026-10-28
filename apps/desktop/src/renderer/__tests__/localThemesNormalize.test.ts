@@ -5,6 +5,8 @@ import {
   parseCssColor,
   type Rgb,
 } from '../../shared/theme-import/color';
+import legacyTable from '../themes/loginLegacyDefaults.json';
+import { LEGACY_SNAPSHOT_MIN_MATCHES } from '../themes/loginLegacyDefaults';
 import { normalizeLocalThemeColors } from '../themes/local-themes-normalize';
 
 function rgb(value: string | undefined): Rgb {
@@ -173,5 +175,78 @@ describe('normalizeLocalThemeColors', () => {
 
     expect(out['switch-track-off']).toBe('#555555');
     expect(out['switch-thumb-off']).toBe('#000000');
+  });
+
+  describe('升级前导出的 login-* 默认值(历史快照迁移)', () => {
+    /** 某个模式下「旧版导出的快照」:前 N 个有历史值的登录 token 各取一个旧值。 */
+    function legacySnapshot(type: 'light' | 'dark'): Record<string, string> {
+      const entries = Object.entries(legacyTable.defaults)
+        .map(([id, slots]) => [id, slots[type][0]] as const)
+        .filter((entry): entry is readonly [string, string] => entry[1] !== undefined);
+      return Object.fromEntries(entries.slice(0, LEGACY_SNAPSHOT_MIN_MATCHES + 2));
+    }
+
+    it('旧快照:丢弃等于本模式历史默认值的 override,用户改过的值与非登录色原样保留', () => {
+      const snapshot = legacySnapshot('light');
+      expect(Object.keys(snapshot).length).toBeGreaterThan(LEGACY_SNAPSHOT_MIN_MATCHES);
+      const out = normalizeLocalThemeColors(
+        { ...snapshot, surface: '#111111', 'login-control-bg': '#123456' }, // 后一项是用户自己改过的
+        'light',
+      );
+      expect(out).toEqual({ surface: '#111111', 'login-control-bg': '#123456' });
+    });
+
+    it('覆盖更早几代:10-23 前的文字实色、10-01 前的画布底,否则旧值会压在新面板上', () => {
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('dark'), 'login-secondary-text': '#6F6F6F', 'login-bg-base': '#1F1F1E' },
+          'dark',
+        ),
+      ).toEqual({});
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('light'), 'login-title-text': '#252222', 'login-bg-base': '#EDEDED' },
+          'light',
+        ),
+      ).toEqual({});
+    });
+
+    it('rgba 数字写法不同(0.5 与 0.50)也能识别', () => {
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('light'), 'login-overlay-button-pressed': 'rgba(0,0,0,0.5)' },
+          'light',
+        ),
+      ).toEqual({});
+    });
+
+    it('只比对本模式的历史值:深色快照里混入的历史亮色值不被丢弃,反之亦然', () => {
+      expect(
+        normalizeLocalThemeColors({ ...legacySnapshot('dark'), 'login-panel-bg': '#FBFBFB' }, 'dark'),
+      ).toEqual({ 'login-panel-bg': '#FBFBFB' });
+      expect(
+        normalizeLocalThemeColors({ ...legacySnapshot('light'), 'login-panel-bg': '#312F2F' }, 'light'),
+      ).toEqual({ 'login-panel-bg': '#312F2F' });
+    });
+
+    it('稀疏手写主题,或本版本新建的副本里零星几个有意设成历史值的 override,原样保留', () => {
+      const sparse = { 'login-panel-bg': '#FBFBFB', 'login-secondary-text': '#6F6F6F' };
+      expect(normalizeLocalThemeColors(sparse, 'light')).toBe(sparse);
+      // 新建副本:全部登录色是当前值(不在历史表里),用户只改了一个为历史值
+      const freshCopy = {
+        ...Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`login-current-${i}`, '#abcdef'])),
+        'login-panel-bg': '#FBFBFB',
+      };
+      expect(normalizeLocalThemeColors(freshCopy, 'light')).toBe(freshCopy);
+    });
+
+    it('没有传主题模式时不迁移;幂等,没有可迁移项时返回同一个对象', () => {
+      const snapshot = legacySnapshot('light');
+      expect(normalizeLocalThemeColors(snapshot)).toBe(snapshot);
+      const colors = { surface: '#111111', 'login-control-bg': '#123456' };
+      expect(normalizeLocalThemeColors(colors, 'light')).toBe(colors);
+      const once = normalizeLocalThemeColors({ ...snapshot, surface: '#111111' }, 'light');
+      expect(normalizeLocalThemeColors(once, 'light')).toEqual(once);
+    });
   });
 });

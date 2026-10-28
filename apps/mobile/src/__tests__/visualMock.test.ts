@@ -4,6 +4,9 @@ import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems
 import { invokePlugin } from '@/plugins/pluginClient';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import type { RemoteMessage } from '@/session/types';
+import { UI_MOCK_PROJECTS } from '@cindy/maker-shared/ui-mock';
+import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
+import type { FileBrowserReadFileResult, FileBrowserListAllFilesResult } from '@/device-link/mobileMakerTransport';
 
 const config = vi.hoisted(() => ({ MOBILE_VISUAL_MOCK_REALDATA_URL: '' }));
 vi.mock('@/config/env', () => config);
@@ -13,6 +16,55 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
 } }));
 beforeEach(() => { vi.resetModules(); config.MOBILE_VISUAL_MOCK_REALDATA_URL = ''; });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+it('serves showcase files without replacing legacy Markdown and media regression fixtures', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  for (const name of ['orbit-garden-zh', 'orbit-garden-en']) {
+    const project = UI_MOCK_PROJECTS.find(item => item.name === name)!;
+    const request = <T>(args: Record<string, unknown>) => link.invoke<T>(mock.VISUAL_MOCK_DEVICE_ID, 'file-browser:remote-op', [{ workdir: `/Users/demo/Projects/${project.name}`, ...args }]);
+    expect(await request({ op: 'listDir', relPath: '' })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'directory', name: 'reports', relPath: 'reports' }),
+      expect.objectContaining({ type: 'file', name: 'README.md' }),
+    ]));
+    expect(await request({ op: 'listDir', relPath: 'reports' })).toEqual([
+      expect.objectContaining({ type: 'file', name: 'playtest.md', relPath: 'reports/playtest.md' }),
+    ]);
+    const result = await request<FileBrowserReadFileResult>({ op: 'readFile', relPath: 'reports/playtest.md' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.content).toBe(project.files['reports/playtest.md']);
+      expect(result.data.size).toBe(new TextEncoder().encode(result.data.content).byteLength);
+    }
+    expect(await request({ op: 'readFile', relPath: '../private.md' })).toMatchObject({ ok: false, code: 'READ_FAILED' });
+    expect(await request({ op: 'listDir', relPath: '../' })).toEqual([]);
+    const all = await request<FileBrowserListAllFilesResult>({ op: 'listAllFiles', cap: 2 });
+    expect(all.files).toHaveLength(2);
+    expect(all.truncated).toBe(true);
+    expect(await request({ op: 'searchCollect', query: '24' })).toMatchObject({ matches: expect.arrayContaining([expect.objectContaining({ relPath: 'reports/playtest.md' })]) });
+    expect(await request({ op: 'searchCollect', query: 'does-not-exist' })).toMatchObject({ matches: [], totalFiles: 0, totalMatches: 0, truncated: false });
+    expect(await request({ op: 'searchCollect', query: 'orbit garden', caseSensitive: true })).toMatchObject({ matches: [], totalFiles: 0 });
+    expect(await request({ op: 'searchCollect', query: 'orbit garden', maxMatches: 1 })).toMatchObject({ matches: [expect.any(Object)], totalFiles: 1, totalMatches: 1, truncated: true });
+  }
+
+  // Regression: matching every shared project hid the old media and Markdown fixtures.
+  // Exercise the real mock transport with remote POSIX paths; no filesystem or network.
+  for (const name of ['cindy-demo', 'design-system']) {
+    const request = (args: Record<string, unknown>) => link.invoke(mock.VISUAL_MOCK_DEVICE_ID,
+      'file-browser:remote-op', [{ workdir: `/Users/demo/Projects/${name}`, ...args }]);
+    expect(await request({ op: 'listDir', relPath: '' })).toEqual(expect.arrayContaining(
+      ['README.md', 'visual-report.md', 'chart.png', 'demo.mp4'].map(relPath => expect.objectContaining({ type: 'file', relPath })),
+    ));
+    expect(await request({ op: 'readFile', relPath: 'README.md' })).toMatchObject({ ok: true, data: { content: markdownPreviewFixture } });
+    expect(await request({ op: 'readFile', relPath: 'visual-report.md' })).toMatchObject({ ok: true, data: { content: expect.stringContaining('Swipe right') } });
+    expect(await request({ op: 'thumbnail', relPath: 'chart.png' })).toMatchObject({ ok: true, dataBase64: expect.any(String) });
+    expect(await request({ op: 'caps' })).toMatchObject({ ok: true, gzip: true });
+    expect(await request({ op: 'listAllFiles' })).toMatchObject({ files: expect.arrayContaining(['apps/mobile/app/_layout.tsx']) });
+    expect(await request({ op: 'searchCollect', query: 'DeviceLinkProvider' })).toMatchObject({ matches: expect.arrayContaining([
+      expect.objectContaining({ relPath: 'apps/mobile/app/_layout.tsx', lineText: 'DeviceLinkProvider' }),
+    ]) });
+  }
+});
 
 it('supplies valid demo plugin projections and confirms enable/disable through the real client', async () => {
   const mock = await import('@/debug/visualMock');

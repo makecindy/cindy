@@ -50,6 +50,7 @@ import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelCatalogImageInput } from '@/hooks/useModelCatalogImageInput';
 import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
+import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
@@ -629,8 +630,7 @@ export function ModelAdvancedDrawer({
     ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
-  const currentEffort = preferredEffort && commonEfforts.some((effort) => effort === preferredEffort)
-    ? preferredEffort : commonEfforts[0] ?? null;
+  const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
   const shownEfforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((agent) => {
       const model = row.byAgent[agent];
@@ -1022,6 +1022,11 @@ export function ModelAdvancedDrawer({
                           )}
                         </>
                       )}
+                      {ctx.compaction && (
+                        <ModelCompactionSettings policy={ctx.compaction}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          onChange={ctx.setCompaction} />
+                      )}
                     </Section>
                   )}
 
@@ -1294,16 +1299,14 @@ export function ModelAdvancedDrawer({
                               key={role}
                               label={t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
                             >
-                              <span className="flex flex-wrap items-start justify-end gap-x-2 gap-y-2">
+                              <span className="flex flex-col items-end gap-1">
                                 {quotes.map((quote, index) => (
-                                  <span key={index} className="inline-flex min-w-0 max-w-full items-start gap-x-2">
-                                    {index > 0 && <span aria-hidden> · </span>}
-                                    <DisplayPricingQuote
-                                      quote={quote}
-                                      currency={primaryModel.currency!}
-                                      costDiscount={discount}
-                                    />
-                                  </span>
+                                  <DisplayPricingQuote
+                                    key={index}
+                                    quote={quote}
+                                    currency={primaryModel.currency!}
+                                    costDiscount={discount}
+                                  />
                                 ))}
                               </span>
                             </Row>

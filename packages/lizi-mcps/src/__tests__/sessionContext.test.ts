@@ -1939,3 +1939,20 @@ describe('dynamic lizi MCP session context', () => {
     });
   });
 });
+
+// Unit / #7253: all harnesses use the same current-task delivery tool; ambient
+// context must win over the server's captured context, and descendants cannot
+// announce their parent's delivery. Existing title tests do not cover this report.
+it.each([['claude-code', false], ['codex', false], ['pi', false], ['claude-code', true], ['codex', true], ['pi', true]] as const)('routes %s delivery only from the current task executor (SSH: %s)', async (agentKind, ssh) => {
+  const report = vi.fn(() => ({ ok: true as const }));
+  const server = createXdtHelperMcpServer({ taskDelivery: { report } }, { agentKind, workingDir: '' });
+  const call = () => tools(server).call_tool.handler({ name: 'report_task_delivery', args: { final_delivery: true } });
+  expect(parse(await call() as never)).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  const context = { agentKind, workingDir: '/repo', sessionId: 'current', sessionInstanceId: 'runtime-1', ...(ssh ? { remoteHostId: 'ssh-host' } : {}) };
+  expect(parse(await runWithLiziMcpSessionContext(context, call) as never)).toMatchObject({ ok: true, recorded: true });
+  expect(report).toHaveBeenCalledWith('current', true, 'runtime-1');
+  report.mockClear();
+  expect(parse(await runWithLiziMcpSessionContext({ ...context, mcpCallerKind: 'descendant' }, call) as never))
+    .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+  expect(report).not.toHaveBeenCalled();
+});

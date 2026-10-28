@@ -76,6 +76,11 @@ describe('stepToRequest', () => {
     expect(req.action).toBe('act');
     expect(req.request?.kind).toBe('evaluate');
     expect(req.request?.fn).toContain('querySelectorAll');
+    // PR #7432: unguarded recipe reads must reach the same fixed DOM path as
+    // direct extracts, while retaining fn for older runtime backends.
+    expect(req.request?.domRead).toEqual({ kind: 'extract',
+      extract: { from: '.row', multiple: true, fields: { t: '.t' } },
+    });
   });
 
   it('maps an evaluate step to act:evaluate, interpolating vars into the fn source', () => {
@@ -455,6 +460,9 @@ describe('recipe guards and output checks', () => {
       guard: { url: 'https://x.com/', selector: '#account', text: 'account' },
       extract: { fields: { title: 'h1' } }, expect: { requiredFields: ['title'] }, as: 'data' }], output: '{{data}}' }, {}, {
       call: async (req) => {
+        // The runtime ignores fn when domRead is present: leaving this metadata
+        // on the combined request would bypass the page identity guard.
+        expect(req.request?.domRead).toBeUndefined();
         calls++;
         const value = await runInNewContext(`(${req.request!.fn})()`, {
           location: { href: scenario.url }, getComputedStyle: () => ({ visibility: 'visible' }),

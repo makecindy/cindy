@@ -22,6 +22,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
+export const chatCacheRooms = sqliteTable('chat_cache_rooms', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  state: text('state').notNull(),
+  version: integer('version').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId] }) }));
+
+export const chatCacheMessages = sqliteTable('chat_cache_messages', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  messageId: text('message_id').notNull(),
+  payload: text('payload').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId, t.messageId] }) }));
+
 const speedSetting = customType<{ data: FastMode; driverData: number }>({
   dataType: () => 'integer',
   toDriver: fastModeToStorage,
@@ -47,13 +62,14 @@ export const pluginUsageSubjects = sqliteTable('plugin_usage_subjects', {
   byBinding: index('plugin_usage_subjects_binding_idx').on(t.ghostId, t.bindingRevision),
 }));
 
-/** Dispatch facts only: no arguments, response bodies, credentials or title snapshots. */
+/** Host-confirmed invocation facts; no content, credentials or title snapshots. */
 export const pluginUsageEvents = sqliteTable('plugin_usage_events', {
   callId: text('call_id').primaryKey(),
   subjectId: text('subject_id').notNull().references(() => pluginUsageSubjects.id),
   historyGeneration: integer('history_generation').notNull(),
   occurredAt: integer('occurred_at').notNull(),
   toolName: text('tool_name').notNull(),
+  entryKind: text('entry_kind').notNull().default('tool'),
   sessionId: text('session_id'),
   version: text('version'),
   releaseId: text('release_id'),
@@ -168,6 +184,14 @@ export const sessions = sqliteTable(
      */
     hiddenAt: integer('hidden_at'), // unix ms
     /**
+     * 按任务静音通知。true = 用户在该任务的右键菜单里开了「消息免打扰」：
+     * 不再发系统通知（toast/声音）、不上 Agent 灵动岛、不推手机、不发 IM 消息。
+     * 任务内的未读与角标不受影响；存量行全部为 false。
+     */
+    notificationsMuted: integer('notifications_muted', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    /**
      * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
      * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
      * 取消置顶时清空。NULL = 尚未生成或非卡片置顶。
@@ -182,12 +206,10 @@ export const sessions = sqliteTable(
     providerId: text('provider_id'),
     /**
      * 用户最近一次"按下发送"的时刻（unix ms，NULL = 从未发过）。
-     * Sidebar Project / 组内 session 排序唯一时间轴：
-     *   - 首条消息发出时由 renderer 通过 touchUserSend IPC 立刻 bump
-     *   - NULL ⟺ 草稿，由 projectGrouping 直接归到未分类
-     * 不被 model/effort/title 改动等"字段类"修改触发——updatedAt 才是。
+     * 保留真人发送语义及现有写入点；列表排序使用 lastActivityAt，旧数据回落到此列。
      */
     userSendAt: integer('user_send_at'), // unix ms
+    lastActivityAt: integer('last_activity_at'),
     /**
      * Agent 来源标识——session 级别。决定本 session 内 messages.agent_meta 的 JSON 形态。
      * 默认 'cc'（Claude Code）。未来扩展 'codex' 等时新建 session 即可，老 session 不动。
@@ -430,7 +452,7 @@ export const botSessionLinks = sqliteTable(
     profileVersion: integer('profile_version').notNull().default(1),
     // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线；
     // `thread` = 主人私聊里的话题（route_key = dm-thread:<根消息 Session>:<根消息 clientId>）。
-    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread'] }).notNull(),
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread', 'routine'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -1431,6 +1453,8 @@ export const schedules = sqliteTable(
     agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
     modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    /** NULL inherits a bound task; empty string explicitly selects the automation host. */
+    modelAgentDeviceId: text('model_agent_device_id'),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,

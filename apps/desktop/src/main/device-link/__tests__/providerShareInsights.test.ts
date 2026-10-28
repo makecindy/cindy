@@ -102,6 +102,21 @@ function fixture() {
 const request = { version: 1, includeUsage: true };
 describe('provider share insights', () => {
   afterEach(() => vi.restoreAllMocks());
+  // Member policy remains visible while the owner keeps aggregate account usage private.
+  it('projects only the authenticated member budget independently of quota visibility', async () => {
+    const { state, deps } = fixture();
+    state.visibility = { quota: false, usage: false, revision: 0 };
+    const budget = vi.fn(async () => ({ state: 'recorded' as const, enabled: true, windowStart: '2026-10-22', windowEnd: '2026-10-28', nextWindowAt: 2000, totalTokens: 100, recommendedModel: 'terra',
+      rules: [{ id: 'premium', models: ['provider-model'], tokens: 20, usedPercent: 20, limitPercent: 30, wouldBlock: false, blocked: false }] }));
+    const read = createProviderShareInsightsReader({ ...deps, budget });
+    const result = parseProviderShareInsights(await read('peer', { version: 1, includeUsage: false }));
+    expect(budget).toHaveBeenCalledWith('provider', 'member');
+    expect(result?.memberBudget?.rules[0].usedPercent).toBe(20);
+    expect(result?.quota).toBeNull();
+    expect(result?.usage).toBeNull();
+    expect(deps.quota).not.toHaveBeenCalled();
+    expect(deps.history).not.toHaveBeenCalled();
+  });
   it.each([
     [false, false],
     [true, false],

@@ -237,6 +237,21 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
 
+  it('lists independent teammate lanes, excludes canonical chat and retains attribution after legacy detail reads', () => {
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy' };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('routine', { source: 'bot', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate }),
+      session('channel', { source: 'bot', companion: { id: 'cindy-default', role: 'channel' }, taskTeammate }),
+      session('canonical', { source: 'bot', companion: { id: 'cindy-default', role: 'canonical' } }),
+      session('thread', { source: 'bot' }),
+    ]);
+    expect(remoteSessionStore.getHomeSessions().map(row => row.id).sort()).toEqual(['channel', 'routine']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('routine', { source: 'bot', status: 'archived' }));
+    expect(remoteSessionStore.getHomeSessions().find(row => row.id === 'routine')).toMatchObject({
+      status: 'archived', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate,
+    });
+  });
+
   it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const item: PendingInteraction = { persistId: 'p1',

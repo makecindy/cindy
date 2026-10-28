@@ -2,7 +2,7 @@ import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { presentationDate, presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
-import { hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
+import { getSessionListActivityAt, hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
 import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
@@ -47,6 +47,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   updatedAt: string;
   userId?: string;
   userSendAt?: string | null;
+  lastActivityAt?: string | null;
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
   remoteHostId?: string | null;
@@ -475,7 +476,7 @@ export function toRemoteSessionListItem(
   unnamedLabel?: string,
   localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
-  const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
   const worktreeLabel = sessionWorktreeLabel(session);
   return {
@@ -691,7 +692,11 @@ export function buildSessionScheduleIndex(
       if (isUnreadScheduleRun(run) && (run.status === 'success' || isUnreadFailure)) {
         unreadRunIds.push(run.id);
       }
-      const candidate = activeFailures.has(run.id) ? { runId: run.id, firedAt, scheduleId: run.scheduleId, failureKind: classifyScheduleFailure(run) } : undefined;
+      const candidate = activeFailures.has(run.id) ? {
+        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        failureKind: classifyScheduleFailure(run),
+        errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+      } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
         ? candidate : existing?.latestFailedRun;
       const running = (existing?.running ?? false) || run.status === 'running';
@@ -819,7 +824,7 @@ function isDialogueSession(session: RemoteSession): boolean {
 }
 
 function lastActivity(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function projectTitle(workingDir: string): string {
@@ -1147,7 +1152,7 @@ function contentRefName(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   for (const key of ['name', 'originalName', 'fileName', 'path', 'url']) {
     const item = record[key];
-    if (typeof item === 'string' && item.trim()) return item.trim().split('/').pop() ?? item.trim();
+    if (typeof item === 'string' && item.trim()) return item.trim().split(/[\\/]/).pop() ?? item.trim();
   }
   return null;
 }

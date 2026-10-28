@@ -1,5 +1,7 @@
+import { deviceDisplayName } from '@/lib/deviceName';
+import type { CompanionCloudSnapshot } from '../../../shared/companionCloud';
 import type { BotProfile } from './botStore';
-import { isRemoteBotUnread, type RemoteBot } from './remoteBotRoster';
+import { isRemoteBotUnread, taskBotKey, type RemoteBot } from './remoteBotRoster';
 
 export type CindyDeviceBot = BotProfile | RemoteBot;
 
@@ -21,6 +23,17 @@ export function isCindyDeviceBot(bot: { id: string; templateId?: string }): bool
   return bot.templateId === 'cindy' || bot.id === 'cindy-default';
 }
 
+/** Task filtering follows the built-in teammate across computers, including historical tasks. */
+export function taskCreatorFilterKey(
+  bot: { id: string; deviceId?: string; templateId?: string; filterKey?: string },
+  cloud?: CompanionCloudSnapshot,
+): string {
+  if (bot.filterKey) return bot.filterKey;
+  if (isCindyDeviceBot(bot)) return JSON.stringify(['teammate', 'cindy']);
+  if (cloud?.enabled && cloud.actors.some(actor => actor.externalId === bot.id)) return JSON.stringify(['companion', bot.id]);
+  return taskBotKey(bot);
+}
+
 export function cindyDeviceKey(bot: { id: string; deviceId?: string }): string {
   return JSON.stringify([bot.deviceId ?? null, bot.id]);
 }
@@ -35,14 +48,7 @@ export function cindyDeviceOptions(
 ): CindyDeviceOption[] {
   const self = devices.find((device) => device.isSelf);
   const remoteCindys = remoteBots.filter(isCindyDeviceBot);
-  const peersByName = new Map<string, string[]>();
-  for (const bot of remoteCindys) {
-    const name = bot.deviceName.trim().toLocaleLowerCase();
-    const peers = peersByName.get(name) ?? [];
-    if (!peers.includes(bot.deviceId)) peers.push(bot.deviceId);
-    peersByName.set(name, peers);
-  }
-  for (const peers of peersByName.values()) peers.sort();
+  const peers = remoteCindys.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName }));
   const local = bots
     .filter(
       (bot) =>
@@ -63,12 +69,11 @@ export function cindyDeviceOptions(
     }));
   const remote = remoteCindys
     .map((bot) => {
-      const name = bot.deviceName.trim() || bot.deviceId;
-      const peers = peersByName.get(bot.deviceName.trim().toLocaleLowerCase())!;
+      const name = deviceDisplayName(bot.deviceId, bot.deviceName, peers);
       return {
         key: cindyDeviceKey(bot),
         bot,
-        label: peers.length > 1 ? `${name} (${peers.indexOf(bot.deviceId) + 1})` : name,
+        label: name,
         deviceName: name,
         online: bot.online,
         unread: isRemoteBotUnread(bot),

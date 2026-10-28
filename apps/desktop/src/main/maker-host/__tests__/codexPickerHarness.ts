@@ -17,7 +17,7 @@ import * as overflow from '../../maker-ipc/contextOverflowRollover.js';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel.js';
 import { normalizeDeviceLinkSetModelWireArgs } from '../../maker-ipc/setModelWireArgs.js';
 import { CredentialModeSwitchBusyError } from '../codex-credential-switch.js';
-import { createPendingAgentSwitchRegistry, applyPendingAgentSwitchIfIdle, projectPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler.js';
+import { createPendingAgentSwitchRegistry, isUserPendingAgentSwitchIntent, applyPendingAgentSwitchIfIdle, projectPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 import { registerSessionSetModelHandler } from '../../maker-ipc/sessionSetModelHandler.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
 import { createMakerSendTransaction, type MakerSendTransactionDeps } from '../../maker-ipc/makerSendTransaction.js';
@@ -64,6 +64,12 @@ export function createCodexPickerHarness(input: {
   const env: Record<string, unknown> = {
     ...providers, ...efforts, ...routeGuard, ...control, ...axes, ...relink, ...windowGate, ...overflow,
     maker, sessions, eq, log, agentSwitchPending: pending,
+    // Active local fixture: no scheduled model override or pending window budget.
+    scheduledModelScope: { restore: asyncNoop },
+    updateScheduledPreference: asyncNoop,
+    isUserPendingAgentSwitchIntent, restoreArchivedSessionForSend: asyncNoop,
+    replayPendingSessionContextWindowBudgetUnderLock: asyncNoop,
+    readStoredSessionContextWindowBudget: async () => null,
     // Ordinary local picker has no shared-task invocation context.
     captureSharedTaskSettingGuard: (id: string) => createSharedTaskSettingGuard(undefined, id, { admitted: false }),
     normalizeDeviceLinkSetModelWireArgs, applyRuntimeSetModelChange, CredentialModeSwitchBusyError,

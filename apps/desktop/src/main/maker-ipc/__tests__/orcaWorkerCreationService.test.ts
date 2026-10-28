@@ -5,7 +5,7 @@ import { runAcceptedCallback } from '../acceptedCallbackRunner.js';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { PluginTaskError } from '../pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -75,7 +75,7 @@ describe('Host provenance across Orca creation waits', () => {
     };
     const bindings = {
       maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      PluginTaskError, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
+      PluginTaskError, isPluginTaskPermissionAllowed, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {
         if (directoryResolved) {
@@ -86,7 +86,7 @@ describe('Host provenance across Orca creation waits', () => {
         if (!receipt || receipt.pluginId !== pluginId || JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked');
         return { ...task };
       } }),
-      isPluginTaskAuthorized: () => enabled, readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
+      isPluginTaskAuthorized: () => enabled, getPluginTaskDefaults: () => change === 'hidden-card' ? undefined : ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
       resolvePluginWorkerDirectory: vi.fn(async () => {
         directoryResolved = true; directoryReads = 0;
         if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
@@ -153,6 +153,18 @@ describe('Host provenance across Orca creation waits', () => {
       return runAcceptedCallback(queuedAcceptance, WORKER_SESSION_ID, 'queued-1');
     } };
   }
+
+  // unit: opting out removes only this plugin's card from native Worker admission.
+  // Enabled-card config/pick revocation cases keep their original behavior.
+  it.each(['createWorker', 'enableTeam', 'startNew', 'startExisting'] as const)(
+    'runs %s with a hidden plugin card', async action => {
+      const { run, deps, lifecycleDeps } = setup(action, '', 'hidden-card');
+      await expect(run()).resolves.toMatchObject({ ok: true });
+      expect(lifecycleDeps.setWorkerPermissionMode).not.toHaveBeenCalled();
+      if (action === 'createWorker' || action === 'enableTeam')
+        expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'auto' }));
+    },
+  );
 
   function wireRemoteCreation(deps: OrcaWorkerCreationDeps) {
     deps.openRemoteWorker = vi.fn(async (input: Parameters<NonNullable<OrcaWorkerCreationDeps['openRemoteWorker']>>[0]) => ({
@@ -3563,10 +3575,10 @@ describe('production plugin Auto admission after reservation', () => {
         if (JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned');
         return { ...task };
       } }),
-      readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
+      getPluginTaskDefaults: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async () => task.workingDir,
-      isGhostPickedDir: () => false, PluginTaskError,
+      isGhostPickedDir: () => false, PluginTaskError, isPluginTaskPermissionAllowed,
     };
     const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
     const { deps, service } = createDeps({ validateCreationPlan });
@@ -3627,7 +3639,7 @@ describe('production plugin Auto admission after reservation', () => {
     const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginWorkerDirectoryScope,
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
-      readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
+      getPluginTaskDefaults: () => ({ permissionMode: 'auto' }),
     };
     const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
     const { deps, service } = createDeps({ validateCreationPlan });
@@ -3682,12 +3694,12 @@ describe('production plugin Auto admission after reservation', () => {
         }
         return task();
       } }),
-      readPluginTaskConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
+      getPluginTaskDefaults: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async ({requested}: {requested: string}) => { if (reserved && point === 'directory') revoke(); return requested === path.resolve('other') ? requested : path.resolve('repo'); },
       realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),
       isGhostPickedDir: () => false,
-      PluginTaskError,
+      PluginTaskError, isPluginTaskPermissionAllowed,
     };
     const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
     const { deps, service } = createDeps({ validateCreationPlan, withLeadSendLock: async (_id, operation) => {

@@ -186,8 +186,14 @@ describe('create from the home teammate section + menu', () => {
     expect(node.textContent).toContain('groupChat.create.minMembers(min=2)');
     expect(h.invoke).not.toHaveBeenCalled();
     await act(async () => { h.inputs['botGroup.create.name'].onChangeText('  官网  '); });
-    await click('botGroup.create.member.abu');
+    // Equal timestamps now have a stable identity tie-breaker. Select in the
+    // reverse order so the assertion still proves list order, not click order.
+    expect([...node.querySelectorAll('[data-testid^="botGroup.create.member."]')]
+      .map(entry => entry.getAttribute('data-testid'))).toEqual([
+      'botGroup.create.member.abu', 'botGroup.create.member.mimi', 'botGroup.create.member.xiaoman',
+    ]);
     await click('botGroup.create.member.mimi');
+    await click('botGroup.create.member.abu');
     h.invoke.mockResolvedValueOnce({ effects: [
       { kind: 'refresh-collection', collectionId: 'bot-groups' },
       { kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g9' } } },
@@ -196,7 +202,7 @@ describe('create from the home teammate section + menu', () => {
     const request = h.invoke.mock.calls[0]!;
     expect(request[0]).toBe('mac');
     expect(request[1]).toBe('maker:remote-resources:invoke');
-    expect(request[2][0]).toMatchObject({ collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: ['mimi', 'abu'] } });
+    expect(request[2][0]).toMatchObject({ collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: ['abu', 'mimi'] } });
     expect(byId('botGroup.create')).toBeNull();
     expect(onGroupCreated).toHaveBeenCalledWith(mac, 'g9');
   });

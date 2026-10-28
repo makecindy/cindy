@@ -71,6 +71,8 @@ export interface ApiFetchOptions {
    * by the caller. These codes are also safe to include in redacted logs.
    */
   allowedRedactedErrorCodes?: readonly string[];
+  /** Expected compatibility responses still throw, but log at debug instead of warn. */
+  expectedErrors?: readonly { status: number; code?: string }[];
 }
 
 interface RawResponse<T> {
@@ -172,8 +174,11 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     }
     // 网络异常 rawFetch 已 log;这里补 not-ok 响应(401/5xx 等)的日志,
     // 否则上层 catch 一吞,排查调用链时完全看不到原因。
+    const expected = opts.expectedErrors?.some(({ status, code }) =>
+      result.status === status && (code === undefined || code === errCode));
+    const logNotOk = expected ? log.debug.bind(log) : log.warn.bind(log);
     if (opts.redactErrorDetails) {
-      log.warn(
+      logNotOk(
         'serverApiFetch.redacted_not_ok',
         'path=' + (opts.logLabel ?? redactedLogPath(apiPath)),
         'method=' + (opts.method ?? 'GET'),
@@ -192,7 +197,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
         'code=' + errCode,
       ];
       if (!opts.logLabel) fields.push('msg=' + errMsg);
-      log.warn(...fields);
+      logNotOk(...fields);
     }
     throw new ServerApiError(
       publicCode,

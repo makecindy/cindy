@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DesktopCaptureWindow } from '../captureWindow';
-import { denyAppDesktopCapture } from '../capturePermissions';
+import { denyAppDesktopCapture, markPlaybackFullscreenWindow } from '../capturePermissions';
 import { buildContentSecurityPolicy } from '../../security/csp';
 
 const fake = vi.hoisted(() => ({
@@ -185,7 +185,16 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith(true);
   request(voice, 'media', reply, { ...details, mediaTypes: ['audio'] });
   expect(reply).toHaveBeenLastCalledWith(true);
-  for (const permission of ['notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
+  // Regression: the capture filter also denied the native video Fullscreen API.
+  // Tier 1: real permission handlers must allow host playback but keep automatic
+  // entry, foreign frames, voice windows and desktop capture denied.
+  expect(check(owner, 'fullscreen', '', details)).toBe(true);
+  request(owner, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(true);
+  expect(check(voice, 'fullscreen', '', details)).toBe(false);
+  request(voice, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(false);
+  for (const permission of ['automatic-fullscreen', 'notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
     expect(check(owner, permission, '', details)).toBe(false);
     request(owner, permission, reply, details);
     expect(reply).toHaveBeenLastCalledWith(false);
@@ -200,6 +209,9 @@ it('denies app display/legacy capture while preserving physical microphone and c
     expect(check(candidate, 'media', '', { ...requestDetails, mediaType: 'audio' })).toBe(false);
     request(candidate, 'media', reply, { ...requestDetails, mediaTypes: ['audio'] });
     expect(reply).toHaveBeenLastCalledWith(false);
+    expect(check(candidate, 'fullscreen', '', requestDetails)).toBe(false);
+    request(candidate, 'fullscreen', reply, requestDetails);
+    expect(reply).toHaveBeenLastCalledWith(false);
   }
   expect(check(owner, 'clipboard-sanitized-write', '', details)).toBe(true);
   request(owner, 'clipboard-sanitized-write', reply, details);
@@ -208,6 +220,43 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith(false);
   ses.setDisplayMediaRequestHandler.mock.calls[0][0]({}, reply);
   expect(reply).toHaveBeenLastCalledWith({});
+});
+
+// User regression: the recording preview's native fullscreen button did nothing.
+// Existing permission cases only cover app/voice owners, not playback-only windows.
+// Minimal input: registered preview top frame requests fullscreen; both production
+// handlers must allow it without granting capture or trusting a foreign frame. Tier: unit.
+it('grants registered playback windows only user-initiated fullscreen', () => {
+  const ses = {
+    setDisplayMediaRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+  };
+  const preview = { kind: 'preview', mainFrame: { url: 'file:///app/index.html' }, isDestroyed: () => false };
+  const details = { isMainFrame: true, requestingUrl: preview.mainFrame.url };
+  denyAppDesktopCapture(ses as any);
+  const check = ses.setPermissionCheckHandler.mock.calls[0][0];
+  const request = ses.setPermissionRequestHandler.mock.calls[0][0];
+  const assertPermission = (owner: unknown, permission: string, requestDetails: unknown, allowed: boolean) => {
+    expect(check(owner, permission, '', requestDetails)).toBe(allowed);
+    const reply = vi.fn();
+    request(owner, permission, reply, requestDetails);
+    expect(reply).toHaveBeenCalledWith(allowed);
+  };
+  assertPermission(preview, 'fullscreen', details, false);
+  markPlaybackFullscreenWindow(preview as any);
+  assertPermission(preview, 'fullscreen', details, true);
+  for (const permission of ['media', 'display-capture', 'clipboard-sanitized-write', 'automatic-fullscreen']) {
+    assertPermission(preview, permission, { ...details, mediaType: 'audio', mediaTypes: ['audio'] }, false);
+  }
+  assertPermission({ ...preview }, 'fullscreen', details, false);
+  assertPermission(preview, 'fullscreen', { ...details, isMainFrame: false }, false);
+  assertPermission(preview, 'fullscreen', { ...details, requestingUrl: 'https://foreign.example/' }, false);
+  preview.mainFrame.url = 'https://foreign.example/';
+  assertPermission(preview, 'fullscreen', { ...details, requestingUrl: preview.mainFrame.url }, false);
+  preview.mainFrame.url = details.requestingUrl;
+  preview.isDestroyed = () => true;
+  assertPermission(preview, 'fullscreen', details, false);
 });
 
 it('capture CSP forbids arbitrary network, application frames and inline/eval scripts', () => {

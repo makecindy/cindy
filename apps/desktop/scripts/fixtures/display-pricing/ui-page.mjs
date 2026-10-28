@@ -9,6 +9,7 @@ export default {
     speech: { about: 'Character input per million' },
     image: { about: 'Input and output per image' },
     video: { about: 'Resolution tier with discounted range and starting price' },
+    compact: { about: 'Short quotes stay on separate right-aligned rows' },
     default: { about: 'Multiple units, all four roles and supplementary conditions' },
     legacy: { about: 'Existing table without summary' },
   },
@@ -49,6 +50,27 @@ export default {
       });
       if (layout.lines.some(count => count !== 1) || layout.tierBelowAmounts) {
         throw Error(`Broken video quote wrapping: ${JSON.stringify(layout)}`);
+      }
+    }
+    // Browser regression: multiple quotes used to share a line with a separator.
+    // Check rendered positions so wrapping and right alignment hold across locales/themes.
+    if (['default', 'compact'].includes(ui.case)) {
+      const layout = await page
+        .getByText(await ui.t('settings.providers.models.advanced.price.input'), { exact: true })
+        .evaluate(label => {
+          const value = label.parentElement.lastElementChild;
+          return {
+            text: value.textContent,
+            quotes: Array.from(value.firstElementChild.children, quote => {
+              const rect = quote.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom, right: rect.right };
+            }),
+          };
+        });
+      const [first, second] = layout.quotes;
+      if (layout.quotes.length !== 2 || layout.text.includes('·')
+        || second.top < first.bottom || Math.abs(first.right - second.right) > 1) {
+        throw Error(`Multiple quotes must be separate right-aligned rows: ${JSON.stringify(layout)}`);
       }
     }
     await ui.capture('pricing');

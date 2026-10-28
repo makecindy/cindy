@@ -128,6 +128,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
@@ -245,6 +246,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
+    ...(row.companion ? { companion: row.companion } : {}),
     ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
@@ -266,7 +268,9 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
     hiddenAt: msToIso(row.hiddenAt),
+    notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
+    lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
     source: normalizeSessionSource(row.source),
     orcaRole: row.orcaRole as OrcaRole | null,
@@ -487,6 +491,7 @@ export function sessionPatchToRow(
     contextWindow?: number;
     clearedAt?: string | null;
     pinnedAt?: string | null;
+    notificationsMuted?: boolean;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
@@ -514,6 +519,7 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
@@ -715,6 +721,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
     modelAgentKind: row.modelAgentKind ?? undefined,
+    modelAgentDeviceId: row.modelAgentDeviceId ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
@@ -768,6 +775,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
     modelAgentKind: s.modelAgentKind ?? null,
+    modelAgentDeviceId: s.modelAgentDeviceId ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
@@ -824,6 +832,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
   if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
+  if (hasKey(patch, 'modelAgentDeviceId')) out.modelAgentDeviceId = patch.modelAgentDeviceId ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;

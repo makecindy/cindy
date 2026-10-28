@@ -11,6 +11,7 @@ import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
+import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
   __testing as promptRecommendations,
@@ -109,6 +110,50 @@ const props = {
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+it.each(['removed-source', 'removed-model'])('sends the first message through host baseline recovery (%s)', async (reason) => {
+  h.localProviders = reason === 'removed-model'
+    ? [sshNativeCodexProvider([sshModel('different-model')])] : [];
+  const onSend = vi.fn().mockResolvedValue(true);
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} sessionId={'recovery-' + reason} deviceLinkDeviceId={null}
+    initialModel={route.model} initialProviderId={route.providerId} runtimeEffective={route}
+    allowBaselineRecovery onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Retry companion</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  expect((send as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(send); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][0]).toBe('Retry companion');
+  expect(onSend.mock.calls[0][6]).toMatchObject({ baselineRecovery: true, providerId: route.providerId });
+  expect(h.confirm).not.toHaveBeenCalled();
+});
+
+it.each([false, undefined])('keeps disconnected ordinary sessions blocked without a host recovery offer (%s)', async (allowBaselineRecovery) => {
+  const onSend = vi.fn();
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} deviceLinkDeviceId={null} initialModel={route.model}
+    initialProviderId={route.providerId} runtimeEffective={route}
+    allowBaselineRecovery={allowBaselineRecovery} onSend={onSend} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Must stay blocked</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  expect((send as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(send);
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+it('does not use baseline recovery to bypass a pending selection source check', async () => {
+  const onSend = vi.fn();
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} deviceLinkDeviceId={null} initialModel={route.model}
+    initialProviderId={route.providerId} runtimeEffective={route} allowBaselineRecovery
+    runtimePending={{ generation: 1, source: 'agent', profile: { ...route, providerId: 'new-disconnected-choice' } }}
+    onSend={onSend} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Do not bypass the new choice</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(onSend).not.toHaveBeenCalled();
+});
 
 it.each([null, 'test-host'])('preserves no-effort after creation when sending the second message (%s)', async (deviceLinkDeviceId) => {
   h.localProviders = [sshNativeCodexProvider([sshModel('qwen3:14b', { efforts: [], defaultEffort: null })])];
@@ -437,6 +482,45 @@ it.each(['button', 'Enter', 'voice'] as const)(
     expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
   },
 );
+
+// PR #7300: manual-send coverage missed automatic actions consuming a request
+// while metadata/Send is disabled. Unit through real ChatInput: one screenshot,
+// one blocked request, then enable Send; retain it and dispatch exactly once.
+it.each(['metadata', 'disabled'] as const)('retains screenshot submission until %s is ready', async gate => {
+  const key = `screenshot-wait-${gate}`;
+  const onSend = vi.fn().mockResolvedValue(true);
+  const inputProps = { ...props, sessionId: key, draftKey: key, onSend,
+    attachmentState: { ...attachments, hasAttachments: true, attachments: [{
+      id: 'shot', name: 'shot.png', path: 'clipboard://shot', ext: '.png',
+      size: 16, category: 'image' as const, url: 'image:shot', mimeType: 'image/png',
+    }] },
+  };
+  const loaded = { initialModel: 'gpt-6-astra', initialProviderId: 'openai', initialEffort: 'medium' as const };
+  const view = render(<ChatInput {...inputProps} {...(gate === 'disabled' ? loaded : {})} disabled={gate === 'disabled'} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Explain screenshot</p>'); });
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      requestComposerSubmit({ storageKey: key, attachmentUrl: 'image:shot' });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(peekComposerSubmitRequest(key)).not.toBeNull();
+    view.rerender(<ChatInput {...inputProps} {...loaded} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toBe('Explain screenshot');
+    expect(peekComposerSubmitRequest(key)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  } finally {
+    view.unmount();
+    takeComposerSubmitRequest(key);
+    clearDraft(key);
+    vi.useRealTimers();
+  }
+});
 
 it('hides a missing existing model, recovers from the effective runtime, and preserves new-draft defaults', async () => {
   const onSend = vi.fn();

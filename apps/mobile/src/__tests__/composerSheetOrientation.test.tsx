@@ -20,8 +20,8 @@ vi.mock('@expo/ui', () => ({ Host: ({ children }: any) => <div>{children}</div> 
 vi.mock('@expo/ui/swift-ui', () => {
   const Container = ({ children }: any) => <div>{children}</div>;
   return { ScrollView: ({ children }: any) => <section data-native-scroll>{children}</section>,
-    Form: ({ children }: any) => <div data-native="Form">{children}</div>,
-    List: ({ children }: any) => <div data-native="List">{children}</div>, Button: Container, Group: Container, HStack: Container, Image: Container,
+    Form: ({ children, modifiers }: any) => <div data-native="Form" data-modifiers={JSON.stringify(modifiers)}>{children}</div>,
+    List: ({ children, modifiers }: any) => <div data-native="List" data-modifiers={JSON.stringify(modifiers)}>{children}</div>, Button: Container, Group: Container, HStack: Container, Image: Container,
     RNHostView: ({ children, matchContents }: any) => <div data-rn-size={matchContents ? 'content' : 'viewport'}>{children}</div>,
     Spacer: Container, Text: Container, VStack: Container, ZStack: Container,
     BottomSheet: (props: any) => { state.sheet = props; return <div>{props.children}</div>; },
@@ -41,6 +41,7 @@ it('uses a plain list only when requested and preserves form sheets', () => {
   } finally { act(() => root.unmount()); }
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
+  environment: (key: string, value: string) => ({ environment: { key, value } }),
   containerRelativeFrame: vi.fn(() => ({})),
   onGeometryChange: vi.fn(() => ({})),
   ...Object.fromEntries(['accessibilityLabel', 'contentShape', 'buttonStyle', 'font', 'foregroundStyle', 'frame', 'padding', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'scrollContentBackground', 'listStyle', 'scrollDismissesKeyboard'].map(name => [name, vi.fn(() => ({}))])),
@@ -134,5 +135,26 @@ it('keeps self-scrolling companion pages on the existing RN viewport path', () =
     expect(viewport?.querySelector('[data-preserve-position="0"]')?.textContent).toBe('Todo');
     expect(viewport?.textContent).toContain('Save');
     expect(viewport?.querySelector('[data-rn-scroll]')?.textContent).not.toContain('Save');
+  } finally { act(() => root.unmount()); }
+});
+
+
+// #6947: per-row editMode never exposes native handles; it belongs on the Form/List.
+it.each([false, true])('applies requested edit mode to the native container (plain list: %s)', (nativeList) => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const render = (editing?: boolean) => act(() => root.render(
+    <ComposerSheet visible title="" nativeContent nativeList={nativeList} nativeEditMode={editing} onClose={() => {}}>
+      <span>Tags</span>
+    </ComposerSheet>,
+  ));
+  const modifiers = () => JSON.parse(container.querySelector('[data-native]')!.getAttribute('data-modifiers')!);
+  try {
+    render();
+    expect(modifiers().some((m: any) => m.environment?.key === 'editMode')).toBe(false);
+    render(true);
+    expect(modifiers()).toContainEqual({ environment: { key: 'editMode', value: 'active' } });
+    render(false);
+    expect(modifiers()).toContainEqual({ environment: { key: 'editMode', value: 'inactive' } });
   } finally { act(() => root.unmount()); }
 });

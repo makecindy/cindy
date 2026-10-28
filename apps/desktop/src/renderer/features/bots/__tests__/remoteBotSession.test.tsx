@@ -10,8 +10,11 @@ const h = vi.hoisted(() => ({
   pin: vi.fn(),
   merge: vi.fn(),
   view: vi.fn(),
+  navigate: vi.fn(),
+  requestedSessionId: undefined as string | undefined,
   online: true,
   listed: true,
+  cached: false,
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
@@ -22,7 +25,11 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLink
 vi.mock('../CloudCompanionOfflineView', () => ({
   CloudCompanionOfflineView: (props: unknown) => { h.cloudView(props); return <div>cloud-offline-view</div>; },
 }));
-vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'home', botId: 'writer' }) }));
+vi.mock('react-router-dom', () => ({
+  useLocation: () => ({ search: '?keep=1', state: { searchJump: { messageClientId: 'reply' } } }),
+  Navigate: (props: unknown) => { h.navigate(props); return <div>original-task</div>; },
+  useParams: () => ({ deviceId: 'home', botId: 'writer', sessionId: h.requestedSessionId }),
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
   markRemoteBotRead: h.markRead,
@@ -43,9 +50,9 @@ vi.mock('../useRemoteBots', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     pinSessionOrigin: h.pin,
-    getSessionDeviceId: () => undefined,
+    getSessionDeviceId: (id: string) => h.cached && id === 'old-canonical' ? 'home' : undefined,
     mergeDeviceSessions: h.merge,
-    getDeviceSessions: () => [],
+    getDeviceSessions: () => h.cached ? [{ id: 'old-canonical', source: 'bot', status: 'active' }] : [],
     captureSessionRead: () => Object.assign(() => true, { mergeActivity: <T,>(detail: T) => detail }),
   },
 }));
@@ -58,8 +65,11 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
 import { CLOUD_HOME_GRACE_MS, RemoteBotSessionView } from '../RemoteBotSessionView';
 beforeEach(() => {
   h.markRead.mockClear();
+  h.navigate.mockReset();
+  h.requestedSessionId = undefined;
   h.online = true;
   h.listed = true;
+  h.cached = false;
   h.lastReplyAt = 0;
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
@@ -83,6 +93,24 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+// Unit regression: an exact notification link must retain its task, host and anchor
+// when the canonical link changed, its host is offline, or the companion lookup fails.
+it.each(['changed', 'offline', 'failed'] as const)('preserves the original task when the companion is %s', async (reason) => {
+  h.requestedSessionId = 'old-canonical';
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  if (reason === 'offline') h.online = false;
+  if (reason === 'failed') h.invoke.mockRejectedValue(new Error('Unavailable'));
+  render(<RemoteBotSessionView />);
+  await screen.findByText('original-task');
+  expect(h.navigate).toHaveBeenLastCalledWith({
+    to: '/cc-agent/old-canonical?keep=1&device=home',
+    state: { searchJump: { messageClientId: 'reply' } }, replace: true,
+  });
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.cloudView).not.toHaveBeenCalled();
+  expect(h.markRead).not.toHaveBeenCalled();
+});
 // Unit regression: a host conversation link + active bot session must reach the shared
 // parent chat as canonical, or its post-send follow-up invitation can never appear.
 it('resolves the latest canonical task and passes its verified identity to writable chat', async () => {
@@ -194,4 +222,22 @@ it('reads "control off" from the live device list, so a stale snapshot neither h
   h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: false }];
   rerender(<RemoteBotSessionView />);
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
+});
+
+// Unit: saved host identity opens its existing history before an unresolved RPC;
+// a later definitive removal must still close it. Covers the former two-RPC entry gate.
+it.each(['missing', 'ACCESS_REVOKED'])('mounts the cached remote task read-only and closes it on %s', async rejection => {
+  h.cached = true;
+  let finish!: (value: unknown) => void;
+  let fail!: (error: Error) => void;
+  h.invoke.mockImplementation(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  render(<RemoteBotSessionView />);
+  expect(screen.getByText('remote-conversation')).toBeTruthy();
+  expect(h.view).toHaveBeenLastCalledWith(expect.objectContaining({ sessionIdProp: 'old-canonical', readOnly: true,
+    botIdentity: expect.objectContaining({ canonicalChat: false }) }));
+  await act(async () => {
+    if (rejection === 'missing') finish(null);
+    else fail(Object.assign(new Error('revoked'), { code: rejection }));
+  });
+  expect(screen.queryByText('remote-conversation')).toBeNull();
 });

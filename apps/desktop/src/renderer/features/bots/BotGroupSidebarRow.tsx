@@ -26,6 +26,7 @@ import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { isBotGroupLaneSession } from './botGroupLane';
 import {
   botGroupNoticeKey,
+  botGroupActivityAt,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
   isRunningBotGroupSidebarPreview,
@@ -154,20 +155,18 @@ export function BotGroupSidebarRow({
             {planLine}
           </span>
         ) : (
-          <>
-            <span className="shrink-0">{names}</span>
-            <span className="min-w-0 truncate">
-              {waiting ? (
-                t('bots.groupChat.sidebar.waiting')
-              ) : (
-                <BotGenerationLabel
-                  sessionId={activity?.sessionId}
-                  phase={activity?.workingPhase ?? 'thinking'}
-                  startedAt={activity?.startedAtMs ?? null}
-                />
-              )}
-            </span>
-          </>
+          <span className="min-w-0 flex-1 truncate" title={names}>
+            {names}{' '}
+            {waiting ? (
+              t('bots.groupChat.sidebar.waiting')
+            ) : (
+              <BotGenerationLabel
+                sessionId={activity?.sessionId}
+                phase={activity?.workingPhase ?? 'thinking'}
+                startedAt={activity?.startedAtMs ?? null}
+              />
+            )}
+          </span>
         )}
       </span>
     );
@@ -176,7 +175,7 @@ export function BotGroupSidebarRow({
   const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
   const unread = botGroupUnreadCount(group);
   const timestamp = formatBotListTimestamp(
-    !group.archived && group.speakingBotIds.length > 0 ? now : group.lastMessage?.createdAt ?? group.updatedAt,
+    !group.archived && group.speakingBotIds.length > 0 ? now : botGroupActivityAt(group),
     now,
     t,
   );

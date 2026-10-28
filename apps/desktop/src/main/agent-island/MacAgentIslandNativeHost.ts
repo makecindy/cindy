@@ -176,6 +176,11 @@ export class MacAgentIslandNativeHost {
     return this.permanentlyFailed;
   }
 
+  /** A buffered publish during startup is not delivery to a native window. */
+  get available(): boolean {
+    return this.ready && this.child !== null && !this.permanentlyFailed;
+  }
+
   publish(
     state: AgentIslandDisplayState,
     frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[],

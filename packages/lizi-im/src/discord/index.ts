@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BaseIM } from '../BaseIM.js';
+import { ConnectionRetry } from '../connectionRetry.js';
 import { processingReaction } from '../processingReactions.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
@@ -106,6 +107,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private lifecycleAnnouncementEnabled = true;
   private lifecycleNoticeVersion = 0;
   private disposing = false;
+  private readonly connectionRetry = new ConnectionRetry();
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
     super('discord', host);
@@ -141,16 +143,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.ownerUserId && this.host.secrets.read(this.key(RUNTIME_ACTIVE_SECRET_KEY)),
     );
 
-    try {
-      await this.gateway.connect(token);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`discord gateway connect failed: ${msg}`);
-    }
+    await this.reconnectPreviousGateway(token);
   }
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.connectionRetry.reset();
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
     this.configVersion += 1;
@@ -213,6 +211,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     const nextOwnerUserId = ownerUserId || this.ownerUserId;
     if (token) {
+      this.connectionRetry.reset();
       this.configVersion += 1;
       const wasConnectedBeforeReconnect = this.status.kind === 'connected';
       await this.gateway.destroy();
@@ -250,8 +249,21 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return configResult();
   }
 
+  /** Reconnect using stored credentials without changing the binding. */
+  async reconnect(): Promise<DiscordConfigState> {
+    this.connectionRetry.reset();
+    const version = ++this.configVersion;
+    await this.gateway.destroy();
+    if (this.disposing || version !== this.configVersion) return this.getConfigState();
+    const token = this.host.secrets.read(this.key(TOKEN_SECRET_KEY));
+    if (token) await this.reconnectPreviousGateway(token);
+    else this.setStatus({ kind: 'idle' });
+    return this.getConfigState();
+  }
+
   /** 通知主人、断开并清掉本实例的全部凭证。 */
   async disconnect(): Promise<{ status: IMStatus }> {
+    this.connectionRetry.reset();
     this.configVersion += 1;
     const disconnectedNoticeConfigVersion = this.configVersion;
     const disconnectedOwnerUserId = this.ownerUserId;
@@ -279,6 +291,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (this.opts.ipc === false) return;
 
     this.host.ipc.handle('discordBot:set-config', (payload) => this.setConfig(payload));
+    this.host.ipc.handle('discordBot:reconnect', () => this.reconnect());
 
     // Renderer IPC can run after handler registration but before init(). Read the
     // persisted preference here instead of exposing the constructor default.
@@ -551,12 +564,21 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private async reconnectPreviousGateway(previousToken: string | null): Promise<void> {
     const token = previousToken?.trim() ?? '';
     if (!token) return;
-
+    const version = this.configVersion;
     try {
       await this.gateway.connect(token);
+      if (version === this.configVersion) this.connectionRetry.reset();
     } catch (err) {
+      if (this.disposing || version !== this.configVersion) return;
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord gateway reconnect to previous config failed: ${msg}`);
+      this.setStatus(mapDiscordLoginErrorToStatus(err));
+      const code = typeof err === 'object' && err !== null && 'code' in err ? err.code : undefined;
+      if (['TokenInvalid', 'DisallowedIntents', 'InvalidIntents', 4004, 4010, 4011, 4012, 4013, 4014].includes(code as string | number)) return;
+      this.connectionRetry.schedule(() => {
+        if (this.disposing || version !== this.configVersion) return;
+        void this.reconnectPreviousGateway(token);
+      });
     }
   }
 

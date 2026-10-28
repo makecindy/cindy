@@ -1,6 +1,7 @@
 import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
 import { parseOverloadError, UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
 
@@ -24,6 +25,9 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   if (data?.reason === 'pi-prompt-timeout' || isPiPromptRpcTimeoutError(data ?? { message: error })
     || (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason))) return 'RUNTIME_TIMEOUT';
   const text = values.filter((value): value is string => typeof value === 'string').join('\n');
+  const remoteLimit = remoteAgentLimitErrorKey(text);
+  if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_DEVICE_LIMIT') return 'REMOTE_DEVICE_LIMIT';
+  if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_TOTAL_LIMIT') return 'REMOTE_TOTAL_LIMIT';
   const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
   if (data?.modelAccessDenied === true || /\b(?:NO_MODEL|MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 401 || status === 403 || /\b(?:AUTH_REQUIRED|INVALID_TOKEN|TOKEN_EXPIRED|UNAUTHORIZED|invalid_api_key|authentication_error|authentication_failed|provider_auth_or_access)\b/i.test(text)) return 'AUTH_REQUIRED';

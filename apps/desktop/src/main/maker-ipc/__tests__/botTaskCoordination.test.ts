@@ -8,8 +8,7 @@ import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationI
 import { buildMakerUserMessage, sanitizeQueuedMessageForPersistence, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { redactMessageOriginForSharedGuest, redactQueueItemForSharedGuest } from '../../device-link/sharedTaskMessageOrigin';
 import { rebuildSessionQueueItem } from '../sessionControlService';
-import { projectCoordinationOutput } from '../coordinationOutput';
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, type AgentEvent } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 import { stripMainOnlySendOpts } from '../mobileClientPromptNote';
 import { captureAgentRequest, formatForwardedRequest } from '../forwardedRequest';
 
@@ -90,11 +89,6 @@ it('retains hidden persistence and routing when the sending task edits its queue
   expect(edited.botTaskCoordination).toEqual(receipt);
   expect(buildMakerUserMessage(edited)).toMatchObject({ content: expect.stringContaining('Updated agreement') });
 });
-it.each<AgentEvent['type']>(['interaction_request', 'interaction_dismissed', 'error', 'tool_use', 'tool_result', 'account_usage'])('does not suppress an attention/action event: %s', type => {
-  const event: AgentEvent = { type, source: 'codex', data: { requestId: 'interaction', kind: 'ask_user_question', questions: [] } };
-  expect(projectCoordinationOutput(event, true)).toBe(event);
-});
-
 it('uses the registered host entry for both quiet and explicitly visible delegated sends', async () => {
   const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf('    sendToSession: async (params) => {');

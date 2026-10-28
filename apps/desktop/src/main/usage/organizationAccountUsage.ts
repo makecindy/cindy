@@ -9,6 +9,7 @@ export async function readOrganizationAccountUsage(): Promise<ClaudeAccountUsage
       baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
       timeoutMs: 8000, redactErrorDetails: true,
       allowedRedactedErrorCodes: ['MODEL_ACCESS_QUOTA_NOT_SUPPORTED'],
+      expectedErrors: [{ status: 404 }, { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED' }],
     });
     if (!data || typeof data !== 'object') return null;
     const row = data as Record<string, unknown>;

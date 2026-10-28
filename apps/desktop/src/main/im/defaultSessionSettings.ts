@@ -7,12 +7,14 @@
  */
 
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import { resolveAutomaticImSettings, resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import {
   chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
+  isModelVisible,
   movedCindyAutoSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -28,16 +30,53 @@ import {
   IM_DEFAULT_SETTINGS,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
+  type ImDefaultSettings,
+  type ImDefaultAgentKind,
+  isUnconditionalTurnPolicyChannel,
 } from '../../shared/imDefaultSettings.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { readImDefaultSettings } from './defaultSettingsStore';
 import { readImRemoteProviderRoute } from './remoteProviderRoute';
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
 import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
 import type { ImOrchestratorConfig } from './shared/types';
 
 const log = createLogger('im:defaults');
+
+/** Read-only projection; never save the resolved automatic route back as a user preference. */
+export async function resolveImAutomaticDefaults<T extends ImDefaultSettings>(
+  raw: T,
+  channel?: ImDefaultSettingsChannel,
+  providerSnapshot?: ProviderView[] | null,
+  agentKind?: ImDefaultAgentKind,
+): Promise<T | null> {
+  const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+  if (!providers) return null;
+  await waitForModelVisibilityMirror();
+  return resolveAutomaticImSettings(raw, providers, {
+    agentKind,
+    isModelEnabled: (agent, providerId, model) => isModelVisible(
+      getModelVisibilityOverride(agent, providerId, model.id), model.defaultEnabled),
+    allowAgent: channel && isUnconditionalTurnPolicyChannel(channel)
+      ? (agent) => getMaker().getCapabilities(agent).turnPermissionPolicy?.supported.supported === true
+      : undefined,
+  });
+}
+
+/** Resolve every automatic slot for settings/official workspace rows, using one catalog snapshot. */
+export async function projectImDefaultSettings<T extends ImDefaultSettings>(raw: T, channel?: ImDefaultSettingsChannel): Promise<T> {
+  const providers = await listProvidersForDefaults();
+  let view = usesAutomaticImModel(raw)
+    ? await resolveImAutomaticDefaults(raw, channel, providers) ?? raw : raw;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    if (agent === view.agentKind || raw.agents[agent].model) continue;
+    const resolved = await resolveImAutomaticDefaults(raw, channel, providers, agent);
+    if (resolved) view = { ...view, agents: { ...view.agents, [agent]: resolved.agents[agent] } };
+  }
+  return view;
+}
 
 export interface ResolvedImSessionDefaults {
   agentDeviceId?: string | null;
@@ -72,6 +111,17 @@ export async function resolveImSessionDefaults(
   channel?: ImDefaultSettingsChannel,
 ): Promise<ResolvedImSessionDefaults> {
   const raw = readImDefaultSettings(channel);
+  if (usesAutomaticImModel(raw)) {
+    const resolved = await resolveImAutomaticDefaults(raw, channel, providerSnapshot);
+    if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
+    return {
+      agentKind: resolved.agentKind,
+      ...resolved.agents[resolved.agentKind],
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
+    };
+  }
   const remote = raw.agents[raw.agentKind];
   if (remote.agentDeviceId) {
     const { model } = await readImRemoteProviderRoute({ ...remote, agentDeviceId: remote.agentDeviceId, agentKind: raw.agentKind });
@@ -225,12 +275,7 @@ function pickModel(
     });
     return { agentKind: systemAgent, modelId: lenient.model };
   }
-  log.warn('im default: all model sources exhausted; using hardcoded system default', {
-    requestedAgent,
-    channelAgent: config.agentKind,
-    channelModel: config.defaultModel,
-  });
-  return { agentKind: systemAgent, modelId: systemFallbackModel };
+  throw new Error('im default session has no available chat model; connect or enable a model in settings');
 }
 
 function hasModel(

@@ -8,8 +8,8 @@
 import { promises as pluginFileFs } from 'node:fs';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
-import { openRemotePluginSettings, closeRemotePluginSettings, answerRemotePluginSettingsDirectory } from '../cindy-brain/remotePluginSettingsController.js';
-import { REMOTE_PLUGIN_SETTINGS_OPEN, REMOTE_PLUGIN_SETTINGS_CLOSE, REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER } from '../../shared/remotePluginSettings.js';
+import { openRemotePluginSettings, closeRemotePluginSettings, answerRemotePluginSettingsDirectory, answerRemotePluginSettingsModelPicker } from '../cindy-brain/remotePluginSettingsController.js';
+import { REMOTE_PLUGIN_SETTINGS_OPEN, REMOTE_PLUGIN_SETTINGS_CLOSE, REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER, REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER } from '../../shared/remotePluginSettings.js';
 import {
   decodeModelSpeedPayload,
   REMOTE_RESOURCE_MANIFEST_CHANNEL,
@@ -1599,6 +1599,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(event);
     try { await answerRemotePluginSettingsDirectory(event.sender, raw); }
     catch { throwIpcError('PRECONDITION_FAILED', 'Remote plugin directory request unavailable'); }
+  });
+  ipcMain.handle(REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try { return await answerRemotePluginSettingsModelPicker(event.sender, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Remote plugin model picker unavailable'); }
   });
   const authorizationHandler = (mode: 'oauth' | 'secret' | 'connection' | 'input') => async (event: import('electron').IpcMainInvokeEvent, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

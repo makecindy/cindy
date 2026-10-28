@@ -217,6 +217,8 @@ export interface Schedule {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -359,6 +361,8 @@ export interface CreateScheduleInput {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源

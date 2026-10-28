@@ -25,6 +25,7 @@ import type {
 import { t } from '../../i18n';
 import { Session } from '@cindy/maker-core';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot';
+import { createIpcError } from '../../../shared/ipc-errors';
 import type { CindyGhostsHostDeps } from '../ghost';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
@@ -256,6 +257,19 @@ vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: vi.fn() }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
 vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
+}));
+
+const communityReadMock = vi.fn();
+const communitySubmitMock = vi.fn();
+const communityPreparedMock = vi.fn();
+vi.mock('../../plugin-contributions/host.js', () => ({
+  listMyPlugins: (...args: unknown[]) => communityReadMock(...args),
+  submitContribution: (...args: unknown[]) => communitySubmitMock(...args),
+  mapContributionError: (error: unknown) => { throw error; },
+}));
+vi.mock('../../plugin-contributions/prepared.js', () => ({
+  contributionOwnerKey: () => 'test-owner', assertContributionOwner: vi.fn(),
+  getPreparedContribution: (...args: unknown[]) => communityPreparedMock(...args),
 }));
 
 const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
@@ -3546,5 +3560,136 @@ describe('market install live authority', () => {
     const controller = new AbortController(); controller.abort();
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' }, controller.signal)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(market.detail).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('personal contribution account surface', () => {
+  beforeEach(() => {
+    communityReadMock.mockReset();
+    communitySubmitMock.mockReset();
+    communityPreparedMock.mockReset();
+    communityPreparedMock.mockReturnValue({ summary: {
+      preparedId: 'prepared-1', ghostId: 'hello', name: 'Hello', description: 'Current installed plugin',
+      version: '1.0.0', sha256: 'a'.repeat(64), releaseNotes: 'Complete release changes.\nIncludes all fixes.',
+    } });
+    communitySubmitMock.mockReturnValue({ localId: 'prepared-1', phase: 'preparing' });
+  });
+
+  it('blocks an account read when the live helper surface is restricted', async () => {
+    communityReadMock.mockReset();
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => false });
+    const result = await makeDeps().communityContribution!({ action: 'list' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(communityReadMock).not.toHaveBeenCalled();
+  });
+
+  it('discards personal results if the helper surface becomes restricted during the read', async () => {
+    let allowed = true;
+    communityReadMock.mockImplementationOnce(async () => { allowed = false; return { privateReason: 'private author record' }; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => allowed });
+    const result = await makeDeps().communityContribution!({ action: 'list' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(JSON.stringify(result)).not.toContain('private author record');
+  });
+
+  it('allows an ordinary current account task to read its own records', async () => {
+    communityReadMock.mockResolvedValueOnce({ plugins: [] });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    await expect(makeDeps().communityContribution!({ action: 'list' })).resolves.toEqual({ ok: true, result: { plugins: [] } });
+  });
+
+  it('returns a known publishing precondition so the author can fix the original package', async () => {
+    const error = createIpcError('PRECONDITION_FAILED', 'This version is already submitted; install a new version before publishing.');
+    communityPreparedMock.mockImplementationOnce(() => { throw error; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    await expect(makeDeps().communityContribution!({ action: 'submit', id: 'prepared-1' }))
+      .resolves.toEqual({ ok: false, errorCode: 'PRECONDITION_FAILED', message: error.message });
+    expect(communitySubmitMock).not.toHaveBeenCalled();
+  });
+
+  it.each([new Error('private-transport-token'), createIpcError('INTERNAL', 'private-transport-token')])('does not expose unexpected publishing failures (%#)', async (error) => {
+    communityPreparedMock.mockImplementationOnce(() => { throw error; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const result = await makeDeps().communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(JSON.stringify(result)).not.toContain('private-transport-token');
+    expect(communitySubmitMock).not.toHaveBeenCalled();
+  });
+
+  it('submits the fixed preparation in Full Access without an extra confirmation', async () => {
+    const permission = vi.fn();
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const deps = makeDeps('pi', 'author', 'author-instance', {}, undefined, permission);
+    await expect(deps.communityContribution!({ action: 'submit', id: 'prepared-1' })).resolves.toMatchObject({ ok: true });
+    expect(communityPreparedMock).toHaveBeenCalledWith('prepared-1');
+    expect(communitySubmitMock).toHaveBeenCalledExactlyOnceWith('prepared-1', expect.any(Function));
+    expect(permission).not.toHaveBeenCalled();
+  });
+
+  it('keeps accepted background submission alive after normal input completion but rechecks its scope', async () => {
+    let active = true, writable = true, allowed = true;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => writable, contributionAccountAllowed: async (accepted = false) => allowed && (active || accepted) });
+    const deps = makeDeps('pi', 'author', 'author-instance');
+    await expect(deps.communityContribution!({ action: 'submit', id: 'prepared-1' })).resolves.toMatchObject({ ok: true });
+    const check = communitySubmitMock.mock.calls[0][1] as () => Promise<void>;
+    active = false;
+    await expect(check()).resolves.toBeUndefined();
+    await expect(deps.communityContribution!({ action: 'list' })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    writable = false;
+    await expect(check()).rejects.toThrow('PERMISSION_DENIED');
+    writable = true; allowed = false;
+    await expect(check()).rejects.toThrow('PERMISSION_DENIED');
+  });
+
+  it.each(['allow', 'block'] as const)('honors Auto %s for the exact public bytes', async (verdict) => {
+    const permission = vi.fn();
+    const reviewAction = vi.fn<(action: { description: string }) => Promise<{ verdict: typeof verdict; reason: string }>>()
+      .mockResolvedValue({ verdict, reason: 'Public publishing is outside the approved scope.' });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, reviewAction,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const result = await makeDeps('codex', 'author', 'author-instance', {}, undefined, permission)
+      .communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(JSON.parse(reviewAction.mock.calls[0]![0].description)).toMatchObject({
+      toolName: 'ghost_contribution_submit', input: {
+        prepared_id: 'prepared-1', ghost_id: 'hello', version: '1.0.0', sha256: 'a'.repeat(64), public: true,
+      },
+    });
+    expect(result).toMatchObject(verdict === 'allow' ? { ok: true } : {
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: 'Public publishing is outside the approved scope.',
+    });
+    expect(communitySubmitMock).toHaveBeenCalledTimes(verdict === 'allow' ? 1 : 0);
+    expect(permission).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('rechecks the account surface after Ask confirmation (restricted=%s)', async (restrict) => {
+    let allowed = true;
+    const permission = vi.fn(async () => {
+      allowed = !restrict;
+      return { kind: 'permission' as const, behavior: 'allow' as const };
+    });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => allowed });
+    const result = await makeDeps('pi', 'author', 'author-instance', {}, undefined, permission)
+      .communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(permission).toHaveBeenCalledWith('author', 'author-instance', expect.objectContaining({
+      toolName: 'ghost_contribution_submit', metadata: { hostOwnedConfirmation: 'plugin_contribution' },
+      input: { prepared_id: 'prepared-1', ghost_id: 'hello', version: '1.0.0', sha256: 'a'.repeat(64) },
+      description: expect.stringContaining('Complete release changes.\nIncludes all fixes.'),
+    }), expect.any(AbortSignal));
+    expect(permission).toHaveBeenCalledWith('author', 'author-instance', expect.objectContaining({
+      description: expect.stringContaining('Once a submission is accepted for review, its version number cannot be reused'),
+    }), expect.any(AbortSignal));
+    expect(result).toMatchObject(restrict ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
+    expect(communitySubmitMock).toHaveBeenCalledTimes(restrict ? 0 : 1);
   });
 });

@@ -27,6 +27,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -80,6 +85,9 @@ interface SnapshotState {
 
 export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsReturn {
   const filter: ListStatusFilter = options?.includeArchived ?? 'active';
+  // patchLocal 可能被异步写入失败回调持有；让该回调只属于创建它的 data owner，
+  // 避免旧账号的 remote/local pin 回滚在账号切换后的同 sessionId 上落入新缓存。
+  const patchOwner = getDataOwnerGeneration();
 
   // 关键：初始 snapshot 来自 store —— remount 命中 cache 即非 null，无 skeleton 闪烁。
   const [snapshotState, setSnapshotState] = useState<SnapshotState>(() => ({
@@ -196,8 +204,11 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
   /** Update a session's fields without re-fetching. Preserves list order — useful
    *  for renames that shouldn't re-sort. 实际转发给 store 让所有 subscriber 同步。 */
   const patchLocal = useCallback(
-    (id: string, patch: Partial<Session>) => sessionsStore.patchLocal(id, patch),
-    [],
+    (id: string, patch: Partial<Session>) => {
+      if (!isDataOwnerGenerationCurrent(patchOwner) || getStickySessionDeviceId(id)) return;
+      sessionsStore.patchLocal(id, patch);
+    },
+    [patchOwner],
   );
 
   return {

@@ -1,3 +1,4 @@
+import { parsePluginObjectUrl, type PluginObjectUrlOptions } from './deliveryObjectUrl.js';
 import {
   ghostManifestUsesOidcToken,
   isValidGhostId,
@@ -6,7 +7,6 @@ import {
 } from './manifest.js';
 import {
   PluginProtocolError,
-  httpsUrl,
   isoDate,
   nextCursor,
   object,
@@ -23,6 +23,7 @@ export {
   isValidPluginNamespace,
 } from './internal/namespace.js';
 export { PluginProtocolError } from './internal/parse.js';
+export { parsePluginObjectUrl, type PluginObjectUrlOptions } from './deliveryObjectUrl.js';
 export { isValidPluginResourceId } from './internal/pluginResourceId.js';
 
 /** Plugin 客户端 HTTP list/detail envelope 版本；与 ghost.json 版本独立演进。 */
@@ -148,6 +149,10 @@ export interface VisiblePluginSummary {
   description: string | null;
   /** 客户端兼容 Release manifest 的作者；未声明时为 `null`。 */
   author: string | null;
+  /** Full workflow-owned nickname; omitted by older servers. */
+  displayAuthor?: string | null;
+  /** Derived from the verified public authorship binding; not a new database column. */
+  publisherKind?: 'official' | 'personal' | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
   /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
@@ -173,6 +178,10 @@ export interface VisiblePluginDetail {
   description: string | null;
   /** 客户端兼容 Release manifest 的作者；未声明时为 `null`。 */
   author: string | null;
+  /** Full workflow-owned nickname; omitted by older servers. */
+  displayAuthor?: string | null;
+  /** Derived from the verified public authorship binding; not a new database column. */
+  publisherKind?: 'official' | 'personal' | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
   /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
@@ -268,7 +277,7 @@ export interface PluginDownloadResponse {
   sizeBytes: number;
 }
 
-function parseIconMetadata(value: unknown, path: string): PluginIconMetadata | null {
+function parseIconMetadata(value: unknown, path: string, options?: PluginObjectUrlOptions): PluginIconMetadata | null {
   // 老的 v2 服务端尚未提供 icon 字段时，客户端继续使用本地兜底图标。
   if (value === null || value === undefined) return null;
   const raw = object(value, path);
@@ -287,12 +296,12 @@ function parseIconMetadata(value: unknown, path: string): PluginIconMetadata | n
     mimeType,
     sha256: sha256(raw.sha256, `${path}.sha256`),
     sizeBytes: raw.sizeBytes,
-    url: httpsUrl(raw.url, `${path}.url`),
+    url: parsePluginObjectUrl(raw.url, `${path}.url`, options),
     expiresAt: isoDate(raw.expiresAt, `${path}.expiresAt`),
   };
 }
 
-function parseReleaseSummary(value: unknown, path: string): PluginReleaseSummary {
+function parseReleaseSummary(value: unknown, path: string, options?: PluginObjectUrlOptions): PluginReleaseSummary {
   const raw = object(value, path);
   const version = string(raw.version, `${path}.version`, 32);
   if (
@@ -308,13 +317,13 @@ function parseReleaseSummary(value: unknown, path: string): PluginReleaseSummary
     sha256: sha256(raw.sha256, `${path}.sha256`),
     sizeBytes: raw.sizeBytes,
     publishedAt: isoDate(raw.publishedAt, `${path}.publishedAt`),
-    icon: parseIconMetadata(raw.icon, `${path}.icon`),
+    icon: parseIconMetadata(raw.icon, `${path}.icon`, options),
   };
 }
 
-function parseReleaseDetail(value: unknown, ghostId: string, path: string): PluginReleaseDetail {
+function parseReleaseDetail(value: unknown, ghostId: string, path: string, options?: PluginObjectUrlOptions): PluginReleaseDetail {
   const raw = object(value, path);
-  const summary = parseReleaseSummary(raw, path);
+  const summary = parseReleaseSummary(raw, path, options);
   const validatedManifest = validateGhostManifest(raw.manifest);
   if (!validatedManifest.ok) {
     throw new PluginProtocolError(`${path}.manifest 不合法: ${validatedManifest.reason}`);
@@ -376,6 +385,10 @@ function parseVisiblePluginBase(
   name: string;
   description: string | null;
   author: string | null;
+  /** Full workflow-owned nickname; omitted by older servers. */
+  displayAuthor?: string | null;
+  /** Derived from the verified public authorship binding; not a new database column. */
+  publisherKind?: 'official' | 'personal' | null;
   scope: PluginScope;
   namespace?: string | null;
   organizationId: string | null;
@@ -385,6 +398,10 @@ function parseVisiblePluginBase(
   if (!isValidPluginResourceId(raw.id)) throw new PluginProtocolError(`${path}.id 不合法`);
   if (!isValidGhostId(raw.ghostId)) throw new PluginProtocolError(`${path}.ghostId 不合法`);
   const scope = parseScope(raw.scope, path);
+  if (raw.publisherKind !== undefined && raw.publisherKind !== null
+    && (scope !== 'public' || (raw.publisherKind !== 'official' && raw.publisherKind !== 'personal'))) {
+    throw new PluginProtocolError(`${path}.publisherKind 不合法`);
+  }
   const organizationId = parseScopedOrganizationId(scope, raw.organizationId, path);
   const identity = parseScopedNamespace(raw, scope, path);
   if (typeof raw.defaultInstall !== 'boolean') {
@@ -398,6 +415,8 @@ function parseVisiblePluginBase(
     description:
       raw.description === null ? null : string(raw.description, `${path}.description`, 300),
     author: raw.author === null ? null : string(raw.author, `${path}.author`),
+    ...(raw.displayAuthor === undefined ? {} : { displayAuthor: raw.displayAuthor === null ? null : string(raw.displayAuthor, `${path}.displayAuthor`, 100) }),
+    ...(raw.publisherKind === undefined ? {} : { publisherKind: raw.publisherKind as 'official' | 'personal' | null }),
     scope,
     ...identity,
     organizationId,
@@ -405,7 +424,7 @@ function parseVisiblePluginBase(
   };
 }
 
-function parseVisiblePluginSummary(value: unknown, index: number): VisiblePluginSummary {
+function parseVisiblePluginSummary(value: unknown, index: number, options?: PluginObjectUrlOptions): VisiblePluginSummary {
   const path = `plugins[${index}]`;
   const { raw, ...base } = parseVisiblePluginBase(value, path);
   const downloadStatistics = parsePluginDownloadStatistics(raw.downloadStatistics);
@@ -413,17 +432,18 @@ function parseVisiblePluginSummary(value: unknown, index: number): VisiblePlugin
     ...base,
     ...(parsePluginUsageStatistics(raw.usageStatistics) ? { usageStatistics: parsePluginUsageStatistics(raw.usageStatistics) } : {}),
     ...(downloadStatistics ? { downloadStatistics } : {}),
-    currentRelease: parseReleaseSummary(raw.currentRelease, `${path}.currentRelease`),
+    currentRelease: parseReleaseSummary(raw.currentRelease, `${path}.currentRelease`, options),
   };
 }
 
-function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDetail {
+function parseVisiblePluginDetail(value: unknown, path: string, options?: PluginObjectUrlOptions): VisiblePluginDetail {
   const { raw, ...parsed } = parseVisiblePluginBase(value, path);
   const downloadStatistics = parsePluginDownloadStatistics(raw.downloadStatistics);
   const currentRelease = parseReleaseDetail(
     raw.currentRelease,
     parsed.ghostId,
     `${path}.currentRelease`,
+    options,
   );
   if (ghostManifestUsesOidcToken(currentRelease.manifest) && parsed.scope !== 'organization') {
     throw new PluginProtocolError(
@@ -530,13 +550,13 @@ function parseCurrentOrganization(value: unknown): PluginCurrentOrganization | n
  * `null`；对象存在但缺少 `pluginPrefix` 键时抛错。`organizationAccessError`
  * 缺失时不保留；出现时必须同时有组织身份，且不能夹带企业条目或清理通告。
  */
-export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
+export function parseListPluginsResponse(value: unknown, options?: PluginObjectUrlOptions): ListPluginsResponse {
   const raw = object(value, 'response');
   if (raw.schemaVersion !== PLUGIN_API_SCHEMA_VERSION) {
     throw new PluginProtocolError(`response.schemaVersion 必须为 ${PLUGIN_API_SCHEMA_VERSION}`);
   }
   if (!Array.isArray(raw.plugins)) throw new PluginProtocolError('response.plugins 必须是数组');
-  const plugins = raw.plugins.map(parseVisiblePluginSummary);
+  const plugins = raw.plugins.map((plugin, index) => parseVisiblePluginSummary(plugin, index, options));
   const removals = parseRemovals(raw.removals);
   const currentOrganization = parseCurrentOrganization(raw.currentOrganization);
   const organizationAccessError = parseOrganizationAccessError(raw.organizationAccessError);
@@ -599,24 +619,24 @@ export function assertPluginListOrganizationNamespace(
  * 除通用字段校验外，还要求 manifest 的 id、version 和展示字段与外层数据一致。
  * 校验失败时抛出 `PluginProtocolError`。
  */
-export function parseGetPluginResponse(value: unknown): GetPluginResponse {
+export function parseGetPluginResponse(value: unknown, options?: PluginObjectUrlOptions): GetPluginResponse {
   const raw = object(value, 'response');
   if (raw.schemaVersion !== PLUGIN_API_SCHEMA_VERSION) {
     throw new PluginProtocolError(`response.schemaVersion 必须为 ${PLUGIN_API_SCHEMA_VERSION}`);
   }
   return {
     schemaVersion: PLUGIN_API_SCHEMA_VERSION,
-    plugin: parseVisiblePluginDetail(raw.plugin, 'response.plugin'),
+    plugin: parseVisiblePluginDetail(raw.plugin, 'response.plugin', options),
   };
 }
 
 /**
  * 解析并规范化当前 Release 的短期下载凭证。
  *
- * 只接受 HTTPS URL、UTC 时间、合法 SHA-256 和正整数文件大小；校验失败时抛出
+ * 默认只接受 HTTPS URL；Host 可显式启用受限本地开发对象地址。UTC 时间、SHA-256 和大小仍严格校验；失败时抛出
  * `PluginProtocolError`。
  */
-export function parsePluginDownloadResponse(value: unknown): PluginDownloadResponse {
+export function parsePluginDownloadResponse(value: unknown, options?: PluginObjectUrlOptions): PluginDownloadResponse {
   const raw = object(value, 'response');
   if (
     typeof raw.sizeBytes !== 'number' ||
@@ -646,7 +666,7 @@ export function parsePluginDownloadResponse(value: unknown): PluginDownloadRespo
           ...identity,
         }
       : {}),
-    url: httpsUrl(raw.url, 'response.url'),
+    url: parsePluginObjectUrl(raw.url, 'response.url', options),
     expiresAt: isoDate(raw.expiresAt, 'response.expiresAt'),
     sha256: sha256(raw.sha256, 'response.sha256'),
     sizeBytes: raw.sizeBytes,

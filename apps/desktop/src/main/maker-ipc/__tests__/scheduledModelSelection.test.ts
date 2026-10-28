@@ -13,10 +13,12 @@ describe('one-run automation model preferences', () => {
   function scopeFixture(
     effort: ScheduledModelSelection['effort'] | '' = 'high',
     fastMode: ScheduledModelSelection['fastMode'] = true,
+    agentDeviceId: string | null = null,
   ) {
     const original: ScheduledModelSelection = {
       agentKind: 'codex', model: 'owner-model', providerId: 'owner-provider',
       effort: effort || null, fastMode,
+      ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
     };
     let profile = { ...original, effort };
     let baseline: string | null = null;
@@ -28,7 +30,8 @@ describe('one-run automation model preferences', () => {
       isBusy: vi.fn(() => false),
       apply: vi.fn(async (_id: string, value: ScheduledModelSelection) => {
         const { agentKind, model, providerId, effort, fastMode } = value;
-        profile = { agentKind, model, providerId, effort, fastMode };
+        profile = { agentKind, model, providerId, effort, fastMode,
+          ...(value.agentDeviceId !== undefined ? { agentDeviceId: value.agentDeviceId } : {}) };
       }),
     };
     return { original, deps, scope: createScheduledModelScope(deps),
@@ -57,6 +60,57 @@ describe('one-run automation model preferences', () => {
     const scope = mode === 'restart' ? createScheduledModelScope(h.deps) : h.scope;
     await scope.restore('task');
     expect(h.state()).toEqual({ profile: h.original, baseline: null });
+  });
+  // Unit: location is part of the durable restore record, including explicit local null.
+  it.each([null, 'shared:owner'])('restores the original Agent location %j after restart', async (device) => {
+    const h = scopeFixture('high', false, device);
+    const scopeId = await h.scope.begin('task');
+    h.automate();
+    await createScheduledModelScope(h.deps).restore('task', scopeId);
+    expect(h.state()).toEqual({ profile: h.original, baseline: null });
+  });
+  // Merge regression, unit: old baselines have no location. A repeated automation
+  // must capture that missing axis before moving the task, preserving the old model.
+  it.each([
+    { device: null, prepare: false }, { device: 'shared:owner', prepare: false },
+    { device: 'shared:owner', prepare: true },
+  ])('upgrades a legacy baseline before a location change: %j', async ({ device, prepare }) => {
+    const h = scopeFixture('high', false, device);
+    const { agentDeviceId: _location, ...legacy } = h.original;
+    await h.deps.write('task', { ...legacy, scopeId: 'legacy-scope' });
+    if (prepare) await h.deps.write('task', { ...legacy, scopeId: 'legacy-scope', pendingBotProfileVersion: 2 });
+    // Both the profile revision and the existing baseline must match for an
+    // upgrade, including a baseline returned by permanent-choice preparation.
+    const scope = createScheduledModelScope({ ...h.deps,
+      read: async () => ({ ...await h.deps.read(), profileRevision: 'A' }),
+      prepareBaseline: prepare ? async () => {
+        await h.deps.write('task', { ...legacy, scopeId: 'legacy-scope' });
+      } : undefined,
+      write: async (id, baseline, revision, expectedBaseline) => {
+        if (baseline && (revision !== 'A' || expectedBaseline !== h.state().baseline)) return false;
+        await h.deps.write(id, baseline);
+        return true;
+      },
+    });
+    expect(await scope.begin('task')).toBe('legacy-scope');
+    h.automate();
+    await createScheduledModelScope(h.deps).restore('task', 'legacy-scope');
+    expect(h.state()).toEqual({ profile: h.original, baseline: null });
+  });
+  // Merge regression, unit: a profile save can invalidate a legacy location
+  // upgrade after its read. A rejected durable write must stop the automation
+  // before it moves the task; earlier coverage only exercised successful writes.
+  it('retries a legacy location upgrade when the profile changes before writing', async () => {
+    const h = scopeFixture('high', false, 'shared:owner');
+    const { agentDeviceId: _location, ...legacy } = h.original;
+    await h.deps.write('task', { ...legacy, scopeId: 'legacy-scope' });
+    const saved = h.state().baseline;
+    const scope = createScheduledModelScope({ ...h.deps,
+      read: async () => ({ ...await h.deps.read(), profileRevision: 'A' }),
+      write: async () => false,
+    });
+    await expect(scope.begin('task')).rejects.toThrow(ScheduledModelSelectionBusyError);
+    expect(h.state()).toEqual({ profile: h.original, baseline: saved });
   });
   // #6895 unit regression: preparing a newly saved route may defer/fail. The
   // stale session row must not become durable recovery state in that case.
@@ -182,6 +236,73 @@ function fixture(agentKind: ScheduledModelSelection['agentKind'] = 'codex') {
 }
 
 describe('saved automation model selection at dispatch', () => {
+  // Unit: same-Harness source changes previously skipped history handoff. Exercise
+  // both directions plus legacy inheritance through the real selection entry point.
+  it.each([
+    { current: null, chosen: 'shared:owner', expected: 'shared:owner', switches: true },
+    { current: 'shared:owner', chosen: null, expected: null, switches: true },
+    { current: 'shared:owner', chosen: undefined, expected: 'shared:owner', switches: false },
+  ])('applies the selected Agent location: %j', async ({ current, chosen, expected, switches }) => {
+    const deps = { ...fixture('pi'), getTarget: async () => ({
+      agentKind: 'pi' as const, status: 'active', agentDeviceId: current,
+    }) };
+    const resolved = await applyScheduledModelSelection({ ...selection, agentDeviceId: chosen }, deps);
+    expect(resolved.agentDeviceId).toBe(expected);
+    expect(deps.switchHarness).toHaveBeenCalledTimes(switches ? 1 : 0);
+    expect(deps.applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: expected }));
+  });
+
+  it('keeps the current task intact when the shared route is unavailable', async () => {
+    const deps = fixture('pi');
+    deps.resolveSelection.mockRejectedValueOnce(new Error('shared provider offline'));
+    await expect(applyScheduledModelSelection({ ...selection, agentDeviceId: 'shared:owner' }, deps))
+      .rejects.toThrow('offline');
+    expect(deps.switchHarness).not.toHaveBeenCalled();
+    expect(deps.applyModel).not.toHaveBeenCalled();
+  });
+  // PR #6830 Greptile P1, unit: the authorized remote catalog can retain a
+  // connected but suspended provider. Earlier cases only simulated read failures.
+  // The real apply/resolve entries must reject before switching or applying a
+  // model, without falling back to another provider offering the same model.
+  it.each([null, 'office-pc'])('rejects a suspended remote source before applying to a task at %j', async (current) => {
+    const selected = { ...provider('custom'), remoteInvocationEnabled: true, suspended: true };
+    const providers = [selected, { ...provider('other'), remoteInvocationEnabled: true }];
+    const choice = { ...selection, agentDeviceId: 'office-pc', effort: 'high' as const };
+    const deps = { ...fixture('pi'),
+      getTarget: async () => ({ agentKind: 'pi' as const, status: 'active', agentDeviceId: current }),
+      resolveSelection: async (value: ScheduledModelSelection) => resolveScheduledModelSelection(value, providers),
+    };
+    await expect(applyScheduledModelSelection(choice, deps)).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(deps.switchHarness).not.toHaveBeenCalled();
+    expect(deps.applyModel).not.toHaveBeenCalled();
+
+    selected.suspended = false;
+    await expect(applyScheduledModelSelection(choice, deps)).resolves.toMatchObject(choice);
+    expect(deps.applyModel).toHaveBeenCalledWith(expect.objectContaining(choice));
+  });
+  // PR #6830 admission regression, unit: the old remote reader rejected model
+  // restrictions and unsupported engines even when the model remained in the
+  // catalog. Existing cases only covered provider-level failures. Inherit the
+  // target's remote location to exercise the real apply/resolve boundary.
+  it.each([
+    { model: { disabled: true } },
+    { model: { status: 'retired' as const } },
+    { model: { mode: 'image_generation' } },
+    { model: { availability: 'requires_payment' as const } },
+    { model: {}, agents: [] },
+  ])('rejects an inadmissible remote model without changing the target: %j', async ({ model, agents }) => {
+    const selected = provider('custom', model);
+    if (agents) selected.agents = agents;
+    const deps = { ...fixture('pi'),
+      getTarget: async () => ({ agentKind: 'pi' as const, status: 'active', agentDeviceId: 'office-pc' }),
+      resolveSelection: async (value: ScheduledModelSelection) =>
+        resolveScheduledModelSelection(value, [selected, provider('other')]),
+    };
+    await expect(applyScheduledModelSelection(selection, deps)).rejects.toThrow(
+      model.availability === 'requires_payment' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE');
+    expect(deps.switchHarness).not.toHaveBeenCalled();
+    expect(deps.applyModel).not.toHaveBeenCalled();
+  });
   it('hands history to the target Harness before applying the complete model configuration', async () => {
     const deps = fixture();
     await applyScheduledModelSelection(selection, deps);
@@ -268,6 +389,12 @@ function provider(id: string, model: Partial<CatalogModel> = {}): ProviderView {
 }
 
 describe('saved effort uses the selected provider and Harness catalog copy', () => {
+  // Main now applies new-route admission to both local and remote restores.
+  it('rejects a disabled local model during scheduled resolution', () => {
+    expect(() => resolveScheduledModelSelection({ ...selection, agentDeviceId: null, effort: 'high' }, [
+      provider('custom', { disabled: true }),
+    ])).toThrow('MODEL_SELECTION_UNAVAILABLE');
+  });
   it.each([null, 'ultra'] as const)('fills or reconciles %s to the route default', (effort) => {
     const selected = provider('custom', { efforts: ['low', 'high'], defaultEffort: 'high' });
     const other = provider('other', { efforts: ['low'], defaultEffort: 'low' });
@@ -302,24 +429,33 @@ describe('bound target Harness capability', () => {
     'rejects cross-Harness overrides on %j while preserving same-Harness and follow modes', (restriction) => {
       const target = { agentKind: 'codex' as const, status: 'active', ...restriction };
       expect(() => assertScheduledHarnessSupported(target, 'pi')).toThrow('current Harness');
+      expect(() => assertScheduledHarnessSupported(target, 'codex', 'shared:owner')).toThrow('current Harness');
+      expect(() => assertScheduledHarnessSupported(target, 'codex', null)).not.toThrow();
       expect(() => assertScheduledHarnessSupported(target, 'codex')).not.toThrow();
       expect(() => assertScheduledHarnessSupported(target, undefined)).not.toThrow();
     },
   );
   // Regression: ordinary Orca switching supports all three Harnesses, but the
   // scheduled guard blocked both the override and the next manual send's restore.
-  // Unit tier: enter a persisted scope, switch, reload it and restore via the real
-  // selection entry; the old guard fails before any model can be applied.
-  it.each(['lead', 'worker'])('applies and restores a cross-Harness override for an Orca %s', async (orcaRole) => {
-    let profile: ScheduledModelSelection = { ...selection, agentKind: 'codex', model: 'owner-model' };
+  // Merge regression, unit: also move the Agent with/without an engine change.
+  // Prior tests covered only Harness changes and could miss a location-only veto.
+  // The real scope/selection entries must restore both persisted axes after reload.
+  it.each([
+    { orcaRole: 'lead', agentKind: 'pi' as const },
+    { orcaRole: 'worker', agentKind: 'pi' as const },
+    { orcaRole: 'lead', agentKind: 'codex' as const },
+    { orcaRole: 'worker', agentKind: 'codex' as const },
+  ])('applies and restores a $agentKind override for an Orca $orcaRole across locations', async ({ orcaRole, agentKind }) => {
+    let profile: ScheduledModelSelection = { ...selection, agentKind: 'codex', agentDeviceId: null, model: 'owner-model' };
+    const override: ScheduledModelSelection = { ...selection, agentKind, agentDeviceId: 'shared:automation' };
     const original = { ...profile };
     let baseline: string | null = null;
     const apply = async (_id: string, choice: ScheduledModelSelection) => {
       await applyScheduledModelSelection(choice, {
-        getTarget: async () => ({ agentKind: profile.agentKind, status: 'active', orcaRole }),
+        getTarget: async () => ({ agentKind: profile.agentKind, agentDeviceId: profile.agentDeviceId, status: 'active', orcaRole }),
         isBusy: () => false,
         resolveSelection: async (value) => value,
-        switchHarness: async (value) => { profile = { ...profile, agentKind: value.agentKind }; return { engineReady: true }; },
+        switchHarness: async (value) => { profile = { ...profile, agentKind: value.agentKind, agentDeviceId: value.agentDeviceId }; return { engineReady: true }; },
         applyModel: async (value) => { profile = { ...value }; },
       });
     };
@@ -331,8 +467,8 @@ describe('bound target Harness capability', () => {
     };
     expect(() => assertScheduledHarnessSupported({ agentKind: 'codex', status: 'active', orcaRole }, 'pi')).not.toThrow();
     await createScheduledModelScope(deps).begin('task');
-    await apply('task', selection);
-    expect(profile).toEqual(selection);
+    await apply('task', override);
+    expect(profile).toEqual(override);
     await createScheduledModelScope(deps).restore('task');
     expect(profile).toMatchObject(original);
     expect(baseline).toBeNull();
@@ -372,6 +508,7 @@ function remoteFixture(device: string | null = 'share:test', status = 'active') 
     isBusy: () => false,
     resolveSelection: createScheduledModelSelectionResolver({
       readRemoteProviders: remote,
+      readSshCodexProviders: async () => { throw new Error('non-SSH tasks must not read the SSH catalog'); },
       resolveLocalSelection: async route => {
         await guard(route.agentKind, route.model, route.providerId);
         return resolveScheduledModelSelection(route, local);
@@ -390,6 +527,25 @@ function remoteFixture(device: string | null = 'share:test', status = 'active') 
 }
 
 describe('automation restore uses the execution computer', () => {
+  // Merge regression, unit: the shared resolver previously only inspected the
+  // bound task. Explicit location changes must validate the destination catalog.
+  it.each([
+    { current: null, chosen: 'share:test', providerId: 'openai-shared' },
+    { current: 'share:test', chosen: null, providerId: 'openai' },
+  ])('resolves an explicit destination instead of the current task location: %j', async ({ current, chosen, providerId }) => {
+    const h = remoteFixture(current);
+    const choice = { ...remoteChoice, agentDeviceId: chosen, providerId };
+    await h.apply('task', choice);
+    expect(h.state().current).toMatchObject(choice);
+    expect(h.switchHarness).toHaveBeenCalledWith(choice);
+    if (chosen) {
+      expect(h.remote).toHaveBeenCalledWith(chosen, 'codex', 'test-model', providerId);
+      expect(h.guard).not.toHaveBeenCalled();
+    } else {
+      expect(h.guard).toHaveBeenCalledWith('codex', 'test-model', providerId);
+      expect(h.remote).not.toHaveBeenCalled();
+    }
+  });
   it.each(['share:test', 'other-device'])('restores a legacy baseline on %s after restart', async device => {
     const h = remoteFixture(device);
     await createScheduledModelScope(h.deps).restore('task');
@@ -443,7 +599,8 @@ describe('automation restore uses the execution computer', () => {
       const views = remoteCatalog('openai-shared');
       Object.assign(views[0].models.codex![0], flags);
       h.remote.mockResolvedValueOnce(views);
-      await expect(h.scope.restore('task')).rejects.toThrow('unavailable');
+      await expect(h.scope.restore('task')).rejects.toThrow(
+        flags.availability === 'requires_payment' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE');
       expect(h.state()).toEqual(before);
       expect(h.applyModel).not.toHaveBeenCalled();
       expect(h.switchHarness).not.toHaveBeenCalled();

@@ -221,7 +221,39 @@ describe('collectOutboundAttachments', () => {
     expect(r.text).not.toContain('已作为附件发送');
     expect(r.text).toContain('🖼️ _a_');
     expect(r.text).toContain('b');
-    expect(r.text).toContain('Attachment delivery incomplete: 2 items');
+    expect(r.text).toContain('Attachment delivery incomplete: 2 items could not be sent (a, b).');
+  });
+
+  it('未导入的本地图片按说明点名, 提示文案由调用方按界面语言给出', async () => {
+    // 2026-10-26 Slack 实踩: 工作目录外的预览图没有入库, 群里只看到英文计数,
+    // 不知道是哪几张没发出去。
+    const r = await collectOutboundAttachments(
+      '![首页纪念行](/tmp/preview/banner.png)\n\n![](/tmp/preview/stars-dark.png)',
+      [],
+      {
+        resolveImageUrl: () => {
+          throw new Error('local images are never resolved here');
+        },
+        formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+        log,
+      },
+    );
+    expect(r.attachments).toHaveLength(0);
+    expect(r.skipped).toBe(2);
+    expect(r.text).toContain('🖼️ _首页纪念行_');
+    expect(r.text).not.toContain('/tmp/preview');
+    expect(r.text).toContain('未发送：首页纪念行、stars-dark.png');
+
+    // Windows-style remote paths must not leak their directories on a POSIX host.
+    const win = await collectOutboundAttachments('![](C:\\Users\\alice\\private.png)', [], {
+      resolveImageUrl: () => {
+        throw new Error('unused');
+      },
+      formatIncompleteNotice: (names) => names.join('|'),
+      log,
+    });
+    expect(win.text).toContain('private.png');
+    expect(win.text).not.toContain('alice');
   });
 
   it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {

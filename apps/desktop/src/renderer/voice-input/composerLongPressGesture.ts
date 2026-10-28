@@ -11,7 +11,7 @@ export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
   moveTolerancePx?: number;
   getState: () => VoiceInputState;
-  /** Prepare without recording. Cleanup cancels a short press or hands off after start. */
+  /** Prepare only after the hold is recognized; cleanup hands off after start. */
   prepare?: () => (() => void) | void;
   /**
    * 开始录音。返回 `false` 表示这次没有占用录音（已在录音、被取消等），
@@ -125,6 +125,13 @@ export function createComposerLongPressVoiceGesture(
     }
     holding = true;
     options.onHoldStart?.();
+    // Opening a Bluetooth microphone can interrupt playback in other apps even
+    // without recording PCM. Ordinary clicks must never prepare the device.
+    try {
+      releasePreparation = options.prepare?.();
+    } catch {
+      // Preparation is optional; the normal start path can still recover.
+    }
     const generation = ++startGeneration;
     const currentStart = Promise.resolve()
       .then(() => options.start())
@@ -158,11 +165,6 @@ export function createComposerLongPressVoiceGesture(
         origin: point,
         timer: setTimeout(beginVoiceInput, holdMs),
       };
-      try {
-        releasePreparation = options.prepare?.();
-      } catch {
-        // Preparation is optional; the normal start path can still recover.
-      }
     },
     move(point) {
       if (!pending) return;

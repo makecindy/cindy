@@ -62,7 +62,7 @@
       "filterMeta": "{{available}} 台可进入",
       "filterMetaWithUnavailable": "{{available}} 台可进入 · {{unavailable}} 台需处理",
       "showUnavailableReason": "展开的设备会显示不可用原因",
-      "emptyCopy": "在电脑端登录同一账号，并在设置里的远程控制打开“允许同账号设备控制本机”。",
+      "emptyCopy": "在电脑端登录同一账号，并在「设置 → 远程连接」中打开“允许同账号设备控制本机”。",
       "emptyTitle": "还没有可显示的电脑",
       "hideUnavailableA11y": "隐藏不可用电脑",
       "showUnavailableA11y": "显示不可用电脑",
@@ -338,7 +338,9 @@
       "doneUnread": "已完成未读",
       "running": "运行中",
       "close": "关闭",
-      "cancelRename": "取消重命名"
+      "cancelRename": "取消重命名",
+      "createdBy": "由 {{name}} 创建",
+      "ownedBy": "归属 {{name}}"
     },
     "accounts": {
       "title": "切换账号",
@@ -415,7 +417,10 @@
       },
       "summaryNone": "无",
       "summarySeparator": "、",
-      "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。"
+      "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
+      "filterTeammatesHeading": "伙伴",
+      "filterAnySource": "不限来源",
+      "filterSelectedTeammates": "已选 {{count}} 位"
     },
     "search": {
       "placeholder": "搜索标题或内容…",
@@ -760,7 +765,18 @@
     "home": "主力电脑",
     "chat": "对话",
     "showReplyTarget": "显示回复对应的消息",
-    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。"
+    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。",
+    "channels": "消息平台",
+    "channelsEmpty": "还没有连接消息平台",
+    "channelTasksEmpty": "还没有任务记录",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "飞书",
+      "lark": "Lark",
+      "wecom": "企业微信",
+      "dingtalk": "钉钉",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "导入伙伴",
@@ -856,6 +872,10 @@
     "checkPrompt": "帮我查查已连接的邮箱、消息等来源里，有没有需要我处理的新事项，有就记成待办。",
     "dailyCheck": "每天帮我查一次",
     "dailyCheckMeta": "工作日 9:00，没有新待办不打扰",
+    "recentTasks": "近期任务",
+    "unread": "未读结果",
+    "stopDailyCheck": "停止每天检查",
+    "openFailed": "无法打开链接",
     "dailyCheckFailed": "没能保存，请重试",
     "loadFailed": "没能读取待办",
     "outputs": "输出内容",

@@ -503,6 +503,19 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
+  it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
+    // 2026-10-26 Slack: previews saved outside the workdir showed on desktop but never reached the channel.
+    const outside = path.join(state.root, 'elsewhere');
+    await fs.mkdir(outside, { recursive: true });
+    const source = path.join(outside, 'preview.png');
+    await fs.writeFile(source, PNG);
+    const text = `![preview](${source})`;
+    const row = insert(text);
+    expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+    expect(await materializeTaskImageText('s', text)).toContain('cindy-media://');
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
   it('serializes concurrent channel imports without duplicate task references', async () => {
     const source = path.join(work, 'shot.png');
     await fs.writeFile(source, PNG);

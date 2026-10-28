@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
@@ -2019,4 +2019,89 @@ describe('title 剥离不得灾难性回溯(ReDoS)', () => {
       { type: 'text', text: ' 补充' },
     ]);
   });
+});
+
+// Performance regression: inline image/comment guards used to rebuild full-source
+// masks for every token. Existing semantic fixtures do not bound that repeated work.
+// Real parser, counted full-source replacements (no wall-clock threshold), unit tier.
+it('prepares paragraph image guards once while preserving formatted text and images', () => {
+  const source = '**one** `two` **three** `four` ![photo](https://example.invalid/a.png)';
+  const replace = String.prototype.replace;
+  let fullSourcePasses = 0;
+  const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === source) fullSourcePasses += 1;
+    return Reflect.apply(replace, this, args);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type !== 'text')).toEqual([
+      { type: 'strong', text: 'one' }, { type: 'code', text: 'two' },
+      { type: 'strong', text: 'three' }, { type: 'code', text: 'four' },
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+    ]);
+    expect(fullSourcePasses).toBeLessThanOrEqual(4);
+  } finally { spy.mockRestore(); }
+});
+
+// A distant URL used to be normalized for every preceding formatted token,
+// repeatedly scanning its full prefix. Count that work through the real parser.
+it('normalizes a pending bare URL once and still discovers the following URL', () => {
+  const source = '**one** `two` **three** `four` https://example.invalid/a。 https://example.invalid/b!';
+  const urlIndex = source.indexOf('https:');
+  const slice = String.prototype.slice;
+  let prefixScans = 0;
+  const spy = vi.spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+    if (String(this) === source && start === 0 && end === urlIndex) prefixScans += 1;
+    return Reflect.apply(slice, this, [start, end]);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.slice(-4)).toEqual([
+      { type: 'link', text: 'https://example.invalid/a', url: 'https://example.invalid/a' },
+      { type: 'text', text: '。 ' },
+      { type: 'link', text: 'https://example.invalid/b', url: 'https://example.invalid/b' },
+      { type: 'text', text: '!' },
+    ]);
+    expect(prefixScans).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
+});
+
+// #7088 follow-up: each formatted token rescanned all remaining syntax, blocking
+// Hermes on a long paragraph. Count examined suffix characters through the real
+// parser (unit, not wall-clock timing); existing semantic tests miss this cost.
+it('bounds repeated suffix searches while keeping text, links and images', () => {
+  const source = '**one** `two` '.repeat(30) + '![photo](https://example.invalid/a.png) after src/end.ts';
+  const exec = RegExp.prototype.exec;
+  let searchedCharacters = 0;
+  const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+    const from = this.lastIndex;
+    const match = Reflect.apply(exec, this, [input]);
+    if (input === source && this.global) searchedCharacters += (match ? match.index + match[0].length : source.length) - from;
+    return match;
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+      { type: 'text', text: ' after ' },
+      { type: 'link', text: 'src/end.ts', url: 'src/end.ts', bare: true },
+    ]);
+    expect(searchedCharacters).toBeLessThan(source.length * 20);
+  } finally { spy.mockRestore(); }
+});
+
+// The pending-search optimization must retain raw prefix boundaries and rejected
+// spans. Through the public parser, protect rendering when another grammar wins
+// before/inside a candidate; these cases distinguish unsafe token-level caching.
+it.each([
+  ['**a**_b_', [{ type: 'strong', text: 'a' }, { type: 'text', text: '_b_' }]],
+  ['`a`$b$', [{ type: 'code', text: 'a' }, { type: 'text', text: '$b$' }]],
+  ['![a `b`](bad) then ![ok](src/a.png)', [
+    { type: 'text', text: '![a ' }, { type: 'code', text: 'b' },
+    { type: 'text', text: '](bad) then ' }, { type: 'image', alt: 'ok', url: 'src/a.png' },
+  ]],
+])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
+  expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
 });

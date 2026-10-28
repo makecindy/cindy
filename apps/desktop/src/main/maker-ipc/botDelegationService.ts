@@ -1037,48 +1037,47 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     });
     completionInFlight.set(params.id, thisDelivery);
     try {
-    const completionStillPending = async (): Promise<boolean> => {
-      const [current] = await getDbClient().drizzle
-        .select({
-          status: botDelegations.status,
-          childSessionId: botDelegations.childSessionId,
-          runSequence: botDelegations.runSequence,
-          completionDeliveredAt: botDelegations.completionDeliveredAt,
-        })
-        .from(botDelegations)
-        .where(eq(botDelegations.id, params.id))
-        .limit(1);
-      return !!current
-        && current.status === params.status
-        && current.childSessionId === params.childSessionId
-        && current.runSequence === params.runSequence
-        && current.completionDeliveredAt === null;
-    };
-    // A retry from an earlier run may fire while the same task card is being
-    // continued. Never let that stale receipt wake or mark the new run.
-    if (!(await completionStillPending())) {
-      clearCompletionRetryTimer(params.id);
-      return false;
-    }
-    const artifacts = params.artifacts ?? [];
-    // 发给模型的回执正文不带 [UI_ACTION_TRIGGER] 前缀;前缀只留在落库 / 排队可见内容上,
-    // 让这条主机内部消息在时间线与排队区保持隐藏(同 botDirectMessageService 的私信)。
-    // 正文有界(结果摘要 / 文件清单截断):完整结果在下面持久化的回执行里,模型按需读取。
-    const completionSnapshot = (await getDbClient().drizzle
-      .select({ snapshot: botDelegations.permissionSnapshotJson }).from(botDelegations)
-      .where(eq(botDelegations.id, params.id)).get())?.snapshot ?? '{}';
-    const completionTerminal = parseRecord(completionSnapshot).taskTerminal as {
-      runSequence: number; execution: DelegationExecutionReceipt;
-    } | undefined;
-    const completionMessage = buildDelegationCompletionMessage({
-      id: params.id,
-      objective: params.objective,
-      status: params.status,
-      resultSummary: params.resultSummary,
-      artifacts,
-      lastError: params.lastError,
-    });
-    try {
+      const completionStillPending = async (): Promise<boolean> => {
+        const [current] = await getDbClient().drizzle
+          .select({
+            status: botDelegations.status,
+            childSessionId: botDelegations.childSessionId,
+            runSequence: botDelegations.runSequence,
+            completionDeliveredAt: botDelegations.completionDeliveredAt,
+          })
+          .from(botDelegations)
+          .where(eq(botDelegations.id, params.id))
+          .limit(1);
+        return !!current
+          && current.status === params.status
+          && current.childSessionId === params.childSessionId
+          && current.runSequence === params.runSequence
+          && current.completionDeliveredAt === null;
+      };
+      // A retry from an earlier run may fire while the same task card is being
+      // continued. Never let that stale receipt wake or mark the new run.
+      if (!(await completionStillPending())) {
+        clearCompletionRetryTimer(params.id);
+        return false;
+      }
+      const artifacts = params.artifacts ?? [];
+      // 发给模型的回执正文不带 [UI_ACTION_TRIGGER] 前缀;前缀只留在落库 / 排队可见内容上,
+      // 让这条主机内部消息在时间线与排队区保持隐藏(同 botDirectMessageService 的私信)。
+      // 正文有界(结果摘要 / 文件清单截断):完整结果在下面持久化的回执行里,模型按需读取。
+      const completionSnapshot = (await getDbClient().drizzle
+        .select({ snapshot: botDelegations.permissionSnapshotJson }).from(botDelegations)
+        .where(eq(botDelegations.id, params.id)).get())?.snapshot ?? '{}';
+      const completionTerminal = parseRecord(completionSnapshot).taskTerminal as {
+        runSequence: number; execution: DelegationExecutionReceipt;
+      } | undefined;
+      const completionMessage = buildDelegationCompletionMessage({
+        id: params.id,
+        objective: params.objective,
+        status: params.status,
+        resultSummary: params.resultSummary,
+        artifacts,
+        lastError: params.lastError,
+      });
       if (!(await completionStillPending())) {
         clearCompletionRetryTimer(params.id);
         return false;
@@ -1271,7 +1270,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       });
       scheduleCompletionRetry(params, attempt);
       return false;
-    }
     } finally {
       releaseDelivery();
       if (completionInFlight.get(params.id) === thisDelivery) {
@@ -1389,7 +1387,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         // A group lane is a live requester only for the task it started (bot-group-chat.md §10);
         // the lane is never woken by this service, its group gets the messages instead.
         // A private-chat topic gets the results of the tasks started in it (cindy-bots-runtime.md).
-        && (parent.role === 'canonical' || parent.role === 'thread' || parent.role === 'delegation' || parent.role === 'group')
+        && (parent.role === 'canonical' || parent.role === 'thread' || parent.role === 'routine' || parent.role === 'delegation' || parent.role === 'group')
       );
     };
     if (parentSessionId && (await liveRequesterTask(parentSessionId))) return parentSessionId;
@@ -1604,7 +1602,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       || link.sessionSource !== 'bot'
       || link.profileStatus !== 'active'
       || link.linkArchivedAt !== null
-      || !['canonical', 'thread', 'delegation', 'group'].includes(link.role)
+      || !['canonical', 'thread', 'routine', 'delegation', 'group'].includes(link.role)
     ) return null;
     // Delegating full independent work is an owner action, not a guest tool grant.
     const group = link.role === 'group' && !ownerUi
@@ -2812,7 +2810,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       || caller.sessionSource !== 'bot'
       || (caller.sessionStatus !== 'active' && caller.sessionStatus !== 'archived')
       || caller.profileStatus === 'deleting'
-      || !['canonical', 'history', 'thread', 'delegation', 'group'].includes(caller.role)) {
+      || !['canonical', 'history', 'thread', 'routine', 'delegation', 'group'].includes(caller.role)) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
     const db = getDbClient().drizzle;

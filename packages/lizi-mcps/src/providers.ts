@@ -46,8 +46,8 @@ export interface CreateLiziMcpProvidersOptions {
   /**
    * cindy_slack: Slack 网关工具(经 hook 通道由 slack-hook-server 以托管
    * user token 调 Slack 官方 MCP, 接替退役的 cindy-slack 意识)。
-   * workingDir 由 provider 从 ctx 绑定; isEnabled = 桥可用、绑定 confirmed 且
-   * 最近一次 welcome 宣告 slack-tools 能力(所有会话可见, 不按 source 门控)。
+   * workingDir 由 provider 从 ctx 绑定; 共享 bridge 预先注册稳定网关，
+   * 普通会话构建仍按绑定及服务端能力门控，实际调用始终复核实时连接与权限。
    * 对应可关插件 id 'slack'。
    */
   slackHook?: Omit<SlackHookMcpDeps, 'workingDir'>;
@@ -308,11 +308,12 @@ export function createLiziMcpProviders(
   if (opts.slackHook && selected(enabled, 'cindy_slack')) {
     providers.push({
       name: 'cindy_slack',
-      // 会话构建期门控: 桥已注册、绑定 confirmed、最近一次成功 welcome 宣告
-      // slack-tools 才挂工具面。瞬时断线不撤 provider(避免重建 Codex),调用期由
-      // connected fail-closed 复查兜底;重连到不同 server 后 manager 会按新 welcome
-      // 刷新此 gate。server 侧还有 NOT_BOUND 的最终防线。
-      isEnabled: () => {
+      // Shared Codex/Pi bridges outlive Slack binding changes. Register the stable
+      // gateway before binding so an existing runtime can recover without closing
+      // unrelated sessions. Every call still reads the live bridge and its binding,
+      // connection, server capabilities and account authorization.
+      isEnabled: (ctx) => {
+        if ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir) return true;
         const bridge = opts.slackHook!.getBridge();
         if (bridge === null) return false;
         const a = bridge.availability();

@@ -102,7 +102,7 @@ describe('sharedTask dispatch scope', () => {
       args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [permissionSuggestion] }],
     })).not.toThrow();
   });
-  it.each(['cindy.app.update', 'cindy.app.auto_update'])('keeps the owner-only %s card away from guests', (toolName) => {
+  it.each(['cindy.app.update', 'cindy.app.auto_update', 'ghost_contribution_submit', 'ghost_cancel_plugin_review'])('keeps the owner-only %s card away from guests', (toolName) => {
     setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName }));
     for (const behavior of ['allow', 'deny']) {
       const args = ['app-update-1', { kind: 'permission', behavior }];

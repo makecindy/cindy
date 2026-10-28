@@ -1,7 +1,9 @@
 /** Single delivery protocol used by host instructions and optional capability lookup. */
-export const RICH_ANSWER_GUIDE = `Cindy can render a streaming component document directly in an assistant progress message or final answer. You choose content and layout; ordinary Markdown remains available. No HTML file or extra model call is needed.
+export const RICH_ANSWER_GUIDE = `Default to plain text or Markdown for ordinary conversation, explanations, progress updates and concise results. Use cindy-ui only when charts, interaction, media presentation or structured layout materially improve understanding, or when the user explicitly requests components. Do not wrap plain prose in text or markdown components just for decoration. Keep surrounding prose in Markdown and use components only for the parts that benefit. Follow the user's requested format.
 
-Your canvas is an inline, progressively rendered part of the conversation, on Cindy's own surface. Layout, hierarchy, typography and spacing are yours; colors and backgrounds belong to Cindy so every answer stays calm and consistent with the application.
+When components are useful, write them directly in progress messages or final answers, alongside Markdown. Choose content and layout freely; no HTML file, tool call or extra model call is needed.
+
+Your canvas is inline on Cindy's conversation surface. Layout, hierarchy, typography and spacing are yours; colors and backgrounds belong to Cindy so answers stay calm and consistent.
 
 Choose a diagram's format for readability and the user's requested output. Mermaid is an option, not a requirement for flowcharts or technical explanations. Use diagram for Mermaid's automatic layout; use svg when custom geometry and routing improve clarity, or compose smaller diagrams with text, rows, details or tabs. Neither format is inherently more readable. When asked to draw or preview, show the diagram rather than only describing a proposed layout.
 
@@ -41,7 +43,7 @@ value and chart data may use a scalar, {ref:"stateKeyOrComputedNodeId"}, or {op,
 
 For example, a button with props {"label":"Plan my trip","send":{"op":"concat","args":["Plan a ",{"ref":"days"},"-day trip to ",{"ref":"destination"}]}} sends the displayed sentence after the user clicks. Define days and destination controls first. Do not request passwords, tokens or other credentials in these controls.
 
-Complete rendered-answer example, not a prescribed answer layout. Include BOTH fence lines shown below in your output, with one JSON object per line; do not copy only the JSON:
+Component syntax example, not a prescribed answer layout. When using components, include BOTH fence lines shown below, with one JSON object per line; do not copy only the JSON:
 \`\`\`cindy-ui
 {"version":1,"seq":1,"op":"create","id":"months","kind":"range","props":{"label":"Months","min":1,"max":24,"default":6}}
 {"seq":2,"op":"create","id":"cost","kind":"stat","props":{"label":"Total","prefix":"¥","value":{"op":"mul","args":[{"ref":"months"},20]}}}
@@ -52,7 +54,7 @@ Keep blocks under 128 KB, with no more than 2048 nodes and depth 32. Finish each
 
 /** Host addition only: native CLI instructions and execution remain unchanged. */
 export const ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery
-Create beautiful, elegant, readable answers. You decide the layout, typography and charts within Cindy's colors, following the user's request and presentation preferences. Cindy's component defaults are fallbacks, not design requirements. These capabilities apply to tasks and companions without changing your tool use or native workflow.
+Create clear, readable answers. Choose plain text, Markdown or cindy-ui components according to the guidance below. When using components, you own layout, typography and charts; Cindy supplies colors. Preserve native workflows.
 
 The component protocol is rendered on Cindy conversation surfaces. External channels retain their required formats. Controls hold local viewing state. Optional button/form send actions let the user explicitly submit visible text as a normal message to continue the conversation; they do not directly execute work or tools.
 

@@ -7,7 +7,7 @@ import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/d
 function setup(
   projection: Pick<
     ConstructorParameters<typeof MobilePluginPages>[0],
-    'setupAssessment' | 'runtimeState' | 'listOrder'
+    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker'
   > = {},
 ) {
   let owner = 'a',
@@ -114,6 +114,29 @@ function setup(
   };
 }
 describe('mobile plugin pages', () => {
+  // New Host picker round trip: page/controller ownership and suspend cancellation are
+  // not covered by the existing directory picker. Minimal input: one native request. Tier: unit.
+  it('delivers model selection only to its source controller and cancels it when the page suspends', async () => {
+    const answer = vi.fn(async () => ({ handled: true, accepted: true }));
+    const h = setup({ answerModelPicker: answer }), { pageId } = await h.open();
+    await h.invoke('poll', { pageId, after: 0 });
+    const target = h.service.modelPickerTarget(pageId, 'practice')!;
+    const cancel = vi.fn();
+    const request = { requestId: 'model-choice', ghostId: 'practice', ghostName: 'Practice', expiresAt: Date.now() + 90_000 };
+    expect(target.send(request, cancel)).toBe(true);
+    const poll = (await h.invoke('poll', { pageId, after: 0 })).result as { modelPickers: unknown[] };
+    expect(poll.modelPickers).toEqual([request]);
+    await expect(h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null }, 'phone-b')).rejects.toThrow();
+    expect(answer).not.toHaveBeenCalled();
+    expect((await h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null })).result)
+      .toEqual({ handled: true, accepted: true });
+    expect(answer).toHaveBeenCalledWith(pageId, request.requestId, null);
+    await h.invoke('suspend', { pageId });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(h.service.modelPickerTarget(pageId, 'practice')).toBeNull();
+    target.dismiss(request.requestId);
+    await h.invoke('close', { pageId });
+  });
   it.each([undefined, true, false])('projects task card visibility without removing task settings access: %s', async (showTaskPreferences) => {
     const h = setup();
     h.ghost.manifest.agent = { tasks: true };
@@ -562,4 +585,9 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   expect(JSON.stringify(signed)).not.toContain('not-a-display-field');
   h.ghost.manifest.panel = {html: 'panel.html', position: 'tab'};
   expect((await read()).find(fact => fact.key === 'panel')?.value).toBe('Panel');
+  h.ghost.publishingSource = { kind: 'public-market', pluginId: 'public-practice' };
+  expect(toGhostPluginDetail(h.ghost).author).toBeNull();
+  expect((await read()).some(fact => fact.key === 'author')).toBe(false);
+  h.ghost.publishingSource = { kind: 'local', source: 'manual' };
+  expect((await read()).find(fact => fact.key === 'author')?.value).toBe('Cindy');
 });

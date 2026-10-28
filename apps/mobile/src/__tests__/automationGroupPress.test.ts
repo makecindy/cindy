@@ -12,7 +12,9 @@ const body = source.slice(start, source.indexOf('  return (', start));
 const handler = new Function('group', 'statusTarget', 'attention', 'rightStatus', 'groupExpanded',
   'selectionMode', 'onPressSelection', 'onOpenSession', 'onToggleAutomationGroup', 'item',
   'sharedRole', 't',
-  `${body}\nreturn handlePress;`);
+  ts.transpileModule(`${body}\nreturn handlePress;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText);
 const translate = (key: string) => key;
 const row = (id: string, time: number): RemoteSessionListItem => ({
   session: { id, status: 'active', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString() },

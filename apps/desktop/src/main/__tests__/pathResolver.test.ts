@@ -299,6 +299,19 @@ describe('resolveWorkspacePath', () => {
 });
 
 describe('resolveWorkspacePathCached', () => {
+  // #7303: renderer retries used to hit the same main-process negative cache.
+  // Exercise real batch-cache → file restoration → explicit refresh, no timers.
+  it('refreshes a restored file immediately despite a batch-cached miss', async () => {
+    const href = 'report.pdf';
+    expect((await resolveWorkspacePathBatchCached([href], workspace))[href].status).toBe('none');
+    const target = write(href, 'restored');
+    expect((await resolveWorkspacePathCached(href, workspace)).status).toBe('none');
+    expect(await resolveWorkspacePathCached(href, workspace, { refresh: true })).toEqual({
+      status: 'unique', candidates: [target], kind: 'file',
+    });
+    expect((await resolveWorkspacePathBatchCached([href], workspace))[href].candidates).toEqual([target]);
+  });
+
   it('returns the same result on repeated calls (cache hit)', async () => {
     const target = write('apps/desktop/src/App.tsx');
 

@@ -96,9 +96,7 @@
   "betaChannel": {
     "title": "Beta channel",
     "badge": "Beta",
-    "description": "Get upcoming client updates early.",
-    "restartHint": "The beta channel takes effect after restarting the app. Please restart to apply.",
-    "ok": "Got it",
+    "description": "Get upcoming client updates early. Content updates are downloaded on the next update check and take effect after an app restart.",
     "saveFailed": "Failed to save beta channel setting",
     "unavailable": "The beta channel is unavailable — could not reach the beta update server."
   },

@@ -371,6 +371,15 @@ describe('authorized file peer source', () => {
       url: 'xdt-file://local/?path=/test',
     })) as { ticket: string; size: number; version: string };
   }
+  // Unit regression: an authorized path without a MIME was sent as octet-stream,
+  // so the mobile player rejected a completely downloaded MP4.
+  it.each([['.mp4', 'video/mp4'], ['.MP4', 'video/mp4'], ['mp4', 'video/mp4'], ['.webm', 'video/webm'], ['.html', 'text/html']])(
+    'returns playable direct-file metadata for extension %s', async (uploadExtHint, mimeType) => {
+      mock.resolve.mockResolvedValue({ absPath: file, uploadExtHint, maxBytes: 100 });
+      const { connection } = await connect();
+      await expect(open(connection)).resolves.toMatchObject({ mimeType, size: 5 });
+    },
+  );
   const read = (connection: string, ticket: string, offset: number) =>
     mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset);
   it('keeps negotiated connections until release, isolates transport failure and still expires stalled files', async () => {

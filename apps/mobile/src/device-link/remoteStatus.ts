@@ -108,6 +108,7 @@ export function describeAgentAuthError(error: string | null | undefined): string
 /** 结构化运行错误保留 marker 做状态分类，展示文案复用 Mobile i18n。 */
 function localizedRuntimeErrorCopy(error: unknown): string | null {
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
+  if (formatted.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return i18n.t('session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED');
   const agentCode = parseAgentErrorCode(formatted)?.code;
   if (agentCode && i18n.exists(`session.remoteError.${agentCode}`)) return i18n.t(`session.remoteError.${agentCode}`);
   if (formatted.includes('DEVICE_OFFLINE')) return i18n.t('session.menu.aiRenameOffline');

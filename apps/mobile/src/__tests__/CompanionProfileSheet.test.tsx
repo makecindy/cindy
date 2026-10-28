@@ -363,3 +363,14 @@ it.each([true, false])('mobile follow-up invitation saves the explicit choice, e
   }, 'en');
   expect(container.querySelectorAll('button')).toHaveLength(0);
 });
+
+// Both platform views share dismissal/navigation: no resource binding may follow an IM task.
+it('opens the original IM task on its computer after the settings sheet closes', async () => {
+  await render();
+  await act(async () => h.view.channels.props.onOpenTask('channel-original'));
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
+  await act(async () => h.view.onClosed());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'channel-original', deviceId: 'host' } });
+  expect(h.invoke).not.toHaveBeenCalled();
+});

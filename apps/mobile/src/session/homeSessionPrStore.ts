@@ -1,5 +1,6 @@
 import {
   PR_STATUS_REFRESH_INTERVAL_MS,
+  MAX_STATUS_QUERIES,
   prStatusKey,
   type PrStatusResult,
   type SessionPrRef,
@@ -19,6 +20,8 @@ import {
 export interface HomeSessionPrInfo {
   ref: SessionPrRef;
   status: PrStatusResult | null;
+  /** Glance includes the same bounded association list as the desktop PR menu. */
+  additional?: HomeSessionPrInfo[];
 }
 
 type Invoke = <T>(deviceId: string, channel: string, args: unknown[]) => Promise<T>;
@@ -107,26 +110,35 @@ export async function loadHomeSessionPr(
   deviceId: string,
   sessionId: string,
   previous: HomeSessionPrInfo | null = null,
+  includeRelated = false,
 ): Promise<HomeSessionPrInfo | null> {
   const refs = await invoke<unknown>(deviceId, 'git-context:pr-refs:list', [sessionId]);
   const ref = latestPrRef(refs);
   if (!ref) return null;
   // 状态查询失败只是这一轮没拿到,不是「状态未知」:同一 PR 沿用上次已知状态
   // (已合并 / 已关闭不该退回中性图标);换了 PR 才没有可沿用的状态。
-  const carried = previous && prStatusKey(previous.ref) === prStatusKey(ref) ? previous.status : null;
+  const previousRows = previous ? [previous, ...(previous.additional ?? [])] : [];
+  const selected = includeRelated && Array.isArray(refs)
+    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null).sort((a, b) => b.lastSeenAt - a.lastSeenAt).slice(0, MAX_STATUS_QUERIES)
+    : [ref];
+  const build = (statuses: unknown): HomeSessionPrInfo => {
+    const rows = selected.map(item => {
+      const carried = previousRows.find(row => prStatusKey(row.ref) === prStatusKey(item))?.status ?? null;
+      const next = Array.isArray(statuses) ? (statuses as PrStatusResult[]).find(status => status && prStatusKey(status) === prStatusKey(item)) : null;
+      return { ref: item, status: includeRelated ? (next?.ok ? next : carried ?? next ?? null) : next ?? carried };
+    });
+    return { ...rows[0], ...(includeRelated ? { additional: rows.slice(1) } : {}) };
+  };
   let statuses: unknown;
   try {
     statuses = await invoke<unknown>(deviceId, 'git-context:pr-status', [{
       sessionId,
-      queries: [{ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }],
+      queries: selected.map(item => ({ owner: item.owner, repo: item.repo, prNumber: item.prNumber })),
     }]);
   } catch {
-    return { ref, status: carried };
+    return build(null);
   }
-  const status = Array.isArray(statuses)
-    ? (statuses as PrStatusResult[]).find((item) => item && prStatusKey(item) === prStatusKey(ref)) ?? null
-    : null;
-  return { ref, status: status ?? carried };
+  return build(statuses);
 }
 
 /** 与桌面信息槽一致:只显示最近一次出现的 PR(lastSeenAt 最大)。 */

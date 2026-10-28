@@ -29,4 +29,23 @@ describe('nativeProviderAdapterAliases', () => {
     expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain('pi-native-keyless');
     expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain("options?.headers?.['cf-aig-authorization']");
   });
+
+  it('enables cached transport only for host-authenticated Codex subscription providers', () => {
+    expect(nativeProviderAdapterAliases([
+      { id: 'openai-codex', name: 'ChatGPT', headers: { 'x-cindy-pi-provider-id': 'openai' }, models: [{ id: 'gpt', api: 'openai-codex-responses' }] },
+      { id: 'openai-codex-account', name: 'Other account', headers: { 'x-cindy-pi-provider-id': 'account' }, api: 'openai-codex-responses' },
+      { id: 'byom', name: 'BYOM', models: [{ id: 'gpt', api: 'openai-codex-responses' }] },
+      { id: 'xai', name: 'Grok', headers: { 'x-cindy-pi-provider-id': 'xai' }, models: [{ id: 'grok', api: 'openai-responses' }] },
+    ])).toEqual([
+      { id: 'openai-codex', name: 'ChatGPT', provider: 'openai-codex', cachedCodex: true },
+      { id: 'openai-codex-account', name: 'Other account', provider: 'openai-codex-account', cachedCodex: true },
+    ]);
+  });
+
+  it('retains per-model HTTP checks for hosted and shared-provider tasks', () => {
+    const providers = [{ id: 'openai-codex', name: 'ChatGPT', api: 'openai-codex-responses',
+      headers: { 'x-cindy-pi-provider-id': 'openai' }, models: [{ id: 'gpt' }] }];
+    expect(nativeProviderAdapterAliases(providers, undefined, true)[0]).not.toHaveProperty('cachedCodex');
+    expect(nativeProviderAdapterAliases(providers, ['gpt'])[0]).not.toHaveProperty('cachedCodex');
+  });
 });

@@ -215,6 +215,19 @@ beforeEach(() => {
   clearSessionPersistState(SESSION);
 });
 
+// #6884, unit: IM display projection must not change history. Existing text
+// persistence cases had no component fence; the DB boundary here is an in-memory spy.
+it('persists the original rich answer for Cindy history', async () => {
+  const source = '```cindy-ui\n' + JSON.stringify({
+    version: 1, seq: 1, op: 'create', id: 'answer', kind: 'text', props: { text: 'Readable answer' },
+  }) + '\n```';
+  onAssistantTextEvent(SESSION, { text: source, isFinal: true }, null);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+    role: 'assistant', content: source,
+  }), expect.anything());
+});
+
 describe('browser proxy credential persistence', () => {
   const proxyServer = 'http://user%40example.test:p%3Ass%2Fword%40%23@proxy.example.test:12323';
 

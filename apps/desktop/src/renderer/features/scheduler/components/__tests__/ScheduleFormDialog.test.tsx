@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 
 // PR #6832: exercise the real form's save/effect path. Pure form-logic tests cannot
 // catch the dialog wiring a remote choice to the local catalog. Minimal inputs:
@@ -101,13 +101,30 @@ beforeEach(() => {
   localStorage.clear();
 });
 afterEach(cleanup);
+afterEach(() => vi.unstubAllGlobals());
+
+// PR #6830, unit/jsdom: a bound remote task must not hide an explicit local
+// model-only selection from the real hook-generation IPC request.
+it('sends the explicit local Harness and location when generating a bound hook', async () => {
+  const generatePreRunHook = vi.fn(async () => ({ ok: false, reason: 'no_candidate', attempts: [] }));
+  vi.stubGlobal('electronAPI', { maker: { schedule: { generatePreRunHook } } });
+  state.references.set('bound', { id: 'bound', state: 'available', status: 'active', agentKind: 'claude-code', agentDeviceId: 'studio' });
+  mount(schedule({ targetSessionId: 'bound', modelAgentKind: 'codex', modelAgentDeviceId: '', providerId: '',
+    preRunHook: { command: 'node check.mjs' } }));
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiModify' }));
+  fireEvent.change(screen.getByPlaceholderText('scheduler.editor.preRunHook.aiPlaceholder'), { target: { value: 'check changes' } });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiGenerate' }));
+  await waitFor(() => expect(generatePreRunHook).toHaveBeenCalledWith(expect.objectContaining({
+    targetSessionId: 'bound', modelAgentDeviceId: '', agentKind: 'codex', model: 'shared', resolveBoundSessionRoute: true,
+  })));
+});
 
 it('saves a selected remote-only model against its own catalog', async () => {
   const form = mount(schedule());
   fireEvent.click(screen.getByText('select remote'));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-    agentDeviceId: 'studio', model: 'remote-only', providerId: 'source', effort: 'ultra', fastMode: true,
+    modelAgentDeviceId: 'studio', model: 'remote-only', providerId: 'source', effort: 'ultra', fastMode: true,
   }), true));
 });
 
@@ -144,4 +161,24 @@ it('preserves remote preferences while its catalog refresh is still loading', as
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     effort: 'ultra', fastMode: true,
   }), true));
+});
+
+// Merge review, unit/jsdom: providers refresh with a new array while a template
+// draft is open. The real initialization effect must not replay over user edits.
+it('keeps edited template fields across catalog refreshes and reapplies on reopening', () => {
+  const template: ScheduleTemplate = { id: 'initial', name: 'Template title', prompt: 'Template prompt',
+    description: '', category: 'code-quality', source: 'builtin', agentKind: 'codex', model: 'shared', providerId: 'source' };
+  const element = (open = true) => <ScheduleFormDialog open={open} initial={null} initialTemplate={template}
+    onOpenChange={() => {}} onSubmit={async () => {}} />;
+  const view = render(element());
+  fireEvent.change(screen.getByDisplayValue('Template title'), { target: { value: 'Edited title' } });
+  fireEvent.change(screen.getByDisplayValue('Template prompt'), { target: { value: 'Edited prompt' } });
+  // The useProviders fixture returns a fresh catalog array on each render.
+  view.rerender(element());
+  expect(screen.getByDisplayValue('Edited title')).toBeTruthy();
+  expect(screen.getByDisplayValue('Edited prompt')).toBeTruthy();
+  view.rerender(element(false));
+  view.rerender(element());
+  expect(screen.getByDisplayValue('Template title')).toBeTruthy();
+  expect(screen.getByDisplayValue('Template prompt')).toBeTruthy();
 });

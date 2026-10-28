@@ -1,3 +1,4 @@
+import { captureGuestRequestUsage } from './guest-provider-route-store.js';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
@@ -28,7 +29,7 @@ import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { zstdCompress, zstdDecompress } from 'node:zlib';
 
 import {
@@ -539,32 +540,6 @@ function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> |
   return { ...body, model: body.model.slice(0, -'[1m]'.length) };
 }
 
-async function rewriteOpenaiContextProfileRequest(
-  rawBody: Buffer,
-  parsedBody: unknown,
-  contentEncoding: string | undefined,
-): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
-  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
-  if (parsedProfile) {
-    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
-  }
-  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
-  try {
-    // Near-1M-token payloads are large enough to stall Electron main. Node's async
-    // zstd APIs move compression work to the libuv worker pool.
-    const decodedBody = await zstdDecompressAsync(rawBody);
-    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
-    const compressedProfile = withOpenaiContextProfileModel(decoded);
-    if (!compressedProfile) return null;
-    return {
-      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
-      contentEncoding,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
@@ -789,17 +764,49 @@ export function getPiNativeSubscriptionHandler(
       headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
       let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
+      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (isOpenAiSubscriptionProviderId(providerId)) {
-        const rewritten = await rewriteOpenaiContextProfileRequest(
-          rawBody,
-          parsedBody,
-          contentEncoding,
-        );
-        if (rewritten) {
-          outboundBody = rewritten.body;
-          contentEncoding = rewritten.contentEncoding;
+        // Retain the decoded object across both rewrites. Unchanged requests keep
+        // their original bytes; changed zstd requests stay compressed on the wire.
+        let forceStandard = !subscriptionRequestAllowsFast(sessionId, providerId);
+        const compressed = parsedBody === undefined && contentEncoding?.toLowerCase() === 'zstd';
+        let current: unknown = parsedBody;
+        let decodeError: unknown;
+        try {
+          if (current === undefined) {
+            const bytes = compressed ? await zstdDecompressAsync(rawBody) : rawBody;
+            current = JSON.parse(bytes.toString('utf8')) as unknown;
+          }
+        } catch (error) {
+          decodeError = error;
+        }
+        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
+        const profile = withOpenaiContextProfileModel(current);
+        current = profile ?? current;
+        let changed = profile !== null;
+        let standardApplied = false;
+        for (;;) {
+          throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+          // Restrictions may tighten while decoding or encoding. Once restricted,
+          // this request cannot regain priority while an asynchronous codec runs.
+          forceStandard ||= !subscriptionRequestAllowsFast(sessionId, providerId);
+          if (forceStandard && !standardApplied) {
+            if (decodeError) throw decodeError;
+            const standard = standardSpeedRequest(current);
+            changed ||= !isDeepStrictEqual(standard, current);
+            current = standard;
+            standardApplied = true;
+          }
+          if (!changed) break;
+          const bytes = Buffer.from(JSON.stringify(current));
+          // Keep large codecs off Electron main, as in the existing profile path.
+          outboundBody = compressed ? await zstdCompressAsync(bytes) : bytes;
+          if (!compressed) contentEncoding = undefined;
+          changed = false;
+          if (standardApplied || !compressed) break;
+          // A profile-only compression can yield to a newly restrictive policy.
         }
       } else if (isXaiSubscriptionProviderId(providerId)) {
         const parsed = isPlainRecord(parsedBody)
@@ -820,16 +827,7 @@ export function getPiNativeSubscriptionHandler(
           contentEncoding = undefined;
         }
       }
-      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
-
-      // Native Pi sends each tool-loop request here; recheck after auth/context awaits.
-      if (isOpenAiSubscriptionProviderId(providerId) && !subscriptionRequestAllowsFast(sessionId, providerId)) {
-        const bytes = contentEncoding?.toLowerCase() === 'zstd' ? await zstdDecompressAsync(outboundBody) : outboundBody;
-        const standard = standardSpeedRequest(JSON.parse(bytes.toString('utf8')));
-        outboundBody = Buffer.from(JSON.stringify(standard));
-        delete headers['content-encoding'];
-      }
 
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       const response = await deps.fetch(upstream.url, {
@@ -867,8 +865,8 @@ export function getPiNativeSubscriptionHandler(
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res, recordUsage
-        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', recordUsage) : undefined);
+      await pipeNativeResponse(response, res, recordUsage || recordGuestUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', value => { recordUsage?.(value); recordGuestUsage?.(value); }) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot

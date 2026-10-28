@@ -5,6 +5,10 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+// These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
+// journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
+vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
+vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -115,6 +119,15 @@ describe('Chat Server membership notices', () => {
       seq: '11', origin: 'user', createdAt: replyAt }];
     const result = await service.getGroup(roomId);
     expect(result.ok && result.group.lastReplyAt).toBe(Date.parse(replyAt));
+  });
+
+  it('uses the latest visible topic activity for the sidebar, not snapshot array order or a deleted message', async () => {
+    const topic = { ...joined(), id: '40000000-0000-4000-8000-000000000002', seq: '9007199254740993',
+      origin: 'user', threadRootId: joined().id, createdAt: '2026-10-09T00:00:00Z',
+      content: [{ type: 'text', text: 'Latest topic reply' }] } as unknown as ReturnType<typeof joined>;
+    messages = [joined(), { ...joined(), seq: '9007199254740994', deleted: true }, topic];
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.lastMessage).toMatchObject({ preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
   });
 
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {

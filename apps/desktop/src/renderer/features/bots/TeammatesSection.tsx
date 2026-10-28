@@ -43,12 +43,11 @@ import { CindyDeviceRow } from './CindyDeviceRow';
 import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
-import { useBotMarketEntryHint } from './botMarketEntryHint';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { BotGroupSidebarRow } from './BotGroupSidebarRow';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { refreshBotGroups, useBotGroupList } from './botGroupStore';
-import { BOT_GROUP_SETTINGS_PARAM } from './botGroupPresentation';
+import { BOT_GROUP_SETTINGS_PARAM, botGroupActivityAt } from './botGroupPresentation';
 import { chatErrorKey } from './chatError';
 import { subscribeBotReadState, getBotLastReadAtMap, isBotGroupUnread } from './botReadState';
 import { withoutBotHiddenLanes } from './botGroupLane';
@@ -125,7 +124,6 @@ export function TeammatesSection() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { dataOwnerId } = useAuth();
-  const marketHint = useBotMarketEntryHint(dataOwnerId);
   // The sidebar lives in the shell, outside the child route's params context.
   const remoteRoute = matchPath('/bots/remote/:deviceId/:botId', pathname);
   const localRoute = [
@@ -334,7 +332,7 @@ export function TeammatesSection() {
       pinned: 'pinnedAt' in bot && Boolean(bot.pinnedAt),
       activityAt: 'activityAt' in bot ? bot.activityAt : bot.lastMessageAt ?? bot.createdAt })),
     ...visibleGroups.map(group => ({ kind: 'group' as const, group, pinned: false,
-      activityAt: group.lastMessage?.createdAt ?? group.updatedAt })),
+      activityAt: botGroupActivityAt(group) })),
     ...(showCindy && currentCindy ? [{ kind: 'cindy' as const, pinned: cindyOptions.some(option => 'pinnedAt' in option.bot && Boolean(option.bot.pinnedAt)),
       activityAt: Math.max(...cindyOptions.map(option => 'activityAt' in option.bot ? option.bot.activityAt : option.bot.lastMessageAt ?? option.bot.createdAt)) }] : []),
   ].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.activityAt - a.activityAt);
@@ -503,10 +501,9 @@ export function TeammatesSection() {
             </Tip>
           </div>
         </div>
-        {/* 发现伙伴入口没看过时「+」常驻可见(带蓝点),其余动作仍只在悬停时浮现。 */}
-        <div className={cn('flex items-center gap-0.5', !marketHint.unseen && HEADER_HOVER_ACTION_CLASS)}>
+        <div className={cn('flex items-center gap-0.5', HEADER_HOVER_ACTION_CLASS)}>
           {roster.showHiddenSection && !collapsed ? (
-            <span className={cn('flex', marketHint.unseen && HEADER_HOVER_ACTION_CLASS)}>
+            <span className="flex">
               <button
                 type="button"
                 onClick={() => setShowHidden((value) => !value)}
@@ -517,7 +514,7 @@ export function TeammatesSection() {
               </button>
             </span>
           ) : null}
-          <BotCreateMenu variant="header" entryHint={marketHint} />
+          <BotCreateMenu variant="header" />
         </div>
       </div>
 

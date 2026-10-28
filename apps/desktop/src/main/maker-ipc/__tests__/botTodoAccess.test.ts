@@ -10,6 +10,7 @@ const env = vi.hoisted(() => ({
   pending: false,
   notify: vi.fn(),
   cancel: vi.fn(async () => true),
+  callerFailure: { ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED', message: 'Open the companion private chat; this call did not read or change records.' },
 }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `${env.owner}:${env.generation}`,
@@ -46,6 +47,7 @@ vi.mock('../botWorkbenchTools.js', () => ({
   resolveWorkbenchCaller: async (id: string) =>
     id === 'canonical-one'
       ? { ok: true, botId: 'bot-one' }
+      : id === 'group-one' ? env.callerFailure
       : { ok: false, errorCode: 'NOT_A_BOT_SESSION' },
 }));
 vi.mock('../../localDb/agentInputQueueSnapshots.js', () => ({
@@ -84,6 +86,16 @@ const patch = {
   },
 };
 describe('Todo public access', () => {
+  // #6965: todoForCaller discarded the real authority hint before the MCP callback could return it.
+  // Unit: denied group caller; preserve code + message and prove no Todo was registered.
+  it('preserves caller recovery hints before accessing or changing todos', async () => {
+    await expect(todoForCaller('group-one')).rejects.toMatchObject({
+      code: env.callerFailure.errorCode,
+      message: env.callerFailure.message,
+    });
+    expect(env.notify).not.toHaveBeenCalled();
+    expect((await (await todoForCaller('canonical-one')).list()).items).toEqual([]);
+  });
   it('enforces current active canonical teammate and owner fences', async () => {
     await expect(todoForCaller('ordinary-session')).rejects.toMatchObject({
       code: 'NOT_A_BOT_SESSION',

@@ -39,6 +39,8 @@ import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
 import { sourceFileReadError, withSourceFileHandleContext } from './sourceFileError';
+import { mimeOf, MIME_BY_EXT } from './mediaMime';
+export { mimeOf } from './mediaMime';
 
 const log = createLogger('device-link:mediaTransfer');
 
@@ -55,42 +57,10 @@ const PRESIGN_PUT_PATH = '/api/device-link/media/presign-put';
 const PRESIGN_GET_PATH = '/api/device-link/media/presign-get';
 const DELETE_PATH = '/api/device-link/media';
 
-/**
- * device-link 媒体关心的 ext→mime(覆盖图片/视频/音频/常见文档)。
- * 仅作 OSS 存储 Content-Type 的 best-effort 兜底;入方向权威 mime 来自被控端
- * cache-store resolver(readFile 返回),不依赖本表。未知 → octet-stream。
- */
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  mkv: 'video/x-matroska',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  m4a: 'audio/mp4',
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  json: 'application/json',
-};
-
 /** 从文件路径取裸扩展名(无点、小写),无扩展名 → 'bin'。 */
 function extOf(localPath: string): string {
   const e = path.extname(localPath).replace(/^\.+/, '').toLowerCase();
   return e || 'bin';
-}
-
-/** ext → mime,未知回落 application/octet-stream。 */
-export function mimeOf(ext: string): string {
-  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
 }
 
 interface PresignPutResponse {

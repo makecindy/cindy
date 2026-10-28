@@ -1,4 +1,4 @@
-import type { PluginTaskRoute } from './pluginTasks.js';
+import type { PluginTaskPermissionMode, PluginTaskRoute } from './pluginTasks.js';
 import type { PluginMessageAttachment } from './pluginAttachments.js';
 
 /** Requires agent.tasks + agent.targets and independent Host consent; does not read history. */
@@ -27,9 +27,16 @@ export type PluginTargetRequest =
       requestKey: string;
       target: PluginTargetRef;
       text: string;
+      context?: string;
       attachments?: PluginMessageAttachment[];
       title?: string;
+      /** Only project creation may opt into Host automatic naming. */
+      autoTitle?: boolean;
       route?: PluginTaskRoute;
+      /** Only project creation may select a permission within the user's plugin policy. */
+      permissionMode?: PluginTaskPermissionMode;
       delivery?: PluginTargetDelivery;
+      /** Reference an already confirmed Host tool invocation; never grants execution authority. */
+      invocationId?: string;
     }
   | { kind: 'cancel'; requestKey: string };

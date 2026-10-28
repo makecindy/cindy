@@ -1280,10 +1280,10 @@ describe('switching accounts between messages to balance quota', () => {
     return { ...h, usage };
   }
 
-  it('offers the account to use first and moves there on the next message only after the user confirms', async () => {
+  it('automatically offers native relocation and binds the move to the next user message', async () => {
     const h = paced();
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({
-      kind: 'ask',
+      kind: 'auto',
       memberKey: MINI.key,
       quota: { usedPercent: 20, resetAtMs: 87_400_000 },
     });
@@ -1357,7 +1357,7 @@ describe('switching accounts between messages to balance quota', () => {
     await h.service.rebalanceDecision('s1', MINI.key, true, 'message-a');
     expect(h.deps.writeAutoRebalance).toHaveBeenCalledWith('s1');
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
-    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'ask', memberKey: MINI.key });
+    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
   });
 
   // §6.2：A 确认后离开而未发送，B 取消或没有提议时不能继承 A 的换号；此前只按任务 id 暂存。

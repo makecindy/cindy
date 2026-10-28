@@ -72,6 +72,7 @@ import {
   type ItemGuardianApprovalReviewStartedNotification,
   type ItemGuardianApprovalReviewCompletedNotification,
   type GuardianWarningNotification,
+  type WarningNotification,
 } from './protocol.js';
 
 /**
@@ -103,6 +104,7 @@ const SUBSCRIBED_METHODS = [
   'item/autoApprovalReview/started',
   'item/autoApprovalReview/completed',
   'guardianWarning',
+  'warning',                         // thread 级提示 (如 WebSocket 回退到 HTTPS)
   'error',
 ] as const;
 
@@ -185,6 +187,7 @@ export interface ThreadEventHandlers {
   autoApprovalReviewStarted?: (params: ItemGuardianApprovalReviewStartedNotification) => void;
   autoApprovalReviewCompleted?: (params: ItemGuardianApprovalReviewCompletedNotification) => void;
   guardianWarning?: (params: GuardianWarningNotification) => void;
+  warning?: (params: WarningNotification['params']) => void;
   error?: (params: ErrorNotification['params']) => void;
   /**
    * Host 被永久替换（强制退役，如账号切换 / auth 失效）时发给每个订阅者的结构化
@@ -1257,6 +1260,8 @@ export class AppServerHost {
         }
         return;
       }
+      // Process-level warnings (config / feature notices) have no thread to route to.
+      if (method === 'warning') return;
       this.logger.warn('notification missing threadId', { method });
       return;
     }
@@ -1677,6 +1682,7 @@ export class AppServerHost {
       case 'item/autoApprovalReview/started': fn = handlers.autoApprovalReviewStarted as (p: never) => void; break;
       case 'item/autoApprovalReview/completed': fn = handlers.autoApprovalReviewCompleted as (p: never) => void; break;
       case 'guardianWarning': fn = handlers.guardianWarning as (p: never) => void; break;
+      case 'warning': fn = handlers.warning as (p: never) => void; break;
       case 'error': fn = handlers.error as (p: never) => void; break;
     }
     if (!fn) {

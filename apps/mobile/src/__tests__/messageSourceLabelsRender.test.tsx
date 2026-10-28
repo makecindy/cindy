@@ -11,6 +11,8 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+// Native playback is covered by NativeVideoPlayer/inlineVideoPlayer; retain this suite's message assertions.
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
@@ -25,11 +27,13 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style }: any) =>
     React.createElement(
       "div",
       {
         "data-testid": testID,
+        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
+        ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
         ...(onLongPress ? { onContextMenu: () => onLongPress() } : {}),
@@ -112,6 +116,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
   FileArchive: () => null,
@@ -161,7 +166,10 @@ vi.mock("react-native-svg", () => ({
   default: () => null,
   Circle: () => null,
 }));
-vi.mock("react-native-uitextview", async () => ({ UITextView: (await import('react-native')).Text }));
+vi.mock("react-native-uitextview", async () => {
+  const { Text } = await import('react-native');
+  return { UITextView: (props: any) => createElement('div', { 'data-native-text-view': true }, createElement(Text, props)) };
+});
 vi.mock("expo-image", () => ({ Image: () => null }));
 // The site-video preview imports this native surface; label tests keep the
 // production renderer but must not load React Native's Flow runtime in Node.
@@ -231,9 +239,6 @@ vi.mock("@/session/mermaidWebView", () => ({ MermaidDiagram: () => null }));
 vi.mock("@/session/mathWebView", () => ({ MathFormulaWebView: () => null }));
 vi.mock("@/session/mediaPlayerWebView", () => ({
   RemoteMediaPlayerWebView: () => null,
-}));
-vi.mock("@/session/MarkdownBlockContent", () => ({
-  MarkdownBlockContent: () => null,
 }));
 // 只把菜单项 id 投到 DOM,供删除入口可见性断言;不渲染真实底部面板。
 vi.mock("@/session/MessageActionSheet", () => ({
@@ -308,6 +313,28 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+it('diagnoses a historical execution error through the real message renderer', () => {
+  const raw = 'provider mismatch api_key=private-history-value';
+  const onDiagnoseError = vi.fn();
+  const { host, unmount } = mount([{
+    ...msg('historical-error', JSON.stringify({ message: raw }), null), role: 'error',
+  }], { onDiagnoseError });
+  try {
+    expect(host.querySelector('[data-testid="agentError.diagnose"]')).toBeNull();
+    const toggle = [...host.querySelectorAll<HTMLElement>('div')].find(
+      (node) => node.textContent === i18n.t('session.tail.showErrorDetails') && node.onclick,
+    );
+    expect(toggle).toBeTruthy();
+    act(() => toggle!.click());
+    expect(host.textContent).toContain('provider mismatch');
+    expect(host.textContent).not.toContain('private-history-value');
+    act(() => host.querySelector<HTMLElement>('[data-testid="agentError.diagnose"]')!.click());
+    expect(onDiagnoseError).toHaveBeenCalledWith(expect.objectContaining({ details: raw }));
+  } finally {
+    unmount();
+  }
 });
 
 describe("device source label", () => {
@@ -411,6 +438,30 @@ describe('completed message actions', () => {
     } finally { partial.unmount(); }
     const final = render([{ ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' }], props);
     expect(final).toContain('message.moreButton');
+  });
+
+  it('reserves the completed action row while an assistant reply streams', () => {
+    // A node-only assertion misses the regression where the empty row collapses.
+    // Compare production styles with the completed control's actual touch height.
+    const streaming = mount([
+      { ...msg('streaming', 'Working', { isStreaming: true }), role: 'assistant' },
+    ], { isSessionStreaming: true });
+    const completed = mount([
+      { ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' },
+    ]);
+    try {
+      const slot = streaming.host.querySelector('[data-testid="message.actionSlot"]');
+      const copy = completed.host.querySelector('[data-testid="message.copyButton"]');
+      expect(slot).not.toBeNull();
+      expect(copy).not.toBeNull();
+      const reservedHeight = Number(slot!.getAttribute('data-min-height'));
+      expect(reservedHeight).toBeGreaterThan(0);
+      expect(reservedHeight).toBe(Number(copy!.getAttribute('data-min-height')));
+      expect(streaming.host.querySelector('[data-testid="message.actionBar"]')).toBeNull();
+    } finally {
+      streaming.unmount();
+      completed.unmount();
+    }
   });
 
   it('places controls outside the bubble and forks the selected row exactly once', () => {
@@ -599,29 +650,63 @@ describe('private group reply source', () => {
   });
 });
 
-// VoiceOver / TalkBack cannot perform the bubble's long-press gesture, so the companion menu
-// falls back to the action row, whose Reply quotes the message like the menu does.
-describe("companion menu with a screen reader", () => {
-  it("keeps the action row and quotes on Reply while a screen reader is on", () => {
+// Regression: the companion menu disabled native text selection (2026-10-25 user decision).
+// Render the real MessageRenderer with one completed reply and system menus available;
+// verify native selectable text and a working Reply action coexist (unit tier).
+describe("companion text selection and actions", () => {
+  // The short-message case never enters the iOS long-message fallback. Removing
+  // the separate selection sheet must keep partial selection after expansion too.
+  it("keeps expanded long companion text in bounded native selection views", () => {
+    const text = "可以直接选择这段长消息中的文字。".repeat(180);
+    const h = mount([msg("long", text, null)], { companion: true });
+    try {
+      const toggle = h.host.querySelector('[data-testid="message.collapseToggle"]')!;
+      expect(toggle).not.toBeNull();
+      act(() => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const body = h.host.querySelector('[data-testid="message.markdownBody"]')!;
+      const selectable = [...body.querySelectorAll('[data-native-text-view] [data-testid="message.markdownTextRun"]')];
+      expect(selectable.length).toBeGreaterThan(1);
+      expect(selectable.map(node => node.textContent).join('')).toBe(text);
+      expect(selectable.every(node => node.getAttribute('data-selectable') === 'true')).toBe(true);
+      expect(selectable.every(node => node.textContent!.length <= 1800)).toBe(true);
+    } finally { h.unmount(); }
+  });
+
+  // PR #7094: bounded paragraph runs do not bound code, quotes or table cells.
+  // Expand one oversized block through the same production entry; those native
+  // roots must retain RN Text fallback instead of mounting a giant UITextView.
+  it.each(["code", "blockquote", "table"])("keeps the stable fallback for expanded long %s blocks", (kind) => {
+    const text = "长内容".repeat(700);
+    const markdown = kind === "code" ? `\`\`\`text\n${text}\n\`\`\``
+      : kind === "blockquote" ? `> ${text}` : `| header | second |\n| --- | --- |\n| ${text} | cell |`;
+    const h = mount([msg("long-block", markdown, null)], { companion: true });
+    try {
+      act(() => h.host.querySelector('[data-testid="message.collapseToggle"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const body = h.host.querySelector('[data-testid="message.markdownBody"]')!;
+      expect(body.textContent).toContain(text);
+      expect(body.querySelector('[data-native-text-view]')).toBeNull();
+      expect(body.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally { h.unmount(); }
+  });
+
+  it.each(["user", "assistant"] as const)("keeps %s text selectable alongside Reply when system menus are available", (role) => {
     a11y.systemMenu = true;
     const onQuote = vi.fn();
     const props = {
       companion: true,
-      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn(), onSelectText: vi.fn() },
+      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn() },
       onAddMessageToComposer: vi.fn(),
     };
-    const h = mount([{ ...msg("r1", "Done", { turnCompleted: true }), role: "assistant" }], props);
+    const h = mount([{ ...msg("r1", "Done", { turnCompleted: true }), role }], props);
     try {
-      expect(h.host.querySelector('[data-testid="companion.messageMenu"]')).not.toBeNull();
-      expect(h.host.querySelector('[data-testid="companion.messageActions"]')).toBeNull();
-      act(() => a11y.screenReader?.(true));
-      expect(h.host.querySelector('[data-testid="companion.messageMenu"]')).toBeNull();
+      const body = h.host.querySelector(`[data-testid="message.${role === "user" ? "user" : "agent"}Bubble"]`)!;
+      expect(body.querySelector('[data-selectable="true"]')?.textContent).toBe("Done");
+      expect(h.host.querySelector('[data-testid="companion.messageActions"]')).not.toBeNull();
       const reply = h.host.querySelector('[data-testid="companion.messageReply"]')!;
       act(() => reply.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-      expect(onQuote).toHaveBeenCalledExactlyOnceWith({ clientId: "r1", role: "assistant", excerpt: "Done" });
+      expect(onQuote).toHaveBeenCalledExactlyOnceWith({ clientId: "r1", role, excerpt: "Done" });
       expect(props.onAddMessageToComposer).not.toHaveBeenCalled();
     } finally {
-      act(() => a11y.screenReader?.(false));
       a11y.systemMenu = false;
       h.unmount();
     }
@@ -632,7 +717,7 @@ describe("companion menu with a screen reader", () => {
     const onAddMessageToComposer = vi.fn();
     const h = mount([{ ...msg("e1", "Boom", { turnCompleted: true }), role: "error" }], {
       companion: true,
-      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn(), onSelectText: vi.fn() },
+      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn() },
       onAddMessageToComposer,
     });
     try {

@@ -24,8 +24,12 @@ import {
   updateScriptForKind,
 } from './ensure-agent-binaries.mjs';
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
+import { buildTrackpad } from '../apps/desktop/native/trackpad/build.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+if (process.platform === 'darwin') {
+  buildTrackpad(path.join(ROOT, 'apps/desktop/resources/tools/trackpad/cindy-trackpad.node'));
+}
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
 

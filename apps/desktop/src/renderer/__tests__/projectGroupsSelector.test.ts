@@ -283,6 +283,28 @@ describe('project grouping projection', () => {
     expect(select(rows, { remoteProjectAliases, projectAliasMembers: rows }).projects[0].displayName).toBe('Local alias');
   });
 
+  // #7469, unit: equal-sized alias arrays can change identity even when the
+  // displayed rows do not. Existing coverage only added/removed members.
+  it.each<Partial<Session>>([
+    { remoteHostId: null },
+    { workingDir: '/elsewhere' },
+    { deviceLinkDeviceId: 'another-device' },
+    { workspaceKind: 'dialogue' },
+    { status: 'deleted' },
+    { orcaRole: 'worker' },
+  ])('refreshes alias eligibility for an out-of-filter member change %j', (patch) => {
+    const local = session('same-id', { deviceLinkDeviceId: 'device', workingDir: '/repo' });
+    const ssh = session('ssh', { deviceLinkDeviceId: 'device', workingDir: '/repo', remoteHostId: 'ssh-a' });
+    const rows = [local];
+    const remoteProjectAliases = new Map([['device', { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Host alias' }] }]]);
+    const select = createProjectGroupsSelector();
+    expect(select(rows, { remoteProjectAliases, projectAliasMembers: [local, ssh] }).projects[0].displayName).toBe('repo');
+    const options = { remoteProjectAliases, projectAliasMembers: [local, { ...ssh, ...patch }] };
+    const result = select(rows, options);
+    expect(result).toEqual(groupSessions(rows, options));
+    expect(result.projects[0].displayName).toBe('Host alias');
+  });
+
   it('reuses equal persistent catalogues but refreshes changed project metadata', () => {
     const rows = [session('a')];
     const projects = [

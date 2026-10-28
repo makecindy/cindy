@@ -413,6 +413,17 @@ describe("cindy_scheduler cross-device routing", () => {
     expect(s.scheduler.pause).toHaveBeenCalledWith("l1", undefined);
   });
 
+  // PR #6830, unit: the real MCP entry must retain explicit clearing across JSON;
+  // replacing null with undefined here would silently keep the old remote route.
+  it("forwards model selection clearing as JSON null without changing omitted fields", async () => {
+    const s = setup();
+    const patch = { modelAgentDeviceId: null, modelAgentKind: null, model: null, providerId: null, effort: null, fastMode: false };
+    const result = parse(await s.registry.call("schedule_update", { id: "r1", device: "mbp", ...patch }));
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(JSON.stringify(s.invoke.mock.calls[0]))).toEqual(["mbp", "update", ["r1", patch]]);
+    expect(s.scheduler.updateFromCurrent).not.toHaveBeenCalled();
+  });
+
   it("rejects writes that cannot be expressed on another computer instead of guessing", async () => {
     const s = setup();
     for (const args of [{ id: "r1", device: "all" }]) {
@@ -425,7 +436,7 @@ describe("cindy_scheduler cross-device routing", () => {
     }
     for (const patch of [
       { bindToCurrentSession: true },
-      { model: null },
+      { workingDir: null },
       { cronExpr: "not a cron" },
       // 运行位置 id 相对本机的设备目录,对那台电脑没有意义。
       { agentDeviceId: "studio", model: "claude-opus-5-5" },

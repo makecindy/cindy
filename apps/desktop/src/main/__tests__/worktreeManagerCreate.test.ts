@@ -76,6 +76,9 @@ describe('createWorktree naming authority', () => {
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
         return { stdout: 'main\n', stderr: '' };
       }
+      if (args[0] === 'rev-parse' && args[1] === '--git-path') {
+        return { stdout: '.git/info/exclude\n', stderr: '' };
+      }
       if (args[0] === 'rev-parse' && (args[1] === '--git-dir' || args[1] === '--git-common-dir')) {
         return { stdout: '.git\n', stderr: '' };
       }
@@ -104,6 +107,31 @@ describe('createWorktree naming authority', () => {
       sourceBranch: 'main',
     });
   }
+
+  // #7259: creation must keep managed checkouts out of the parent's untracked scan.
+  // Existing naming tests do not inspect the local exclude file. Two creates with an
+  // existing rule and no final newline cover preservation and idempotence (unit tier).
+  // Windows 2026-10-26: this file alone took 3.05s wall clock (Vitest 1.43s).
+  it('appends the managed directory exclusion once without changing existing rules or .gitignore', async () => {
+    const exclude = path.join(baseRepo, '.git', 'info', 'exclude');
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    fs.writeFileSync(exclude, '# user rules\r\nlocal-cache/');
+    fs.writeFileSync(path.join(baseRepo, '.gitignore'), 'build/\n');
+
+    await expect(create('first')).resolves.toMatchObject({ ok: true });
+    await expect(create('second', 'session-2')).resolves.toMatchObject({ ok: true });
+
+    expect(fs.readFileSync(exclude, 'utf8')).toBe('# user rules\r\nlocal-cache/\r\n/.cindy-worktrees/\r\n');
+    expect(fs.readFileSync(path.join(baseRepo, '.gitignore'), 'utf8')).toBe('build/\n');
+  });
+
+  // A read/write failure in this optimization must not prevent starting a task.
+  it('still creates the worktree when the local exclude cannot be updated', async () => {
+    const exclude = path.join(baseRepo, '.git', 'info', 'exclude');
+    fs.mkdirSync(exclude, { recursive: true });
+    await expect(create('exclude-unavailable')).resolves.toMatchObject({ ok: true });
+    expect(fs.statSync(exclude).isDirectory()).toBe(true);
+  });
 
   it('records the background checkout child and holds its lease until completion', async () => {
     const previousGit = gitExecMock.getMockImplementation()!;

@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BaseIM } from '../BaseIM.js';
+import { ConnectionBackoff, ConnectionRetry } from '../connectionRetry.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
   IMAttachment,
@@ -116,8 +117,6 @@ const GROUP_MEDIA_POOL_TTL_MS = 24 * 60 * 60 * 1_000;
  * 用户早已不在等, 逐条回答只会刷屏并派出过期任务。
  */
 const STALE_MESSAGE_MS = 60 * 60 * 1_000;
-const POLL_RETRY_BASE_MS = 1_000;
-const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
@@ -395,6 +394,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    */
   private lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
+  private readonly connectionRetry = new ConnectionRetry();
   private disposing = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
@@ -684,7 +684,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
-      const connected = await this.connect(token);
+      const connected = await this.connect(token, false);
       if (!connected) {
         const failedStatus = this.status;
         const restored = await this.rollbackConfigOrFailClosed(
@@ -1295,7 +1295,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── connect / polling ──────────────────────────────────────────────────────
 
-  private async connect(token: string): Promise<boolean> {
+  private async connect(token: string, autoRetry = true): Promise<boolean> {
     const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
     // getMe 是网络请求, 这段窗口里另一台设备可能远程下线、用户可能本地下线或
     // 登出。这些路径都只递增 configVersion + 停当前 poll —— 尚未创建 poll 的
@@ -1310,6 +1310,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch (err) {
       if (this.configVersion !== generation || this.disposing) return false;
       this.setStatus(mapConnectErrorToStatus(err));
+      const retryable = !(err instanceof TelegramApiError)
+        || err.errorCode === 429 || err.errorCode >= 500;
+      if (autoRetry && retryable) {
+        this.connectionRetry.schedule(() => {
+          if (this.configVersion !== generation || this.disposing) return;
+          if (this.offlineFlagState() !== 'absent') return;
+          void this.connect(token);
+        }, { minimumDelayMs: err instanceof TelegramApiError ? (err.retryAfterSec ?? 0) * 1_000 : 0 });
+      }
       return false;
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
@@ -1329,6 +1338,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.log.info('connect result discarded: offline flag is set or unreadable after getMe');
       return false;
     }
+    this.connectionRetry.reset();
     this.api = api;
     this.botId = me.id;
     this.botUsername = me.username ?? '';
@@ -1395,7 +1405,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     let offset = this.readPersistedOffset();
     this.lastSeenOffset = offset;
-    let retryDelay = POLL_RETRY_BASE_MS;
+    const backoff = new ConnectionBackoff({ jitterMinRatio: 1 });
     while (!abort.signal.aborted && this.configVersion === generation) {
       try {
         const updates = await api.call<TgUpdate[]>(
@@ -1407,7 +1417,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           },
           abort.signal,
         );
-        retryDelay = POLL_RETRY_BASE_MS;
+        backoff.reset();
         if (this.status.kind !== 'connected') {
           this.setStatus({ kind: 'connected', appId: String(this.botId) });
         }
@@ -1436,13 +1446,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
         // 网络抖动/超时: connecting + 指数退避重试。
         if (this.status.kind === 'connected') this.setStatus({ kind: 'connecting' });
-        await sleep(retryDelay, abort.signal);
-        retryDelay = Math.min(retryDelay * 2, POLL_RETRY_MAX_MS);
+        await sleep(backoff.nextDelay(err instanceof TelegramApiError
+          ? (err.retryAfterSec ?? 0) * 1_000 : 0), abort.signal);
       }
     }
   }
 
   private async stopPolling(): Promise<void> {
+    this.connectionRetry.reset();
     this.clearPendingAlbums();
     this.pollAbort?.abort();
     this.pollAbort = null;

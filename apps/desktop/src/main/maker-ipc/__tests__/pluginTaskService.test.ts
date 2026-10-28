@@ -80,8 +80,8 @@ it.each([false,true])('production Auto context checks uninstall after its projec
     const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
       getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,fastModeToStorage,
       createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
-      pluginTaskServiceForCurrentOwner:()=>f.service,readPluginTaskConfig:()=>({permissionMode:'auto'}),
-      readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
+      pluginTaskServiceForCurrentOwner:()=>f.service,getPluginTaskDefaults:()=>({permissionMode:'auto'}),
+      readPluginTaskPlanReceipt,isPluginTaskPermissionAllowed,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
     const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
     const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
     const block=source.slice(start,source.indexOf('\n  }));',start)+7);
@@ -204,6 +204,164 @@ function fixture() {
     },
   };
 }
+
+// Exercise the production Main creator with an in-memory persistence boundary;
+// service-only mocks cannot catch a permission choice being dropped by register.
+const permissionCreatorSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+const permissionCreatorStart = permissionCreatorSource.indexOf('      createSession: async (pluginId, taskId, title, route,');
+const permissionCreatorCode = ts.transpileModule('return (' + permissionCreatorSource.slice(
+  permissionCreatorStart + '      createSession: '.length,
+  permissionCreatorSource.indexOf('\n      },', permissionCreatorStart) + 8,
+) + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+function useProductionPermissionCreator(f: ReturnType<typeof fixture>, configured: { permissionMode: string }, useDefaults = true) {
+  const snapshot = {};
+  const persist = vi.fn(async (options: { sessionId: string; title: string; permissionMode: string;
+    onPersistenceStarted(): void; shouldContinue(): boolean }) => {
+    if (!options.shouldContinue()) throw new PluginTaskError('PERMISSION_DENIED', 'Configuration changed');
+    options.onPersistenceStarted();
+    f.tasks.set(options.sessionId, { taskId: options.sessionId, title: options.title, status: 'active',
+      resolvedConfig: f.route, revision: 1, permissionMode: options.permissionMode });
+  });
+  const deps = { assertPlugin: () => {}, getPluginTaskDefaults: () => useDefaults ? ({ ...configured }) : undefined,
+    resolveRoute: (...args: Parameters<typeof f.deps.resolveRoute>) => f.deps.resolveRoute(...args),
+    PluginTaskError, isPluginTaskPermissionAllowed, createPluginTaskSession: persist,
+    clampPluginTaskPermissionMode: (mode: unknown) => mode ?? 'ask', snapshot,
+    getCurrentDbClientSnapshot: () => snapshot, isPluginTaskAuthorized: () => true,
+  };
+  f.deps.readPermissionMode = () => useDefaults ? configured.permissionMode : undefined;
+  f.deps.createSession = new Function(...Object.keys(deps), permissionCreatorCode)(...Object.values(deps));
+  return persist;
+}
+
+// unit: new per-create permissions must reach ordinary Session persistence while
+// remaining within the user policy. Previous cases only exercised the default.
+it('persists the chosen creation permission without changing defaults or duplicate requests', async () => {
+  const f = fixture(), configured = { permissionMode: 'bypassPermissions' };
+  const persist = useProductionPermissionCreator(f, configured);
+  for (const permissionMode of ['ask', 'auto', 'bypassPermissions'] as const) {
+    const request = { requestKey: permissionMode, title: 'Work', permissionMode };
+    const task = await f.service.create('p', request);
+    expect(task.permissionMode).toBe(permissionMode);
+    expect(await f.service.create('p', request)).toEqual(task);
+    await expect(f.service.create('p', { ...request, permissionMode: permissionMode === 'ask' ? 'auto' : 'ask' }))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  }
+  expect((await f.create()).permissionMode).toBe('bypassPermissions');
+  expect(await f.create()).toMatchObject({ permissionMode: 'bypassPermissions' });
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(configured).toEqual({ permissionMode: 'bypassPermissions' });
+});
+
+// unit: a hidden card cannot cap explicit creation, sending or queued acceptance.
+// Enabled-card cases below retain their original ceiling and revocation behavior.
+it.each(['auto', 'bypassPermissions'] as const)('uses the hidden plugin configuration through %s creation and queued acceptance', async permissionMode => {
+  const f = fixture(), configured = { permissionMode: 'ask' };
+  useProductionPermissionCreator(f, configured, false);
+  const task = await f.service.create('p', { requestKey: 'independent', title: 'Work', permissionMode });
+  configured.permissionMode = 'plan';
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'input', text: 'Continue' });
+  await f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution);
+  f.deps.inspect = async () => ({ execution: f.execution, pending: [] });
+  expect((await f.service.getRun('p', run.runId)).status).toBe('running');
+  expect((await f.service.get('p', task.taskId)).permissionMode).toBe(permissionMode);
+  expect(configured.permissionMode).toBe('plan');
+});
+
+// unit: full access must work through ordinary send/accept, but a revoked user
+// ceiling must block the queued input before execution. No full-access path existed before.
+it('delivers an authorized full-access task and rechecks the ceiling before acceptance', async () => {
+  const f = fixture(), configured = { permissionMode: 'bypassPermissions' };
+  useProductionPermissionCreator(f, configured);
+  const task = await f.service.create('p', { requestKey: 'full', title: 'Work', permissionMode: 'bypassPermissions' });
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision,
+    requestKey: 'send', text: 'Continue' });
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  configured.permissionMode = 'auto';
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  await expect(f.service.create('p', { requestKey: 'denied', title: 'Work', permissionMode: 'bypassPermissions' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+it('rejects an unauthorized creation permission before reserving a task', async () => {
+  const f = fixture(), configured = { permissionMode: 'ask' };
+  const persist = useProductionPermissionCreator(f, configured);
+  const request = { requestKey: 'new', title: 'Work', permissionMode: 'auto' as const };
+  await expect(f.service.create('p', request)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(persist).not.toHaveBeenCalled();
+  expect(f.rows.size).toBe(0);
+  configured.permissionMode = 'auto';
+  expect((await f.service.create('p', request)).permissionMode).toBe('auto');
+});
+
+it.each(['route', 'persistence'] as const)('rechecks creation permission after %s preparation', async phase => {
+  const f = fixture(), configured = { permissionMode: 'auto' };
+  const persist = useProductionPermissionCreator(f, configured);
+  if (phase === 'route') f.deps.resolveRoute = async () => { configured.permissionMode = 'ask'; return f.route; };
+  else persist.mockImplementationOnce(async options => {
+    configured.permissionMode = 'ask';
+    options.onPersistenceStarted();
+  });
+  await expect(f.service.create('p', { requestKey: 'new', title: 'Work', permissionMode: 'auto' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.tasks.size).toBe(0);
+  expect(f.rows.size).toBe(0);
+});
+
+// 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
+// unit: new-title intent lives in the existing create receipt; context must reach
+// dispatch and participate in deduplication rather than becoming visible prose.
+it('persists automatic naming intent and dispatches separate context without duplicating title requests', async () => {
+  const f = fixture();
+  const schedule = vi.fn();
+  f.deps.scheduleAutoTitle = schedule;
+  const task = await f.service.create('p', { requestKey: 'new', autoTitle: true });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ autoTitle: true });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here', context: 'Window contents' };
+  await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe('Window contents');
+  expect(schedule).toHaveBeenCalledOnce();
+  await expect(f.service.send('p', { ...request, context: 'Another window' }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+// unit: a failed naming-metadata read must not leave an unsent receipt that
+// suppresses the retry. Inject the store failure after host bookkeeping starts.
+it('retries after a failed naming-metadata read without leaving an unsent receipt', async () => {
+  const f = fixture(), task = await f.create();
+  const get = f.deps.store.get;
+  let failRead = false;
+  f.deps.prepareInvocation = () => { failRead = true; return 'invocation'; };
+  f.deps.store.get = async id => {
+    if (failRead) { failRead = false; throw new Error('Store read failed'); }
+    return get(id);
+  };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here' };
+  await expect(f.service.send('p', request)).rejects.toThrow('Store read failed');
+  expect([...f.rows.values()].filter(row => row.operation === 'send')).toHaveLength(0);
+  f.deps.prepareInvocation = () => 'invocation';
+  await f.service.send('p', request);
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+});
+
+// unit；现有任务测试检查任务状态，未检查宿主统计观察者收到哪些事实。
+it('records one accepted input after create and does not count receipt replay or rejected dispatch', async () => {
+  const f = fixture();
+  const accepted: string[] = [];
+  f.deps.prepareInvocation = (_pluginId, id) => id;
+  f.deps.acceptInvocation = (_pluginId, id) => { accepted.push(id); };
+  const task = await f.create();
+  expect(accepted).toEqual([]);
+  const request = { taskId: task.taskId, requestKey: 'first-input', expectedRevision: task.revision, text: 'hello' };
+  const run = await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(accepted).toEqual([run.runId]);
+  vi.mocked(f.deps.dispatch).mockResolvedValueOnce({ ok: false });
+  await f.service.send('p', { ...request, requestKey: 'rejected-input' });
+  expect(accepted).toEqual([run.runId]);
+});
 
 // Targets create in a selected project through the same service, not directly through
 // session persistence. Without its create receipt, helper tools and uninstall lose ownership.
@@ -1004,9 +1162,9 @@ describe('current plugin dispatch authority', () => {
     await expect(f.service.get('p',run.taskId)).resolves.toMatchObject({planModeEnabled:true});
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
   });
-  it.each(['plan', 'ask', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
-    const modes = ['plan', 'ask', 'acceptEdits', 'auto'];
-    for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
+  it.each(['plan', 'ask', 'acceptEdits', 'auto', 'bypassPermissions'])('allows only authority within %s configuration', configured => {
+    const modes = ['plan', 'ask', 'acceptEdits', 'auto', 'bypassPermissions'];
+    for (const mode of [...modes, 'unknown', undefined]) {
       expect(isPluginTaskPermissionAllowed(mode, configured)).toBe(modes.includes(mode!) && modes.indexOf(mode!) <= modes.indexOf(configured));
     }
     expect(isPluginTaskPermissionAllowed('auto', undefined)).toBe(false);
@@ -1277,7 +1435,7 @@ it.each([
   const preference = source.slice(preferenceStart, source.indexOf('      readPermissionMode:', preferenceStart));
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
-  const deps = { readPluginTaskConfig: () => config, getSelectedNewMakerRoute: () => selected,
+  const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
     activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {

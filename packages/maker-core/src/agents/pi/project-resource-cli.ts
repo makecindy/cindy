@@ -223,9 +223,26 @@ export function assertPiSpawnArgvFitsPlatform(
   platform: NodeJS.Platform = process.platform,
 ): void {
   const budget = piSpawnArgvBudget(platform);
-  if (budget === null || estimateSpawnArgvLength(args, platform) <= budget) return;
+  if (budget === null) return;
+  const length = estimateSpawnArgvLength(args, platform);
+  if (length <= budget) return;
+
+  let promptLength = 0;
+  let resourceLength = 0;
+  for (let index = 0; index < args.length - 1; index += 1) {
+    const flag = args[index];
+    if (flag === '--append-system-prompt' || flag === '--system-prompt') {
+      promptLength += estimateSpawnArgvLength(args.slice(index, index + 2), platform);
+      index += 1;
+    } else if (flag === '--skill' || flag === '--prompt-template' || flag === '--extension') {
+      resourceLength += estimateSpawnArgvLength(args.slice(index, index + 2), platform);
+      index += 1;
+    }
+  }
+  const unit = platform === 'win32' ? 'UTF-16 code units' : 'UTF-8 bytes';
   throw new Error(
-    'This project has too many Pi skills, prompts, or extensions to start a task. Remove some and try again.',
+    `Pi launch command line exceeds the ${platform} budget: estimated ${length} ${unit}, limit ${budget} `
+    + `(prompt arguments: ${promptLength}; resource arguments: ${resourceLength}; other arguments: ${length - promptLength - resourceLength}).`,
   );
 }
 

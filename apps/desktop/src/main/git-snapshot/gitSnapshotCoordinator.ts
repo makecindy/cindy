@@ -6,6 +6,7 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
+import { OperationBudget, operationCheckpoint, operationWait } from '../utils/operationBudget';
 
 import { createAfterEditLabel } from './gitSnapshotLabeler';
 import { enqueueGitRepoWrite } from './gitRepoWriteQueue';
@@ -35,6 +36,10 @@ export interface GitSnapshotSessionContext {
 }
 
 export interface GitSnapshotCoordinatorDeps {
+  /** Must persist intent before Git work or dispatch; failure is NOT best effort. */
+  recordTurnAttempt?: (sessionId: string) => Promise<TurnStartMetadata>;
+  /** One budget for queueing, detection, filtering, staging and publication. */
+  snapshotTimeoutMs?: number;
   /** Global auto-snapshot switch; turn-start decisions are reused at matching turn end. */
   readAutoSnapshotEnabled: () => boolean;
   /** Whether an empty local project may be initialized as Git during resolution. */
@@ -85,6 +90,7 @@ interface TurnStartState {
 }
 
 interface TurnStartRecord extends Partial<TurnStartState> {
+  operation: OperationBudget;
   autoSnapshotEnabled: boolean;
   autoInitProjectGit: boolean;
   promise: Promise<void>;
@@ -101,16 +107,20 @@ interface TurnStartRecord extends Partial<TurnStartState> {
   overlappedWithPeer?: boolean;
 }
 
-interface TurnStartMetadata {
+export interface TurnStartMetadata {
   anchor?: string;
   userPrompt?: string;
+  attemptId?: string;
 }
+
+const TURN_SNAPSHOT_BUDGET_MS = 8_000;
 
 export class GitSnapshotCoordinator {
   private readonly sessionCache = new Map<string, ResolvedSnapshotSession>();
   private readonly turnStartQueues = new Map<string, TurnStartRecord[]>();
   /** In-flight turn records per repo root, for same-repo concurrency checks. */
   private readonly activeTurnRecordsByRepo = new Map<string, Set<TurnStartRecord>>();
+  private readonly operations = new Map<string, Set<OperationBudget>>();
 
   constructor(private readonly deps: GitSnapshotCoordinatorDeps) {}
 
@@ -118,17 +128,35 @@ export class GitSnapshotCoordinator {
    * Turn-start hook. Snapshots the current worktree state onto the session's
    * shadow savepoint chain as the baseline for this turn's file rewind.
    */
-  async onTurnStart(sessionId: string): Promise<void> {
+  async onTurnStart(sessionId: string, signal?: AbortSignal): Promise<void> {
     const autoSnapshotEnabled = this.deps.readAutoSnapshotEnabled();
     const record: TurnStartRecord = {
+      operation: new OperationBudget(this.deps.snapshotTimeoutMs ?? TURN_SNAPSHOT_BUDGET_MS),
       autoSnapshotEnabled,
       autoInitProjectGit: this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled,
       promise: Promise.resolve(),
       ownerSessionId: sessionId,
     };
     this.pushTurnStartRecord(sessionId, record);
-    record.promise = this.captureTurnStart(sessionId, record);
-    await record.promise;
+    let intentRecorded = !this.deps.recordTurnAttempt;
+    record.promise = this.runOperation(sessionId, record.operation, async () => {
+      if (this.deps.recordTurnAttempt) {
+        record.metadata = await operationWait(this.deps.recordTurnAttempt(sessionId));
+        intentRecorded = true;
+      }
+      await this.captureTurnStart(sessionId, record);
+    }, signal, () => !intentRecorded);
+    try {
+      await record.promise;
+    } catch (error) {
+      // The send never became safe to dispatch. Remove this exact reservation,
+      // not a peer's earlier baseline from the FIFO.
+      const queue = this.turnStartQueues.get(sessionId);
+      const index = queue?.indexOf(record) ?? -1;
+      if (index >= 0) queue!.splice(index, 1);
+      if (queue?.length === 0) this.turnStartQueues.delete(sessionId);
+      throw error;
+    }
   }
 
   hasPendingTurnStart(sessionId: string): boolean {
@@ -150,21 +178,24 @@ export class GitSnapshotCoordinator {
         return;
       }
 
+      operationCheckpoint();
       record.repoRoot = resolved.repoRoot;
       this.registerActiveTurn(resolved.repoRoot, record);
-      const metadataPromise = this.resolveTurnStartMetadata(sessionId);
+      const metadataPromise = record.metadata ? Promise.resolve(record.metadata) : this.resolveTurnStartMetadata(sessionId);
+      // A metadata failure must be observed even when queue waiting expires.
+      void metadataPromise.catch(() => {});
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
-        const metadata = await metadataPromise;
+        const metadata = await operationWait(metadataPromise);
         record.metadata = metadata;
-        const turnStart = await this.createTurnStartSavepoint(
+        const turnStart = await operationWait(this.createTurnStartSavepoint(
           sessionId,
           resolved.repoRoot,
           metadata,
-        );
+        ));
         record.turnStartCommit = turnStart.commit;
         record.turnStartSkippedFingerprints = turnStart.skippedFingerprints;
       });
-      record.metadata ??= await metadataPromise;
+      record.metadata ??= await operationWait(metadataPromise);
     } catch (err) {
       this.deps.logger.warn('[git-snapshot] onTurnStart failed (swallowed)', {
         sessionId,
@@ -179,6 +210,11 @@ export class GitSnapshotCoordinator {
    */
   async onTurnEnd(sessionId: string): Promise<void> {
     const turnStart = this.shiftTurnStartRecord(sessionId);
+    await this.runOperation(sessionId, new OperationBudget(this.deps.snapshotTimeoutMs ?? TURN_SNAPSHOT_BUDGET_MS),
+      () => this.captureTurnEnd(sessionId, turnStart));
+  }
+
+  private async captureTurnEnd(sessionId: string, turnStart: TurnStartRecord | undefined): Promise<void> {
     try {
       const autoSnapshotEnabled = turnStart?.autoSnapshotEnabled ?? this.deps.readAutoSnapshotEnabled();
       const autoInitProjectGit = turnStart
@@ -186,7 +222,7 @@ export class GitSnapshotCoordinator {
         : this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled;
       if (!autoSnapshotEnabled) return;
       if (turnStart && !turnStart.repoRoot) {
-        await turnStart.promise;
+        await operationWait(turnStart.promise);
       }
 
       const resolved = await this.resolveSession(
@@ -197,7 +233,7 @@ export class GitSnapshotCoordinator {
       if (!resolved) return;
 
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
-        await turnStart?.promise;
+        if (turnStart) await operationWait(turnStart.promise);
         await this.snapshotAfterEdit(sessionId, resolved, turnStart);
       });
     } catch (err) {
@@ -210,11 +246,13 @@ export class GitSnapshotCoordinator {
 
   /** Consumes one turn-start baseline when a turn ends without a successful done event. */
   onTurnAbort(sessionId: string): void {
-    this.shiftTurnStartRecord(sessionId);
+    this.shiftTurnStartRecord(sessionId)?.operation.cancel();
+    for (const operation of this.operations.get(sessionId) ?? []) operation.cancel();
   }
 
   /** Clears per-session repo detection when the session is closed. */
   onSessionClosed(sessionId: string): void {
+    for (const operation of this.operations.get(sessionId) ?? []) operation.cancel();
     this.sessionCache.delete(sessionId);
     // 未被 turn-end/abort 消费的 record(运行中关会话)必须逐条注销同仓并发
     // 记账,否则悬空 record 会让同仓其它会话的后续每一轮都被误判为并发。
@@ -237,18 +275,19 @@ export class GitSnapshotCoordinator {
     const cached = this.sessionCache.get(sessionId);
     if (cached) return cached;
 
-    const ctx = await this.deps.getSessionContext(sessionId);
+    operationCheckpoint();
+    const ctx = await operationWait(this.deps.getSessionContext(sessionId));
     if (!ctx?.workingDir) return null;
 
-    let repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);
+    let repoRoot = await operationWait(this.deps.detectRepoRoot(ctx.workingDir));
     if (!repoRoot && autoInitProjectGit && this.deps.initializeProjectGit) {
-      const bootstrap = await this.deps.initializeProjectGit?.(sessionId, ctx, {
+      const bootstrap = await operationWait(this.deps.initializeProjectGit(sessionId, ctx, {
         autoSnapshotEnabled,
         autoInitProjectGit,
-      });
+      }));
       repoRoot = bootstrap?.repoRoot ?? null;
       if (!repoRoot) {
-        repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);
+        repoRoot = await operationWait(this.deps.detectRepoRoot(ctx.workingDir));
       }
     }
     if (!repoRoot) return null;
@@ -258,6 +297,7 @@ export class GitSnapshotCoordinator {
       agentKind: ctx.agentKind,
       savepointRewind: ctx.agentKind === 'codex' || ctx.agentKind === 'pi' || ctx.savepointRewind === true,
     };
+    operationCheckpoint();
     this.sessionCache.set(sessionId, resolved);
     return resolved;
   }
@@ -316,7 +356,7 @@ export class GitSnapshotCoordinator {
     // status-based check would create an empty after-edit every turn.
     let result: ShadowSavepointResult;
     try {
-      result = await this.deps.createShadowSavepoint(repoRoot, {
+      result = await operationWait(this.deps.createShadowSavepoint(repoRoot, {
         sessionId,
         label: (diff) =>
           createAfterEditLabel(
@@ -327,9 +367,12 @@ export class GitSnapshotCoordinator {
           kind: 'after-edit',
           baselineCommit: baseline,
           ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
+          ...(metadata.attemptId ? { attemptId: metadata.attemptId } : {}),
         },
         skipIfTreeEquals: baseline,
-      });
+        recordUnchanged: true,
+        baselineSkippedFingerprints: turnStart?.turnStartSkippedFingerprints ?? [],
+      }));
     } catch (err) {
       this.deps.logger.warn('[git-snapshot] after-edit savepoint failed', {
         sessionId,
@@ -418,14 +461,16 @@ export class GitSnapshotCoordinator {
   ): Promise<{ commit: string | undefined; skippedFingerprints: SkippedFileFingerprint[] }> {
     // Always created, dirty or clean, so every turn has a uniform restore
     // baseline; an unchanged tree costs almost nothing thanks to object reuse.
-    const result = await this.deps.createShadowSavepoint(repoRoot, {
+    operationCheckpoint();
+    const result = await operationWait(this.deps.createShadowSavepoint(repoRoot, {
       sessionId,
       label: '本轮开始时的工作区基线',
       meta: {
         kind: 'turn-start',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
+        ...(metadata.attemptId ? { attemptId: metadata.attemptId } : {}),
       },
-    });
+    }));
 
     if (result.commit) {
       this.deps.logger.info('[git-snapshot] turn-start baseline created', {
@@ -462,7 +507,8 @@ export class GitSnapshotCoordinator {
   ): Promise<T | undefined> {
     if (!fn) return undefined;
     try {
-      return await fn(sessionId);
+      operationCheckpoint();
+      return await operationWait(fn(sessionId));
     } catch (err) {
       this.deps.logger.debug('[git-snapshot] optional metadata unavailable, continuing', {
         sessionId,
@@ -480,14 +526,15 @@ export class GitSnapshotCoordinator {
     logMessage: string,
     metadata: TurnStartMetadata,
   ): Promise<void> {
-    const commit = await this.deps.createShadowMarker(repoRoot, {
+    operationCheckpoint();
+    const commit = await operationWait(this.deps.createShadowMarker(repoRoot, {
       sessionId,
       label,
       meta: {
         kind: 'rewind-blocked',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
-    });
+    }));
     if (!commit) {
       // Marker tree could not be built (git fully unavailable); the failure
       // is logged by the kernel and the outer swallow keeps the turn alive.
@@ -507,6 +554,28 @@ export class GitSnapshotCoordinator {
       queue.push(record);
     } else {
       this.turnStartQueues.set(sessionId, [record]);
+    }
+  }
+
+  private async runOperation(sessionId: string, operation: OperationBudget, task: () => Promise<void>, signal?: AbortSignal, mustReject?: () => boolean): Promise<void> {
+    const active = this.operations.get(sessionId) ?? new Set<OperationBudget>();
+    active.add(operation);
+    this.operations.set(sessionId, active);
+    try {
+      await operation.run(task, signal);
+    } catch (error) {
+      if (mustReject?.()) {
+        this.deps.logger.warn('[git-snapshot] dispatch intent unavailable; send not authorized', {
+          sessionId, error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      this.deps.logger.warn('[git-snapshot] snapshot unavailable; continuing without file rewind coverage', {
+        sessionId, error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      active.delete(operation);
+      if (active.size === 0 && this.operations.get(sessionId) === active) this.operations.delete(sessionId);
     }
   }
 

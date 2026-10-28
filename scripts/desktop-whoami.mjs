@@ -24,6 +24,83 @@ function run(command, args, options = {}) {
   });
 }
 
+/**
+ * 进程表可以很大：`ps -eo …` 在这台机器上已经输出 1.6 MB（约 930 行），而
+ * spawnSync 默认 maxBuffer 只有 1 MiB。溢出时 status 变成 null、stdout 只剩半截，
+ * 旧实现把这种失败当成「系统里一个进程都没有」，于是基于进程归属的结论全部失真。
+ */
+export const PROCESS_TABLE_MAX_BYTES = 64 * 1024 * 1024;
+
+function processScanFailure(result, message) {
+  return {
+    code: result?.error?.code ?? `EXIT_${result?.status ?? 'UNKNOWN'}`,
+    message: result?.error?.message || message,
+  };
+}
+
+export function parsePosixProcessTable(text) {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      return match
+        ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+/**
+ * 读全量进程表。失败时返回 error 而不是空数组：调用方必须能区分
+ * 「确实没有相关进程」和「进程表根本读不到」，后者不能拿来下任何结论。
+ */
+export function scanProcessTable({ platform = process.platform, runCommand = run } = {}) {
+  if (platform === 'win32') {
+    const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine } |
+  Select-Object ProcessId,ParentProcessId,CommandLine |
+  ConvertTo-Json -Compress
+`;
+    const result = runCommand('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script,
+    ], { maxBuffer: PROCESS_TABLE_MAX_BYTES });
+    if (result.error || result.status !== 0) {
+      return {
+        processes: [],
+        error: processScanFailure(result, 'powershell.exe did not return a process table'),
+      };
+    }
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return {
+        processes: (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
+          pid: Number(item.ProcessId),
+          ppid: Number(item.ParentProcessId) || 0,
+          command: String(item.CommandLine ?? ''),
+        })),
+        error: null,
+      };
+    } catch {
+      return {
+        processes: [],
+        error: { code: 'PROCESS_LIST_UNPARSABLE', message: 'powershell.exe output was not valid JSON' },
+      };
+    }
+  }
+
+  const result = runCommand('ps', ['-eo', 'pid=,ppid=,command='], {
+    maxBuffer: PROCESS_TABLE_MAX_BYTES,
+  });
+  if (result.error || result.status !== 0) {
+    return { processes: [], error: processScanFailure(result, 'ps did not return a process table') };
+  }
+  return { processes: parsePosixProcessTable(result.stdout), error: null };
+}
+
 function normalize(value) {
   return path.resolve(value).replaceAll('\\', '/').toLowerCase();
 }
@@ -62,46 +139,6 @@ function repositoryWorktrees(cwd = rootDir) {
   if (result.status !== 0) return [{ rootDir: path.resolve(cwd), branch: null }];
   const entries = parseWorktreeEntries(result.stdout);
   return entries.length > 0 ? entries : [{ rootDir: path.resolve(cwd), branch: null }];
-}
-
-function listProcesses() {
-  if (process.platform === 'win32') {
-    const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine } |
-  Select-Object ProcessId,ParentProcessId,CommandLine |
-  ConvertTo-Json -Compress
-`;
-    const result = run('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script,
-    ]);
-    if (result.status !== 0 || !result.stdout.trim()) return [];
-    try {
-      const parsed = JSON.parse(result.stdout);
-      return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
-        pid: Number(item.ProcessId),
-        ppid: Number(item.ParentProcessId) || 0,
-        command: String(item.CommandLine ?? ''),
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  const result = run('ps', ['-eo', 'pid=,ppid=,command=']);
-  if (result.status !== 0) return [];
-  return result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      return match
-        ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }
-        : null;
-    })
-    .filter(Boolean);
 }
 
 function extractArgumentPath(command, name) {
@@ -306,6 +343,9 @@ function printText(report) {
   console.log(report.match ? 'Desktop source: MATCH' : 'Desktop source: NO MATCH');
   console.log(`expected root: ${report.expected.rootDir}`);
   console.log(`expected HEAD: ${report.expected.commit ?? 'unknown'}`);
+  if (report.processScan?.ok === false) {
+    console.log(`process table: unavailable (${report.processScan.code}: ${report.processScan.message})`);
+  }
   if (report.instances.length === 0) {
     console.log('active dev instances: none');
     return;
@@ -343,7 +383,11 @@ export function collectDesktopWhoamiReport(options = {}) {
   const env = options.env ?? process.env;
   const region = resolveDesktopDevRegion([], env);
   const worktrees = options.worktrees ?? repositoryWorktrees(expectedRoot);
-  const processes = options.processes ?? listProcesses();
+  const scan = options.processScan
+    ?? (options.processes
+      ? { processes: options.processes, error: null }
+      : scanProcessTable());
+  const processes = scan.processes;
   const preliminary = options.scanned ?? identifyDesktopProcesses(processes, worktrees);
   const userDataDirs = new Set([
     path.resolve(options.userDataDir ?? env.XDT_USER_DATA_DIR ?? defaultUserDataDir(region)),
@@ -361,6 +405,11 @@ export function collectDesktopWhoamiReport(options = {}) {
   return {
     schemaVersion: 1,
     expected: { rootDir: expectedRoot, commit: expectedCommit },
+    // 进程表读不到时 match 一定是 false；把原因带出去，让 verdict 能区分
+    // 「没起」和「查不了」，而不是都塌成 WHOAMI_MISMATCH。
+    processScan: scan.error
+      ? { ok: false, code: scan.error.code, message: scan.error.message }
+      : { ok: true },
     match,
     instances: options.all
       ? allInstances

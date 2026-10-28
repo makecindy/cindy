@@ -19,19 +19,25 @@ export function LocalDbFatalScreen({
   code,
   message,
   onBackToLogin,
+  onRetry,
 }: {
   code?: string;
   message?: string;
   onBackToLogin?: () => void;
+  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const { status, progress } = useUpdateStatus();
   // 点了「重启并安装更新」后应用即将退出重启，期间锁住按钮防止重复触发。
   const [installing, setInstalling] = useState(false);
 
-  const view = resolveLocalDbFatalView(status);
+  const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
+    if (view === 'retry-local-db') {
+      onRetry?.();
+      return;
+    }
     if (view === 'install-update') {
       if (installing) return;
       setInstalling(true);
@@ -46,17 +52,25 @@ export function LocalDbFatalScreen({
   };
 
   const title =
-    view === 'no-update' ? t('localDbFatal.noUpdate.title') : t('localDbFatal.updateReady.title');
+    view === 'retry-local-db'
+      ? t('localDbFatal.schemaLease.title')
+      : view === 'no-update'
+        ? t('localDbFatal.noUpdate.title')
+        : t('localDbFatal.updateReady.title');
   const description =
-    view === 'install-update'
-      ? t('localDbFatal.updateReady.description')
-      : view === 'preparing-update'
-        ? t('localDbFatal.preparing.description')
-        : t('localDbFatal.noUpdate.description');
+    view === 'retry-local-db'
+      ? (message ?? t('localDbFatal.schemaLease.lock-unreadable'))
+      : view === 'install-update'
+        ? t('localDbFatal.updateReady.description')
+        : view === 'preparing-update'
+          ? t('localDbFatal.preparing.description')
+          : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'install-update'
-      ? t('localDbFatal.updateReady.confirm')
-      : t('localDbFatal.noUpdate.checkUpdate');
+    view === 'retry-local-db'
+      ? t('localDbFatal.schemaLease.retry')
+      : view === 'install-update'
+        ? t('localDbFatal.updateReady.confirm')
+        : t('localDbFatal.noUpdate.checkUpdate');
 
   return (
     <div

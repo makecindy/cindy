@@ -1,6 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
-import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
+import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -38,6 +38,7 @@ import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-erro
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  type SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
@@ -51,9 +52,9 @@ import {
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 
-/** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
+/** Group-lane output belongs in its group. A DM input is hidden, but its answer belongs to the owner. */
 function isBotPrivateInput(clientId: string): boolean {
-  return clientId.startsWith('bot-dm:') || isBotGroupClientId(clientId);
+  return isBotGroupClientId(clientId);
 }
 
 interface DismissedInteraction {
@@ -64,6 +65,7 @@ interface DismissedInteraction {
 }
 
 export interface PrepareSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn'>;
@@ -118,7 +120,7 @@ export interface PrepareSessionEventDeps {
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
     'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'getAcceptedInputProvenance' | 'isActiveTaskCoordination'
-  > | null;
+  > & Partial<Pick<AgentInputCoordinator, 'isActiveInputOwnerAuthored'>> | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
     doneAt: number,
@@ -182,10 +184,13 @@ export function prepareSessionEvent(
       },
     };
   }
+  if (event.turnScope !== 'background'
+    && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
+    revealScheduledOutput(event.turnOrigin);
+  }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
-    if (taskCoordination && !event.runtimeRecovery) return;
     if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
     // Deliver through the existing persisted-row channel only. Sending a text
     // event as well would let older renderers adopt the notice as their active
@@ -226,7 +231,9 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          botPrivateReply: isBotPrivateInput(activeInputId) || (taskCoordination && !event.runtimeRecovery),
+          // Coordination hides the incoming report, not the teammate's reply.
+          botPrivateReply: isBotPrivateInput(activeInputId),
+          // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // The user input this turn answers; companion chats can show it above the reply
           // (cindy-bots-runtime.md「回复对应的消息」). Hidden trigger inputs are skipped on display.
@@ -349,6 +356,11 @@ export function prepareSessionEvent(
         clearPending: typeof event.turnAttemptToken === 'number',
       });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
+      if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
+        deps.sessionListActivityTracker.start(session.id, event.sessionTurnGeneration === undefined
+          ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`);
+      }
       if (!wasInTurn && event.source === 'claude-code') {
         const startedProductTurn = deps.productTurnWallClockTracker.start(session.id);
         if (startedProductTurn) deps.productTurnUsageTargetTracker.clear(session.id);
@@ -603,7 +615,6 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     groupLaneInputClientId,
-    taskCoordination,
     broadcastEvent,
     eventAgentMeta,
     pendingContextSnapshot,

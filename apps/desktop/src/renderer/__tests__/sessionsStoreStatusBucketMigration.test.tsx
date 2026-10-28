@@ -30,7 +30,7 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { emitAutoTitlePreview } from '@/lib/sessionsBus';
+import { emitAutoTitlePreview, emitPatch } from '@/lib/sessionsBus';
 import { sessionsStore } from '@/lib/sessionsStore';
 import type { ListStatusFilter } from '@/lib/sessionService';
 
@@ -70,6 +70,91 @@ describe('sessionsStore status bucket migration', () => {
   afterEach(() => {
     cleanup();
     sessionsStore.reset();
+  });
+
+  it('retains a successful unpin patch when an older list response returns', async () => {
+    const pinned = {
+      ...session('unpin-me'),
+      pinnedAt: '2026-08-27T01:00:00.000Z',
+      summary: 'old summary',
+    } as Session;
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('active');
+
+    emitPatch('unpin-me', { pinnedAt: null, summary: null });
+    staleRequest.resolve([pinned]);
+    await staleRefresh;
+
+    expect(sessionsStore.findById('unpin-me')).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
+  });
+
+  it('does not let a summary-only update extend stale pin protection to a newer request', async () => {
+    const pinned = {
+      ...session('field-revisions'),
+      pinnedAt: '2026-08-27T01:00:00.000Z',
+      summary: 'old summary',
+    } as Session;
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+
+    emitPatch('field-revisions', {
+      status: 'active',
+      pinnedAt: pinned.pinnedAt,
+      updatedAt: '2026-08-27T02:00:00.000Z',
+    });
+    emitPatch('field-revisions', { pinnedAt: null, summary: null });
+
+    const listRequest = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(listRequest.promise);
+    const refresh = sessionsStore.forceRefresh('active');
+    emitPatch('field-revisions', { summary: 'new summary' });
+
+    const repinned = { ...pinned, pinnedAt: '2026-08-27T03:00:00.000Z' } as Session;
+    listRequest.resolve([repinned]);
+    await refresh;
+    expect(sessionsStore.findById('field-revisions')).toEqual(
+      expect.objectContaining({
+        pinnedAt: repinned.pinnedAt,
+        summary: 'new summary',
+      }),
+    );
+  });
+
+  it('replays a later repin after a failed pin over a stale list response', async () => {
+    const unpinned = {
+      ...session('repin-me'),
+      pinnedAt: null,
+      summary: null,
+    } as Session;
+    mocks.list.mockResolvedValueOnce([unpinned]);
+    await sessionsStore.ensureByFilter('active');
+
+    const failedPinRequest = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(failedPinRequest.promise);
+    const failedPinRefresh = sessionsStore.forceRefresh('active');
+    sessionsStore.patchLocal('repin-me', { pinnedAt: '2026-08-27T01:00:00.000Z' });
+    sessionsStore.patchLocal('repin-me', { pinnedAt: null });
+    failedPinRequest.resolve([unpinned]);
+    await failedPinRefresh;
+    expect(sessionsStore.findById('repin-me')).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
+
+    const repinRequest = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(repinRequest.promise);
+    const repinRefresh = sessionsStore.forceRefresh('active');
+    sessionsStore.patchLocal('repin-me', { pinnedAt: '2026-08-27T02:00:00.000Z' });
+    repinRequest.resolve([unpinned]);
+    await repinRefresh;
+    expect(sessionsStore.findById('repin-me')).toEqual(
+      expect.objectContaining({ pinnedAt: '2026-08-27T02:00:00.000Z', summary: null }),
+    );
   });
 
   it('publishes original list mutations with the preserved row, including deletion outside cached windows', async () => {
@@ -223,7 +308,10 @@ describe('sessionsStore status bucket migration', () => {
   });
 
   it('keeps an optimistic archive applied to list requests started before the DB write completes', async () => {
-    const target = session('archive-me', 'active', '2026-08-27T02:00:00.000Z');
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T02:00:00.000Z'),
+      pinnedAt: '2026-08-27T01:00:00.000Z',
+    } as Session;
     const keep = session('keep', 'active', '2026-08-27T01:00:00.000Z');
     const alreadyArchived = session(
       'already-archived',
@@ -258,11 +346,11 @@ describe('sessionsStore status bucket migration', () => {
 
     expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
     expect(sessionsStore.getByFilter('archived')).toEqual([
-      expect.objectContaining({ id: 'archive-me', status: 'archived' }),
+      expect.objectContaining({ id: 'archive-me', status: 'archived', pinnedAt: null }),
       expect.objectContaining({ id: 'already-archived' }),
     ]);
     expect(sessionsStore.getByFilter('all')?.find(({ id }) => id === 'archive-me')).toEqual(
-      expect.objectContaining({ status: 'archived' }),
+      expect.objectContaining({ status: 'archived', pinnedAt: null }),
     );
   });
 
@@ -412,6 +500,89 @@ describe('sessionsStore status bucket migration', () => {
         status: 'archived',
         title: 'new authoritative title',
         totalCostUsd: 42,
+      }),
+    );
+  });
+
+  it('preserves newer pin metadata over a stale complete status row', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      pinnedAt: '2026-08-27T00:00:00.000Z',
+      summary: 'old summary',
+      model: 'old-model',
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+    sessionsStore.patchLocal('archive-me', {
+      pinnedAt: null,
+      summary: 'new summary',
+      model: 'new-model',
+    });
+
+    expect(
+      sessionsStore.completeStatusTransition(transition!, {
+        ...target,
+        status: 'archived',
+        pinnedAt: null,
+        summary: 'persisted summary',
+        model: 'persisted-model',
+        updatedAt: '2026-08-27T03:00:00.000Z',
+      }),
+    ).toBe(true);
+    staleRequest.resolve([target]);
+    await staleRefresh;
+
+    expect(sessionsStore.findById('archive-me')).toEqual(
+      expect.objectContaining({
+        status: 'archived',
+        pinnedAt: null,
+        summary: 'new summary',
+        model: 'new-model',
+      }),
+    );
+  });
+
+  it('keeps the rollback pin while retaining concurrent metadata over a stale response', async () => {
+    const target = {
+      ...session('archive-me', 'active', '2026-08-27T01:00:00.000Z'),
+      pinnedAt: '2026-08-27T00:00:00.000Z',
+      summary: 'old summary',
+      model: 'old-model',
+    } as Session;
+    mocks.list.mockResolvedValueOnce([target]);
+    await sessionsStore.ensureByFilter('all');
+
+    const transition = sessionsStore.beginStatusTransition('archive-me', {
+      status: 'archived',
+      pinnedAt: null,
+    });
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleRefresh = sessionsStore.forceRefresh('all');
+    sessionsStore.patchLocal('archive-me', {
+      pinnedAt: '2026-08-27T02:00:00.000Z',
+      summary: 'new summary',
+      model: 'new-model',
+    });
+
+    expect(sessionsStore.rollbackStatusTransition(transition!)).toBe(true);
+    staleRequest.resolve([target]);
+    await staleRefresh;
+
+    expect(sessionsStore.findById('archive-me')).toEqual(
+      expect.objectContaining({
+        status: 'active',
+        pinnedAt: '2026-08-27T00:00:00.000Z',
+        summary: 'new summary',
+        model: 'new-model',
       }),
     );
   });

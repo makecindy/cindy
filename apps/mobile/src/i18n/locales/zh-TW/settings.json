@@ -96,9 +96,7 @@
   "betaChannel": {
     "title": "Beta 測試管道",
     "badge": "Beta",
-    "description": "提前接收即將發布的用戶端更新。",
-    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
-    "ok": "我知道了",
+    "description": "提前接收即將發布的用戶端更新。內容更新會在下次檢查時下載，重新啟動 App 後生效。",
     "saveFailed": "儲存 Beta 測試管道設定失敗",
     "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
   },

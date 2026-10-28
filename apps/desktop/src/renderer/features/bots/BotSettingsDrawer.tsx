@@ -9,8 +9,7 @@ import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
-import { isBotChannelLaneSession } from './botGroupLane';
-import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
 
@@ -138,7 +137,6 @@ export function BotSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
@@ -186,16 +184,7 @@ export function BotSettingsDrawer() {
                   bot={bot}
                   onBack={performClose}
                   onOpenSession={(sessionId, searchJump) => {
-                    const projection = bot.sessions.find((item) => item.id === sessionId);
-                    // IM 专线的记录在 IM 里，不在伙伴页面打开。
-                    if (isBotChannelLaneSession(projection)) return;
-                    const route =
-                      projection?.kind === 'history'
-                        ? `/bots/${bot.id}/history/${sessionId}`
-                        : projection?.kind === 'thread' && projection.threadRoot
-                          ? `/bots/${bot.id}/session/${projection.threadRoot.rootSessionId}?${BOT_DM_THREAD_PARAM}=${sessionId}`
-                          : `/bots/${bot.id}/session/${sessionId}`;
-                    navigate(route, { state: searchJump ? { searchJump } : undefined });
+                    navigate(standardSessionRoute(sessionId), { state: searchJump ? { searchJump } : undefined });
                   }}
                 />
               </BotPronounProvider>

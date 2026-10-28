@@ -11,7 +11,7 @@ export function classifyHelperSurface(
 ): 'bot' | 'bot-main' | 'default' {
   if (source !== 'bot' && !hasBotLink) return 'default';
   // A private-chat topic is the owner's own Bot Chat, so it gets the main Chat's surface.
-  return source === 'bot' && hasBotLink && (main?.role === 'canonical' || main?.role === 'thread')
+  return source === 'bot' && hasBotLink && (main?.role === 'canonical' || main?.role === 'thread' || main?.role === 'routine')
     && main.status === 'active' && !main.remoteHostId
     ? 'bot-main'
     : 'bot';

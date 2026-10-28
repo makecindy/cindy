@@ -1,3 +1,4 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -101,6 +102,8 @@ import {
   toggleAgentIslandSoundEnabled,
 } from '@/hooks/useAgentIslandSettings';
 import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerShortcut';
+import { useSessionBrowseHistory } from '@/features/cc-agent/useSessionBrowseHistory';
+import { useAuth } from '@/contexts/AuthContext';
 // chat-data-localization F1 V0.4 / M-FE6
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
@@ -130,11 +133,11 @@ import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryL
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
 import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
 import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
+import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   isAgentIslandVisibleSessionOwnedByBotRoute,
-  resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
@@ -454,6 +457,15 @@ export function MainLayout() {
 
   const isSettingsRoute = location.pathname === '/settings';
 
+  // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
+  // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
+  // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
+  // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
+  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const browseHistory = useSessionBrowseHistory({
+    ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
+  });
+
   // 完全隐藏态 hover 临时浮出(peek)状态机 —— hover 折叠按钮抽屉滑出预览,
   // 点击/⌘B 固定展开(pin)。rail 态(isCollapsed=false)不触发。见 useSidebarPeek。
   const sidebarPeek = useSidebarPeek({
@@ -491,6 +503,8 @@ export function MainLayout() {
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
     if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
+    // The task view confirms metadata and rendered history before acknowledging a single task.
+    if (typeof visibleSessions === 'string') return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
       visibleSessions,
     );
@@ -553,16 +567,23 @@ export function MainLayout() {
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
-    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true) => {
-      // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
-      // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
-      // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
-      // 让 Orca 路由一步到位(Codex review P2,与 SessionLinkChip 同款处理)。
+    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
+      // 已知镜像可提前解析 Orca 角色；明确指定电脑时，先由任务入口恢复并校验
+      // 来源，避免读到本机同 ID。Worker 后续转到 Lead 时保留 device 和 searchJump。
       const remoteSession =
-        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) => s.id === sessionId) ?? null;
-      void resolveSessionRoute(sessionId, remoteSession).then((target) => {
+        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
+          s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
+      const route = deviceId
+        ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
+          ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
+        : resolveSessionRoute(sessionId, remoteSession);
+      void route.then((target) => {
         if (!isLatest()) return;
-        const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);
+        if (deviceId && target !== '/cc-agent') {
+          const url = new URL(target, 'https://cindy.invalid');
+          url.searchParams.set('device', deviceId);
+          target = `${url.pathname}${url.search}`;
+        }
         if (messageClientId) {
           // 带消息锚点:即使已在目标路由也要 navigate——新的 location.state 才能
           // 触发 CCAgentSessionView 的 searchJump 消费 effect(定位 + 高亮)。
@@ -580,17 +601,7 @@ export function MainLayout() {
         } else if (currentPathRef.current !== target) {
           navigate(target);
         }
-        // 通知点击跳转专用的 visible-session 上报:故意只 gate isAgentIslandSupported(),
-        // 不像上面的 syncAgentIslandVisibleSession / OrcaSplitView 那样加 document.hasFocus()
-        // 或 orca-split / workdir-browse 归属守卫。原因:通知触发跳转时主窗口 focus 往往还
-        // 没稳定(见 main 端 isAgentIslandPendingFocusAck 放宽),本路径是唯一能在这段 focus
-        // 竞态里把灵动岛收起的上报来源。若把 orca / files 路由交还各自 owner 组件,它们都带
-        // document.hasFocus() 守卫、竞态期不会上报,首个权限卡片会退回"必须先点窗口才收起"
-        // 的旧 bug。worker deep link 直接按 route query 上报 [Lead, Worker]，普通会话
-        // 上报单个 session；窗口 focus 稳定后 owner 组件继续维护同一份可见集合。
-        if (isAgentIslandSupported()) {
-          void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
-        }
+
       });
     },
     [navigate],
@@ -600,13 +611,25 @@ export function MainLayout() {
   // One navigator for the layout's lifetime: its sequence must span re-renders so a
   // late lookup for an earlier notification cannot override a newer click.
   const [navigateToSession] = useState(() => createSessionEntryNavigator({
+    captureOwner: () => {
+      const owner = getDataOwnerGeneration();
+      return () => isDataOwnerGenerationCurrent(owner);
+    },
+    isRemoteDevice: async (deviceId) => deviceId !== await window.electronAPI.getDeviceId(),
     readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId)
       ?? remoteBotRouteForSession(readRemoteBots(), sessionId),
     resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {
       readProfiles: getBotProfiles,
       loadProfiles: ensureBotProfilesLoaded,
     }),
-    openBotRoute: (route, islandEntryId) => {
+    openBotRoute: (route, islandEntryId, messageClientId, sessionId) => {
+      if (messageClientId && sessionId) {
+        sessionEntryDepsRef.current.navigate(route, { state: {
+          ...(islandEntryId ? islandEntryRouteState(islandEntryId) : {}),
+          searchJump: { kind: 'conversation-search', sessionId, messageId: messageClientId, messageIdKind: 'clientId', messageClientId },
+        } });
+        return;
+      }
       // 只读历史由自己的归属门禁在显示后处置被点的卡:点击编号随路由状态交过去,已在该页也要重新交一次。
       if (islandEntryId) {
         sessionEntryDepsRef.current.navigate(route, {
@@ -620,8 +643,8 @@ export function MainLayout() {
     // 群专线没有可处置报错的横幅:目标地址提交后请 main
     // 处置这次点击的那张卡(main 只认最近一次点击与当时的卡片身份,见 BotSessionEntryTarget)。
     consumeAlert: requestIslandEntryAlertDisposal,
-    openOrdinary: (sessionId, messageClientId, isLatest) =>
-      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest),
+    openOrdinary: (sessionId, messageClientId, isLatest, deviceId) =>
+      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest, deviceId),
   }));
   navigateToSessionRef.current = navigateToSession;
   // 已提交的地址交给入口导航器:灵动岛卡片的处置等到目标地址真正提交后才发。
@@ -698,7 +721,7 @@ export function MainLayout() {
   const handleDeepLinkPayload = useCallback(
     (
       payload:
-        | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
@@ -708,7 +731,8 @@ export function MainLayout() {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' },
+        | { type: 'plugin'; pluginId: string }
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -733,8 +757,12 @@ export function MainLayout() {
         setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
       }
+      if (payload.type === 'plugin') {
+        navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
       if (payload.type === 'session') {
-        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId);
+        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId, payload.deviceId);
         return;
       }
       if (payload.type === 'project') {
@@ -793,11 +821,11 @@ export function MainLayout() {
         void pullChatInvitations();
         return;
       }
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin') {
         handleDeepLinkPayload(payload);
         return;
       }
-      // Main retains imports through login. Both this wake-up and the mount pull
+      // Main retains these intents through login. Both this wake-up and the mount pull
       // use the same atomic take, so either ordering navigates only once.
       void pullChatInvitations();
     });
@@ -810,6 +838,23 @@ export function MainLayout() {
     pendingDeepLinkPulledRef.current = true;
     void pullChatInvitations();
   }, [handleDeepLinkPayload, pullChatInvitations]);
+
+  // 全局截图「问 Cindy / 翻译 / 解释 / 提取文字」: 挂载时与每次唤醒时各取一次,
+  // main 侧 take 是原子的, 两条路径不会重复处理同一张截图。
+  useEffect(() => {
+    const compose = window.electronAPI.regionScreenshotCompose;
+    if (!compose) return;
+    const pull = () => {
+      void compose
+        .take()
+        .then((request) => {
+          if (request) applyScreenshotComposeRequest(request, navigate);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    return compose.onWake(pull);
+  }, [navigate]);
 
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarCollapsed((prev) => {
@@ -1675,6 +1720,7 @@ export function MainLayout() {
           <ChromeActions
             isSidebarCollapsed={isSidebarCollapsed}
             onToggleSidebar={handleToggleSidebar}
+            browseHistory={browseHistory}
             peekTriggerProps={sidebarPeek.triggerProps}
           />
         )}
@@ -1711,8 +1757,9 @@ export function MainLayout() {
                 }}
               >
                 {/* showCollapsedActions: 完全隐藏(isSidebarCollapsed)**和** rail 态(isRailMode)
-                    都要为浮动 ChromeActions 簇预留 68px 占位 —— rail 下侧栏仅 64px,chrome 簇
-                    贴在 rail 右缘(见上方 sidebarWidth),不留占位会压住会话标题左侧。 */}
+                    都要为浮动 ChromeActions 簇预留占位(CHROME_ACTIONS_GEOMETRY.clusterWidth + 8)
+                    —— rail 下侧栏仅 64px,chrome 簇贴在 rail 右缘(见上方 sidebarWidth),
+                    不留占位会压住会话标题左侧。 */}
                 {/* rail 态在 sidebarVisible 口径里视同"不可见"(codex review): 否则 mac 无
                     headerContent 路由下 ContentHeader 会因 sidebarVisible=true 提前 return null,
                     我们为 rail 浮动 chrome 预留的 spacer 不渲染、按钮悬空。 */}
@@ -1720,6 +1767,9 @@ export function MainLayout() {
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
                   isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
+                  // 展开态侧栏可拖到 180(比按钮簇右缘 202 窄):那一段的按钮悬在 header
+                  // 拖拽区上,由 ContentHeader 按侧栏宽补挖 no-drag。
+                  sidebarWidth={sidebarWidth}
                   // M2(2026-07-09 口径修订):mac 右上浮层随面板在场常驻(折叠
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
@@ -1840,7 +1890,12 @@ export function MainLayout() {
           {/* 面板稳态宽度由 LayoutRoot 输出 CSS 百分比/clamp，BrowserWindow live resize
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
-            <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
+            <LayoutRoot
+              suppressNonChatPanels={isSettingsRoute}
+              rightTabsCollapsed={
+                !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
+              }
+            />
           </TabGroupHostProvider>
         </BuiltinPanelBridgeProvider>
         {/* 拖面板换位(B3 转正;M3 起 mac 同步开闸——mac 顶栏全部保留窗口拖拽,

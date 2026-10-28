@@ -167,7 +167,10 @@ describe('model advanced editor', () => {
   });
 
   it.each(['generate', 'edit', 'default'] as const)('saves image capability %s only on the explicit Images connection', async (value) => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
@@ -204,7 +207,10 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
   it.each(['generate', 'edit', 'default'] as const)('saves video capability %s only on the explicit video connection', async (value) => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
@@ -391,7 +397,10 @@ describe('model advanced editor', () => {
   });
 
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
@@ -414,7 +423,10 @@ describe('model advanced editor', () => {
 
   // V6 selection is a user intent, not a copy of today's resolved route/limits.
   it.each(['auto', 'moonshot-kimi-code-openai-responses'])('persists Kimi interface %s without locking catalog defaults', async (interfaceId) => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'kimi-user', name: 'Kimi', runtimes: {
@@ -433,7 +445,10 @@ describe('model advanced editor', () => {
   });
 
   it('saves Google selection with its matching wire and official endpoint', async () => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
@@ -1071,6 +1086,14 @@ describe('model advanced editor', () => {
     expect(input.getAttribute('aria-invalid')).toBe('true');
   });
 
+  it('keeps the saved primary effort when another harness has a different default', () => {
+    vi.mocked(getProviderModelEffort).mockImplementation((agent) => agent === 'codex' ? 'max' : undefined);
+    draw({ ...model, efforts: ['low', 'high', 'max'], defaultEffort: 'low' }, 'low');
+
+    expect(screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'))
+      .toBe('true');
+  });
+
   it('retains a mixed saved selection without showing per-engine default labels', () => {
     draw(model, 'low');
     expect(screen.getByText('settings.providers.models.advanced.effortMixed')).toBeTruthy();
@@ -1192,7 +1215,7 @@ it.each([{ hasSummary: true, withNotes: true }, { hasSummary: true, withNotes: f
   }
   const input = screen.getByText('settings.providers.models.advanced.price.input').parentElement!;
   expect(input.textContent).toContain('¥0.016');
-  expect(input.textContent).toContain(' · ');
+  expect(input.textContent).not.toContain(' · ');
   expect(input.textContent).toContain('¥112');
   expect(input.querySelector('s')?.textContent).toBe('¥0.02');
   const output = screen.getByText('settings.providers.models.advanced.price.output').parentElement!;

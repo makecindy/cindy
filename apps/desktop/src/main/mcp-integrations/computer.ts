@@ -24,7 +24,11 @@ import type {
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
-import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from './computer-contract.js';
+import {
+  adaptComputerDriverArgs,
+  selectAdvertisedComputerDriverArgs,
+  type ComputerDriverToolSchema,
+} from './computer-contract.js';
 import { computerResultOutcome, getComputerTool, isUnavailableWindowObservation } from '@cindy/mcps/computer';
 import { callComputerToolWithOutputValidation } from './computer-output.js';
 
@@ -2414,11 +2418,16 @@ async function initializeDefaultCursorStyle(
     assertActive();
     signal?.throwIfAborted();
     if (entry.cursorSetup[call.stateKey] !== 'pending') continue;
+    const driverArgs = selectAdvertisedComputerDriverArgs(call.tool, call.args, entry.toolSchemas);
+    if (!driverArgs) {
+      entry.cursorSetup[call.stateKey] = 'unavailable';
+      continue;
+    }
     try {
       await callCuaMcpTool(
         entry,
         call.tool,
-        call.args,
+        driverArgs,
         STATUS_TIMEOUT_MS,
         signal,
       );

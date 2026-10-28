@@ -80,7 +80,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     return read;
   };
   const canRun = (record: DurableOutboxRecord) =>
-    deps.isForeground() &&
+    !record.chat && deps.isForeground() &&
     (hidden(record) ||
       isDurableOutboxSettled(record) ||
       (!record.suspended &&
@@ -115,6 +115,7 @@ export function createOutboxMessageLeases(deps: OutboxMessageLeaseDeps) {
     if (!deps.isCurrent()) return;
     const keys = new Set<string>();
     for (const record of deps.getRecords()) {
+      if (record.chat) continue;
       if (isDurableOutboxSettled(record) || deps.hidden(record)) continue;
       if (deps.restoreEditable(record)) continue;
       if (record.creation?.cancelled) {

@@ -23,7 +23,7 @@ import {
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
-import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
 import {
   readAccountUsageLimit,
   sessionUsesOtherMachineAccount,
@@ -42,7 +42,7 @@ export interface StartGoalControllerDeps {
   getDb: () => GoalDrizzleDb;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED)。 */
   broadcastStatus: (update: GoalStatusUpdate) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 
@@ -77,6 +77,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     emitStatus: deps.broadcastStatus,
+    onGoalStopped: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
+    onGoalUserDispatched: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
     // 护栏默认从 goal-settings-store 读(系统默认 + 用户 override,规则 20);新建 goal
     // 时直接采用最新默认值。
     getDefaults: () => readGoalSettings(),

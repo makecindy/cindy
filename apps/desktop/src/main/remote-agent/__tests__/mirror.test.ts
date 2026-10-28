@@ -525,6 +525,11 @@ describe('shadow on the other computer', () => {
     write(path.join(project, 'hello.txt'), 'hi');
     write(path.join(root, 'work', '.git', 'HEAD'), 'ref: refs/heads/main\n');
     write(path.join(root, '.bashrc'), 'export TASK_SHELL_CONFIG=1\n');
+    // Regression: ancestor absence must preserve existing plugin roots, including their files.
+    const pluginMarkers = ['.codex-plugin', '.claude-plugin', '.cursor-plugin'];
+    for (const marker of pluginMarkers) {
+      write(path.join(root, 'work', marker, 'plugin.json'), JSON.stringify({ name: 'qa-plugin' }));
+    }
     const inputs: HostedStartInput[] = [];
     let stop!: () => void;
     const stopped = new Promise<void>((resolve) => { stop = resolve; });
@@ -604,13 +609,17 @@ describe('shadow on the other computer', () => {
       { target: path.join(input.shadowDir, '.git'), local: false },
       { target: path.join(parent, '.git'), local: false },
       { target: path.join(parent, '.git', 'HEAD'), local: false },
+      ...pluginMarkers.flatMap(marker => [
+        { target: path.join(parent, marker, 'plugin.json'), local: false },
+        { target: path.join(root, 'work', marker, 'plugin.json'), local: false },
+      ]),
       { target: path.join(top, 'not-a-marker'), local: false },
       { target: path.join(input.mirrorRoot, 'home', '.agents', 'skills'), local: false },
       { target: path.join(path.parse(input.mirrorRoot).root, 'not-a-cindy-dir', 'tool'), local: false },
       // 镜像外的绝对路径会原样交给任务电脑；同一路径下的隐藏文件/已存在标记不能凭点前缀判不存在。
       { target: path.join(root, '.bashrc'), local: false },
       { target: path.join(root, 'work', '.git', 'HEAD'), local: false },
-      { target: path.join(root, 'work', '.codex-plugin', 'plugin.json'), local: true },
+      { target: path.join(root, '.codex-plugin', 'plugin.json'), local: true },
       { target: path.join(grandparent, '.git'), local: true },
       { target: path.join(grandparent, '.cursor-plugin', 'plugin.json'), local: true },
       { target: path.join(padded, '.git'), local: true },

@@ -54,8 +54,14 @@ export async function resolveWorkbenchCaller(callerSessionId: string): Promise<W
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '伙伴或它的主任务已停用' };
   }
-  if (row.role !== 'canonical' && row.role !== 'thread') {
-    return { ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED', message: '只有伙伴的主任务可以使用工作台' };
+  if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'routine') {
+    return {
+      ok: false,
+      errorCode: 'BOT_MAIN_TASK_REQUIRED',
+      message: '当前入口不是伙伴的私聊主任务或私聊话题，不能使用工作台、待办或项目关联工具。'
+        + '本次调用未读取或修改这些记录。请告知主人：在 Cindy 中打开这位伙伴的私聊主聊天（主任务），在那里提出本次请求；私聊话题也可用。'
+        + '不要在当前入口重试。',
+    };
   }
   if (row.remoteHostId) {
     return { ok: false, errorCode: 'REMOTE_WORKBENCH_UNAVAILABLE', message: '远端伙伴暂不支持工作台' };
@@ -175,7 +181,7 @@ async function resolveBotTaskCreator(callerSessionId: string): Promise<string | 
     .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(and(
       eq(botSessionLinks.sessionId, callerSessionId),
-      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group']),
+      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group', 'routine']),
       isNull(botSessionLinks.archivedAt),
       eq(sessions.source, 'bot'),
       eq(sessions.status, 'active'),

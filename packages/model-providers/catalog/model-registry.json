@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-24T03:51:23.033Z",
+  "updatedAt": "2026-10-27T15:16:20.193Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3311,19 +3311,272 @@
       ],
       "nativeApi": "openai-responses",
       "modelRef": "xd/auto"
+    },
+    {
+      "id": "agnes/agnes-3.0-flash",
+      "name": "Agnes 3.0 Flash",
+      "modelRef": "agnes/agnes-3.0-flash",
+      "status": "active",
+      "sortOrder": 100,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-3.0-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-anthropic-messages"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro",
+      "name": "Agnes 2.5 Pro",
+      "modelRef": "agnes/agnes-2.5-pro",
+      "status": "active",
+      "sortOrder": 101,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-anthropic-messages"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro-beta",
+      "name": "Agnes 2.5 Pro Beta",
+      "modelRef": "agnes/agnes-2.5-pro-beta",
+      "status": "active",
+      "sortOrder": 102,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-pro-beta",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-anthropic-messages"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-flash",
+      "name": "Agnes 2.5 Flash",
+      "modelRef": "agnes/agnes-2.5-flash",
+      "status": "active",
+      "sortOrder": 103,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-anthropic-messages"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.0-flash",
+      "name": "Agnes Image 2.0 Flash",
+      "modelRef": "agnes/agnes-image-2.0-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.0-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.1-flash",
+      "name": "Agnes Image 2.1 Flash",
+      "modelRef": "agnes/agnes-image-2.1-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.1-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.5-flash",
+      "name": "Agnes Image 2.5 Flash",
+      "modelRef": "agnes/agnes-image-2.5-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.5-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-video-2.5",
+      "name": "Agnes Video 2.5",
+      "modelRef": "agnes/agnes-video-2.5",
+      "mode": "video_generation",
+      "status": "active",
+      "nativeApi": "openai-videos",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-video-2.5",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-video-2.5-flash",
+      "name": "Agnes Video 2.5 Flash",
+      "modelRef": "agnes/agnes-video-2.5-flash",
+      "mode": "video_generation",
+      "status": "active",
+      "nativeApi": "openai-videos",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-video-2.5-flash",
+          "agents": []
+        }
+      ]
     }
   ],
   "nativeApiRules": [
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "google/gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
     {
       "providerId": "xd",
       "modelIdPrefix": "google/gemini-",
@@ -9096,6 +9349,292 @@
       "defaults": {
         "name": "Auto"
       }
+    },
+    {
+      "id": "agnes/agnes-3.0-flash",
+      "aliases": [
+        "agnes-3.0-flash"
+      ],
+      "defaults": {
+        "name": "Agnes 3.0 Flash",
+        "mode": "chat",
+        "contextWindow": 512000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-30-flash"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.15,
+              "cacheReadPerMtok": 0.005,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro",
+      "aliases": [
+        "agnes-2.5-pro"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Pro",
+        "mode": "chat",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-pro"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.45,
+              "outputPerMtok": 0.9,
+              "cacheReadPerMtok": 0.045,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro-beta",
+      "aliases": [
+        "agnes-2.5-pro-beta"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Pro Beta",
+        "mode": "chat",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-pro-beta"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.3,
+              "cacheReadPerMtok": 0.01,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-flash",
+      "aliases": [
+        "agnes-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Flash",
+        "mode": "chat",
+        "contextWindow": 512000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-flash"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.15,
+              "cacheReadPerMtok": 0.005,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.0-flash",
+      "aliases": [
+        "agnes-image-2.0-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.0 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-20-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-image-2.1-flash",
+      "aliases": [
+        "agnes-image-2.1-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.1 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-21-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-image-2.5-flash",
+      "aliases": [
+        "agnes-image-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.5 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-video-2.5",
+      "aliases": [
+        "agnes-video-2.5"
+      ],
+      "defaults": {
+        "name": "Agnes Video 2.5",
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-video-25"
+      }
+    },
+    {
+      "id": "agnes/agnes-video-2.5-flash",
+      "aliases": [
+        "agnes-video-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Video 2.5 Flash",
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-video-25-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-3.0-pro",
+      "aliases": [
+        "agnes-3.0-pro"
+      ],
+      "defaults": {
+        "name": "Agnes 3.0 Pro",
+        "mode": "chat",
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-30-pro"
+      }
     }
   ],
   "interfaceProfiles": [
@@ -10236,6 +10775,62 @@
         "supportsImageInput": true,
         "supportsToolCalls": true
       }
+    },
+    {
+      "id": "agnes-anthropic-messages",
+      "providerId": "agnes",
+      "api": "anthropic-messages",
+      "baseUrl": "https://apihub.agnes-ai.com",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [
+        "claude-code",
+        "pi"
+      ],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
+    },
+    {
+      "id": "agnes-openai-responses",
+      "providerId": "agnes",
+      "api": "openai-responses",
+      "baseUrl": "https://apihub.agnes-ai.com/v1",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
+    },
+    {
+      "id": "agnes-openai-completions",
+      "providerId": "agnes",
+      "api": "openai-completions",
+      "baseUrl": "https://apihub.agnes-ai.com/v1",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
     }
   ]
 }

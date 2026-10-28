@@ -1473,6 +1473,26 @@
           "$value": "{reference.defaults.login-overlay-secondary-pressed.dark}"
         }
       },
+      "login-overlay-apple-pressed": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-pressed.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-pressed.dark}"
+        }
+      },
+      "login-overlay-apple-hover": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-hover.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.login-overlay-apple-hover.dark}"
+        }
+      },
       "login-apple-circle-bg": {
         "light": {
           "$type": "color",

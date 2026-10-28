@@ -107,7 +107,8 @@ import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/i
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
-import { readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   getWorkspacePref,
@@ -143,6 +144,7 @@ import {
   type HookSessionRunner,
 } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
+import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
   cancelHookInteraction,
@@ -150,7 +152,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
@@ -257,7 +259,24 @@ async function resolveNewSessionConfig(
   }
 
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
-  const defaults = imDefaults;
+  let defaults = imDefaults;
+  const selectedAgent = mergedOverrides.agentKind;
+  const selectedDefaultAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : imDefaults.agentKind;
+  const automatic = usesAutomaticImModel({ ...imDefaults, agentKind: selectedDefaultAgent }) && mergedOverrides.model === null;
+  if (automatic) {
+    const automaticAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : undefined;
+    const remoteDeviceId = workdirRoute?.agentDeviceId ?? imDefaults.agents[selectedDefaultAgent].agentDeviceId;
+    const resolved = remoteDeviceId
+      ? await readImRemoteAutomaticDefaults(imDefaults, {
+          agentDeviceId: remoteDeviceId, agentKind: automaticAgent,
+          providerId: workdirRoute?.providerId ?? imDefaults.agents[selectedDefaultAgent].providerId,
+        })
+      // Workspace sources are paired with their former model. Resolve the inherited
+      // model first, then apply the existing stale-source checks below.
+      : await resolveImAutomaticDefaults(imDefaults, undefined, providers, automaticAgent);
+    if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${ROUTE_RESELECT_HINT}`);
+    defaults = resolved;
+  }
   const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
     ? mergedOverrides.agentKind : defaults.agentKind;
   const defaultRoute = defaults.agents[requestedAgent];
@@ -283,12 +302,13 @@ async function resolveNewSessionConfig(
       getPermissionModes: () => requestedPermissionMode === null ? [] : [requestedPermissionMode],
       log,
     }, { ...mergedOverrides, agentKind: requestedAgent, model: requestedModel });
-    return { ...remote, agentDeviceId, providerId, fingerprint };
+    return { ...remote, agentDeviceId, providerId,
+      fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
   }
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => imDefaults,
+      readDefaults: () => defaults,
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
@@ -362,7 +382,8 @@ async function resolveNewSessionConfig(
       `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
     );
   }
-  return { ...resolved, model: lenient.model, providerId: lenient.providerId, fingerprint };
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId,
+    fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
 }
 
 /**
@@ -545,6 +566,16 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   };
 }
 
+/** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
+function formatHookIncompleteNotice(skippedNames: string[]): string {
+  const locale = getResolvedMainLocale();
+  const separator = locale === 'en' || locale === 'ko' ? ', ' : '、';
+  const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
+  return t('imBot.outboundAttachmentsIncomplete', locale)
+    .replace('{{count}}', String(skippedNames.length))
+    .replace('{{names}}', names.join(separator));
+}
+
 /**
  * 收口时的出站附件收集(run() 与 watchContinuation 共用)。
  *
@@ -572,7 +603,7 @@ async function collectOutboundForFinalText(
   // once so a temporary source changing cannot split the body from its attachment.
   const scanText = stripInternalWebCitations(texts.wholeTurn);
   const materialized = canReadLocal
-    ? await materializeTaskImageTextResult(sessionId, scanText)
+    ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
   const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
@@ -588,6 +619,7 @@ async function collectOutboundForFinalText(
       allowedFileRoots,
       provider,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
+      formatIncompleteNotice: formatHookIncompleteNotice,
       log,
     });
     if (collected.skipped > 0) {

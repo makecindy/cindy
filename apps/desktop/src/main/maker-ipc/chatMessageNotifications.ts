@@ -16,17 +16,43 @@ export interface ChatNotificationMessage {
   threadRootId: string | null; mentions?: string[];
 }
 
+export interface ChatAttentionSnapshot<M extends ChatNotificationMessage> {
+  room: { name: string; kind?: string; archived?: boolean; dissolved_at?: string | null };
+  messages: M[];
+  reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }>;
+}
+
+/** One eligibility rule for native notifications and the island's unread projection. */
+export function isChatMessageAttention<M extends ChatNotificationMessage>(snapshot: ChatAttentionSnapshot<M>, message: M, selfId: string): boolean {
+  if (!snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at
+    || snapshot.reads.some(read => read.thread_key === 'main' && read.muted)
+    || message.deleted || message.origin === 'system' || message.origin === 'import' || message.authorId === selfId) return false;
+  const read = snapshot.reads.find(read => read.thread_key === (message.threadRootId ?? 'main'));
+  if (read?.muted || BigInt(message.seq) <= BigInt(read?.read_seq ?? '0')) return false;
+  return !message.threadRootId || read?.following === true || message.mentions?.includes(selfId) === true;
+}
+
+/** An unread mention wins; otherwise show the newest eligible message, regardless of snapshot order. */
+export function selectChatAttentionMessage<M extends ChatNotificationMessage>(snapshot: ChatAttentionSnapshot<M>, selfId: string): M | null {
+  let selected: M | null = null;
+  for (const message of snapshot.messages) {
+    if (!isChatMessageAttention(snapshot, message, selfId)) continue;
+    const mention = message.mentions?.includes(selfId) === true;
+    const previousMention = selected?.mentions?.includes(selfId) === true;
+    if (!selected || (mention && !previousMention) || (mention === previousMention && BigInt(message.seq) > BigInt(selected.seq))) selected = message;
+  }
+  return selected;
+}
+
 export function createChatMessageNotifications<M extends ChatNotificationMessage>(deps: {
   current: () => boolean;
   selfId: () => string;
   message?: (groupId: string, messageId: string) => Promise<M>;
-  snapshot: (groupId: string) => Promise<{
-    room: { name: string; archived?: boolean; dissolved_at?: string | null };
-    messages: M[];
-    reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }>;
-  }>;
+  snapshot: (groupId: string) => Promise<ChatAttentionSnapshot<M>>;
   present: (groupId: string, message: M) => Promise<Omit<ChatMessageNotification, 'groupId' | 'groupName' | 'messageId' | 'threadRootId'>>;
   notify: (notification: ChatMessageNotification, current: () => boolean) => void;
+  shouldAlert?: (message: M, snapshot: ChatAttentionSnapshot<M>, groupId: string) => boolean;
+  revision?: (groupId: string) => unknown;
 }) {
   const pending = new Map<string, Set<string>>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -45,7 +71,10 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
     pending.delete(groupId);
     if (!ids || !current()) return;
     try {
+      const revision = deps.revision?.(groupId);
+      const stillCurrent = () => current() && deps.revision?.(groupId) === revision;
       const snapshot = await deps.snapshot(groupId);
+      if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');
       if (!current() || !snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at) return;
       const main = snapshot.reads.find(read => read.thread_key === 'main');
       if (main?.muted) return;
@@ -54,14 +83,12 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
         const message = snapshot.messages.find(message => message.id === id) ?? await deps.message?.(groupId, id);
         if (!current()) return;
         if (!message) continue;
-        if (message.deleted || message.origin === 'system' || message.origin === 'import' || message.authorId === deps.selfId()) { remember(id); continue; }
-        const read = message.threadRootId ? snapshot.reads.find(read => read.thread_key === message.threadRootId) : main;
-        if (read?.muted || BigInt(message.seq) <= BigInt(read?.read_seq ?? '0')) { remember(id); continue; }
-        if (message.threadRootId && !read?.following && !message.mentions?.includes(deps.selfId())) { remember(id); continue; }
+        if (!isChatMessageAttention(snapshot, message, deps.selfId()) || deps.shouldAlert?.(message, snapshot, groupId) === false) { remember(id); continue; }
         const presentation = await deps.present(groupId, message);
         if (!current()) return;
+        if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');
         deps.notify({ ...presentation, groupId, groupName: snapshot.room.name, messageId: message.id,
-          ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}) }, current);
+          ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}) }, stillCurrent);
         remember(id);
       }
     } catch {

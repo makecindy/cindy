@@ -152,6 +152,8 @@ export const REMOTE_AGENT_MAX_PUSH_CHARS = 3 * 1024 * 1024;
 
 export type RemoteAgentRequest =
   | { op: 'caps' }
+  /** Same-account native history transfer. The host validates commands before accessing storage. */
+  | { op: 'native-history'; sessionId: string; command: unknown }
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
@@ -269,6 +271,7 @@ export interface RemoteAgentForkResult {
 }
 
 export interface RemoteAgentCaps {
+  nativeHistoryTransfer?: boolean;
   subscriptionFastPolicy?: true;
   nativeFork?: boolean;
   imageRecovery?: boolean;
@@ -441,6 +444,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
   switch (v.op) {
     case 'caps':
       return { op: 'caps' };
+    case 'native-history': {
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      return { op: 'native-history', sessionId: v.sessionId as string, command: record(v.command) };
+    }
     case 'fast-policy': {
       if (typeof v.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(v.group)
         || typeof v.allowFast !== 'boolean') invalid();
@@ -662,6 +669,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(v.nativeFork === true ? { nativeFork: true } : {}),
+    ...(v.nativeHistoryTransfer === true ? { nativeHistoryTransfer: true } : {}),
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),

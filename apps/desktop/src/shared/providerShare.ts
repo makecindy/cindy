@@ -1,3 +1,4 @@
+import type { ProviderShareMemberBudget } from './providerShareBudget.js';
 /**
  * 供应商分享的 Renderer ↔ Main 契约(只在本机进程之间；服务端契约见
  * docs/provider-sharing-contract.md)。身份只有昵称与头像。
@@ -196,7 +197,7 @@ export type ProviderShareCommand =
   | { action: 'get-fast-policy'; providerId: string }
   | { action: 'set-fast-policy'; providerId: string; allowFast: boolean }
   | { action: 'get-model-access'; providerId: string; memberId?: string }
-  | { action: 'set-model-access'; providerId: string; memberId?: string; models: RemoteModelSelection }
+  | { action: 'set-model-access'; providerId: string; memberId?: string; models: RemoteModelSelection; memberBudget?: ProviderShareMemberBudget | null }
   | { action: 'get-visibility'; providerId: string }
   | { action: 'set-visibility'; providerId: string; visibility: Partial<ProviderShareVisibility> }
   | { action: 'quota-account'; providerId: string }

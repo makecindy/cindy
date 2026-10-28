@@ -1,3 +1,4 @@
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import {
@@ -70,7 +71,6 @@ import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { keywordRanges } from './keywordRanges';
 import { FilterReminderDot } from './FilterReminderDot';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { conversationSearchResultKey } from '@/lib/conversationSearchFanout';
 import {
@@ -550,17 +550,7 @@ export function useConversationSearch({
         if (remoteDeviceId) {
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
-        const companion = item.session.companion;
-        const companionRoute = companion
-          ? remoteDeviceId
-            ? `/bots/remote/${encodeURIComponent(remoteDeviceId)}/${encodeURIComponent(companion.id)}`
-            : `/bots/${encodeURIComponent(companion.id)}`
-          : null;
-        const baseRoute = companionRoute
-          ? companion?.readOnly
-            ? `${companionRoute}/history/${encodeURIComponent(item.session.id)}`
-            : remoteDeviceId ? companionRoute : `${companionRoute}/session/${encodeURIComponent(item.session.id)}`
-          : await resolveSessionRoute(item.session.id, item.session);
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
         // 其 reset() 会清空 query。内联展开态不传 onResultChosen——选中结果后**刻意保留 query**,

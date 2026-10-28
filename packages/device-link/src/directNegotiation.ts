@@ -192,7 +192,9 @@ export class DirectLinkNegotiator {
   private retry(peerId: string, peer: Peer): void {
     if (this.peers.get(peerId) !== peer || peer.retry || !this.deps.streams(peerId)
       || !this.deps.identity() || this.deps.identity()! >= peerId) return;
-    const delay = Math.min(60_000, 5_000 * 2 ** Math.min(peer.failures++, 4));
+    const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(peer.failures++, 4));
+    // Spread simultaneous peer failures even at the cap, without exceeding the retry ceiling.
+    const delay = Math.floor(backoff * (0.8 + Math.random() * 0.2));
     peer.retry = setTimeout(() => {
       peer.retry = undefined;
       if (this.peers.get(peerId) === peer) this.ready(peerId);

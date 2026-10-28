@@ -53,6 +53,17 @@ const mixed: ModelDisplayPricing = {
   },
 };
 
+// Short quotes must stay on separate lines even when both fit horizontally.
+const compact: ModelDisplayPricing = {
+  ...video,
+  summary: {
+    input: [
+      { price: 1, unit: 'image', quantity: 1 },
+      { price: 2, unit: 'second', quantity: 1 },
+    ],
+  },
+};
+
 void mountPage({
   host: {
     maker: {
@@ -71,7 +82,7 @@ void mountPage({
   render: (ctx) => {
     const quote =
       (
-        { speech, image, video, mixed, legacy: { items: speech.items } } as Record<
+        { speech, image, video, mixed, compact, legacy: { items: speech.items } } as Record<
           string,
           ModelDisplayPricing
         >

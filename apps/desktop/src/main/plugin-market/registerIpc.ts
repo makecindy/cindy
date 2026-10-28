@@ -32,6 +32,8 @@ import {
   type PluginMarketSnapshotOptions,
 } from './service.js';
 
+import { preparePluginShare } from './sharing.js';
+
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
@@ -174,6 +176,10 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       service().detail(requireString(pluginId, 'pluginId')),
     );
+  });
+  ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return preparePluginShare(pluginId, options);
   });
   ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

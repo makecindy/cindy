@@ -1,9 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '../user-provider.js';
 import { alignModelApiRoute, providerInterfaceModelRoute } from '../providerInterfaceRoutes.js';
-import { BUNDLED_CATALOG } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 
 describe('documented supplier interfaces', () => {
+  // Agnes previously fell back to 200K. Exercise saved connections and preset
+  // import through the production resolver, including an explicit user budget.
+  it('resolves Agnes capacity and interfaces without overwriting saved choices', () => {
+    const catalog = parseCatalog(JSON.stringify(BUNDLED_CATALOG));
+    const preset = catalog.presets!.find(p => p.id === 'agnes')!;
+    const provider = buildUserProvider({ id: 'agnes-account', name: 'Agnes', runtimes:
+      Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+      }])) }, { presets: catalog.presets, modelRegistry: catalog.modelRegistry });
+    for (const agent of provider.agents) {
+      expect(provider.models[agent]?.[0]).toMatchObject({
+        contextWindow: 512000, maxOutput: 65536, supportsImageInput: true,
+        selectedInterface: { api: agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
+      });
+    }
+    for (const contextWindow of [undefined, 510000]) {
+      const saved = buildUserProvider({ id: 'old-agnes', name: 'Agnes', runtimes: { pi: {
+        baseUrl: 'https://apihub.agnes-ai.com/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'agnes-3.0-flash', name: 'Agnes', defaultEnabled: false, ...(contextWindow ? { contextWindow } : {}) }],
+      } } }, { modelRegistry: catalog.modelRegistry });
+      expect(saved.models.pi?.[0]).toMatchObject({ contextWindow: contextWindow ?? 512000, defaultEnabled: false });
+      expect(saved.routing.pi?.upstream).toBe('https://apihub.agnes-ai.com/v1');
+    }
+  });
   // r4365890304 (unit): import saved Model Studio connections through the
   // production resolver. Previous coverage checked protocol shape, not whether
   // these products actually exposed a selected catalog interface.
