@@ -8,6 +8,8 @@ export interface CapabilityResourceSnapshot {
   discoveryErrorRevision?: string;
 }
 
+class CapabilityDiscoveryError extends Error {}
+
 /** Resource discovery is owned by the native adapters. This controller only
  * compares their snapshots and serializes reloads with the host send lease. */
 export function createSessionCapabilityMonitor<T extends CapabilityRefreshSession>(deps: {
@@ -17,6 +19,7 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
   read(session: T): Promise<CapabilityResourceSnapshot>;
   reload(session: T, isCurrent: () => boolean): Promise<T>;
   changed(session: T): void;
+  canContinueAfterDiscoveryError?(session: T): boolean;
 }) {
   const snapshots = new WeakMap<T, Promise<CapabilityResourceSnapshot>>();
   const coordinator = createSessionCapabilityRefreshCoordinator<T>({
@@ -25,10 +28,10 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
     onStateChanged: deps.changed,
     refresh: async (session, isCurrent) => {
       // Read before closing: a broken discovery/read leaves the old process intact.
-      const target = await deps.read(session);
+      const target = await read(session);
       const previous = await track(session);
       if (target.discoveryErrorRevision && target.discoveryErrorRevision !== previous.discoveryErrorRevision) {
-        throw new Error('Changed native capability resources could not be discovered');
+        throw new CapabilityDiscoveryError('Changed native capability resources could not be discovered');
       }
       if (!isCurrent()) throw new Error('Capability refresh superseded');
       const replacement = await deps.reload(session, isCurrent);
@@ -37,10 +40,20 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
     },
   });
 
+  async function read(session: T): Promise<CapabilityResourceSnapshot> {
+    try { return await deps.read(session); }
+    catch { throw new CapabilityDiscoveryError('Native capability resources could not be discovered'); }
+  }
+
+  function canContinue(session: T, error: unknown): boolean {
+    return error instanceof CapabilityDiscoveryError && deps.isCurrent(session)
+      && deps.canContinueAfterDiscoveryError?.(session) === true;
+  }
+
   function track(session: T): Promise<CapabilityResourceSnapshot> {
     let snapshot = snapshots.get(session);
     if (!snapshot) {
-      snapshot = deps.read(session);
+      snapshot = read(session);
       snapshots.set(session, snapshot);
       // Keep a failed baseline observable to beforeSend without an unhandled rejection.
       void snapshot.catch(() => {
@@ -53,21 +66,23 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
     return snapshot;
   }
 
-  async function check(session: T): Promise<void> {
-    if (!deps.isCurrent(session)) return;
+  async function check(session: T): Promise<boolean> {
+    if (!deps.isCurrent(session)) return true;
     try {
       const previous = await track(session);
-      const current = await deps.read(session);
+      const current = await read(session);
       if (deps.isCurrent(session) && previous.revision !== current.revision) {
         if (current.discoveryErrorRevision && current.discoveryErrorRevision !== previous.discoveryErrorRevision) {
-          throw new Error('Changed native capability resources could not be discovered');
+          throw new CapabilityDiscoveryError('Changed native capability resources could not be discovered');
         }
         coordinator.markChanged(session);
         deps.changed(session);
       }
+      return true;
     } catch (error) {
       if (coordinator.state(session)?.phase !== 'failed') coordinator.markFailed(session);
       deps.changed(session);
+      if (canContinue(session, error)) return false;
       throw error;
     }
   }
@@ -76,20 +91,23 @@ export function createSessionCapabilityMonitor<T extends CapabilityRefreshSessio
     let current = session;
     for (;;) {
       if (!deps.isCurrent(current)) return { kind: 'superseded' as const };
-      try { await check(current); }
+      try { if (!await check(current)) return { kind: 'unchanged' as const }; }
       catch (error) {
         coordinator.markFailed(current);
         deps.changed(current);
         return { kind: 'failed' as const, error };
       }
       const outcome = await coordinator.beforeSend(current);
+      if (outcome.kind === 'failed' && canContinue(current, outcome.error)) {
+        return { kind: 'unchanged' as const };
+      }
       if (outcome.kind === 'superseded') {
         const replacement = deps.current?.(current.id);
         if (replacement && replacement !== current) { current = replacement; continue; }
       }
       if (outcome.kind !== 'refreshed') { deps.changed(current); return outcome; }
       current = outcome.session;
-      try { await check(current); }
+      try { if (!await check(current)) return { kind: 'unchanged' as const }; }
       catch (error) {
         coordinator.markFailed(current);
         deps.changed(current);

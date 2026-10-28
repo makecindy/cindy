@@ -8068,6 +8068,39 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('discovers independent account Skills through that account native host and refreshes additions and removals', async () => {
+    let scope = 'default';
+    const deps = createDeps({}, { isCodexAccountProvider: id => id === 'account-b' });
+    deps.auth.getAuthEnv = async options => {
+      scope = options?.providerId ?? 'default';
+      return { CODEX_HOME: `/anonymous/${scope}` };
+    };
+    const skill = (name: string, account: string) => ({ name, description: name,
+      path: `/anonymous/${account}/skills/${name}/SKILL.md`, scope: 'user', enabled: true });
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.SkillsList, { result: { data: [{ cwd: '/repo',
+        skills: [skill(scope === 'account-b' ? 'private' : 'shared', scope)], errors: [] }] } });
+    };
+    const agent = new CodexAgent(deps);
+    try {
+      const normal = await agent.listAgentSkills({ workingDir: '/repo', forceReload: true });
+      expect(normal.skills.map(s => s.name)).toEqual(['shared']);
+      const privateSkills = await agent.listRuntimeSkills({ workingDir: '/repo', providerId: 'account-b', forceReload: true });
+      expect(privateSkills.skills.map(s => s.path)).toEqual(['/anonymous/account-b/skills/private/SKILL.md']);
+      expect(createdStdioOptions).toHaveLength(2);
+      expect(createdStdioOptions[1].env?.CODEX_HOME).toBe('/anonymous/account-b');
+      const account = createdTransports[1];
+      account.setMockResponse(Method.SkillsList, { result: { data: [{ cwd: '/repo',
+        skills: [skill('added', 'account-b')], errors: [] }] } });
+      expect((await agent.listRuntimeSkills({ workingDir: '/repo', providerId: 'account-b', forceReload: true }))
+        .skills.map(s => s.name)).toEqual(['added']);
+      account.setMockResponse(Method.SkillsList, { result: { data: [{ cwd: '/repo', skills: [], errors: [] }] } });
+      expect((await agent.listRuntimeSkills({ workingDir: '/repo', providerId: 'account-b', forceReload: true })).skills).toEqual([]);
+      expect((await agent.listAgentSkills({ workingDir: '/repo', forceReload: true })).skills.map(s => s.name)).toEqual(['shared']);
+      expect(account.lines.filter(line => line.includes('skills/list'))).toHaveLength(3);
+    } finally { await agent.dispose(); }
+  });
+
   it('uses the home directory to list global skills for a new conversation without a cwd', async () => {
     const home = os.homedir();
     MockCodexTransport.onCreate = (transport) => {

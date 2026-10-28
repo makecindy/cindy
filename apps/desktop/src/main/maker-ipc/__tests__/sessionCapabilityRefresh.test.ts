@@ -242,15 +242,66 @@ describe('native resource discovery and send boundary', () => {
     emit({ event: 'fileTree', data: { workdir: '/other/skills' } });
     expect(changed).not.toHaveBeenCalled();
     emit({ event: 'fileTree', data: { workdir: '/remote/skills' } });
+    await Promise.resolve();
     expect(changed).toHaveBeenCalledOnce();
     current = false;
     reconnect();
     emit({ event: 'fileTree', data: { workdir: '/remote/skills' } });
+    await Promise.resolve();
     expect(changed).toHaveBeenCalledOnce();
     dispose();
     expect(request).toHaveBeenLastCalledWith('ssh', 'watchStop', { workdir: '/remote/skills', consumerId: 'task-consumer' });
     expect(offEvent).toHaveBeenCalledOnce();
     expect(offReconnect).toHaveBeenCalledOnce();
+  });
+  it('discovers remote config and newly created roots without watch events, serializes polls, and stops at owner loss', async () => {
+    vi.useFakeTimers();
+    let dispose = () => {};
+    try {
+      const session = { id: 'ssh-task', instanceId: 'first' };
+      let current = session;
+      let revision = 'original';
+      let owner = true;
+      const reload = vi.fn(async () => { current = { ...session, instanceId: 'next' }; return current; });
+      const monitor = createSessionCapabilityMonitor({
+        isCurrent: candidate => owner && candidate === current, isIdle: () => true,
+        read: async () => ({ revision, watchPaths: ['/missing/.pi/skills'] }),
+        reload, changed: () => {},
+      });
+      await monitor.track(session);
+      const gate = deferred<void>();
+      let held = true;
+      const changed = vi.fn(async () => {
+        if (held) await gate.promise;
+        await monitor.check(current);
+        await monitor.beforeSend(current);
+      });
+      const request = vi.fn(async (_host: string, method: string) => {
+        if (method === 'watchStart') throw new Error('ENOENT');
+      });
+      const manager = { request, onHostEvent: () => () => {}, onHostConnected: () => () => {} } as unknown as RemoteFileBrowserManager;
+      dispose = await watchRemoteCapabilityPaths(manager, 'ssh', 'only-this-task', ['/missing/.pi/skills'], changed, () => owner);
+      revision = 'mcp-file-edited';
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(changed).toHaveBeenCalledOnce();
+      expect(reload).not.toHaveBeenCalled();
+      held = false;
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reload).toHaveBeenCalledOnce();
+      expect(monitor.state(current)?.phase).toBe('loaded');
+      revision = 'new-skill-root-created';
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reload).toHaveBeenCalledTimes(2);
+      owner = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(changed).toHaveBeenCalledTimes(2);
+      dispose();
+      owner = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(changed).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith('ssh', 'watchStop', { workdir: '/missing/.pi/skills', consumerId: 'only-this-task' });
+    } finally { dispose(); vi.useRealTimers(); }
   });
   it('hashes actual file changes and observes atomic replacement after watch readiness', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-capability-watch-'));
@@ -275,7 +326,7 @@ describe('native resource discovery and send boundary', () => {
     }
   });
 
-  function monitored() {
+  function monitored(allowAdvisoryDiscoveryFailure = false) {
     const initial = { id: 'task', instanceId: 'one' };
     let current = initial;
     let revision = 'original';
@@ -286,6 +337,7 @@ describe('native resource discovery and send boundary', () => {
       return current;
     });
     const monitor = createSessionCapabilityMonitor({
+      canContinueAfterDiscoveryError: () => allowAdvisoryDiscoveryFailure,
       isCurrent: session => session === current,
       current: () => current,
       isIdle: () => idle, read, reload, changed: vi.fn(),
@@ -398,6 +450,43 @@ describe('native resource discovery and send boundary', () => {
     h.read.mockResolvedValue({ revision: 'changed', watchPaths: [], discoveryErrorRevision: 'new-error' });
     expect((await h.monitor.beforeSend(h.initial)).kind).toBe('failed');
     expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  it('keeps Pi self-repair usable on advisory scan errors and reloads after repair', async () => {
+    const h = monitored(true);
+    await h.monitor.track(h.initial);
+    h.read.mockResolvedValue({ revision: 'unreadable-skill', watchPaths: [], discoveryErrorRevision: 'advisory' });
+    const dispatch = vi.fn();
+    const outcome = await h.monitor.beforeSend(h.initial);
+    if (outcome.kind === 'unchanged') dispatch();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.monitor.state(h.initial)?.phase).toBe('failed');
+    h.read.mockResolvedValue({ revision: 'repaired-skill', watchPaths: [] });
+    expect((await h.monitor.beforeSend(h.initial)).kind).toBe('refreshed');
+    expect(h.monitor.state(h.current)?.phase).toBe('loaded');
+  });
+
+  it('allows advisory file-read repair but keeps real native reload failures blocking', async () => {
+    const h = monitored(true);
+    await h.monitor.track(h.initial);
+    h.read.mockRejectedValueOnce(new Error('unreadable preview file'));
+    expect((await h.monitor.beforeSend(h.initial)).kind).toBe('unchanged');
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.monitor.state(h.initial)?.phase).toBe('failed');
+    h.change('fixed-preview');
+    h.reload.mockRejectedValueOnce(new Error('native startup failed'));
+    expect((await h.monitor.beforeSend(h.initial)).kind).toBe('failed');
+  });
+
+  it('retains self-repair when discovery fails at refresh preflight before close', async () => {
+    const h = monitored(true);
+    await h.monitor.track(h.initial);
+    h.read.mockResolvedValueOnce({ revision: 'new-resource', watchPaths: [] })
+      .mockRejectedValueOnce(new Error('preview changed during read'));
+    expect((await h.monitor.beforeSend(h.initial)).kind).toBe('unchanged');
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.monitor.state(h.initial)?.phase).toBe('failed');
   });
 
   it('drains a new entry created by a change notification during runtime replacement', async () => {

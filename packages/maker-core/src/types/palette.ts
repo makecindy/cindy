@@ -97,6 +97,8 @@ export interface ListAgentSkillsOptions {
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */
 export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
+  /** Host-owned account identity of the live local runtime. Never renderer supplied. */
+  providerId?: string | null;
   /** Exact config directory passed to the local runtime process, when it differs from its default. */
   runtimeConfigDir?: string;
 }

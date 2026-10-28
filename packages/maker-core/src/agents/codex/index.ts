@@ -86,6 +86,7 @@ import type { AuthState, Effort, PermissionMode, UserMessage } from '../../types
 import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
+  ListRuntimeSkillsOptions,
   ListAgentSkillsResult,
 } from '../../types/palette.js';
 import type {
@@ -1879,6 +1880,14 @@ export class CodexAgent extends BaseAgent {
    * 只是包成新的 AgentSkillCommand 形状(kind='agent-skill')。
    */
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    return this.listSkillCommands(opts);
+  }
+
+  override async listRuntimeSkills(opts: ListRuntimeSkillsOptions): Promise<ListAgentSkillsResult> {
+    return this.listSkillCommands(opts, opts.providerId);
+  }
+
+  private async listSkillCommands(opts: ListAgentSkillsOptions, providerId?: string | null): Promise<ListAgentSkillsResult> {
     // Codex app-server 的 skills/list 强制要求 cwd；无项目的新对话用 HOME 作为
     // 查询上下文，既能发现全局 skills，又不会误带任意项目的 repo skills。
     const workingDir = opts.workingDir || os.homedir();
@@ -1887,6 +1896,7 @@ export class CodexAgent extends BaseAgent {
         workingDir,
         opts.forceReload ?? false,
         opts.remoteHostId,
+        providerId,
       );
       const out: ListAgentSkillsResult = {
         skills: paletteVisibleCodexSkills(skills)
@@ -1928,10 +1938,13 @@ export class CodexAgent extends BaseAgent {
     workingDir: string,
     forceReload: boolean,
     remoteHostId?: string,
+    providerId?: string | null,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
     return this.withHostOperation(async () => remoteHostId
       ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
-      : this.getUtilityHost(),
+      : providerId && this.deps.isCodexAccountProvider?.(providerId)
+        ? { key: `local-account:${providerId}`, host: await this.getHost(undefined, 'oauth-bearer', { providerId }) }
+        : this.getUtilityHost(),
     host => this.listSkillsForHost(host, workingDir, forceReload));
   }
 

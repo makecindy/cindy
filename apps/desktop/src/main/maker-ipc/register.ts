@@ -9394,8 +9394,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...sources.flatMap(source => source.path ? [path.posix.dirname(physical(source.path))] : []),
           path.posix.join(remoteHome, '.claude', 'skills'),
           path.posix.join(remoteHome, '.agents', 'skills'),
+          path.posix.join(remoteHome, '.pi', 'agent', 'skills'),
+          path.posix.join(remoteHome, '.codex', 'skills'),
           path.posix.join(session.workDir, '.claude'),
           path.posix.join(session.workDir, '.agents'),
+          path.posix.join(session.workDir, '.pi', 'skills'),
+          path.posix.join(session.workDir, '.codex', 'skills'),
         ])],
       };
     }
@@ -9404,9 +9408,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     else await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
     const providerId = session.providerId !== undefined ? session.providerId : getSessionProvider(session.id);
     const codexHome = !session.agentDeviceId && isCodexAccountProvider(providerId) ? codexAccountHome(providerId!) : getCodexHome();
-    const listed = await maker.listAgentSkills(session.agentKind, {
-      workingDir: session.workDir, forceReload: true,
-    });
+    const listed = session.agentKind === 'codex' && isCodexAccountProvider(providerId)
+      ? await maker.listAgentRuntimeSkills('codex', {
+        workingDir: session.workDir, forceReload: true, providerId, runtimeConfigDir: codexHome,
+      })
+      : await maker.listAgentSkills(session.agentKind, {
+        workingDir: session.workDir, forceReload: true,
+      });
     const skillFiles = listed.skills.flatMap(skill => skill.path ? [skill.path] : []);
     const discoveryRoots = [
       path.join(os.homedir(), '.agents', 'skills'),
@@ -9453,6 +9461,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       && session.listBackgroundTasks().length === 0
       && !hasPendingAgentInteractionForSession(session.id),
     current: currentCapabilitySession,
+    // Pi discovery is advisory: keep native tools available to repair the source.
+    canContinueAfterDiscoveryError: session => session.agentKind === 'pi' && !mcpConfiguration.hasPendingSave(),
     read: async session => {
       const detached = detachedCapabilitySessions.get(session.id);
       const snapshot = await readCapabilitySourceSnapshot({
@@ -9653,7 +9663,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (maker.getSession(session.id) !== session || isAppSessionBoundaryPending()) return;
       capabilityWatchers.get(session)?.();
       const changed = () => {
-          void capabilityMonitor.check(session)
+          return capabilityMonitor.check(session)
             .then(() => settleSessionCapabilitiesHolder?.(session.id))
             .catch(() => { /* Before-send discovery exposes incomplete sources without closing the old runtime. */ });
         };

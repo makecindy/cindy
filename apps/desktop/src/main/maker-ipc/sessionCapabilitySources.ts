@@ -130,10 +130,19 @@ export async function watchCapabilityPaths(roots: readonly string[], changed: ()
  * one task must never stop the file tree or another control device's watcher. */
 export async function watchRemoteCapabilityPaths(
   manager: RemoteFileBrowserManager, hostId: string, consumerId: string,
-  roots: readonly string[], changed: () => void, isCurrent: () => boolean,
+  roots: readonly string[], changed: () => void | Promise<void>, isCurrent: () => boolean,
 ): Promise<() => void> {
   let closed = false;
   const directories = [...new Set(roots)];
+  // Missing roots and single config files cannot be watched recursively without
+  // observing the whole remote home. Compare their snapshots on a bounded timer.
+  let checking: Promise<void> | undefined;
+  const compare = () => {
+    if (closed || !isCurrent() || checking) return;
+    checking = Promise.resolve().then(changed).catch(() => undefined).finally(() => { checking = undefined; });
+  };
+  const timer = setInterval(compare, 30_000);
+  timer.unref?.();
   const start = async (workdir: string) => {
     if (closed || !isCurrent()) return;
     try {
@@ -145,16 +154,17 @@ export async function watchRemoteCapabilityPaths(
   };
   const off = manager.onHostEvent(hostId, event => {
     if (!closed && isCurrent() && event.event === 'fileTree'
-      && directories.includes((event.data as { workdir: string }).workdir)) changed();
+      && directories.includes((event.data as { workdir: string }).workdir)) compare();
   });
   const offReconnect = manager.onHostConnected(hostId, () => {
     if (closed || !isCurrent()) return;
-    changed();
+    compare();
     for (const root of directories) void start(root);
   });
   for (const root of directories) await start(root);
   return () => {
     closed = true;
+    clearInterval(timer);
     off();
     offReconnect();
     for (const workdir of directories) {
