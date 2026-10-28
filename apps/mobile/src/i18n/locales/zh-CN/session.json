@@ -48,6 +48,12 @@
     "dismissTitle": "关闭历史失败提示"
   },
   "common": {
+    "capabilityReload": {
+      "pending": "Skill / MCP · 待刷新",
+      "refreshing": "Skill / MCP · 正在刷新…",
+      "loaded": "Skill / MCP · 已加载",
+      "failed": "Skill / MCP · 加载失败"
+    },
     "modelHiddenReselect": "{{model}} 已关闭，请选择已开启的模型后再发送。",
     "modelUnavailableReselect": "{{model}} 在这台电脑上已不可用，请重新选择模型后再发送。",
     "cancel": "取消",

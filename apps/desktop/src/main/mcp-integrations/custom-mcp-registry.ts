@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../logger.js';
+import { createHash } from 'node:crypto';
 import type { McpProvider } from '@cindy/maker-core';
 
 import {
@@ -30,6 +31,8 @@ const log = createLogger('custom-mcp-registry');
 
 /** 被注入的 agent mcpProviders 数组(原地 mutate 的目标)。 */
 const registeredArrays: McpProvider[][] = [];
+let appliedRevision: string | null = null;
+let registryGeneration = 0;
 
 /**
  * 注册一个 agent 的 mcpProviders 数组,后续 refresh 会原地更新它。
@@ -37,13 +40,15 @@ const registeredArrays: McpProvider[][] = [];
  */
 export function registerCustomMcpArrays(...arrays: McpProvider[][]): void {
   for (const arr of arrays) {
-    if (!registeredArrays.includes(arr)) registeredArrays.push(arr);
+    if (!registeredArrays.includes(arr)) { registeredArrays.push(arr); appliedRevision = null; registryGeneration++; }
   }
 }
 
 /** 清空注册表（切账号 / resetMaker 时调用，防止旧数组引用残留）。 */
 export function resetCustomMcpRegistry(): void {
   registeredArrays.length = 0;
+  appliedRevision = null;
+  registryGeneration++;
   resetAppServers();
 }
 
@@ -71,13 +76,19 @@ export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
  * 读 DB → 重建 CustomMcpProvider[] → 原地更新每个已注册数组
  * (移除旧 CustomMcpProvider,追加新的)。任何一步失败只 warn,不抛。
  */
-export async function refreshCustomMcpProviders(): Promise<void> {
+export async function refreshCustomMcpProviders(options?: { strict?: boolean }): Promise<void> {
+  const generation = registryGeneration;
   let providers: CustomMcpProvider[] = [];
+  let revision: string;
   // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
   const skippedNames = new Set<string>();
   try {
     const configs = await listCustomMcpServers();
+    if (generation !== registryGeneration) throw new Error('MCP registry owner changed');
+    const tokens = new Map(configs.map(config => [config.id, readCustomMcpToken(config.id)]));
     const reservedIds = getBuiltinMcpServerNames();
+    revision = createHash('sha256').update(JSON.stringify([configs, [...tokens], reservedIds])).digest('hex');
+    if (revision === appliedRevision) return;
     providers = configs.flatMap((config) => {
       const validation = validateCustomMcpConfig(config, reservedIds);
       if (!validation.ok) {
@@ -91,13 +102,17 @@ export async function refreshCustomMcpProviders(): Promise<void> {
         skippedNames.add(serverName);
         return [];
       }
-      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy);
+      // The endpoint and credential belong to one immutable launch revision.
+      // An old Apps proxy must never pair its old URL with a newly saved token.
+      const token = tokens.get(config.id) ?? null;
+      const provider = new CustomMcpProvider(config, () => token, createAppServerProxy);
       return [provider];
     });
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
       error: err instanceof Error ? err.message : String(err),
     });
+    if (options?.strict) throw new Error('MCP provider registry refresh failed');
     return;
   }
   // Saved endpoint changes revoke open Views, while existing Agent calls retain their snapshot.
@@ -140,6 +155,7 @@ export async function refreshCustomMcpProviders(): Promise<void> {
       arr.push(provider);
     }
   }
+  appliedRevision = revision;
   log.info('custom mcp providers refreshed', {
     count: providers.length,
     skipped: skippedNames.size,

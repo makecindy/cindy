@@ -7693,6 +7693,12 @@
       }
     },
     "mcp": {
+      "reload": {
+        "pending": "스킬 / MCP · 새로고침 대기 중",
+        "refreshing": "스킬 / MCP · 새로고침 중…",
+        "loaded": "스킬 / MCP · 로드됨",
+        "failed": "스킬 / MCP · 로드하지 못함"
+      },
       "title": "외부 도구",
       "subtitle": "직접 만든 원격 MCP 서버를 연결합니다. HTTP / Streamable HTTP 서버는 Claude와 Codex 모두에서 사용 가능하며, SSE는 Claude 전용입니다.",
       "cancel": "취소",
@@ -7730,6 +7736,7 @@
         "urlInvalid": "유효한 http(s) URL을 입력하세요"
       },
       "toast": {
+        "credentialSaveFailed": "MCP 인증 정보를 저장하지 못했습니다. 설정을 다시 저장하여 재시도하세요.",
         "created": "MCP 서버가 추가되었습니다",
         "updated": "MCP 서버가 업데이트되었습니다",
         "deleted": "MCP 서버가 삭제되었습니다",

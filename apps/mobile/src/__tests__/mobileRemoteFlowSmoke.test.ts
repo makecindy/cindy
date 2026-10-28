@@ -372,6 +372,7 @@ describe('mobile remote-control headless UI flow smoke', () => {
       if (channel === 'maker:list-agent-skills') {
         return {
           success: true,
+          capabilityRefreshPhase: 'loaded',
           skills: [{ kind: 'agent-skill', name: 'review', source: 'user', description: 'Review code' }],
         };
       }
@@ -657,6 +658,7 @@ describe('mobile remote-control headless UI flow smoke', () => {
       sessionId: SESSION_ID,
     })).resolves.toMatchObject({
       skills: [{ name: 'review' }],
+      capabilityRefreshPhase: 'loaded',
     });
     expect(invoke).toHaveBeenCalledWith(
       DEVICE_ID,

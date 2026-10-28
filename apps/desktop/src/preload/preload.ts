@@ -6673,15 +6673,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
         : ipcRenderer.invoke('maker:mcp:custom:list', context),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
+      options?: { deferRuntimeRefresh: true },
+    ): Promise<{ ok: true; saveId?: string }> => options
+      ? ipcRenderer.invoke('maker:mcp:custom:create', config, options)
+      : ipcRenderer.invoke('maker:mcp:custom:create', config),
     updateCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config),
+      options?: { deferRuntimeRefresh: true },
+    ): Promise<{ ok: true; saveId?: string }> => options
+      ? ipcRenderer.invoke('maker:mcp:custom:update', config, options)
+      : ipcRenderer.invoke('maker:mcp:custom:update', config),
     deleteCustomMcpServer: (mcpId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:mcp:custom:delete', mcpId),
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */
-    refreshCustomMcpCodex: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:mcp:custom:refresh'),
+    refreshCustomMcpCodex: (receipt?: { saveId: string; committed: boolean }): Promise<{ ok: true }> =>
+      receipt ? ipcRenderer.invoke('maker:mcp:custom:refresh', receipt) : ipcRenderer.invoke('maker:mcp:custom:refresh'),
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: fanOutMakerMcpChanged,
     /** 自定义供应商上游错误订阅（payload = { agent, providerId, code, retryable, status, detail? }）。 */
@@ -6944,6 +6950,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{
       success: boolean;
       error?: string;
+      capabilityRefreshPhase?: import('../shared/sessionCapabilityRefresh').SessionCapabilityRefreshPhase;
       skills?: Array<{
         kind: 'agent-skill';
         name: string;

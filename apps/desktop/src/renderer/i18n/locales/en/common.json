@@ -7724,6 +7724,12 @@
       }
     },
     "mcp": {
+      "reload": {
+        "pending": "Skills / MCP · Waiting to reload",
+        "refreshing": "Skills / MCP · Reloading…",
+        "loaded": "Skills / MCP · Loaded",
+        "failed": "Skills / MCP · Could not reload"
+      },
       "title": "External tools",
       "subtitle": "Connect your own remote MCP servers. HTTP/Streamable HTTP servers work with both Claude and Codex; SSE is Claude-only.",
       "cancel": "Cancel",
@@ -7761,6 +7767,7 @@
         "urlInvalid": "Enter a valid http(s) URL"
       },
       "toast": {
+        "credentialSaveFailed": "The MCP credential could not be saved. Save the configuration again to retry.",
         "created": "MCP server added",
         "updated": "MCP server updated",
         "deleted": "MCP server deleted",

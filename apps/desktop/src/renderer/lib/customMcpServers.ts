@@ -4,14 +4,12 @@
  * 配置走 maker IPC（入 localDb）；token 走通用 safeStorage IPC（`mcp_token_<id>`，本地加密；
  * main 的 CustomMcpProvider resolve 时读出，Claude 合成 Authorization 头 / Codex 注入 env）。
  *
- * 顺序约定：
- *   - create：先写配置（IPC 在重名 / 非法时 reject，避免误覆盖既有同 id 的 token），成功后存 token。
- *   - update：先写配置，成功后按 clearToken 标志决定 token 处理：
- *       clearToken=true  → 用户明确清空字段 → 移除已存 token（撤销鉴权）。
- *       clearToken=false → 字段为空但尚未加载完成，或用户未动字段 → 保留已存 token（留空不改）。
- *   - delete：先删配置，再清 token（幂等）。
+ * create/update 先由 main 校验并暂存配置，处理完 safeStorage 后再提交配置与刷新。
+ * clearToken=true 表示明确移除密钥；空值且 clearToken=false 保留原密钥。
+ * delete 先删配置，再清 token（幂等）。
  */
 
+import { i18n } from '@/i18n';
 import { customMcpSecretStorageKey } from '@/../shared/providerSecrets';
 
 import type { CustomMcpConfig } from '@/../shared/customMcp';
@@ -32,79 +30,47 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
   return res.servers;
 }
 
-/** 新建：先写配置（reject 时不碰 token），成功后存 token；无 token 时清除同 id 可能遗留的旧 key。 */
-export async function createCustomMcpServer(
-  config: CustomMcpConfig,
-  token: string,
-): Promise<void> {
-  await window.electronAPI.maker.createCustomMcpServer(config);
-  const t = token.trim();
-  if (t) {
-    // token 是可选字段：存储失败不阻断 create 事务（配置已入库，用户可在「编辑」里补录）。
-    // safeStorageStore 在 safeStorage 不可用时返回 false 而不是 throw，需单独检查。
-    try {
-      const ok = await window.electronAPI.safeStorageStore(customMcpSecretStorageKey(config.id), t);
-      if (!ok) console.warn('[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved');
-    } catch (err) {
-      console.warn('[customMcpServers] safeStorageStore failed for new MCP token (non-fatal)', err);
-    }
-  } else {
-    try {
-      await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
-    } catch {
-      /* 无旧 token 时 remove 无害 */
-    }
-  }
-  // 第二次 invalidateCodex：消除「配置 IPC 完成→token 落盘」之间的竞态窗口——
-  // 若 Codex 在该窗口内重建环境，会读到写入前的旧/空 token；token 落盘后再失效一次，
-  // 确保下个 Codex 会话读到正确 token。best-effort，失败不阻断。
-  try {
-    await window.electronAPI.maker.refreshCustomMcpCodex();
-  } catch {
-    /* best-effort */
-  }
-}
-
-/**
- * 编辑：先写配置，成功后处理 token。
- * - token 非空 → 写入新 token。
- * - token 为空 + clearToken=true → 移除已存 token（用户明确清空字段 = 撤销鉴权）。
- * - token 为空 + clearToken=false → 不动 safeStorage（async 回填未完成 / 用户未改）。
- */
-export async function updateCustomMcpServer(
+/** Configuration stays behind a main-owned save receipt until credentials are
+ * persisted. The existing secret IPC retains its encrypted device-link route. */
+async function saveWithCredential(
   config: CustomMcpConfig,
   token: string,
   clearToken: boolean,
+  create: boolean,
 ): Promise<void> {
-  await window.electronAPI.maker.updateCustomMcpServer(config);
-  const t = token.trim();
-  let tokenChanged = false;
-  if (t) {
-    // token 是可选字段：存储失败不阻断 update 事务（配置已入库），与 create 路径保持一致。
-    // safeStorageStore 在 safeStorage 不可用时返回 false 而不是 throw，需单独检查。
-    try {
-      const ok = await window.electronAPI.safeStorageStore(customMcpSecretStorageKey(config.id), t);
-      if (!ok) console.warn('[customMcpServers] safeStorageStore returned false (safeStorage unavailable) — token not saved');
-      else tokenChanged = true;
-    } catch (err) {
-      console.warn('[customMcpServers] safeStorageStore failed on update (non-fatal)', err);
+  const maker = window.electronAPI.maker;
+  const receipt = await (create ? maker.createCustomMcpServer : maker.updateCustomMcpServer)(
+    config, { deferRuntimeRefresh: true },
+  );
+  let credentialComplete = false;
+  try {
+    const value = token.trim();
+    if (value) {
+      if (!await window.electronAPI.safeStorageStore(customMcpSecretStorageKey(config.id), value)) {
+        throw new Error(i18n.t('settings.mcp.toast.credentialSaveFailed'));
+      }
+    } else if (clearToken || create) {
+      const removed = await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
+      if (!removed.success) throw new Error(i18n.t('settings.mcp.toast.credentialSaveFailed'));
     }
-  } else if (clearToken) {
-    try {
-      await window.electronAPI.safeStorageRemove(customMcpSecretStorageKey(config.id));
-      tokenChanged = true;
-    } catch {
-      /* 清理失败不影响配置更新 */
+    credentialComplete = true;
+    await maker.refreshCustomMcpCodex(receipt.saveId ? { saveId: receipt.saveId, committed: true } : undefined);
+  } catch {
+    if (receipt.saveId) {
+      await maker.refreshCustomMcpCodex({ saveId: receipt.saveId, committed: false }).catch(() => undefined);
     }
+    throw new Error(i18n.t(credentialComplete ? 'settings.mcp.toast.saveFailed' : 'settings.mcp.toast.credentialSaveFailed'));
   }
-  // 仅 token 实际发生变化时才触发第二次 invalidateCodex，消除竞态窗口（同 create 路径）。
-  if (tokenChanged) {
-    try {
-      await window.electronAPI.maker.refreshCustomMcpCodex();
-    } catch {
-      /* best-effort */
-    }
-  }
+}
+
+export async function createCustomMcpServer(config: CustomMcpConfig, token: string): Promise<void> {
+  return saveWithCredential(config, token, true, true);
+}
+
+export async function updateCustomMcpServer(
+  config: CustomMcpConfig, token: string, clearToken: boolean,
+): Promise<void> {
+  return saveWithCredential(config, token, clearToken, false);
 }
 
 /** 删除：先删配置，再清 token（幂等，失败忽略）。 */

@@ -86,6 +86,153 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  it('does not block healthy tasks after an uncommitted new MCP credential fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    const control = registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    const waiting = control.waitForStableConfiguration();
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH,
+      { saveId: receipt.saveId, committed: false })).rejects.toThrow('credential save failed');
+    await expect(waiting).resolves.toBeUndefined();
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
+  });
+  it('retains recovery protection when a new config was written before runtime refresh failed', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({ refreshProviders: vi.fn().mockRejectedValueOnce(new Error('fixture registry failure')) });
+    const control = registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH,
+      { saveId: receipt.saveId, committed: true })).rejects.toThrow('fixture registry failure');
+    expect(await listCustomMcpServers()).toMatchObject([validConfig]);
+    await expect(control.waitForStableConfiguration()).rejects.toThrow('configuration save failed');
+    const retry = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, { saveId: retry.saveId, committed: true });
+    await expect(control.waitForStableConfiguration()).resolves.toBeUndefined();
+  });
+  it('commits duplicate finalization receipts only once, including a lost reply retry', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    const final = { saveId: receipt.saveId, committed: true };
+    await Promise.all([harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, final),
+      harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, final)]);
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, final)).resolves.toEqual({ ok: true });
+    expect(deps.refreshProviders).toHaveBeenCalledOnce();
+    expect(await listCustomMcpServers()).toHaveLength(1);
+  });
+
+  it('releases a staged save as failed when its settings window disappears', async () => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    const control = registerMcpHandlers(harness, deps);
+    await harness.invokeFrom(7, MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig, { deferRuntimeRefresh: true });
+    const waiting = control.waitForStableConfiguration();
+    harness.destroySender(7);
+    await expect(waiting).rejects.toThrow('configuration save failed');
+    expect(control.hasPendingSave()).toBe(false);
+    expect(await listCustomMcpServers()).toMatchObject([validConfig]);
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
+  });
+  it('releases healthy tasks when a window abandons a new MCP before config commit', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    const control = registerMcpHandlers(harness, deps);
+    await harness.invokeFrom(7, MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig, { deferRuntimeRefresh: true });
+    const waiting = control.waitForStableConfiguration();
+    harness.destroySender(7);
+    await expect(waiting).resolves.toBeUndefined();
+    expect(control.hasPendingSave()).toBe(false);
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
+  });
+  it('holds original-task input until configuration and credential commit both finish', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const backgroundReload = vi.fn();
+    let control!: ReturnType<typeof registerMcpHandlers>;
+    const runtimeChanged = vi.fn(() => {
+      // Production notifications arrive before finalization releases the barrier.
+      void control.waitForStableConfiguration().then(backgroundReload);
+    });
+    const deps = makeDeps({ runtimeChanged });
+    control = registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    const dispatch = vi.fn();
+    const waiting = control.waitForStableConfiguration().then(dispatch);
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+    expect(await listCustomMcpServers()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, { saveId: receipt.saveId, committed: true });
+    await waiting;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(runtimeChanged).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(backgroundReload).toHaveBeenCalledOnce());
+    expect(deps.refreshProviders).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed credential save visible and permits a successful retry', async () => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    const control = registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH,
+      { saveId: receipt.saveId, committed: false })).rejects.toThrow('credential save failed');
+    await expect(control.waitForStableConfiguration()).rejects.toThrow('configuration save failed');
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
+    expect(await listCustomMcpServers()).toMatchObject([validConfig]);
+    const retry = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH, { saveId: retry.saveId, committed: true });
+    await expect(control.waitForStableConfiguration()).resolves.toBeUndefined();
+  });
+
+  it('rejects overlapping saves before a second writer can change the configuration', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const control = registerMcpHandlers(harness, makeDeps());
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig);
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig, { deferRuntimeRefresh: true });
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE,
+      { ...validConfig, name: 'overlapping' }, { deferRuntimeRefresh: true })).rejects.toThrow('already being saved');
+    expect((await listCustomMcpServers())[0].name).toBe(validConfig.name);
+    control.dispose();
+  });
+
+  it('rejects an old owner commit without refreshing the new owner', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    let owner = 'first';
+    const deps = makeDeps({ ownerKey: () => owner });
+    const control = registerMcpHandlers(harness, deps);
+    const receipt = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig,
+      { deferRuntimeRefresh: true }) as { saveId: string };
+    const waiting = control.waitForStableConfiguration();
+    owner = 'second';
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH,
+      { saveId: receipt.saveId, committed: true })).rejects.toThrow('inactive owner');
+    control.dispose();
+    await expect(waiting).rejects.toThrow('owner changed');
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {

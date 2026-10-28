@@ -189,6 +189,7 @@ export interface MobileLearnStartRequest {
 export interface MobileAgentSkillListResult {
   success: boolean;
   error?: string;
+  capabilityRefreshPhase?: 'pending' | 'refreshing' | 'loaded' | 'failed';
   skills?: MobileSlashCommand[];
 }
 

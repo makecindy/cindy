@@ -5824,13 +5824,15 @@ interface ElectronAPI {
     ) => Promise<import('../shared/customMcp').CustomMcpListResult>;
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ) => Promise<{ ok: true }>;
+      options?: { deferRuntimeRefresh: true },
+    ) => Promise<{ ok: true; saveId?: string }>;
     updateCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
-    ) => Promise<{ ok: true }>;
+      options?: { deferRuntimeRefresh: true },
+    ) => Promise<{ ok: true; saveId?: string }>;
     deleteCustomMcpServer: (mcpId: string) => Promise<{ ok: true }>;
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */
-    refreshCustomMcpCodex: () => Promise<{ ok: true }>;
+    refreshCustomMcpCodex: (receipt?: { saveId: string; committed: boolean }) => Promise<{ ok: true }>;
     /** 自定义 MCP 变更广播订阅（返回 off）。 */
     onMcpChanged: (cb: () => void) => () => void;
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
@@ -6067,6 +6069,7 @@ interface ElectronAPI {
     ) => Promise<{
       success: boolean;
       error?: string;
+      capabilityRefreshPhase?: import('../shared/sessionCapabilityRefresh').SessionCapabilityRefreshPhase;
       skills?: Array<{
         kind: 'agent-skill';
         name: string;

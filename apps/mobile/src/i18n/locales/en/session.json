@@ -48,6 +48,12 @@
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
+    "capabilityReload": {
+      "pending": "Skills / MCP · Waiting to reload",
+      "refreshing": "Skills / MCP · Reloading…",
+      "loaded": "Skills / MCP · Loaded",
+      "failed": "Skills / MCP · Could not reload"
+    },
     "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
     "modelUnavailableReselect": "{{model}} is no longer available on this computer. Choose another model before sending.",
     "cancel": "Cancel",

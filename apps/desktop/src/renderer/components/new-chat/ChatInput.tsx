@@ -4585,6 +4585,9 @@ export function ChatInput({
   });
   const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
     useState<PiPackageCommandRuntimeStatus | null>(null);
+  const [capabilityRefreshPhase, setCapabilityRefreshPhase] = useState<
+    import('@/../shared/sessionCapabilityRefresh').SessionCapabilityRefreshPhase | undefined
+  >();
   const slashCommandsReady = isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
@@ -4629,6 +4632,9 @@ export function ChatInput({
           onPiRuntimeStatus: (status) => {
             if (slashCommandLoadSeqRef.current === seq) setPiRuntimeCommandStatus(status);
           },
+          onCapabilityRefreshPhase: (phase) => {
+            if (slashCommandLoadSeqRef.current === seq) setCapabilityRefreshPhase(phase);
+          },
         },
         deviceLinkDeviceId ?? undefined,
       )
@@ -4661,6 +4667,7 @@ export function ChatInput({
   useEffect(() => {
     piRuntimeRetryRef.current = 0;
     setPiRuntimeCommandStatus(null);
+    setCapabilityRefreshPhase(undefined);
   }, [slashCommandContextKey]);
   useEffect(() => {
     reloadSlashCommands();
@@ -4671,6 +4678,10 @@ export function ChatInput({
       void reloadSlashCommands({ forceReload: true });
     });
   }, [reloadSlashCommands]);
+
+  useEffect(() => window.electronAPI.maker.onMcpChanged(() => {
+    reloadSlashCommands({ forceReload: true });
+  }), [reloadSlashCommands]);
 
   useEffect(
     () =>
@@ -10243,6 +10254,7 @@ export function ChatInput({
           {/* Slash palette */}
           {slashOpen && trigger.kind === 'slash' && (
             <SlashCommandPalette
+              capabilityRefreshPhase={capabilityRefreshPhase}
               query={trigger.query}
               commands={paletteCommands}
               focusedIndex={slashFocus}

@@ -7693,6 +7693,12 @@
       }
     },
     "mcp": {
+      "reload": {
+        "pending": "Skill / MCP · 待刷新",
+        "refreshing": "Skill / MCP · 正在刷新…",
+        "loaded": "Skill / MCP · 已加载",
+        "failed": "Skill / MCP · 加载失败"
+      },
       "title": "外部工具",
       "subtitle": "接入你自己的远程 MCP 服务器。HTTP / Streamable HTTP 服务器 Claude 和 Codex 均可调用；SSE 仅支持 Claude。",
       "cancel": "取消",
@@ -7730,6 +7736,7 @@
         "urlInvalid": "请填写合法的 http(s) URL"
       },
       "toast": {
+        "credentialSaveFailed": "MCP 密钥未能保存，请重新保存配置以重试",
         "created": "MCP 服务器已添加",
         "updated": "MCP 服务器已更新",
         "deleted": "MCP 服务器已删除",

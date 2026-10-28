@@ -198,6 +198,8 @@ describe('complete selection commit boundaries', () => {
     // A new scope instance also exercises a restart between turns.
     const adapter = compile(directSendAdapter, {
       scheduledModelScope: createScheduledModelScope(deps),
+      waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
+      refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),
       acquireSendToSessionLock, agentSwitchPending: new Map(),
       isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
@@ -240,6 +242,8 @@ describe('complete selection commit boundaries', () => {
       bootstrapSwitchedSession: vi.fn(), log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, { agentSwitchPending: pending, acquireSendToSessionLock,
       scheduledModelScope: { restore: vi.fn(async () => {}) },
+      waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
+      refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),
       restoreArchivedSessionForSend: async () => { status = 'active'; },
       reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent,
       agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
@@ -341,6 +345,8 @@ describe('Orca model-only picker intent admission', () => {
       log: { info: vi.fn(), warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, {
       scheduledModelScope: { restore: vi.fn(async () => {}) },
+      waitForSessionCapabilityConfiguration: vi.fn(async () => {}),
+      refreshSessionCapabilitiesUnderLock: vi.fn(async () => {}),
       agentSwitchPending: pending, restoreArchivedSessionForSend: restore,
       acquireSendToSessionLock: acquire, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, contextOverflowRolloverHolder: null,

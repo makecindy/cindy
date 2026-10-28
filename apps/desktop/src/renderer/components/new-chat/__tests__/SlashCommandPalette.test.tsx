@@ -37,6 +37,15 @@ const discoveredProjectSkill: UnifiedCommand = {
 };
 
 describe('SlashCommandPalette project Skill rows', () => {
+  it.each(['pending', 'refreshing', 'loaded', 'failed'] as const)(
+    'shows the host %s state inside the palette without invoking a Skill', phase => {
+      const onSelect = vi.fn();
+      render(<SlashCommandPalette query="" commands={[]} focusedIndex={0}
+        capabilityRefreshPhase={phase} onFocusedIndexChange={vi.fn()} onSelect={onSelect} onClose={vi.fn()} />);
+      expect(screen.getByRole('status').textContent).toBe(`settings.mcp.reload.${phase}`);
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
   it('opens details from the portaled information panel without inserting the Skill', () => {
     const command: UnifiedCommand = { ...discoveredProjectSkill, path: '/repo/.pi/skills/demo/SKILL.md' };
     const onSelect = vi.fn();

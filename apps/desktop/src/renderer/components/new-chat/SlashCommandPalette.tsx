@@ -68,6 +68,7 @@ interface SlashCommandPaletteProps {
   onTooltipHoverChange?: (hovered: boolean) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
+  capabilityRefreshPhase?: import('@/../shared/sessionCapabilityRefresh').SessionCapabilityRefreshPhase;
 }
 
 /** 右侧小标签文案 —— skill 显示 source(user/skill), agent-builtin 显示 'agent-cmd'
@@ -98,11 +99,13 @@ export function SlashCommandPalette({
   allowProjectSkillDetails = true,
   onTooltipHoverChange,
   maxHeight = 400,
+  capabilityRefreshPhase,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const capabilityStatusRef = useRef<HTMLDivElement | null>(null);
   // Glide highlight on the focused index; arrow keys are pressed in the editor.
   const highlightPanelRef = useMenuPanel(panelRef, {
     lockWidth: false,
@@ -187,7 +190,11 @@ export function SlashCommandPalette({
       const viewportW = window.innerWidth;
       const viewportH = window.innerHeight;
       const bottomBoundary = Math.min(panelRect.bottom, viewportH - VIEWPORT_PAD);
-      const tooltipMaxHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - VIEWPORT_PAD));
+      // On narrow windows the description overlaps the menu. Keep the runtime
+      // status visible above it rather than covering the loading/failure state.
+      const topBoundary = Math.max(VIEWPORT_PAD,
+        capabilityStatusRef.current?.getBoundingClientRect().bottom ?? VIEWPORT_PAD);
+      const tooltipMaxHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - topBoundary));
       const measuredHeight = Math.min(tooltipHeight, tooltipMaxHeight);
       // Prefer right side; flip to left when there isn't TOOLTIP_W + padding.
       const rightLeft = panelRect.right + TOOLTIP_GAP;
@@ -198,7 +205,7 @@ export function SlashCommandPalette({
       // Vertically align with focused row; clamp so the tooltip never drops
       // below the palette panel bottom (or the viewport bottom, whichever is higher).
       const rawTop = (rowRect?.top ?? panelRect.top) - 6;
-      const top = Math.max(VIEWPORT_PAD, Math.min(rawTop, bottomBoundary - measuredHeight));
+      const top = Math.max(topBoundary, Math.min(rawTop, bottomBoundary - measuredHeight));
       setTooltipPos({
         left: Math.round(left),
         top: Math.round(top),
@@ -213,7 +220,7 @@ export function SlashCommandPalette({
       window.removeEventListener('resize', handle);
       window.removeEventListener('scroll', handle, true);
     };
-  }, [focusedCmd, focusedIndex, panelScroll, filtered.length, maxHeight, tooltipHeight]);
+  }, [focusedCmd, focusedIndex, panelScroll, filtered.length, maxHeight, tooltipHeight, capabilityRefreshPhase]);
 
   const tooltipVisible = !!focusedCmd && !!tooltipPos;
   useEffect(() => {
@@ -265,6 +272,11 @@ export function SlashCommandPalette({
         style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
         <MenuHighlightLayer />
+        {capabilityRefreshPhase && (
+          <div ref={capabilityStatusRef} role="status" className="px-2 py-1 text-xs text-muted-foreground">
+            {t(`settings.mcp.reload.${capabilityRefreshPhase}`)}
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div
             className={cn(

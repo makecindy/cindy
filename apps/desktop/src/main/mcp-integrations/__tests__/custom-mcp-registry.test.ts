@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpProvider } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 
-const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
+const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn(), readToken: vi.fn((): string | null => null) }));
 
 vi.mock('../../maker-host/custom-mcp-store.js', async () => {
   const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.js')>(
@@ -26,7 +26,7 @@ vi.mock('../../maker-host/custom-mcp-store.js', async () => {
 });
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  readCustomMcpToken: () => null,
+  readCustomMcpToken: storeMock.readToken,
 }));
 
 import {
@@ -53,9 +53,50 @@ function builtin(name: string): McpProvider {
 beforeEach(() => {
   resetCustomMcpRegistry();
   storeMock.listCustomMcpServers.mockReset();
+  storeMock.readToken.mockReset().mockReturnValue(null);
 });
 
 describe('refreshCustomMcpProviders', () => {
+  it('discards an old account read before touching the replacement owner arrays or credentials', async () => {
+    let finish!: (configs: CustomMcpConfig[]) => void;
+    const oldProviders: McpProvider[] = [];
+    registerCustomMcpArrays(oldProviders);
+    storeMock.listCustomMcpServers.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const reading = refreshCustomMcpProviders({ strict: true });
+    resetCustomMcpRegistry();
+    const newProviders: McpProvider[] = [builtin('cindy_browser')];
+    registerCustomMcpArrays(newProviders);
+    finish([config('old-account')]);
+    await expect(reading).rejects.toThrow('registry refresh failed');
+    expect(newProviders.map(provider => provider.name)).toEqual(['cindy_browser']);
+    expect(storeMock.readToken).not.toHaveBeenCalled();
+  });
+  it('keeps an old Apps endpoint paired with its own credential revision', async () => {
+    const providers: McpProvider[] = [];
+    registerCustomMcpArrays(providers);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('tools')]);
+    storeMock.readToken.mockReturnValue('old-fixture');
+    await refreshCustomMcpProviders();
+    const old = providers[0] as import('../custom-mcp-provider').CustomMcpProvider;
+    storeMock.readToken.mockReturnValue('new-fixture');
+    storeMock.listCustomMcpServers.mockResolvedValue([{ ...config('tools'), url: 'https://new.example.test/mcp' }]);
+    await refreshCustomMcpProviders();
+    const replacement = providers[0] as import('../custom-mcp-provider').CustomMcpProvider;
+    expect(old.appServerConfig().headers?.Authorization).toBe('Bearer old-fixture');
+    expect(replacement.appServerConfig().headers?.Authorization).toBe('Bearer new-fixture');
+    expect(old.appServerConfig().url).not.toBe(replacement.appServerConfig().url);
+  });
+
+  it('reports a strict refresh failure and leaves the running provider generation intact', async () => {
+    const providers: McpProvider[] = [];
+    registerCustomMcpArrays(providers);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('tools')]);
+    await refreshCustomMcpProviders();
+    const initial = providers[0];
+    storeMock.listCustomMcpServers.mockRejectedValue(new Error('fixture read failed'));
+    await expect(refreshCustomMcpProviders({ strict: true })).rejects.toThrow('registry refresh failed');
+    expect(providers[0]).toBe(initial);
+  });
   it('appends custom providers that do not collide', async () => {
     const arr: McpProvider[] = [builtin('cindy_browser')];
     registerCustomMcpArrays(arr);

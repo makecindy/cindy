@@ -75,11 +75,24 @@ export class DeferredCodexRestartService {
    */
   private generation = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly appliedWaiters = new Set<(applied: boolean) => void>();
 
   constructor(private readonly deps: DeferredCodexRestartDeps) {}
 
   isPending(): boolean {
     return this.pending;
+  }
+
+  /** Explicit capability reloads may wait outside the send lease. Ordinary
+   * settings callers keep the existing nonblocking scheduling behavior. */
+  waitForApplied(): Promise<boolean> {
+    if (!this.pending) return Promise.resolve(true);
+    return new Promise(resolve => { this.appliedWaiters.add(resolve); });
+  }
+
+  private settleAppliedWaiters(applied: boolean): void {
+    for (const resolve of this.appliedWaiters) resolve(applied);
+    this.appliedWaiters.clear();
   }
 
   isSessionRestarting(sessionId: string): boolean {
@@ -156,6 +169,7 @@ export class DeferredCodexRestartService {
     this.pending = false;
     this.pendingApplyRuntime = null;
     this.pendingSessionIds.clear();
+    this.settleAppliedWaiters(false);
   }
 
   /**
@@ -222,6 +236,7 @@ export class DeferredCodexRestartService {
       const sessionIds = [...this.pendingSessionIds];
       this.pendingSessionIds.clear();
       this.pending = false;
+      this.settleAppliedWaiters(true);
       this.clearRetry();
       this.deps.logger?.info('deferred codex restart applied', {
         wokenSessions: sessionIds.length,

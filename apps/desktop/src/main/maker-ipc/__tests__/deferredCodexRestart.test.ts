@@ -22,6 +22,27 @@ afterEach(() => {
 });
 
 describe('DeferredCodexRestartService', () => {
+  it('lets explicit capability inputs await application without changing ordinary scheduling', async () => {
+    let busy = true;
+    const service = new DeferredCodexRestartService({
+      restart: async apply => { await apply(); },
+      hasBusyLocalCodexSession: () => busy,
+      listLocalCodexSessionIds: () => [],
+    });
+    service.schedule('MCP change');
+    const loaded = vi.fn();
+    const waiting = service.waitForApplied().then(loaded);
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(loaded).not.toHaveBeenCalled();
+    busy = false;
+    await service.flushBeforeLocalCodexSessionStart();
+    await waiting;
+    expect(loaded).toHaveBeenCalledWith(true);
+    service.schedule('new MCP');
+    const cancelled = service.waitForApplied();
+    service.clear();
+    expect(await cancelled).toBe(false);
+  });
   function createService(overrides?: {
     restart?: () => Promise<void>;
     hasBusyLocalCodexSession?: () => boolean;

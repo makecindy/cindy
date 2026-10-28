@@ -19,6 +19,7 @@
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
+import type { SessionCapabilityRefreshPhase } from '@/../shared/sessionCapabilityRefresh';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
 import type { BuiltInSkillDraftIntent } from './composerDraftStore';
 
@@ -368,6 +369,7 @@ export async function loadAllCommands(
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
+    onCapabilityRefreshPhase?: (phase?: SessionCapabilityRefreshPhase) => void;
   },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
@@ -379,7 +381,7 @@ export async function loadAllCommands(
     commands?: unknown[];
     runtimeStatus?: PiPackageCommandRuntimeStatus;
   };
-  type SkillRes = { success: boolean; skills?: unknown[] };
+  type SkillRes = { success: boolean; skills?: unknown[]; capabilityRefreshPhase?: SessionCapabilityRefreshPhase };
 
   // device-link「以被控端为准」:agent-builtin / agent-skill 是被控端**该会话**的能力,远程时经隧道
   // 从被控端读(channel 已 allowlist,workingDir 是被控端路径,扫描在被控端跑正确)。
@@ -427,6 +429,7 @@ export async function loadAllCommands(
     : Promise.resolve({ success: true, skills: [] });
 
   const [desktopRes, builtinRes, skillRes] = await Promise.all([desktopP, builtinP, skillP]);
+  opts?.onCapabilityRefreshPhase?.(skillRes.capabilityRefreshPhase);
   if (agentKind === 'pi' && builtinRes.runtimeStatus) {
     opts?.onPiRuntimeStatus?.(builtinRes.runtimeStatus);
   }

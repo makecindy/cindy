@@ -140,7 +140,7 @@ import { refreshSubscriptionAccountModels } from '../maker-host/subscription-acc
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
 import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
-import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
+import { isCodexAccountProvider, codexAccountHome, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -602,7 +602,7 @@ import {
   activeCindyBuiltInAgentSkills,
   builtInSkillDescriptors,
 } from '../maker-host/built-in-skills.js';
-import { isCindySkillEnabled } from '../skillhub/activationPreferences.js';
+import { isCindySkillEnabled, readDisabledSkillPaths } from '../skillhub/activationPreferences.js';
 import {
   parseDirectLearnInvocation,
   canGrantUnqualifiedClaudeLearnInvocation,
@@ -906,6 +906,13 @@ import {
 import { GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
+import { createSessionCapabilityMonitor, type CapabilityResourceSnapshot } from './sessionCapabilityMonitor.js';
+import { readCapabilityFiles, readForwardedCapabilitySnapshot, watchCapabilityPaths, watchRemoteCapabilityPaths } from './sessionCapabilitySources.js';
+import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
+import { createRemotePiFileOps } from '../maker-host/pi-remote-transport.js';
+import { getRemoteFileBrowser } from '../file-browser/remote-deps.js';
+import { collectPersonalConfig, collectProjectInstructionFiles, codexHomeDir } from '../remote-agent/controller/projectFiles.js';
 
 import {
   excludeDirectoryGrantConflictsWithSlots,
@@ -1067,7 +1074,7 @@ import {
   registerOrcaRemoteWorkerHandlers,
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, invokeDeviceValue, isExecutionDeviceCandidate, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
-import { getReceivedShares, providerShareAgentDeviceId } from '../device-link/providerShareGuest.js';
+import { getReceivedShares, providerShareAgentDeviceId, parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
@@ -4050,6 +4057,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
 }
 
 type WiredSession = NonNullable<ReturnType<Maker['getSession']>>;
+type CapabilitySourceContext = Pick<WiredSession, 'id' | 'agentKind' | 'workDir' | 'remoteHostId' | 'agentDeviceId'> & { providerId?: string | null };
 
 /**
  * Monotonic logical-turn generation used by direct abort reconciliation.
@@ -4585,6 +4593,11 @@ function settlePendingCredentialSwitch(sessionId: string, source: string): void 
 // registerMakerIpcs 闭包内 (依赖 maker / ensure 函数), 模块级 turn 收口
 // 路径经 holder 调用; 未注入时 no-op。
 let refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null = null;
+let trackSessionCapabilitiesHolder: ((session: WiredSession) => (() => void)) | null = null;
+let settleSessionCapabilitiesHolder: ((sessionId: string) => void) | null = null;
+let disposeSessionCapabilitiesHolder: (() => void) | null = null;
+let captureSessionCapabilitiesHolder: ((source: CapabilitySourceContext) => Promise<CapabilityResourceSnapshot>) | null = null;
+let adoptSessionCapabilitiesHolder: ((session: WiredSession, snapshot: CapabilityResourceSnapshot) => void) | null = null;
 let deferredCodexRestartHolder: DeferredCodexRestartService | null = null;
 let gatewayCodexRestartHolder: GatewayCodexRestartService | null = null;
 let pendingAgentSwitchApplyHolder:
@@ -6033,6 +6046,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
 
 /** Called only when the outgoing Maker is actually discarded, not on any error status. */
 export function releaseSessionBindingsForOwnerBoundary(): void {
+  disposeSessionCapabilitiesHolder?.();
   sessionBindings.releaseForOwnerBoundary();
 }
 
@@ -6290,6 +6304,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   if (!session) return;
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
+  const disposeCapabilities = trackSessionCapabilitiesHolder?.(session);
+  if (disposeCapabilities) registration.disposers.push(disposeCapabilities);
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
 
@@ -7930,7 +7946,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
-  registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+  let mcpSharedCodexPending = false;
+  const mcpConfiguration = registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    ownerKey: () => `${isAppSessionBoundaryPending() ? 'pending:' : ''}${activeOwnerScopeKey()}:${getActiveAppSession().generation}`,
+    runtimeChanged: () => notifyMcpCapabilityChange(),
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
@@ -7938,7 +7957,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const meta = await maker.getSessionMeta(sessionId);
       return meta ? { agentKind: route.agentKind, remoteHostId: meta.remoteHostId } : null;
     },
-    refreshProviders: () => refreshCustomMcpProviders(),
+    refreshProviders: () => refreshCustomMcpProviders({ strict: true }),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
     // 内置 server 名对自定义 MCP 是保留名：撞名会在装配层顶替内置 server 并继承
     // 它在 MCP 审批策略里的信任，所以 CRUD 阶段就拒收。
@@ -7947,7 +7966,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: async () => {
       const ownerScopeKey = activeOwnerScopeKey();
-      await refreshCodexMcpEnvironment({
+      captureCodexCapabilityRefreshIntents();
+      const result = await refreshCodexMcpEnvironment({
         restartCodex: restartCodexAfterAuthModeChange,
         shutdownCodexEnvironment,
         onDeferred: () => {
@@ -7957,6 +7977,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
         logger: log,
       });
+      if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) {
+        mcpSharedCodexPending = !result.codexMcpRefreshed;
+      }
       // Pi 的 MCP bridge 同样按首个会话冻结 server 集合:自定义 MCP 增删改后必须 invalidate,
       // 否则新 Pi 会话仍暴露已删/已禁用的工具、拿不到新启用的工具(codex review P1)。
       // 与 codex 分支独立(不依赖 codexRestarted),下一次 startSession lazy 重建。
@@ -7980,9 +8003,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastToAllWindows(MAKER_PUSH.PROVIDER_UPSTREAM_ERROR, event),
   );
   // 会话后台活动翻转 → 广播给所有窗口(renderer 会话内横幅 +「全部停止」入口)。
-  setClaudeBackgroundActivityBroadcaster((payload) =>
-    broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED, payload),
-  );
+  setClaudeBackgroundActivityBroadcaster((payload) => {
+    broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED, payload);
+    queueMicrotask(() => settleSessionCapabilitiesHolder?.(payload.sessionId));
+  });
 
   // per-session 供应商路由:把 cc loopback proxy 看到的 x-claude-code-session-id(= sdkSessionId)
   // 反解成 xdt sessionId,供其统一路由器查该会话显式选定的供应商。sdkSessionId 唯一,直接匹配活跃会话。
@@ -8148,9 +8172,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
         }
         const result = await maker.listAgentSkills(kind, skillParams);
+        const live = skillParams.sessionId ? currentCapabilitySession(skillParams.sessionId) : undefined;
         return {
           success: true,
           ...result,
+          capabilityRefreshPhase: live ? capabilityMonitor.state(live)?.phase : undefined,
           skills: activeCindyBuiltInAgentSkills(
             result.skills,
             builtInSkillDescriptors(app.getPath('userData'), app.getPath('appData')),
@@ -8961,6 +8987,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectProjectContext: boolean;
   }> {
     assertAccess?.();
+    const capabilityOwner = getActiveAppSession().generation;
+    let capabilitySnapshot: CapabilityResourceSnapshot | undefined;
+    assertAccess?.();
     await applyPersistedCindyMakeMarker(o, readSessionSource);
     assertAccess?.();
     // 协同远端 Worker 的代理任务行只承接计槽与回报，真实任务在运行设备上，绝不在本机起 Agent。
@@ -9089,6 +9118,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
+        capabilitySnapshot = await captureSessionCapabilitiesHolder?.({
+          id: o.id ?? 'pending', agentKind: o.agentKind, workDir: o.workingDir,
+          remoteHostId: o.remoteHostId ?? null, agentDeviceId: o.agentDeviceId ?? null, providerId: o.providerId,
+        }).catch(() => undefined);
+        assertAccess?.();
+        if (capabilityOwner !== getActiveAppSession().generation || isAppSessionBoundaryPending()) {
+          throw new Error('Capability startup owner changed');
+        }
         session = await maker.createSession(o);
         if (nativeRelocation?.nativeId && session.sdkSessionId !== nativeRelocation.nativeId) {
           const opened = session;
@@ -9156,6 +9193,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
+    if (capabilitySnapshot && capabilityOwner === getActiveAppSession().generation) {
+      adoptSessionCapabilitiesHolder?.(session, capabilitySnapshot);
+    }
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
 
@@ -9249,6 +9289,413 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
   }
+
+  const capabilityOwners = new WeakMap<WiredSession, number>();
+  const capabilityWatchers = new Map<WiredSession, () => void>();
+  const capabilityMcpRevisions = new WeakMap<WiredSession, string>();
+  // Keep explicit reload intents across native close/bootstrap, including the
+  // shared Codex Host's soft-close. Failed startup can then retry the same task.
+  const detachedCapabilitySessions = new Map<string, { session: WiredSession; providerId: string | null }>();
+  const codexCapabilityEnvironmentDirty = new Set<WiredSession>();
+  const piCapabilityEnvironmentDirty = new Set<WiredSession>();
+  let nativeCapabilityEnvironmentRefresh: Promise<void> | null = null;
+  let mcpCredentialRevision = 0;
+  const reportedCapabilityPhases = new Map<string, string>();
+  function currentCapabilitySession(sessionId: string): WiredSession | undefined {
+    return maker.getSession(sessionId) ?? detachedCapabilitySessions.get(sessionId)?.session;
+  }
+  function captureCodexCapabilityRefreshIntents(): void {
+    for (const session of maker.listActiveSessions()) {
+      if (session.agentKind !== 'codex' || session.remoteHostId || session.agentDeviceId) continue;
+      detachedCapabilitySessions.set(session.id, { session, providerId: getSessionProvider(session.id) ?? null });
+      capabilityMonitor.markChanged(session);
+    }
+  }
+  function settleDetachedCapabilitySessions(): void {
+    for (const sessionId of detachedCapabilitySessions.keys()) settleSessionCapabilitiesHolder?.(sessionId);
+  }
+  function notifyMcpCapabilityChange(): void {
+    mcpCredentialRevision++;
+    const affected = new Set([...maker.listActiveSessions(),
+      ...[...detachedCapabilitySessions.values()].map(intent => intent.session)]);
+    for (const session of affected) {
+      capabilityMcpRevisions.delete(session);
+      codexCapabilityEnvironmentDirty.delete(session);
+      piCapabilityEnvironmentDirty.delete(session);
+      capabilityMonitor.markChanged(session);
+    }
+    const owner = getActiveAppSession().generation;
+    // afterChange runs before the save receipt releases its barrier. Schedule
+    // idle reloads after that release, otherwise an idle task never gets a wake.
+    void mcpConfiguration.waitForStableConfiguration().then(() => {
+      if (owner !== getActiveAppSession().generation || isAppSessionBoundaryPending()) return;
+      for (const session of maker.listActiveSessions()) settleSessionCapabilitiesHolder?.(session.id);
+      settleDetachedCapabilitySessions();
+    }).catch(() => { /* The save failure remains visible to the sending entry. */ });
+  }
+  async function readCustomMcpCapabilitySource() {
+    const servers = await listCustomMcpServers();
+    // This private digest detects rotation/removal even if an external writer
+    // bypassed the settings notification. No token or digest is sent to UI/logs.
+    const credentialRevision = pluginTaskConfigHash('sha256').update(JSON.stringify(
+      servers.map(server => [server.id, readCustomMcpToken(server.id)]),
+    )).digest('hex');
+    return { servers, credentialRevision, mcpCredentialRevision };
+  }
+  async function readCapabilitySourceSnapshot(session: CapabilitySourceContext): Promise<CapabilityResourceSnapshot> {
+    if (mcpConfiguration.hasPendingSave()) throw new Error('MCP configuration save is incomplete');
+    // Device-hosted agents receive the controller's personal/project files
+    // and MCP bridge (controller/projectFiles.ts and service.ts). SSH scopes
+    // instead read the SSH filesystem through its existing native adapter.
+    if (session.agentDeviceId) {
+      return readForwardedCapabilitySnapshot(session, {
+        collectProject: collectProjectInstructionFiles, collectPersonal: collectPersonalConfig,
+        skipCredentials: parseProviderShareAgentDeviceId(session.agentDeviceId) !== null,
+        homeDir: os.homedir(), codexHome: codexHomeDir(),
+        mcpCatalog: await readCustomMcpCapabilitySource(),
+      });
+    }
+    if (session.remoteHostId) {
+      const host = getRemoteSshPool().get(session.remoteHostId);
+      if (!host) throw new Error('Capability execution host unavailable');
+      const files = createRemotePiFileOps(host);
+      const listed = await maker.listAgentSkills(session.agentKind, {
+        workingDir: session.workDir, remoteHostId: session.remoteHostId, forceReload: true,
+      });
+      const sources = [];
+      for (const skill of listed.skills) {
+        sources.push({ ...skill, digest: skill.path ? await files.sha256File(skill.path) : undefined });
+      }
+      // Remote paths remain remote. Never pass them to node:fs or os.homedir.
+      const home = await host.exec('printf "%s" "$HOME"', {
+        timeoutMs: 10_000, label: 'capability-resource-home',
+      });
+      if (home.exitCode !== 0 || !home.stdout.startsWith('/')) throw new Error('Remote capability home unavailable');
+      const remoteHome = home.stdout.trim();
+      const physical = (source: string) => source.startsWith('$HOME/')
+        ? path.posix.join(remoteHome, source.slice(6)) : source;
+      const configs = session.agentKind === 'claude-code'
+        ? [path.posix.join(remoteHome, '.claude.json'), path.posix.join(session.workDir, '.mcp.json')]
+        : [];
+      const configRevisions = [];
+      for (const file of configs) {
+        if (!(await files.stat(file))?.isFile) { configRevisions.push(null); continue; }
+        const parsed = JSON.parse(await files.readFile(file));
+        configRevisions.push(file.endsWith('/.claude.json')
+          ? { global: parsed.mcpServers, project: parsed.projects?.[session.workDir]?.mcpServers }
+          : parsed);
+      }
+      return {
+        revision: pluginTaskConfigHash('sha256').update(JSON.stringify({ sources,
+          errors: listed.errors, configRevisions, mcp: await readCustomMcpCapabilitySource() })).digest('hex'),
+        discoveryErrorRevision: listed.errors?.length
+          ? pluginTaskConfigHash('sha256').update(JSON.stringify(listed.errors)).digest('hex') : undefined,
+        watchPaths: [...new Set([
+          ...sources.flatMap(source => source.path ? [path.posix.dirname(physical(source.path))] : []),
+          path.posix.join(remoteHome, '.claude', 'skills'),
+          path.posix.join(remoteHome, '.agents', 'skills'),
+          path.posix.join(session.workDir, '.claude'),
+          path.posix.join(session.workDir, '.agents'),
+        ])],
+      };
+    }
+    await prepareProjectSkillLinksFailSoft(session.workDir);
+    if (session.agentKind === 'codex') await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+    else await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+    const providerId = session.providerId !== undefined ? session.providerId : getSessionProvider(session.id);
+    const codexHome = !session.agentDeviceId && isCodexAccountProvider(providerId) ? codexAccountHome(providerId!) : getCodexHome();
+    const listed = await maker.listAgentSkills(session.agentKind, {
+      workingDir: session.workDir, forceReload: true,
+    });
+    const skillFiles = listed.skills.flatMap(skill => skill.path ? [skill.path] : []);
+    const discoveryRoots = [
+      path.join(os.homedir(), '.agents', 'skills'),
+      path.join(os.homedir(), '.claude', 'skills'),
+      path.join(codexHome, 'skills'),
+      path.join(os.homedir(), '.codex', 'skills'),
+      path.join(os.homedir(), '.claude', 'commands'),
+      path.join(os.homedir(), '.pi', 'agent', 'skills'),
+      path.join(session.workDir, '.agents', 'skills'),
+      path.join(session.workDir, '.claude', 'skills'),
+      path.join(session.workDir, '.claude', 'commands'),
+      path.join(session.workDir, '.pi', 'skills'),
+      ...skillFiles.map(file => path.dirname(file)),
+      path.join(app.getPath('userData'), 'skillhub', 'activation-preferences.json'),
+    ];
+    const configs = session.agentKind === 'codex'
+      ? [path.join(codexHome, 'config.toml')]
+      : session.agentKind === 'claude-code'
+        ? [path.join(os.homedir(), '.claude.json'), path.join(session.workDir, '.mcp.json')]
+        : [];
+    const selectConfig = (file: string, content: Buffer) => {
+      if (file !== path.join(os.homedir(), '.claude.json')) return content;
+      const parsed = JSON.parse(content.toString('utf8'));
+      return JSON.stringify({ global: parsed.mcpServers,
+        project: parsed.projects?.[session.workDir]?.mcpServers });
+    };
+    const mcp = await readCapabilityFiles(await readCustomMcpCapabilitySource(), configs, [], selectConfig);
+    const snapshot = await readCapabilityFiles({
+      errors: listed.errors,
+      skills: listed.skills.map(({ name, path: source, enabled }) => ({ name, source, enabled }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+      mcp: mcp.revision,
+      disabledSkillPaths: readDisabledSkillPaths(),
+    }, skillFiles, [...discoveryRoots, ...configs]);
+    return { ...snapshot, mcpRevision: mcp.revision, discoveryErrorRevision: listed.errors?.length
+      ? pluginTaskConfigHash('sha256').update(JSON.stringify(listed.errors)).digest('hex') : undefined };
+  }
+
+  const capabilityMonitor = createSessionCapabilityMonitor<WiredSession>({
+    isCurrent: session => !isAppSessionBoundaryPending()
+      && capabilityOwners.get(session) === getActiveAppSession().generation
+      && currentCapabilitySession(session.id) === session,
+    isIdle: session => !session.isTurnRunning()
+      && session.listBackgroundTasks().length === 0
+      && !hasPendingAgentInteractionForSession(session.id),
+    current: currentCapabilitySession,
+    read: async session => {
+      const detached = detachedCapabilitySessions.get(session.id);
+      const snapshot = await readCapabilitySourceSnapshot({
+        id: session.id, agentKind: session.agentKind, workDir: session.workDir,
+        remoteHostId: session.remoteHostId, agentDeviceId: session.agentDeviceId,
+        providerId: detached?.session === session ? detached.providerId : undefined,
+      });
+      const previousMcp = capabilityMcpRevisions.get(session);
+      if (!session.remoteHostId && previousMcp !== undefined && previousMcp !== snapshot.mcpRevision) {
+        if (session.agentKind === 'codex' && !session.agentDeviceId) codexCapabilityEnvironmentDirty.add(session);
+        if (session.agentKind === 'pi' || session.agentDeviceId) piCapabilityEnvironmentDirty.add(session);
+      }
+      if (snapshot.mcpRevision) capabilityMcpRevisions.set(session, snapshot.mcpRevision);
+      return snapshot;
+    },
+    reload: async (expected, isCurrent) => {
+      reportCapabilityPhase(expected);
+      const ownerGeneration = getActiveAppSession().generation;
+      const assertOwner = () => {
+        if (isAppSessionBoundaryPending() || getActiveAppSession().generation !== ownerGeneration) {
+          throw new Error('Capability refresh owner changed');
+        }
+      };
+      const [row] = await getDbClient().drizzle.select().from(sessions)
+        .where(eq(sessions.id, expected.id)).limit(1);
+      if (!row?.workingDir || row.status !== 'active') throw new Error('Capability refresh task unavailable');
+      if (expected.agentKind !== dbToMakerAgentKind(row.agentKind)) throw new Error('Capability refresh engine switch pending');
+      const assertTaskCurrent = async () => {
+        assertOwner();
+        const [current] = await getDbClient().drizzle.select().from(sessions)
+          .where(eq(sessions.id, expected.id)).limit(1);
+        assertOwner();
+        if (!current || current.status !== 'active' || current.workingDir !== row.workingDir
+          || current.agentKind !== row.agentKind || current.agentDeviceId !== row.agentDeviceId
+          || current.remoteHostId !== row.remoteHostId || current.providerId !== row.providerId
+          || current.model !== row.model || current.permissionMode !== row.permissionMode
+          || current.clearedAt !== row.clearedAt) throw new Error('Capability refresh task changed');
+      };
+      const hasNativeHistory = row.userSendAt !== null || expected.codexThreadMayHaveRollout === true;
+      const co = buildCreateOptsWithStderr({
+        ...expected.hostStartupPreferences,
+        id: row.id, workingDir: row.remoteHostId ? row.workingDir
+          : workingDirectoryRecovery.resolve(row.id, row.workingDir), workspaceKind: row.workspaceKind,
+        agentKind: dbToMakerAgentKind(row.agentKind), model: row.model ?? undefined,
+        providerId: row.providerId, effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: row.fastMode ?? false, permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: !!row.planModeEnabled, title: row.title ?? undefined,
+        resumeSessionId: hasNativeHistory ? expected.sdkSessionId || row.sdkSessionId || undefined : undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+      });
+      await synthesizeOrcaVendorOptionsFromDb(expected.id, co);
+      Object.assign(co, directoryGrantsForRuntime(await readSessionExtraDirsFromDb(expected.id)));
+      co.writableDirs = await readSessionWritableDirsFromDb(expected.id);
+      await refreshCustomMcpProviders({ strict: true });
+      if (codexCapabilityEnvironmentDirty.has(expected)) throw new Error('Codex MCP environment refresh pending');
+      if (piCapabilityEnvironmentDirty.delete(expected)) invalidatePiEnvironment();
+      await ensureRemoteReadyForSessionStart({ createOpts: co });
+      await preflightBotRuntimeResources(co as MakerSessionCreateOpts);
+      if (!await checkWorkDirExists(expected.id, co.workingDir, co.agentKind, co.remoteHostId)) {
+        throw new Error('Capability refresh working directory unavailable');
+      }
+      assertOwner();
+      if (mcpConfiguration.hasPendingSave()) throw new Error('MCP configuration save is incomplete');
+      await assertTaskCurrent();
+      if (!isCurrent()) throw new Error('Capability refresh superseded');
+      return withRehydrateCloseSuppressed(expected.id, async () => {
+        detachedCapabilitySessions.set(expected.id, { session: expected, providerId: row.providerId });
+        await maker.closeSessionIfCurrent(expected, 'runtime-refresh');
+        await assertTaskCurrent();
+        if (!isCurrent()) throw new Error('Capability refresh cancelled after close');
+        if (maker.getSession(expected.id)) throw new Error('Capability refresh runtime replaced');
+        const { session } = await bootstrapSession(co, assertOwner, hasNativeHistory);
+        assertOwner();
+        broadcastSessionCreated(session.id);
+        return session;
+      });
+    },
+    changed: session => reportCapabilityPhase(session),
+  });
+
+  function reportCapabilityPhase(session: WiredSession): void {
+    if (isAppSessionBoundaryPending() || capabilityOwners.get(session) !== getActiveAppSession().generation) return;
+    const state = capabilityMonitor.state(session);
+    if (!state) return;
+    const key = `${state.instanceId}:${state.revision}:${state.phase}`;
+    if (reportedCapabilityPhases.get(session.id) === key) return;
+    reportedCapabilityPhases.set(session.id, key);
+    broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {});
+    if (state.phase === 'loaded') agentInputCoordinatorHolder?.wakeSession(session.id, 'capability-refresh-loaded');
+  }
+
+  async function refreshSessionCapabilitiesUnderLock(sessionId: string): Promise<void> {
+    const owner = getActiveAppSession().generation;
+    const live = currentCapabilitySession(sessionId);
+    if (!live) return;
+    if (live.agentKind === 'codex' && !live.agentDeviceId && !live.remoteHostId && mcpSharedCodexPending && deferredCodexRestartHolder?.isPending()) {
+      throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.refreshing'));
+    }
+    const outcome = await capabilityMonitor.beforeSend(live);
+    if (owner !== getActiveAppSession().generation || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.failed'));
+    }
+    if (outcome.kind === 'failed') {
+      // Deliberately keep native details (which may contain a URL or token)
+      // inside main. The existing send transaction retains the waiting input.
+      throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.failed'));
+    }
+    if (outcome.kind === 'deferred') {
+      throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.pending'));
+    }
+  }
+
+  async function waitForSessionCapabilityConfiguration(sessionId: string): Promise<void> {
+    const owner = getActiveAppSession().generation;
+    const session = currentCapabilitySession(sessionId) ?? await maker.getSessionMeta(sessionId);
+    await mcpConfiguration.waitForStableConfiguration().catch(() => {
+      throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.failed'));
+    });
+    if (session && 'instanceId' in session) {
+      await capabilityMonitor.check(session).catch(() => {
+        throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.failed'));
+      });
+      if (codexCapabilityEnvironmentDirty.has(session)) {
+        if (!nativeCapabilityEnvironmentRefresh) {
+          const operation = (async () => {
+            captureCodexCapabilityRefreshIntents();
+            const result = await refreshCodexMcpEnvironment({
+              restartCodex: restartCodexAfterAuthModeChange, shutdownCodexEnvironment,
+              onDeferred: () => {
+                if (owner === getActiveAppSession().generation && !isAppSessionBoundaryPending()) {
+                  scheduleDeferredCodexRestart('Native MCP configuration changed');
+                }
+              },
+              logger: log,
+            });
+            if (owner !== getActiveAppSession().generation || isAppSessionBoundaryPending()) throw new Error('Capability owner changed');
+            if (!result.codexMcpRefreshed) {
+              mcpSharedCodexPending = true;
+              const applied = deferredCodexRestartHolder?.waitForApplied();
+              deferredCodexRestartHolder?.onSessionSettled();
+              if (!applied || !await applied) throw new Error('Native MCP refresh cancelled');
+            }
+            if (owner !== getActiveAppSession().generation) throw new Error('Capability owner changed');
+            codexCapabilityEnvironmentDirty.clear();
+            settleDetachedCapabilitySessions();
+          })();
+          nativeCapabilityEnvironmentRefresh = operation;
+          void operation.finally(() => {
+            if (nativeCapabilityEnvironmentRefresh === operation) nativeCapabilityEnvironmentRefresh = null;
+          }).catch(() => undefined);
+        }
+        await nativeCapabilityEnvironmentRefresh.catch(() => {
+          throwIpcError('PRECONDITION_FAILED', t('settings.mcp.reload.failed'));
+        });
+      }
+    }
+    const restart = deferredCodexRestartHolder;
+    if (session?.agentKind === 'codex' && !session.agentDeviceId && !session.remoteHostId && mcpSharedCodexPending && restart?.isPending()) {
+      const applied = restart.waitForApplied();
+      restart.onSessionSettled();
+      if (!await applied) throwIpcError('PRECONDITION_FAILED', 'MCP runtime refresh was cancelled');
+    }
+    if (owner !== getActiveAppSession().generation || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'Capability refresh owner changed');
+    }
+  }
+
+  function hasPendingSessionCapabilityRefresh(sessionId: string): boolean {
+    const live = currentCapabilitySession(sessionId);
+    if (!live) return false;
+    return mcpConfiguration.hasPendingSave() || capabilityMonitor.blocksInput(live)
+      || (live.agentKind === 'codex' && !live.agentDeviceId && !live.remoteHostId && mcpSharedCodexPending && deferredCodexRestartHolder?.isPending() === true);
+  }
+
+  settleSessionCapabilitiesHolder = sessionId => {
+    if (isAppSessionBoundaryPending()) return;
+    const live = currentCapabilitySession(sessionId);
+    if (!live || live.isTurnRunning()
+      || mcpConfiguration.hasPendingSave()
+      || (live.agentKind === 'codex' && !live.agentDeviceId && !live.remoteHostId && mcpSharedCodexPending && deferredCodexRestartHolder?.isPending())
+      || live.listBackgroundTasks().length || hasPendingAgentInteractionForSession(sessionId)) return;
+    void waitForSessionCapabilityConfiguration(sessionId)
+      .then(() => withSendToSessionLock(sessionId, () => refreshSessionCapabilitiesUnderLock(sessionId)))
+      .catch(() => { /* A failed refresh remains pending for the next explicit send. */ });
+  };
+  captureSessionCapabilitiesHolder = readCapabilitySourceSnapshot;
+  adoptSessionCapabilitiesHolder = (session, snapshot) => {
+    capabilityMonitor.adopt(session, snapshot);
+    if (snapshot.mcpRevision) capabilityMcpRevisions.set(session, snapshot.mcpRevision);
+  };
+  trackSessionCapabilitiesHolder = session => {
+    capabilityOwners.set(session, getActiveAppSession().generation);
+    if (detachedCapabilitySessions.get(session.id)?.session !== session) detachedCapabilitySessions.delete(session.id);
+    let disposed = false;
+    void capabilityMonitor.track(session).then(async snapshot => {
+      if (maker.getSession(session.id) !== session || isAppSessionBoundaryPending()) return;
+      capabilityWatchers.get(session)?.();
+      const changed = () => {
+          void capabilityMonitor.check(session)
+            .then(() => settleSessionCapabilitiesHolder?.(session.id))
+            .catch(() => { /* Before-send discovery exposes incomplete sources without closing the old runtime. */ });
+        };
+      const stopWatching = session.remoteHostId
+        ? await watchRemoteCapabilityPaths(getRemoteFileBrowser(), session.remoteHostId,
+          `capability-refresh:${session.instanceId}`, snapshot.watchPaths, changed,
+          () => !disposed && !isAppSessionBoundaryPending() && maker.getSession(session.id) === session)
+        : await watchCapabilityPaths(snapshot.watchPaths, changed);
+      if (disposed || isAppSessionBoundaryPending() || maker.getSession(session.id) !== session) stopWatching();
+      else capabilityWatchers.set(session, stopWatching);
+    }).catch(() => undefined);
+    const off = session.onEvent(event => {
+      if (event.type === 'done' || event.type === 'status' || event.type === 'interaction_dismissed') {
+        queueMicrotask(() => settleSessionCapabilitiesHolder?.(session.id));
+      }
+    });
+    return () => {
+      disposed = true;
+      if (detachedCapabilitySessions.get(session.id)?.session === session
+        && getWiredSessionCloseReason(session) !== 'runtime-refresh') {
+        detachedCapabilitySessions.delete(session.id);
+        capabilityMonitor.forget(session);
+      }
+      off();
+      capabilityWatchers.get(session)?.();
+      capabilityWatchers.delete(session);
+    };
+  };
+  disposeSessionCapabilitiesHolder = () => {
+    capabilityWatchers.forEach(dispose => dispose());
+    capabilityWatchers.clear();
+    capabilityMonitor.clear();
+    reportedCapabilityPhases.clear();
+    codexCapabilityEnvironmentDirty.clear();
+    piCapabilityEnvironmentDirty.clear();
+    detachedCapabilitySessions.clear();
+    nativeCapabilityEnvironmentRefresh = null;
+    mcpSharedCodexPending = false;
+    mcpConfiguration.dispose();
+    // IPC is registered once against the dynamic Maker facade. Reset only
+    // owner-scoped state: the next owner still needs these same entry hooks.
+  };
 
   async function recordBotCompactRuntimeLifecycle(input: {
     botId: string;
@@ -11641,6 +12088,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     else await scheduledModelScope.restore(sessionId);
   };
   pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride) => {
+    await waitForSessionCapabilityConfiguration(sessionId);
     let stage = 'direct-send:acquire';
     let deferPendingApply = false;
     const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);
@@ -11688,6 +12136,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       stage = 'direct-send:prepareUnhealthySession';
       await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+      stage = 'direct-send:refreshCapabilities';
+      await refreshSessionCapabilitiesUnderLock(sessionId);
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';
       return { release, selection: resolvedSelection };
@@ -12119,6 +12569,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
 
     if (targetSessionId) {
+      await waitForSessionCapabilityConfiguration(targetSessionId);
       try {
         await assertReviewExternalInputAllowed(targetSessionId);
       } catch (error) {
@@ -12461,6 +12912,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // reading metadata or dispatching; busy inputs defer to the queued path.
       await scheduledModelScope.restore(targetSessionId);
       await reconcileBotModelRoute(targetSessionId, true);
+      await refreshSessionCapabilitiesUnderLock(targetSessionId);
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),
         getSessionRowSnapshot(targetSessionId),
@@ -18495,6 +18947,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
+    await waitForSessionCapabilityConfiguration(sessionId);
     agentPrewarmer.markUsed(sessionId);
     // 新建页的未发送任务第一次发送：renderer 通常已先转正，这里兜底。
     if (isProvisionalSession(sessionId)) await commitProvisionalSession(sessionId);
@@ -18508,6 +18961,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (compactedRuntime) await refreshBotCapabilityEpochBeforeSend(compactedRuntime);
     return await withSendToSessionLock(sessionId, async () => {
       await reconcileBotModelRoute(sessionId, true);
+      await refreshSessionCapabilitiesUnderLock(sessionId);
       const [botInput] = await getDbClient()
         .drizzle.select({
           source: sessions.source,
@@ -20425,7 +20879,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 晚绑定。
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
       hasPendingCredentialSwitchEntry: (sessionId) =>
-        pendingCredentialSwitchHolder?.has(sessionId) === true,
+        pendingCredentialSwitchHolder?.has(sessionId) === true || hasPendingSessionCapabilityRefresh(sessionId),
       isSessionRestarting: (sessionId) =>
         deferredCodexRestartHolder?.isSessionRestarting(sessionId) === true ||
         gatewayCodexRestartHolder?.isSessionRestarting(sessionId) === true,
@@ -20815,6 +21269,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .listActiveSessions()
         .filter((session) => session.agentKind === 'codex' && !session.remoteHostId)
         .map((session) => session.id),
+    onApplied: () => {
+      mcpSharedCodexPending = false;
+      settleDetachedCapabilitySessions();
+    },
     onQueueGateReleased: createDeferredRestartSettledWake({
       wakeSession: (sessionId, reason) => inputCoordinator.wakeSession(sessionId, reason),
     }),

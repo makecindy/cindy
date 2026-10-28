@@ -48,6 +48,12 @@
     "dismissTitle": "過去の失敗通知を閉じる"
   },
   "common": {
+    "capabilityReload": {
+      "pending": "スキル / MCP · 再読み込み待ち",
+      "refreshing": "スキル / MCP · 再読み込み中…",
+      "loaded": "スキル / MCP · 読み込み済み",
+      "failed": "スキル / MCP · 読み込みに失敗しました"
+    },
     "modelHiddenReselect": "{{model}} はオフになっています。送信する前に、有効なモデルを選んでください。",
     "modelUnavailableReselect": "{{model}} はこのコンピューターでは利用できなくなりました。送信する前に、別のモデルを選んでください。",
     "cancel": "キャンセル",

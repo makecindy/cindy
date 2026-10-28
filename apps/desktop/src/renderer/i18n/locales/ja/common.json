@@ -7693,6 +7693,12 @@
       }
     },
     "mcp": {
+      "reload": {
+        "pending": "スキル / MCP · 再読み込み待ち",
+        "refreshing": "スキル / MCP · 再読み込み中…",
+        "loaded": "スキル / MCP · 読み込み済み",
+        "failed": "スキル / MCP · 読み込みに失敗しました"
+      },
       "title": "外部ツール",
       "subtitle": "独自のリモート MCP サーバーを接続します。HTTP / Streamable HTTP サーバーは Claude と Codex の両方で利用可能；SSE は Claude 専用です。",
       "cancel": "キャンセル",
@@ -7730,6 +7736,7 @@
         "urlInvalid": "有効な http(s) URL を入力してください"
       },
       "toast": {
+        "credentialSaveFailed": "MCP の認証情報を保存できませんでした。設定を再保存して再試行してください",
         "created": "MCP サーバーを追加しました",
         "updated": "MCP サーバーを更新しました",
         "deleted": "MCP サーバーを削除しました",

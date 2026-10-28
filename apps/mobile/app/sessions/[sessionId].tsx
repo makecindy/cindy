@@ -765,6 +765,7 @@ import type {
 } from '@/session/types';
 import type {
   MobileAtResourceItem,
+  MobileAgentSkillListResult,
   MobileDesktopCommandListResult,
   MobileModelPricingMap,
   MobileSlashCommand,
@@ -11577,6 +11578,7 @@ function SessionComposerPalette({
   const [slashCommands, setLocalSlashCommands] = useState<MobileSlashCommand[]>([]);
   const [slashPaletteLoading, setSlashPaletteLoading] = useState(false);
   const [slashPaletteError, setSlashPaletteError] = useState<string | null>(null);
+  const [capabilityRefreshPhase, setCapabilityRefreshPhase] = useState<MobileAgentSkillListResult['capabilityRefreshPhase']>();
   const [atResources, setAtResources] = useState<MobileAtResourceItem[]>([]);
   const [atPaletteLoading, setAtPaletteLoading] = useState(false);
   const [atPaletteError, setAtPaletteError] = useState<string | null>(null);
@@ -11616,11 +11618,13 @@ function SessionComposerPalette({
       setSlashCommands([]);
       setSlashPaletteLoading(false);
       setSlashPaletteError(null);
+      setCapabilityRefreshPhase(undefined);
       return;
     }
     // palette 重新打开:之前的点选意图作废,以本次新选择为准。
     pendingSkillSelectionRef.current = null;
     const seq = ++slashLoadSeqRef.current;
+    setCapabilityRefreshPhase(undefined);
     const agentKind = agentKindForSession(currentSession);
     const paletteCacheKey = buildComposerPaletteCacheKey(
       deviceId,
@@ -11659,6 +11663,7 @@ function SessionComposerPalette({
     })
       .then(({ builtins, skills, desktop }) => {
         if (slashLoadSeqRef.current !== seq) return;
+        setCapabilityRefreshPhase(skills.capabilityRefreshPhase);
         const builtinCommands = builtins.success && Array.isArray(builtins.commands)
           ? builtins.commands
           : [];
@@ -11824,6 +11829,7 @@ function SessionComposerPalette({
           {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'slash' ? (
             <ComposerPaletteFrame
               emptyText={t('session.common.noMatchingCommands')}
+              statusText={capabilityRefreshPhase ? t(`session.common.capabilityReload.${capabilityRefreshPhase}`) : undefined}
               errorText={slashPaletteError}
               loading={slashPaletteLoading}
               maxHeight={nativeShellLayout.paletteMaxHeight}
@@ -13111,6 +13117,7 @@ function ComposerPaletteFrame({
   loading,
   maxHeight,
   testID,
+  statusText,
 }: {
   children: ReactNode;
   emptyText: string;
@@ -13118,6 +13125,7 @@ function ComposerPaletteFrame({
   loading: boolean;
   maxHeight: number;
   testID: string;
+  statusText?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -13125,6 +13133,7 @@ function ComposerPaletteFrame({
   const hasRows = Array.isArray(children) ? children.length > 0 : !!children;
   return (
     <View style={[styles.palettePanel, { maxHeight }]} testID={testID}>
+      {statusText ? <Text accessibilityRole="text" style={styles.paletteCapabilityStatusText}>{statusText}</Text> : null}
       {loading ? (
         <View style={styles.paletteStatusRow}>
           <ActivityIndicator color={colors.textSecondary} />
@@ -13674,6 +13683,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  paletteCapabilityStatusText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },

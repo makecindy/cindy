@@ -12,6 +12,7 @@
  */
 
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
@@ -54,6 +55,9 @@ export interface McpHandlerDeps {
    * 省略时不做保留名校验（测试便利）。
    */
   getReservedMcpIds?(): string[];
+  /** Stable config + credential commit, used by original-task runtime reload. */
+  runtimeChanged?(): void;
+  ownerKey?(): string;
 }
 
 const listContextSchema = z.object({
@@ -69,7 +73,73 @@ const listContextSchema = z.object({
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 
-export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
+export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps) {
+  const saves = new Map<string, {
+    id: string; owner: string; done: Promise<void>; release(): void;
+    write?: () => Promise<void>;
+    committing?: boolean;
+    operation?: Promise<{ ok: true }>;
+    commitDecision?: boolean;
+    preserveFailure: boolean;
+  }>();
+  const completed = new Map<string, string>();
+  const failed = new Set<string>();
+  const ownerKey = () => deps.ownerKey?.() ?? 'local';
+  const key = (id: string) => JSON.stringify([ownerKey(), id]);
+  function begin(id: string, event: unknown, preserveFailure: boolean) {
+    if ([...saves.values()].some(save => save.id === id && save.owner === ownerKey())) {
+      throwIpcError('PRECONDITION_FAILED', 'MCP configuration is already being saved');
+    }
+    const saveId = randomUUID();
+    let release!: () => void;
+    const done = new Promise<void>(resolve => { release = resolve; });
+    const save = { id, owner: ownerKey(), done, release, committing: false, preserveFailure };
+    saves.set(saveId, save);
+    const sender = (event as { sender?: {
+      once?(name: string, callback: () => void): unknown;
+      removeListener?(name: string, callback: () => void): unknown;
+    } } | null)?.sender;
+    if (sender?.once) {
+      const destroyed = () => {
+        if (saves.get(saveId) !== save || save.committing) return;
+        if (save.preserveFailure) failed.add(JSON.stringify([save.owner, id]));
+        saves.delete(saveId);
+        save.release();
+      };
+      sender.once('destroyed', destroyed);
+      save.release = () => { sender.removeListener?.('destroyed', destroyed); release(); };
+    }
+    return saveId;
+  }
+  const saveOptions = z.object({ deferRuntimeRefresh: z.literal(true) }).strict();
+  async function persist(id: string, options: unknown, write: () => Promise<void>, event: unknown,
+    preserveFailure = true) {
+    const saveId = begin(id, event, preserveFailure);
+    const save = saves.get(saveId)!;
+    if (options !== undefined) {
+      // Stage config in main until the existing encrypted secret IPC completes.
+      // A rejected secure write must not leave a half-installed DB row behind.
+      save.write = write;
+      return { ok: true as const, saveId };
+    }
+    save.committing = true;
+    let persisted = false;
+    try {
+      await write();
+      persisted = true;
+      if (save.owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+      await afterChange();
+      failed.delete(key(id));
+      return { ok: true as const };
+    } catch (error) {
+      if (persisted) failed.add(JSON.stringify([save.owner, id]));
+      saves.delete(saveId);
+      save.release();
+      throw error;
+    } finally {
+      if (options === undefined) { saves.delete(saveId); save.release(); }
+    }
+  }
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');
@@ -90,7 +160,9 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
 
   // CRUD 成功后统一收尾：刷新 provider 数组 + 广播 + 失效 Codex app-server。
   async function afterChange(): Promise<void> {
+    const owner = ownerKey();
     await deps.refreshProviders();
+    if (owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
     deps.broadcastChanged();
     // Codex 失效放最后：即使它慢 / 抛错(busy 会话),UI 列表与 Claude 侧已即时生效。
     // 生产实现自身 best-effort;这里再包一层,保证 CRUD 结果不被 Codex 重启失败带崩。
@@ -99,43 +171,107 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     } catch {
       /* best-effort:Codex 失效失败不影响 CRUD 已落库的结果 */
     }
+    if (owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+    deps.runtimeChanged?.();
   }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown, options: unknown) => {
+    const owner = ownerKey();
+    if (options !== undefined && !saveOptions.safeParse(options).success) throwIpcError('INVALID_PARAMS', 'Invalid MCP save options');
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
     if (await customMcpServerExists(config.id)) {
       throwIpcError('ALREADY_EXISTS', `custom mcp '${config.id}' already exists`);
     }
-    await createCustomMcpServer(config);
-    await afterChange();
-    return { ok: true };
+    if (owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+    return persist(config.id, options, async () => { await createCustomMcpServer(config); }, _event, false);
   });
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown, options: unknown) => {
+    const owner = ownerKey();
+    if (options !== undefined && !saveOptions.safeParse(options).success) throwIpcError('INVALID_PARAMS', 'Invalid MCP save options');
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
-    const updated = await updateCustomMcpServer(config.id, config);
-    if (!updated) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
-    await afterChange();
-    return { ok: true };
+    if (!await customMcpServerExists(config.id)) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
+    if (owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+    return persist(config.id, options, async () => {
+      const updated = await updateCustomMcpServer(config.id, config);
+      if (!updated) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
+    }, _event);
   });
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (_event, mcpId: unknown) => {
     if (typeof mcpId !== 'string' || mcpId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
-    await deleteCustomMcpServer(mcpId);
-    await afterChange();
-    return { ok: true };
+    return persist(mcpId, undefined, async () => { await deleteCustomMcpServer(mcpId); }, _event);
   });
 
-  // token-only 后置刷新：renderer 在 safeStorage write/remove 完成后调用，消除竞态窗口。
-  // 无 DB 改动；仅重跑 afterChange()（refreshProviders + broadcastChanged + invalidateCodex）。
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async () => {
+  // A modern receipt commits staged configuration after the encrypted secret write.
+  // Older callers omit it and retain the existing token-only refresh behavior.
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async (_event, input: unknown) => {
+    if (input !== undefined) {
+      const parsed = z.object({ saveId: z.string().uuid(), committed: z.boolean() }).strict().safeParse(input);
+      if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP save receipt');
+      if (completed.get(parsed.data.saveId) === ownerKey() && parsed.data.committed) return { ok: true };
+      const save = saves.get(parsed.data.saveId);
+      if (!save || save.owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP save belongs to an inactive owner');
+      if (save.operation) {
+        if (save.commitDecision !== parsed.data.committed) throwIpcError('PRECONDITION_FAILED', 'MCP save is already finalizing');
+        return save.operation;
+      }
+      save.commitDecision = parsed.data.committed;
+      const operation = Promise.resolve().then(async (): Promise<{ ok: true }> => {
+        try {
+          if (saves.get(parsed.data.saveId) !== save || save.owner !== ownerKey()) {
+            throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+          }
+          if (!parsed.data.committed) {
+            throwIpcError('PRECONDITION_FAILED', 'MCP credential save failed');
+          }
+          save.committing = true;
+          // Once a config write starts, its outcome may be uncertain. Existing
+          // endpoints also need recovery after credential changes. A new MCP
+          // abandoned before any config write cannot affect healthy runtimes.
+          save.preserveFailure = true;
+          await save.write?.();
+          if (save.owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+          await afterChange();
+          if (save.owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+          failed.delete(key(save.id));
+          completed.set(parsed.data.saveId, save.owner);
+          if (completed.size > 256) completed.delete(completed.keys().next().value!);
+          return { ok: true };
+        } catch (error) {
+          if (save.preserveFailure) failed.add(JSON.stringify([save.owner, save.id]));
+          throw error;
+        } finally {
+          saves.delete(parsed.data.saveId);
+          save.release();
+        }
+      });
+      save.operation = operation;
+      return operation;
+    }
     await afterChange();
     return { ok: true };
   });
+  return {
+    hasPendingSave(): boolean { return [...saves.values()].some(save => save.owner === ownerKey()); },
+    async waitForStableConfiguration(): Promise<void> {
+      const owner = ownerKey();
+      for (;;) {
+        const pending = [...saves.values()].filter(save => save.owner === owner);
+        if (!pending.length) break;
+        await Promise.all(pending.map(save => save.done));
+        if (owner !== ownerKey()) throwIpcError('PRECONDITION_FAILED', 'MCP configuration owner changed');
+      }
+      if ([...failed].some(value => JSON.parse(value)[0] === owner)) {
+        throwIpcError('PRECONDITION_FAILED', 'MCP configuration save failed; save the configuration again');
+      }
+    },
+    dispose() { saves.forEach(save => save.release()); saves.clear(); failed.clear(); completed.clear(); },
+  };
 }
