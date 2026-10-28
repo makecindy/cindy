@@ -221,6 +221,32 @@ interface SessionTitleOverride {
 const sessionTitleOverrides = new Map<string, SessionTitleOverride>();
 let sessionTitleRevision = 0;
 
+/**
+ * 置顶 / 摘要字段的「防旧快照」叠加层(sessionId → 字段值 + 各自的事件版本)。
+ *
+ * 与 {@link sessionTitleOverrides} 同一套机制、同一个理由:取消置顶的成功广播
+ * `{ pinnedAt: null, summary: null }` 不带 status,任务此前没有状态覆盖记录时,
+ * 这些字段在请求返回前没有任何保护,先发后至的 sessions:list 会整桶覆盖,
+ * 把旧置顶写回缓存(issue #7664)。正常置顶的成功广播虽带 status,但状态覆盖
+ * 记录若继续收留 pinnedAt,其单一 rowRevision 会被之后的任意摘要更新抬升,
+ * 把记录里过期的 pinnedAt 一起重放,冲掉更新鲜的数据库值(同 issue 的二次交错)。
+ *
+ * 因此两个方向都收敛到这里:pinnedAt 与 summary 各持独立版本,摘要事件只推进
+ * summary 版本,永不连带重放过期的 pinnedAt。
+ */
+interface SessionPinOverride {
+  /** pinnedAt 事件版本;独立于 summary,摘要更新不得抬升它。 */
+  pinnedAtRevision: number;
+  pinnedAt: string | null;
+  /** summary 事件版本;未收到过 summary 事件时保持 0,重放永不命中。 */
+  summaryRevision: number;
+  summary: string | null;
+}
+
+const sessionPinOverrides = new Map<string, SessionPinOverride>();
+let sessionPinRevision = 0;
+let sessionPinSummaryRevision = 0;
+
 interface SessionStatusOverride {
   /** status 事件版本；rollback 用它区分同向状态是否有更晚的权威写入。 */
   revision: number;
@@ -260,6 +286,8 @@ interface PendingStatusTransition {
   concurrentAuthoritativePatch: Partial<Session>;
   titleRevisionAtStart: number;
   spendRevisionAtStart: number;
+  pinRevisionAtStart: number;
+  pinSummaryRevisionAtStart: number;
   buckets: Map<ListStatusFilter, StatusBucketSnapshot>;
   /** 乐观移除前恰好满 1000 条的桶；等状态写收敛后定向补回新的尾项。 */
   vacatedFullBuckets: Set<ListStatusFilter>;
@@ -472,6 +500,78 @@ function applySessionSpendOverrides(list: Session[], afterRevision: number): Ses
 }
 
 /**
+ * 仅重放请求启动后到达的置顶 / 摘要事件,避免旧事件覆盖未来数据库刷新。
+ * 必须排在 {@link applySessionStatusOverrides} 之后:状态覆盖携带的完整旧行
+ * 可能带着过期的置顶字段,由这一层按各自版本号纠正。
+ */
+function applySessionPinOverrides(
+  list: Session[],
+  afterPinnedAtRevision: number,
+  afterSummaryRevision: number,
+): Session[] {
+  if (sessionPinOverrides.size === 0) return list;
+  let changed = false;
+  const next = list.map((session) => {
+    const override = sessionPinOverrides.get(session.id);
+    if (!override) return session;
+    const patch: Partial<Session> = {};
+    if (
+      override.pinnedAtRevision > afterPinnedAtRevision &&
+      override.pinnedAt !== session.pinnedAt
+    ) {
+      patch.pinnedAt = override.pinnedAt;
+    }
+    if (
+      override.summaryRevision > afterSummaryRevision &&
+      override.summary !== session.summary
+    ) {
+      patch.summary = override.summary;
+    }
+    if (Object.keys(patch).length === 0) return session;
+    changed = true;
+    return mergeSession(session, patch);
+  });
+  return changed ? next : list;
+}
+
+/** 以 patch 语义登记置顶 / 摘要的权威事件(patchLocal 与状态迁移收敛共用)。 */
+function registerPinOverride(id: string, patch: Partial<Session>): void {
+  if (patch.pinnedAt === undefined && patch.summary === undefined) return;
+  if (patch.pinnedAt !== undefined) {
+    sessionPinRevision += 1;
+    const prev = sessionPinOverrides.get(id);
+    sessionPinOverrides.set(id, {
+      pinnedAtRevision: sessionPinRevision,
+      pinnedAt: patch.pinnedAt,
+      summaryRevision: prev?.summaryRevision ?? 0,
+      summary: prev?.summary ?? null,
+    });
+  }
+  if (patch.summary !== undefined) {
+    sessionPinSummaryRevision += 1;
+    const prev = sessionPinOverrides.get(id);
+    sessionPinOverrides.set(id, {
+      pinnedAtRevision: prev?.pinnedAtRevision ?? 0,
+      pinnedAt: prev?.pinnedAt ?? null,
+      summaryRevision: sessionPinSummaryRevision,
+      summary: patch.summary,
+    });
+  }
+}
+
+/**
+ * 状态迁移收敛(complete / rollback)后,以最终行重写置顶覆盖条目。
+ * 乐观迁移经 patchLocal 登记过 pinnedAt;不重写的话,发起于迁移之前的旧列表
+ * 请求返回时会把乐观值重放到已收敛的行上,回滚恢复的置顶因此被冲掉。
+ */
+function registerPinOverrideFromRow(sessionId: string, row: Session): void {
+  registerPinOverride(sessionId, {
+    pinnedAt: row.pinnedAt,
+    ...(row.summary !== undefined ? { summary: row.summary } : {}),
+  });
+}
+
+/**
  * **乐观标题的唯一写入口**:只把标题合并进各桶,什么簿记都不做。
  *
  * 与 `patchLocal`(权威写入口)刻意分开 —— 这是本 PR 反复栽的那个坑的结构性修法:
@@ -511,6 +611,8 @@ async function fetchFilter(
   const titleRevisionAtStart = sessionTitleRevision;
   const statusRevisionAtStart = sessionStatusRevision;
   const statusRowRevisionAtStart = sessionStatusRowRevision;
+  const pinRevisionAtStart = sessionPinRevision;
+  const pinSummaryRevisionAtStart = sessionPinSummaryRevision;
   const startedAt = performance.now();
   const sessions = await sessionService.list(
     DEFAULT_LIMIT,
@@ -518,15 +620,19 @@ async function fetchFilter(
     opts?.fresh ? { fresh: true } : undefined,
   );
   // 顺序:status override 可能携带写库返回的完整旧行,必须先应用；再重放请求期间到达的
-  // 费用与权威标题,最后叠乐观标题预览。否则完整状态行会把这三类更新盖回旧值。
+  // 置顶/摘要、费用与权威标题,最后叠乐观标题预览。否则完整状态行会把这四类更新盖回旧值。
   const result = applyAutoTitlePreviews(
     applySessionTitleOverrides(
       applySessionSpendOverrides(
-        applySessionStatusOverrides(
-          sessions,
-          filter,
-          statusRevisionAtStart,
-          statusRowRevisionAtStart,
+        applySessionPinOverrides(
+          applySessionStatusOverrides(
+            sessions,
+            filter,
+            statusRevisionAtStart,
+            statusRowRevisionAtStart,
+          ),
+          pinRevisionAtStart,
+          pinSummaryRevisionAtStart,
         ),
         spendRevisionAtStart,
       ),
@@ -571,6 +677,19 @@ function runTrailingFilterBackfill(filter: ListStatusFilter): void {
   runFilterBackfill(filter);
 }
 
+/**
+ * pinnedAt / summary 的权威事件由 {@link sessionPinOverrides} 专层登记与重放;
+ * 混入状态覆盖记录后,其单一 rowRevision 会被后续任意字段更新抬升,把过期的
+ * pinnedAt 一起重放,冲掉更新鲜的数据库值(issue #7664)。
+ */
+function stripPinFields(patch: Partial<Session>): Partial<Session> {
+  if (patch.pinnedAt === undefined && patch.summary === undefined) return patch;
+  const next = { ...patch };
+  delete next.pinnedAt;
+  delete next.summary;
+  return next;
+}
+
 function recordStatusOverride(
   sessionId: string,
   patch: Partial<Session>,
@@ -580,7 +699,7 @@ function recordStatusOverride(
   sessionStatusOverrides.set(sessionId, {
     revision: sessionStatusRevision,
     rowRevision: sessionStatusRowRevision,
-    patch: { ...patch },
+    patch: stripPinFields(patch),
     session: patch.status === 'deleted' ? null : session,
   });
 }
@@ -588,6 +707,8 @@ function recordStatusOverride(
 /**
  * 状态覆盖可能携带一整行；后到的权威字段必须同时合并进去，否则旧 list 响应重放状态时
  * 会把 model / effort / permissionMode 等 settings-only 更新盖回旧值。
+ * pinnedAt / summary 除外——它们由专层保护,剥掉后无可合并字段时不抬升
+ * rowRevision,避免为纯取消置顶广播扩大状态重放窗口。
  */
 function mergeAuthoritativePatchIntoStatusOverride(
   sessionId: string,
@@ -597,7 +718,7 @@ function mergeAuthoritativePatchIntoStatusOverride(
   if (pending) {
     pending.concurrentAuthoritativePatch = mergeSessionPatch(
       pending.concurrentAuthoritativePatch,
-      patch,
+      stripPinFields(patch),
     );
     if (pending.sourceSession) {
       pending.sourceSession = mergeSession(pending.sourceSession, patch);
@@ -606,11 +727,13 @@ function mergeAuthoritativePatchIntoStatusOverride(
   const override = sessionStatusOverrides.get(sessionId);
   if (!override) return;
   if (override.patch.status !== 'deleted') {
+    const statusPatch = stripPinFields(patch);
+    if (Object.keys(statusPatch).length === 0) return;
     sessionStatusRowRevision += 1;
     override.rowRevision = sessionStatusRowRevision;
-    override.patch = mergeSessionPatch(override.patch, patch);
+    override.patch = mergeSessionPatch(override.patch, statusPatch);
     if (override.session) {
-      override.session = mergeSession(override.session, patch);
+      override.session = mergeSession(override.session, statusPatch);
     }
   }
 }
@@ -624,6 +747,7 @@ function applyAuthoritativeStatusSession(
     autoTitlePreviews.delete(session.id);
     sessionTitleOverrides.delete(session.id);
     sessionSpendOverrides.delete(session.id);
+    sessionPinOverrides.delete(session.id);
   }
   let touched = false;
   const toBackfill = new Set<ListStatusFilter>();
@@ -800,6 +924,8 @@ export const sessionsStore = {
       concurrentAuthoritativePatch: {},
       titleRevisionAtStart: sessionTitleRevision,
       spendRevisionAtStart: sessionSpendRevision,
+      pinRevisionAtStart: sessionPinRevision,
+      pinSummaryRevisionAtStart: sessionPinSummaryRevision,
       buckets,
       vacatedFullBuckets: new Set(),
     });
@@ -887,11 +1013,20 @@ export const sessionsStore = {
     const authoritative = mergeSession(authoritativeBase, pending.concurrentAuthoritativePatch);
     const [withOverrides] = applyAutoTitlePreviews(
       applySessionTitleOverrides(
-        applySessionSpendOverrides([authoritative], pending.spendRevisionAtStart),
+        applySessionSpendOverrides(
+          applySessionPinOverrides(
+            [authoritative],
+            pending.pinRevisionAtStart,
+            pending.pinSummaryRevisionAtStart,
+          ),
+          pending.spendRevisionAtStart,
+        ),
         pending.titleRevisionAtStart,
       ),
     );
-    applyAuthoritativeStatusSession(withOverrides ?? authoritative, pending);
+    const finalRow = withOverrides ?? authoritative;
+    registerPinOverrideFromRow(token.sessionId, finalRow);
+    applyAuthoritativeStatusSession(finalRow, pending);
     if (pending.tokens.size === 0) {
       requestPendingStatusVacancyBackfills(pending, persisted.status);
     }
@@ -922,19 +1057,19 @@ export const sessionsStore = {
       return true;
     }
     if (pending.sourceSession) {
+      const restored = mergeSession(pending.sourceSession, pending.rollbackPatch);
+      // 回滚行经 pending.sourceSession 合并,已携带 pending 期间到达的权威字段;
+      // 置顶覆盖层不再按起飞版本重放——那只会把乐观登记的 pinnedAt 重放回来,
+      // 冲掉回滚恢复的置顶。收敛后以恢复行重写条目(registerPinOverrideFromRow)。
       const [withOverrides] = applyAutoTitlePreviews(
         applySessionTitleOverrides(
-          applySessionSpendOverrides(
-            [mergeSession(pending.sourceSession, pending.rollbackPatch)],
-            pending.spendRevisionAtStart,
-          ),
+          applySessionSpendOverrides([restored], pending.spendRevisionAtStart),
           pending.titleRevisionAtStart,
         ),
       );
-      applyAuthoritativeStatusSession(
-        withOverrides ?? mergeSession(pending.sourceSession, pending.rollbackPatch),
-        pending,
-      );
+      const finalRow = withOverrides ?? restored;
+      registerPinOverrideFromRow(token.sessionId, finalRow);
+      applyAuthoritativeStatusSession(finalRow, pending);
     } else {
       this.patchLocal(token.sessionId, pending.rollbackPatch);
     }
@@ -1029,10 +1164,19 @@ export const sessionsStore = {
       sessionTitleRevision += 1;
       sessionTitleOverrides.set(id, { revision: sessionTitleRevision, title: patch.title });
     }
+    // 置顶 / 摘要的每一次权威写入都登记字段级版本化 override:发起于本次写入
+    // 之前的 list 请求回来时,快照里还是旧值,必须被这一层挡住,否则整桶覆盖会
+    // 把刚写进缓存的置顶冲掉(issue #7664)。两个版本互相独立:摘要事件只推进
+    // summary,不得连带重放过期的 pinnedAt。乐观状态迁移经 beginStatusTransition
+    // 进入的 pinnedAt 同样在这里登记——与状态覆盖相同,pending 期间乐观值必须
+    // 跨过 request-start 版本持续生效;收敛(complete / rollback)时会以最终行
+    // 重写条目,乐观值不会泄漏到之后的重放。
+    registerPinOverride(id, patch);
     if (patch.status === 'deleted') {
       autoTitlePreviews.delete(id);
       sessionTitleOverrides.delete(id);
       sessionSpendOverrides.delete(id);
+      sessionPinOverrides.delete(id);
     }
     if (patch.totalCostUsd !== undefined || patch.totalMoney !== undefined) {
       sessionSpendRevision += 1;
@@ -1155,6 +1299,7 @@ export const sessionsStore = {
     autoTitlePreviews.delete(id);
     sessionTitleOverrides.delete(id);
     sessionSpendOverrides.delete(id);
+    sessionPinOverrides.delete(id);
     sessionStatusOverrides.delete(id);
     let touched = false;
     for (const [filter, list] of cache) {
@@ -1173,6 +1318,7 @@ export const sessionsStore = {
     sessionSpendOverrides.clear();
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
+    sessionPinOverrides.clear();
     sessionStatusOverrides.clear();
     hiddenSessionIds.clear();
     statusTransitionGeneration += 1;
