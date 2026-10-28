@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canPreviewModel3DInApp,
   getModel3DFormat,
   isManagedModel3DUrl,
   isModel3DPath,
@@ -18,6 +17,13 @@ describe('getModel3DFormat', () => {
     ['xdt-file://local/?path=C%3A%5Cwork%5Cb.OBJ&v=1', 'obj'],
     ['https://cdn.example.com/a/b.stl?v=2', 'stl'],
     ['https://cdn.example.com/a/b.ply#frag', 'ply'],
+    // 磁盘路径里的 # / ? 是文件名的字面字符，不是 URL 的 hash / query
+    ['/work/project#1/chair.glb', 'glb'],
+    ['/work/chair#2.glb', 'glb'],
+    ['/work/what?.obj', 'obj'],
+    ['C:\\work\\project#1\\Chair.FBX', 'fbx'],
+    ['xdt-file://local/?path=%2Fwork%2Fproject%231%2Fchair.glb', 'glb'],
+    ['./models#v2/ship.stl', 'stl'],
     ['scene.dae', 'dae'],
     ['part.3mf', '3mf'],
     ['old.3DS', '3ds'],
@@ -51,17 +57,6 @@ describe('getModel3DFormat', () => {
 
   it('keeps the recognised format list free of archives', () => {
     expect(MODEL3D_FORMATS).not.toContain('zip' as never);
-  });
-});
-
-describe('canPreviewModel3DInApp', () => {
-  it('only allows glTF-family formats today', () => {
-    expect(canPreviewModel3DInApp('glb')).toBe(true);
-    expect(canPreviewModel3DInApp('GLTF')).toBe(true);
-    expect(canPreviewModel3DInApp(' glb ')).toBe(true);
-    for (const format of MODEL3D_FORMATS) {
-      if (format !== 'glb' && format !== 'gltf') expect(canPreviewModel3DInApp(format)).toBe(false);
-    }
   });
 });
 

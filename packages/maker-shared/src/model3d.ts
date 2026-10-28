@@ -7,9 +7,6 @@
  *    嗅探真实类型（见 `sniffMediaMime`）。总仓目前只收 GLB——它有可靠的文件头；
  *    OBJ / 二进制 STL 没有魔数，扩展名又不能单独作为可信依据。
  * 2. 用户磁盘上的原始文件：就地读取（`xdt-file`），不复制进总仓，按扩展名识别。
- *
- * 另外「能识别」不等于「应用内能预览」：预览能力随查看器升级而扩大，单独导出，
- * 避免识别范围一变就把没法渲染的格式路由进查看器。
  */
 
 /** 能被识别为 3D 模型文件的格式（扩展名，小写、无点）。 */
@@ -27,51 +24,54 @@ export const MODEL3D_FORMATS = [
 
 export type Model3DFormat = (typeof MODEL3D_FORMATS)[number];
 
-/** 应用内查看器当前能渲染的格式（model-viewer 只认 glTF 系）。 */
-export const IN_APP_PREVIEW_MODEL3D_FORMATS = ['glb', 'gltf'] as const;
-
 /** 媒体总仓里的 3D 模型地址：整串精确匹配，目前仅 GLB。 */
 export const MANAGED_MODEL3D_URL_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb$/;
 
 const FORMAT_SET: ReadonlySet<string> = new Set(MODEL3D_FORMATS);
-const PREVIEW_SET: ReadonlySet<string> = new Set(IN_APP_PREVIEW_MODEL3D_FORMATS);
 
-/** 取路径 / URL 的扩展名；忽略 `?query` 与 `#hash`，两种路径分隔符都认。 */
-function extensionOf(pathOrUrl: string): string {
-  const withoutSuffix = pathOrUrl.split(/[?#]/, 1)[0] ?? '';
+/**
+ * 取扩展名，两种路径分隔符都认。`stripUrlSuffix` 为 true 时先去掉 `?query` 与 `#hash`——
+ * 只有 URL 才有这两段；磁盘路径里的 `?` / `#` 是文件名的字面字符（`/work/project#1/a.glb`）。
+ */
+function extensionOf(pathOrUrl: string, stripUrlSuffix: boolean): string {
+  const withoutSuffix = stripUrlSuffix ? (pathOrUrl.split(/[?#]/, 1)[0] ?? '') : pathOrUrl;
   const base = withoutSuffix.split(/[\\/]/).pop() ?? '';
   const dot = base.lastIndexOf('.');
   if (dot <= 0 || dot === base.length - 1) return '';
   return base.slice(dot + 1).toLowerCase();
 }
 
-/** `xdt-file://local/?path=<编码后的绝对路径>`：真实路径在 query 里，其余地址按原样取扩展名。 */
-function resolveSubject(pathOrUrl: string): string {
-  if (!pathOrUrl.startsWith('xdt-file://')) return pathOrUrl;
+/** `scheme://…`：带协议头的才是 URL；`C:\\x`、`/x`、`./x` 都是磁盘路径。 */
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * `xdt-file://local/?path=<编码后的绝对路径>`：真实路径在 query 里，解码后就是磁盘路径，
+ * 其中的 `#` / `?` 是字面字符；其余 URL 按原样取（扩展名前去掉 query / hash），磁盘路径原样取。
+ */
+function resolveSubject(pathOrUrl: string): { subject: string; isUrl: boolean } {
+  if (!pathOrUrl.startsWith('xdt-file://')) {
+    return { subject: pathOrUrl, isUrl: URL_SCHEME_RE.test(pathOrUrl) };
+  }
   const query = pathOrUrl.split('?', 2)[1];
   const encoded = query?.split('#', 1)[0]?.split('&').find((part) => part.startsWith('path='));
-  if (!encoded) return '';
+  if (!encoded) return { subject: '', isUrl: false };
   try {
-    return decodeURIComponent(encoded.slice('path='.length));
+    return { subject: decodeURIComponent(encoded.slice('path='.length)), isUrl: false };
   } catch {
-    return '';
+    return { subject: '', isUrl: false };
   }
 }
 
 /** 按扩展名识别 3D 模型格式；不是 3D 模型返回 null。ZIP 不是模型。 */
 export function getModel3DFormat(pathOrUrl: unknown): Model3DFormat | null {
   if (typeof pathOrUrl !== 'string' || !pathOrUrl) return null;
-  const ext = extensionOf(resolveSubject(pathOrUrl));
+  const { subject, isUrl } = resolveSubject(pathOrUrl);
+  const ext = extensionOf(subject, isUrl);
   return FORMAT_SET.has(ext) ? (ext as Model3DFormat) : null;
 }
 
 export function isModel3DPath(pathOrUrl: unknown): boolean {
   return getModel3DFormat(pathOrUrl) !== null;
-}
-
-/** 该格式能否在应用内查看器里渲染。 */
-export function canPreviewModel3DInApp(format: string): boolean {
-  return PREVIEW_SET.has(format.trim().toLowerCase());
 }
 
 /** 是否为媒体总仓里的 3D 模型地址（整串精确匹配）。 */

@@ -15,13 +15,21 @@ import { getModel3DFormat } from '@cindy/maker-shared/model3d';
 /** 文件候选需带扩展名;复制/移动命令的目录目标可用末尾分隔符明确表达。 */
 const EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
 
+/**
+ * 有扩展名。通用 `EXT_RE` 要求扩展名首字符是字母，会把 `.3mf` / `.3ds` 挡掉；
+ * 这两个是 maker-shared 已声明支持的 3D 模型格式，按模型格式表补上。
+ */
+function hasFileExtension(value: string): boolean {
+  return EXT_RE.test(value) || getModel3DFormat(value) !== null;
+}
+
 /** 临时目录里的产物是脚本自身/中间文件的高发区,一律不算「本轮产出」。 */
 const TEMP_DIR_RE = /(^|[\\/])(tmp|temp)([\\/])|[\\/]AppData[\\/]Local[\\/]Temp[\\/]/i;
 
 function isPathCandidate(raw: string): boolean {
   const s = raw.trim();
   if (s.length < 3 || s.length > 512) return false;
-  if (!EXT_RE.test(s) && !/[\\/]$/.test(s)) return false;
+  if (!hasFileExtension(s) && !/[\\/]$/.test(s)) return false;
   if (TEMP_DIR_RE.test(s)) return false;
   // 绝对路径,或含分隔符的相对路径(交给 resolveToolFilePath 按 workingDir 解析)。
   // 纯文件名(`输出.xlsx`)不收:随机带点 token 误报率太高。
@@ -171,7 +179,7 @@ function extractCommandPathTokens(command: string): CommandPathToken[] {
 }
 
 const WRITE_CALL_PREFIX_RE =
-  /(?:\.|\b)(?:export|export_scene\.[a-z0-9_]+|save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*(?:(?:path_or_buf|excel_writer|path|filepath|filename|fname|fp|file)\s*=\s*)?(?:[rubf]{0,2})?['"]$/i;
+  /(?:\.|\b)(?:export|export_scene\.[a-z0-9_]+|save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*(?:(?:path_or_buf|excel_writer|path|filepath|filename|fname|fp|file_obj|file)\s*=\s*)?(?:[rubf]{0,2})?['"]$/i;
 const WRITE_CALL_LATER_KEYWORD_PREFIX_RE =
   /(?:\.|\b)(?:save|savefig|writeFileSync|writeFile|writeAllText|writeAllBytes|createWriteStream|write_text|write_bytes|to_csv|to_excel|to_json|to_parquet|imwrite|imsave|dump)\s*\(\s*[^();\r\n]+,\s*(?:path_or_buf|excel_writer|path|filename|fname|fp|file)\s*=\s*(?:[rubf]{0,2})?['"]$/i;
 const OBJECT_FIRST_WRITE_CALL_PREFIX_RE =
@@ -679,7 +687,7 @@ function fileStem(value: string): string {
 function isSynthesizedOutputCandidate(value: string): boolean {
   const s = value.trim();
   if (s.length < 3 || s.length > 512) return false;
-  if (!EXT_RE.test(s)) return false;
+  if (!hasFileExtension(s)) return false;
   if (TEMP_DIR_RE.test(s)) return false;
   return !/[<>|?*]/.test(s);
 }
@@ -762,6 +770,25 @@ function bareModelOutputOptionOutputs(args: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * 明确的 3D 模型导出调用里的**纯文件名**：`mesh.export("cube.glb")`、
+ * `bpy.ops.export_scene.gltf(filepath="ship.glb")`。纯文件名过不了通用 token 扫描
+ * （`isPathCandidate` 要求带分隔符，否则「随机带点 token」误报面太大），但调用名本身
+ * 已经把「写出」和「模型」说明白了：只收 `export` 家族调用的首个参数（或 `file_obj` /
+ * `file` / `filepath` / `filename` / `path` 关键字），且扩展名必须是 3D 模型格式。
+ */
+const MODEL_EXPORT_CALL_BARE_NAME_RE =
+  /(?:\.|\b)(?:export|export_scene\.[a-z0-9_]+)\s*\(\s*(?:(?:file_obj|file|filepath|filename|fname|fp|path)\s*=\s*)?(?:[rubf]{0,2})?(?:"([^"\\/\r\n]+)"|'([^'\\/\r\n]+)')/gi;
+
+function bareModelExportOutputs(command: string): string[] {
+  const out: string[] = [];
+  for (const match of command.matchAll(MODEL_EXPORT_CALL_BARE_NAME_RE)) {
+    const name = match[1] ?? match[2] ?? '';
+    if (getModel3DFormat(name)) out.push(name);
+  }
+  return out;
+}
+
 /** 转换器 / 无头浏览器写出的产物路径(合成,可能不在命令文本里字面出现)。 */
 export function extractConverterOutputPaths(command: string): string[] {
   if (!command) return [];
@@ -770,6 +797,7 @@ export function extractConverterOutputPaths(command: string): string[] {
     const value = match[1] ?? match[2] ?? match[3] ?? '';
     if (value) out.push(value);
   }
+  out.push(...bareModelExportOutputs(command));
   for (const segment of splitCommandSegments(command)) {
     const args = extractCommandArguments(segment)
       .map((argument) => argument.value)

@@ -171,8 +171,10 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 ## 3D 模型的识别与存放
 
 - 3D 模型文件的识别只有一个来源：`packages/maker-shared/src/model3d.ts`
-  （`getModel3DFormat`、`isManagedModel3DUrl`、`canPreviewModel3DInApp`）。Desktop 与 Mobile
+  （`getModel3DFormat`、`isModel3DPath`、`isManagedModel3DUrl`）。Desktop 与 Mobile
   不再各写扩展名正则；要支持新格式，先改这里并补测试。ZIP 不是 3D 模型，不按模型处理。
+  只有 URL 才去掉 `?query` / `#hash` 再取扩展名；磁盘路径（含 `xdt-file://…?path=` 解码后的路径）里的
+  `#`、`?` 是文件名的字面字符，`/work/project#1/chair.glb` 照常识别。
 - 存放分两条通道，规则不同：
   - **媒体总仓**只收 GLB。总仓格式必须由 `sniffMediaMime` 按字节核验，GLB 有可靠文件头；
     OBJ、二进制 STL 没有魔数，扩展名又不能单独作为可信依据，因此不进总仓。`sniffMediaMime` 与
@@ -192,10 +194,8 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   - **缩略图**在 Renderer 用 SDK 的 `createThumbnailRenderer` 生成（共用一个 WebGL 上下文、任务串行、
     空闲 30 秒释放），结果只缓存在内存里（data URL，LRU 48 张；本地文件的缓存键含修改时间与大小；
     失败短暂缓存），**不写入媒体总仓**，应用重启后重新生成。缩略图只对 ≤32 MB 的模型生成——Three
-    加载器在主线程同步解析，更大的文件会卡界面，显示占位图标，点击预览不受影响。
+    加载器在主线程同步解析，更大的文件会卡界面，卡片退化成一行「图标 + 文件名」，点击预览不受影响。
   - `xdt-model://` 与 `modelCacheStore` 仍是冻结的历史兼容层：不再有新功能使用，但保留已有地址的读取。
-- 「能识别」与「应用内能预览」分开表达：预览范围由 `IN_APP_PREVIEW_MODEL3D_FORMATS` 决定，
-  目前只有 glTF 系。识别范围变大不会自动把没法渲染的格式路由进查看器。
 
 ## 读取、协议与边界
 
