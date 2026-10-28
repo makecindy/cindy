@@ -42,6 +42,7 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 function createNotifier(opts?: {
   hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
   sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
+  ownerOpenId?: string | null;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
   isAgentIslandEnabled?: () => boolean;
@@ -60,7 +61,7 @@ function createNotifier(opts?: {
     sendFeishuSessionNotification: opts?.sendFeishuSessionNotification,
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
-      getOwnerOpenId: vi.fn(() => 'ou_owner'),
+      getOwnerOpenId: vi.fn(() => opts?.ownerOpenId === undefined ? 'ou_owner' : opts.ownerOpenId),
       sendMarkdownText,
     } as unknown as FeishuIM,
     logger: { warn },
@@ -282,6 +283,20 @@ describe('DesktopNotifier desktop status mapping', () => {
 
 
 describe('Feishu notification origin receipt', () => {
+  // Regression: adopting the personal connection left ordinary scheduler runs
+  // without an owner; the old precheck skipped the shared resolver entirely.
+  // Unit; one completed run, null personal owner, explicit notify on/off.
+  it('uses the shared session sender without a personal owner and preserves the notification opt-out', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => undefined);
+    const { notifier, sendMarkdownText } = createNotifier({ ownerOpenId: null, sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledWith('session-1', expect.any(String));
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    sendFeishuSessionNotification.mockClear();
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: false } }, run('success'));
+    expect(sendFeishuSessionNotification).not.toHaveBeenCalled();
+  });
+
   it('passes the original run session to the receipt writer', async () => {
     const sendFeishuSessionNotification = vi.fn(async () => undefined);
     const { notifier, sendMarkdownText } = createNotifier({ sendFeishuSessionNotification });

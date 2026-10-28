@@ -5,7 +5,8 @@
  *
  * turnRunner 在「找任务」这一步多做一次归属解析: 连接已交给伙伴 → 主人私聊走
  * 伙伴主任务, 群 / 话题 / 获准的陌生人私聊走伙伴的 `channel` 专线; 未交出或伙伴
- * 解析失败 → 原逻辑。真实实现见 imBotBindingRuntime.ts(由 orchestrator 注入),
+ * 解析失败 → 原逻辑; 显式共享的主人私聊通过 failClosed 拒绝回落为其他身份。
+ * 真实实现见 imBotBindingRuntime.ts(由 orchestrator 注入),
  * 单测直接注入替身。
  */
 
@@ -21,7 +22,9 @@ export type ImCompanionSessionResult =
 
 export interface ImCompanionRouteDeps {
   /** 连接(本渠道 + botContextId)已交给的伙伴 id; 未交出返回 null。同步、可在热路径调用。 */
-  readBinding(botContextId: string): string | null;
+  readBinding(botContextId: string, userId?: string): string | null;
+  /** Shared identity switching must never fall back to a different identity on failure. */
+  failClosed?: boolean | ((userId?: string) => boolean);
   /**
    * 解析伙伴的落点任务。create=false 只查已有的(不建行、不恢复主任务), 查不到返回 null;
    * create=true 时确保存在(主任务走伙伴主任务恢复入口, 专线幂等创建)。

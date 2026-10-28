@@ -89,7 +89,11 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 **飞书主人通知的无租约路径**：`send_message_to_user` / `send_file_to_user` 在伙伴 canonical
 主任务的后台回报、心跳或桌面轮次中可主动通知主人。无飞书逐轮作用域时，宿主异步查询当前账号的
 `bot_session_links`（`role='canonical'`，关联 `sessions.source='bot'`），确认伙伴 Profile 为 `active`，
-选择该伙伴已连接且已绑定主人的飞书连接；发送时校验连接的 owner 与已解析收件人一致。
+默认选择该伙伴已连接且已绑定主人的飞书连接；发送时校验连接的 owner 与已解析收件人一致。
+主人显式开启[飞书共享连接](../product-rules/feishu-shared-connection.md)后，普通任务、独立调度与
+伙伴通知共用原连接实例；共享连接不可用时拒绝发送，不回落其他连接。普通任务显示 Cindy，伙伴
+来源由宿主关联生成；共享私聊入站默认进入 Cindy 的 canonical Session，`/bot` 切换只影响后续私聊，
+群和访客仍走原有专线及权限。旧专属记录不自动共享、不移动凭证。
 已识别伙伴但没有匹配的可用连接、伙伴 Profile 非 active 或缺失、数据库查询失败、账号边界处于 pending
 或 owner 代次变化，均拒绝发送，不回落个人 bot；查询前后
 及实际调用发送前都复核账号边界、owner 代次与所用 DB 快照。没有 canonical 伙伴归属的普通

@@ -52,6 +52,8 @@ export type FeishuToolTransport = Pick<
   | 'getService'
   | 'getBotAppId'
   | 'getOwnerOpenId'
+  | 'getStatus'
+  | 'sendNotification'
   | 'sendText'
   | 'sendMarkdownText'
   | 'replyText'

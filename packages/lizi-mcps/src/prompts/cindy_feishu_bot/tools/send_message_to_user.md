@@ -27,7 +27,7 @@
 
 错误码:
 
-- `NO_CHAT_CONTEXT` —— 既不在飞书 / Lark session,bot 又没有绑定过 owner(用户从未私聊过 bot)。**告诉用户**:"我目前无法通过飞书或 Lark 通知你,请先在已配置的 IM 服务里私聊机器人发一条消息完成绑定,之后再让我重试。" 不要自己重试。
+- `NO_CHAT_CONTEXT` —— 当前任务没有可用的飞书 / Lark 收件人路由。请用户检查当前账号的机器人连接、共享开关和主人绑定；仅在尚未绑定时建议私聊对应机器人完成绑定。不要断言用户从未私聊过机器人，不要自己重试。
 - `EMPTY_TEXT` —— text 为空或纯空白,不发
 - `INVALID_ARGS` —— schema 校验失败(含 `validation_errors`);最常见原因是 text 超过 30000 字符,截断后重试
 - `SEND_FAILED` —— 网络 / 权限 / SDK 错误,返回 raw 错误信息;可视具体错误决定是否重试(rate-limit 类等一秒再试;auth 类不要重试)

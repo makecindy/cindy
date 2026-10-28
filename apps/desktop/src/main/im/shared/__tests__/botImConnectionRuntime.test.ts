@@ -88,6 +88,7 @@ import {
   registerBotImConnectionIpc,
   setWechatCompanionBinding,
   getBotFeishuTransport,
+  getSharedFeishuTransport,
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
@@ -440,6 +441,45 @@ describe('bot im connection runtime', () => {
     expect(getBotFeishuTransport('unrelated-bot')).toBeNull();
     await stopBotImConnections();
     expect(getBotFeishuTransport('bot-mia')).toBeNull();
+  });
+
+  // Shared connection regression: selectors must reuse the live dedicated
+  // instance, and never borrow another app's recipient after reconnect/auth loss.
+  // Unit; real store/start/stop entry points, one saved connection, no network.
+  it('reuses one live instance for sharing and fails closed through disconnect, owner changes and stop', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' });
+    await connectionStore.updateBotImConnectionRecord(record.id, {
+      sharedFeishu: { appId: 'cli_shared', ownerOpenId: 'ou_shared', selectedBotId: null },
+    });
+    let state = { kind: 'connected', appId: 'cli_shared', owner: 'ou_shared' };
+    const im = {
+      init: vi.fn(async () => undefined), dispose: vi.fn(async () => undefined),
+      onStatusChange: () => () => undefined,
+      getStatus: () => ({ kind: state.kind, appId: state.appId }),
+      getBotAppId: () => state.appId, getOwnerOpenId: () => state.owner,
+    };
+    const create = vi.fn(() => ({ kind: 'feishu' as const, im: im as never, orchestrator: fakeOrchestrator() as never }));
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat, create,
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    await startBotImConnections();
+    await startBotImConnections();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(im.init).toHaveBeenCalledTimes(1);
+    expect(getSharedFeishuTransport()).toBe(getBotFeishuTransport('bot-mia'));
+    expect(() => getSharedFeishuTransport('ou_foreign')).toThrow('unavailable');
+    state.kind = 'offline';
+    expect(() => getSharedFeishuTransport()).toThrow('unavailable');
+    state.kind = 'connected';
+    expect(getSharedFeishuTransport()).toBe(im);
+    state.owner = 'ou_changed';
+    expect(() => getSharedFeishuTransport()).toThrow('unavailable');
+    state = { kind: 'connected', appId: 'cli_other', owner: 'ou_shared' };
+    expect(() => getSharedFeishuTransport()).toThrow('unavailable');
+    await stopBotImConnections();
+    expect(() => getSharedFeishuTransport()).toThrow('unavailable');
   });
 
   it('lists known groups with their per-connection activation and toggles it live', async () => {

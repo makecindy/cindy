@@ -135,6 +135,7 @@ export function createMessageHandler(
     }
 
     let notificationSessionId: string | undefined;
+    if (adapter.handleControlMessage && await adapter.handleControlMessage(event)) return;
     if (event.replyThread && adapter.resolveNotificationReply) {
       try {
         notificationSessionId = (await adapter.resolveNotificationReply(event)) ?? undefined;
@@ -453,7 +454,7 @@ export function createMessageHandler(
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
     const channelToolScope: ChannelToolScope | undefined =
       adapter.channelToolScopeFor?.(event) ??
-      (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
+      (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId, event.senderId)
         ? {
             channel,
             botId: event.contextId,

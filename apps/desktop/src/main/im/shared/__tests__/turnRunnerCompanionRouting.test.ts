@@ -212,7 +212,7 @@ function streamingHandleStub() {
     messageId: 'm-1',
     append: vi.fn(),
     replace: vi.fn(),
-    finalize: vi.fn(async (): Promise<void> => undefined),
+    finalize: vi.fn(async (_text: string): Promise<void> => undefined),
     addExtraImageAbsPath: vi.fn(),
     close: vi.fn(),
   };
@@ -535,6 +535,32 @@ describe('turnRunner: connection handed to a companion bot', () => {
     const warnings = mocks.logger.warn.mock.calls.filter(([msg]) =>
       String(msg).includes('falling back to the channel'));
     expect(warnings).toHaveLength(1);
+  });
+
+  // Shared selection is explicit: a paused/missing target cannot silently
+  // become Cindy or reuse an unrelated channel history. Unit, inactive profile.
+  it('refuses an unavailable shared identity without falling back to the legacy task', async () => {
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'BOT_UNAVAILABLE', message: 'paused' });
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: { ...companion, failClosed: true } as ImCompanionRouteDeps,
+    });
+    await expect(runTurn(OWNER)).rejects.toThrow('Companion route unavailable');
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    expect(harnesses.size).toBe(0);
+  });
+
+  it('keeps the output identity frozen for an earlier turn after the DM selection changes', async () => {
+    const handle = streamingHandleStub();
+    mocks.im.startStreamingText.mockResolvedValue(handle);
+    runner = createTurnRunner({ ...fakeAdapter, outputPrefixForSession: async (id) => `【${id}】\n\n` }, fakeRepo, fakeCards, {
+      companion: companion as ImCompanionRouteDeps,
+    });
+    await runTurn(OWNER);
+    binding = 'bot-other';
+    harnesses.get('mimi-main')!.emit({ type: 'text', data: { text: 'Reply A', isFinal: true } } as AgentEvent);
+    harnesses.get('mimi-main')!.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('【mimi-main】')));
+    expect(String(handle.finalize.mock.calls[0]?.[0])).not.toContain('bot-other');
   });
 
   it('replies with a notice and does not send when the bot guard blocks the turn', async () => {

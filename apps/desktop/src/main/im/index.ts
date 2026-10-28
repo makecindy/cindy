@@ -103,6 +103,7 @@ import {
 } from './shared/botImPersonalAdoption';
 import { readTelegramBehavior } from './telegram/behaviorStore';
 import { readBotImConnection, secretKeyPrefixFor } from './shared/botImConnectionStore';
+import { createSharedFeishuControls } from './feishu/sharedConnection';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { backfillLegacyImDefaultRoutes, backfillLegacyImDefaultRoutesAtStartup } from './shared/channelDefaultRouteSync';
 import type { ImDefaultSettingsChannel } from '../../shared/imDefaultSettings';
@@ -309,9 +310,13 @@ export function startImOrchestrators(): void {
       }
       if (record.channel === 'feishu') {
         const im = createBotFeishuIM(prefix);
+        const controls = createSharedFeishuControls(record.id, im);
         const orchestrator = wireFeishuOrchestrator(im, FEISHU_CONFIG, {
           instanceKey: `feishu#${record.id}`,
-          companionBotId: record.botId,
+          companionBotId: controls.readBinding,
+          companionFailClosed: (userId) => userId === im.getOwnerOpenId() && Boolean(readBotImConnection(record.id)?.sharedFeishu),
+          handleControlMessage: controls.handleControlMessage,
+          outputPrefixForSession: controls.outputPrefixForSession,
         });
         return { kind: 'feishu', im, orchestrator };
       }

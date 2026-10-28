@@ -14,8 +14,8 @@
  *      chat the user is already talking through).
  *   2. otherwise → bot's TOFU-recorded owner (the person who first DM'd this
  *      bot, semantically "the human this bot belongs to").
- *   3. neither → NO_CHAT_CONTEXT (bot has never been DM'd → user must bind
- *      the bot once before agent can push notifications).
+ *   3. neither → NO_CHAT_CONTEXT (no recipient route is available; the host's
+ *      connection, sharing and owner binding must be checked).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -169,7 +169,7 @@ function registerSendFileToUser(
           {
             ok: false,
             errorCode: 'NO_CHAT_CONTEXT',
-            error: `既没有当前飞书 / Lark session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在已配置的 IM 服务里私聊机器人一次完成绑定,再重试。`,
+            error: `当前任务没有可用的飞书 / Lark 收件人路由。请检查当前账号的机器人连接、共享开关和主人绑定；若尚未绑定，请先私聊对应机器人完成绑定。不能据此断言用户从未私聊过机器人。`,
           },
           true,
         );
@@ -236,7 +236,7 @@ function registerSendMessageToUser(
           {
             ok: false,
             errorCode: 'NO_CHAT_CONTEXT',
-            error: `既没有当前飞书 / Lark session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在已配置的 IM 服务里私聊机器人一次完成绑定,再重试。`,
+            error: `当前任务没有可用的飞书 / Lark 收件人路由。请检查当前账号的机器人连接、共享开关和主人绑定；若尚未绑定，请先私聊对应机器人完成绑定。不能据此断言用户从未私聊过机器人。`,
           },
           true,
         );
