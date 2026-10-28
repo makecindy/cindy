@@ -17406,8 +17406,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             message: 'session runtime generation changed; read it again before retrying',
           };
         }
-        if (patch.usageLimitFallback === null) {
-          await writeSessionUsageLimitFallback(targetSessionId, null);
+        if (patch.usageLimitFallback !== null) {
+          // 这些任务永不走额度自动继续（定时任务、伙伴、Orca Worker、共享中的任务、
+          // 目标模式在管的任务、执行已暂停），远程 Agent 任务也不在范围内：写入时就拒绝，
+          // 不留在库里一条永远不触发的策略。
+          if (!await isUsageLimitAutoResumeEligible(targetSessionId)) {
+            return {
+              ok: false,
+              errorCode: 'INVALID_ARGS',
+              message: 'usage-limit fallback applies to ordinary local tasks only',
+            };
+          }
+          if (await readSessionAgentDeviceId(targetSessionId)) {
+            return {
+              ok: false,
+              errorCode: 'INVALID_ARGS',
+              message: 'usage-limit fallback is unavailable while the agent runs on another computer',
+            };
+          }
+        }
+        if (patch.usageLimitFallback === null) {          await writeSessionUsageLimitFallback(targetSessionId, null);
           return {
             ok: true as const,
             status: 'applied' as const,
