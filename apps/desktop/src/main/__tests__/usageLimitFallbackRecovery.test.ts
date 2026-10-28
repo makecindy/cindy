@@ -38,6 +38,8 @@ type AutoRetryOutcome = 'resumed' | 'superseded' | 'no-progress';
 function harness(options: {
   continueOutcome?: AutoRetryOutcome;
   closeOnSwitch?: boolean;
+  throwOnSwitch?: boolean;
+  throwOnContinue?: boolean;
   overrides?: Partial<UsageLimitFallbackRecoveryDeps>;
 } = {}) {
   const recovery = { id: 'recovery-1' };
@@ -45,14 +47,22 @@ function harness(options: {
   let wait: { token: number; resumeAt: number | null } | null = { token: 7, resumeAt: null };
   let nextToken = 100;
   const state = { effective: { ...source } as SessionRuntimeProfile, generation: 3 };
-  const armResetWait = vi.fn((...args: unknown[]) => {
-    void args;
-    // 真实的 usageLimitAutoResume 只在候选仍有效时挂得上定时器。
-    if (!wait || error === null) return;
+  /**
+   * 真实的 usageLimitAutoResume.onTurnError 只在候选仍有效时才挂得上定时器：
+   * 令牌对不上或等待已被清掉时直接失败。上一轮的 bug 就死在这里，所以 mock 必须会拒。
+   * （`activeTurn` / `autoResumePending` 两维省略不影响等价性：能走到 handBack 时
+   * 前者已置 null，后者非 null 时 coordinator 根本不会回调。）
+   */
+  const armResetWait = vi.fn((_sessionId: string, _signals: unknown, token: number) => {
+    if (!wait || error === null) throw new Error('reset wait has no valid candidate');
+    if (wait.token !== token) throw new Error(`stale candidate token ${token} !== ${wait.token}`);
+    wait = { ...wait, resumeAt: 2_000 };
   });
   const continueAfterReset = vi.fn(
-    async (_sessionId: string, _token: number, _info: unknown): Promise<AutoRetryOutcome> =>
-      options.continueOutcome ?? 'resumed',
+    async (_sessionId: string, _token: number, _info: unknown): Promise<AutoRetryOutcome> => {
+      if (options.throwOnContinue) throw new Error('resume dispatch failed');
+      return options.continueOutcome ?? 'resumed';
+    },
   );
 
   const deps: UsageLimitFallbackRecoveryDeps = {
@@ -67,6 +77,7 @@ function harness(options: {
       state.effective = { ...state.effective, providerId: target.providerId, model: target.model };
       // 换路可能以 runtime-refresh 关闭旧会话：等待被撤销，recovery 保留。
       if (options.closeOnSwitch) wait = null;
+      if (options.throwOnSwitch) throw new Error('relink failed after close');
       return { deferred: false, superseded: false };
     },
     lease: (_sessionId, token) => (wait?.token === token && error !== null ? recovery : null),
@@ -153,9 +164,35 @@ describe('usage-limit fallback recovery', () => {
     const h = harness({ continueOutcome: 'superseded' });
     h.recovery.handBack('s1', quotaSignals, 7);
     await vi.waitFor(() => expect(h.armResetWait).toHaveBeenCalledTimes(1));
-    const token = h.armResetWait.mock.calls[0]![2] as number;
-    expect(h.currentWait()?.token).toBe(token);
-    expect(h.currentWait()).not.toBeNull();
+    // mock 会拒过期令牌；能改写 resumeAt 就证明交回的令牌真的排上了等待。
+    expect(h.currentWait()?.resumeAt).toBe(2_000);
+  });
+
+  it('recovers the candidate when the route switch throws after closing the session', async () => {
+    const h = harness({ closeOnSwitch: true, throwOnSwitch: true });
+    const result = await h.recovery.recover({
+      sessionId: 's1',
+      signals: quotaSignals,
+      policy,
+      token: 7,
+    });
+    expect(result.resumed).toBe(false);
+    // 关闭已清掉等待，只有租约能把它拉回候选；否则既没有续跑也没有等待。
+    expect(h.currentWait()?.token).toBe(result.token);
+    expect(h.currentWait()?.resumeAt).toBeNull();
+  });
+
+  it('recovers the candidate when the resume dispatch itself throws', async () => {
+    const h = harness({ throwOnContinue: true });
+    const result = await h.recovery.recover({
+      sessionId: 's1',
+      signals: quotaSignals,
+      policy,
+      token: 7,
+    });
+    expect(result.resumed).toBe(false);
+    expect(h.currentWait()?.token).toBe(result.token);
+    expect(h.currentWait()?.resumeAt).toBeNull();
   });
 
   it('falls back to reset waiting when no policy is configured', () => {

@@ -19915,8 +19915,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readPolicy: (sessionId) => readSessionUsageLimitFallback(sessionId),
     isEligible: (sessionId) => isUsageLimitAutoResumeEligible(sessionId),
     runsOffThisMachine: (sessionId) => sessionRunsOffThisMachine(sessionId),
-    isBoundToProviderGroup: async (sessionId) =>
-      Boolean(await providerGroupService?.sessionGroup(sessionId)),
+    // 归组判定用 binding：`sessionGroup` 在“仍有绑定、但当前路由不在任何成员上”时返回 null，
+    // 那种任务仍属组，不能吃本策略。
+    isBoundToProviderGroup: (sessionId) => Boolean(readProviderGroupBinding(sessionId)),
     readProfiles: async (sessionId) => {
       const profiles = await readSessionRuntimeProfiles(sessionId);
       return profiles

@@ -2,6 +2,7 @@ import {
   USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
   type AutoResumeInfo,
 } from '../../shared/agentInputQueue.js';
+import type { AutoRetryOutcome } from './agent-input-coordinator.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import {
@@ -26,7 +27,7 @@ export interface UsageLimitFallbackRecoveryDeps {
   /** 远程 Agent 与 SSH 远程会话不吃本策略。 */
   runsOffThisMachine(sessionId: string): Promise<boolean>;
   /** 归供应商组的任务先换电脑；组内全失败也不换模型，仍等额度重置。 */
-  isBoundToProviderGroup(sessionId: string): Promise<boolean>;
+  isBoundToProviderGroup(sessionId: string): boolean | Promise<boolean>;
   readProfiles(sessionId: string): Promise<{
     effective: SessionRuntimeProfile;
     generation: number;
@@ -44,7 +45,7 @@ export interface UsageLimitFallbackRecoveryDeps {
   isLeaseCurrent(sessionId: string, lease: object): boolean;
   /** `resumeAt` 为 null 表示退回候选状态（立刻到点前/交回等重置前都用它）。 */
   rearm(sessionId: string, lease: object, resumeAt: number | null): number | null;
-  continueAfterReset(sessionId: string, token: number, info: AutoResumeInfo): Promise<string>;
+  continueAfterReset(sessionId: string, token: number, info: AutoResumeInfo): Promise<AutoRetryOutcome>;
   /** 交回既有的「等额度重置」流程。 */
   armResetWait(sessionId: string, signals: InterruptedTurnErrorSignals, token: number): void;
   now(): number;
@@ -105,45 +106,57 @@ export function createUsageLimitFallbackRecovery(
     const profiles = await deps.readProfiles(sessionId);
     if (!profiles || !matchesUsageLimitFallbackSource(policy, profiles.effective)) return stop;
     if (!deps.canApplySelection(sessionId, profiles.generation)) return stop;
-    const switched = await deps.withSessionLock(sessionId, async () => {
-      if (!deps.canApplySelection(sessionId, profiles.generation)) return false;
-      if (!deps.isLeaseCurrent(sessionId, lease)) return false;
-      const result = await deps.applySelection({
-        sessionId,
-        from: profiles.effective,
-        target: policy.target,
-        generation: profiles.generation,
+    let resumeToken: number | null = null;
+    try {
+      const switched = await deps.withSessionLock(sessionId, async () => {
+        if (!deps.canApplySelection(sessionId, profiles.generation)) return false;
+        if (!deps.isLeaseCurrent(sessionId, lease)) return false;
+        const result = await deps.applySelection({
+          sessionId,
+          from: profiles.effective,
+          target: policy.target,
+          generation: profiles.generation,
+        });
+        return (
+          !result.superseded &&
+          !result.deferred &&
+          result.contextWindowConfirmationRequired === undefined &&
+          result.contextTokensForConfirmation === undefined
+        );
       });
-      return (
-        !result.superseded &&
-        !result.deferred &&
-        result.contextWindowConfirmationRequired === undefined &&
-        result.contextTokensForConfirmation === undefined
-      );
-    });
-    if (!switched) return stop;
-    // 换路已完成：立刻到点续跑一次（有产出发续跑指令、零产出重发原文）。
-    const resumeToken = deps.rearm(sessionId, lease, deps.now());
-    if (resumeToken === null) return stop;
-    const labels = usageLimitFallbackLabels(policy);
-    const outcome = await deps.continueAfterReset(sessionId, resumeToken, {
-      reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
-      agentSwitch: { from: labels.from, to: labels.to, cause: 'usage-limit', kind: 'model' },
-      attempt: 1,
-      maxAttempts: 1,
-      sessionTotal: 0,
-      ...(signals.message !== undefined ? { error: signals.message } : {}),
-    });
-    deps.log.info('usage-limit fallback resumed', {
-      sessionId,
-      outcome,
-      fromModel: labels.from,
-      toModel: labels.to,
-    });
-    if (outcome === 'resumed') return { resumed: true, token: resumeToken };
-    // 到点了却没续跑成：把等待退回候选，并交出仍然有效的那张令牌。
-    const backToken = deps.rearm(sessionId, lease, null);
-    return { resumed: false, token: backToken ?? resumeToken };
+      if (!switched) return stop;
+      // 换路已完成：立刻到点续跑一次（有产出发续跑指令、零产出重发原文）。
+      resumeToken = deps.rearm(sessionId, lease, deps.now());
+      if (resumeToken === null) return stop;
+      const labels = usageLimitFallbackLabels(policy);
+      const outcome = await deps.continueAfterReset(sessionId, resumeToken, {
+        reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+        agentSwitch: { from: labels.from, to: labels.to, cause: 'usage-limit', kind: 'model' },
+        attempt: 1,
+        maxAttempts: 1,
+        sessionTotal: 0,
+        ...(signals.message !== undefined ? { error: signals.message } : {}),
+      });
+      deps.log.info('usage-limit fallback resumed', {
+        sessionId,
+        outcome,
+        fromModel: labels.from,
+        toModel: labels.to,
+      });
+      if (outcome === 'resumed') return { resumed: true, token: resumeToken };
+      // 到点了却没续跑成：把等待退回候选，并交出仍然有效的那张令牌。
+      const backToken = deps.rearm(sessionId, lease, null);
+      return { resumed: false, token: backToken ?? resumeToken };
+    } catch (error: unknown) {
+      // 换路可能在关闭旧会话之后才抛（重新挂接/终态校验失败）：那时等待已被关闭清掉，
+      // 只剩租约还能把它拉回来。不抢回来就会变成“没续跑也没等待”。
+      deps.log.warn('usage-limit fallback interrupted', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const backToken = deps.rearm(sessionId, lease, null);
+      return { resumed: false, token: backToken ?? resumeToken ?? token };
+    }
   }
 
   function handBack(
