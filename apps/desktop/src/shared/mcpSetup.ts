@@ -30,7 +30,7 @@ export interface McpSetupResult {
   errorCode?: McpSetupError;
   serverId?: string;
   verification?: 'passed';
-  activation?: 'next_session' | 'pending';
+  activation?: 'next_session' | 'refreshing' | 'deferred' | 'pending';
 }
 export interface McpSetupSnapshot extends McpSetupResult {
   kind: 'mcp_setup';

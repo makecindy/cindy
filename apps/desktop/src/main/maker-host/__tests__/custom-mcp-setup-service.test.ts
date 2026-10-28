@@ -7,6 +7,7 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { commitCustomMcp } from '../../localDb/worker/opHandlers/customMcpTx.js';
 import { CustomMcpSetupService, mcpSubmissionSchema } from '../custom-mcp-setup-service.js';
+import { DeferredCodexRestartService } from '../../maker-ipc/deferredCodexRestart.js';
 import {
   listMcpSummaries,
   resolveMcpCredentials,
@@ -181,7 +182,7 @@ describe('secure custom MCP setup', () => {
     const saving = service.submit(input);
     await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
     const saved = frames.at(-1)!;
-    expect(saved).toMatchObject({ status: 'saved', activation: 'pending' });
+    expect(saved).toMatchObject({ status: 'saved', activation: 'refreshing' });
     expect(complete).toHaveBeenCalledOnce();
     const retry = service.retryActivation(saved.requestId, saved.revision);
     expect(changed).toHaveBeenCalledOnce();
@@ -189,6 +190,73 @@ describe('secure custom MCP setup', () => {
     expect(await saving).toMatchObject({ status: 'saved', activation: 'next_session' });
     expect(await retry).toMatchObject({ status: 'saved', activation: 'next_session' });
     expect(client.tx).toHaveBeenCalledOnce();
+  });
+  it('automatically settles a deferred activation at the idle restart boundary without another save or continuation', async () => {
+    let busy = true;
+    const restart = vi.fn(async (apply: () => Promise<boolean>) => { await apply(); });
+    const deferred = new DeferredCodexRestartService({
+      restart,
+      hasBusyLocalCodexSession: () => busy,
+      listLocalCodexSessionIds: () => ['task'],
+      onApplied: () => service.activationApplied(),
+    });
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, verify, executionKey: () => execution,
+      changed: async () => { deferred.schedule('Custom MCP configuration changed'); return 'deferred'; },
+    });
+    try {
+      const { input, receipt } = prepare();
+      expect(await service.submit(input)).toMatchObject({ status: 'saved', activation: 'deferred' });
+      await deferred.flushBeforeLocalCodexSessionStart();
+      expect(restart).not.toHaveBeenCalled();
+      busy = false;
+      // The existing runtime-refresh close silences Agent continuation, not
+      // this owner's already durable result card.
+      service.cleanupForSession('task');
+      await deferred.flushBeforeLocalCodexSessionStart();
+      expect(frames.at(-1)).toMatchObject({ status: 'saved', activation: 'next_session' });
+      expect(await service.status('task', receipt.operationId)).toMatchObject({ activation: 'next_session' });
+      expect(verify).toHaveBeenCalledOnce();
+      expect(client.tx).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+    } finally { deferred.clear(); }
+  });
+  it('publishes the applied receipt when an immediate refresh retires the originating Agent session', async () => {
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, verify, executionKey: () => execution,
+      changed: async () => { service.cleanupForSession('task'); return true; },
+    });
+    expect(await service.submit(prepare().input)).toMatchObject({ status: 'saved', activation: 'next_session' });
+    expect(frames.at(-1)).toMatchObject({ status: 'saved', activation: 'next_session' });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+  it('keeps the applied result if the idle callback wins the race with the initial refresh reply', async () => {
+    let pending = true;
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, verify, executionKey: () => execution,
+      activationPending: () => pending,
+      changed: async () => {
+        pending = false;
+        service.activationApplied();
+        return 'deferred';
+      },
+    });
+    expect(await service.submit(prepare().input)).toMatchObject({ activation: 'next_session' });
+    expect(frames.at(-1)).toMatchObject({ activation: 'next_session' });
+  });
+  it('does not publish an old owner receipt when a late activation callback arrives', async () => {
+    service = new CustomMcpSetupService({
+      broadcast: (_id, snapshot) => frames.push(structuredClone(snapshot)),
+      complete, verify, changed: async () => 'deferred', executionKey: () => execution,
+    });
+    await service.submit(prepare().input);
+    const count = frames.length;
+    state.scope = 'owner:2';
+    service.activationApplied();
+    expect(frames).toHaveLength(count);
   });
   it('revokes a queued completion if Stop arrives after persistence', async () => {
     let resume!: () => void;
@@ -212,7 +280,7 @@ describe('secure custom MCP setup', () => {
     await vi.waitFor(() => expect(frames.at(-1)?.status).toBe('saved'));
     service.cleanupForSession('task');
     resume();
-    expect(await saving).toMatchObject({ status: 'saved' });
+    expect(await saving).toMatchObject({ status: 'saved', activation: 'pending' });
     expect(delivered).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
     expect(await listMcpRecords()).toHaveLength(1);

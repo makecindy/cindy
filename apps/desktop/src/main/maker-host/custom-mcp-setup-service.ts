@@ -58,7 +58,7 @@ type Entry = {
   submissionRevision?: number;
   committingDraft?: McpSetupDraft;
   job?: Promise<McpSetupSnapshot>;
-  activationJob?: Promise<boolean>;
+  activationJob?: Promise<NonNullable<McpSetupResult['activation']>>;
   completionSent?: boolean;
   silent?: boolean;
   executionKey?: string;
@@ -66,7 +66,8 @@ type Entry = {
 interface SetupDeps {
   broadcast(sessionId: string, snapshot: McpSetupSnapshot): void;
   complete(sessionId: string, snapshot: McpSetupSnapshot, assertCurrent: () => void): Promise<void>;
-  changed(): Promise<void | boolean>;
+  changed(): Promise<void | boolean | 'deferred'>;
+  activationPending?(): boolean;
   executionKey?(sessionId: string): string | undefined;
   captureOwner?: typeof captureMcpOwner;
   verify?: typeof verifyCustomMcp;
@@ -101,7 +102,7 @@ export class CustomMcpSetupService {
       ...entry.snapshot,
       status: 'saved',
       serverId: entry.serverId,
-      activation: 'pending',
+      activation: entry.silent ? 'pending' : 'refreshing',
       errorCode: undefined,
     };
     clearTimeout(entry.timer);
@@ -114,10 +115,16 @@ export class CustomMcpSetupService {
     // the originating session. The existing input queue deduplicates it.
     await this.notifyCompleted(entry);
     entry.owner.assertOwner();
-    if (entry.silent) return;
-    const refreshed = await this.refreshActivation(entry);
+    if (entry.silent) {
+      if (entry.snapshot.activation === 'refreshing') {
+        entry.snapshot = { ...entry.snapshot, activation: 'pending' };
+        this.deps.broadcast(entry.sessionId, entry.snapshot);
+      }
+      return;
+    }
+    const activation = await this.refreshActivation(entry);
     entry.owner.assertOwner();
-    entry.snapshot = { ...entry.snapshot, activation: refreshed ? 'next_session' : 'pending' };
+    this.setActivation(entry, activation);
   }
   private async recoverCommitted(entry: Entry): Promise<boolean> {
     if (!entry.committingDraft) return false;
@@ -141,18 +148,25 @@ export class CustomMcpSetupService {
     entry.committingDraft = undefined;
     return true;
   }
-  private refreshActivation(entry: Entry): Promise<boolean> {
+  private refreshActivation(entry: Entry): Promise<NonNullable<McpSetupResult['activation']>> {
     if (entry.activationJob) return entry.activationJob;
     entry.activationJob = Promise.resolve()
       .then(() => this.deps.changed())
       .then(
-        (result) => result !== false,
-        () => false,
+        (result) => result === false ? 'pending' as const : result === 'deferred' ? 'deferred' as const : 'next_session' as const,
+        () => 'pending' as const,
       )
       .finally(() => {
         entry.activationJob = undefined;
       });
     return entry.activationJob;
+  }
+  private setActivation(entry: Entry, activation: NonNullable<McpSetupResult['activation']>): void {
+    // The idle callback may run before changed() returns. Re-read its existing
+    // pending flag in the same synchronous step that publishes the receipt.
+    entry.snapshot = { ...entry.snapshot, activation:
+      activation === 'deferred' && this.deps.activationPending?.() === false ? 'next_session' : activation,
+    };
   }
   private async notifyCompleted(entry: Entry): Promise<void> {
     entry.owner.assertOwner();
@@ -358,10 +372,11 @@ export class CustomMcpSetupService {
         parsed.headers = {};
       }
       entry.owner.assertOwner();
-      if (!entry.silent) {
+      // Runtime refresh can retire the original Agent session. A durable receipt
+      // still belongs to this owner even when continuation has been silenced.
+      if (!entry.silent || entry.snapshot.status === 'saved')
         this.deps.broadcast(entry.sessionId, entry.snapshot);
-        if (entry.snapshot.status === 'saved') await this.notifyCompleted(entry);
-      }
+      if (!entry.silent && entry.snapshot.status === 'saved') await this.notifyCompleted(entry);
       return entry.snapshot;
     })();
     return entry.job;
@@ -415,11 +430,24 @@ export class CustomMcpSetupService {
   async retryActivation(id: string, revision: number): Promise<McpSetupSnapshot> {
     const entry = this.current(id, revision);
     if (entry.snapshot.status !== 'saved') throw new Error('CONFIG_CONFLICT');
-    const refreshed = await this.refreshActivation(entry);
+    const activation = await this.refreshActivation(entry);
     entry.owner.assertOwner();
-    entry.snapshot = { ...entry.snapshot, activation: refreshed ? 'next_session' : 'pending' };
+    this.setActivation(entry, activation);
     this.deps.broadcast(entry.sessionId, entry.snapshot);
     return entry.snapshot;
+  }
+  /** The existing owner-scoped idle restart has applied the frozen MCP config. */
+  activationApplied(): void {
+    for (const entry of this.entries.values()) {
+      if (entry.snapshot.status !== 'saved' || entry.snapshot.activation !== 'deferred') continue;
+      try {
+        entry.owner.assertOwner();
+        entry.snapshot = { ...entry.snapshot, activation: 'next_session' };
+        this.deps.broadcast(entry.sessionId, entry.snapshot);
+      } catch {
+        /* Never publish a receipt across an account boundary. */
+      }
+    }
   }
   cleanupForSession(sessionId: string) {
     for (const e of this.entries.values())

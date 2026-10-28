@@ -96,6 +96,14 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  it.each([true, false])('reports an automatic host refresh only when provider refresh succeeds (%s)', async (providersReady) => {
+    const harness = new IpcHarness();
+    const afterChange = registerMcpHandlers(harness, makeDeps({
+      refreshProviders: vi.fn(async () => providersReady),
+      invalidateCodex: vi.fn(async () => 'deferred' as const),
+    }));
+    expect(await afterChange()).toBe(providersReady ? 'deferred' : false);
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {

@@ -56,10 +56,10 @@ export function McpSetupPrompt({
   return (
     <section
       aria-live="polite"
-      className="min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]"
+      className="flex max-h-[min(460px,55vh)] w-full min-w-0 flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]"
     >
       {snapshot.errorCode && (
-        <p role="alert" className="px-4 pt-4 text-13 text-[var(--error-fg)]">
+        <p role="alert" className="shrink-0 px-4 pt-4 text-13 text-[var(--error-fg)]">
           {t('settings.mcp.setup.errors.' + snapshot.errorCode)}
         </p>
       )}
@@ -73,7 +73,7 @@ export function McpSetupPrompt({
           onSaved={() => {}}
         />
       ) : (
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto p-4">
           <p className="text-13">{t('settings.mcp.setup.states.' + snapshot.status)}</p>
           {snapshot.status === 'saved' && (
             <div className="min-w-0 space-y-1 text-12 text-[var(--text-secondary)]">
@@ -86,7 +86,11 @@ export function McpSetupPrompt({
               {t(
                 snapshot.activation === 'pending'
                   ? 'settings.mcp.setup.activationPending'
-                  : 'settings.mcp.setup.nextTask',
+                  : snapshot.activation === 'refreshing'
+                    ? 'settings.mcp.setup.activationRefreshing'
+                    : snapshot.activation === 'deferred'
+                      ? 'settings.mcp.setup.activationDeferred'
+                      : 'settings.mcp.setup.nextTask',
               )}
             </p>
           )}

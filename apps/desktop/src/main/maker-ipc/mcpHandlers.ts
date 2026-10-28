@@ -46,7 +46,7 @@ export interface McpHandlerDeps {
    * codexEnvironment 缓存 + dispose app-server（与 slack 变更同款,best-effort，busy 会话软重启失败
    * 登记空闲重试而不阻塞 CRUD）。测试可省略。
    */
-  invalidateCodex?(): Promise<void | boolean>;
+  invalidateCodex?(): Promise<void | boolean | 'deferred'>;
   /**
    * 内置 MCP server 名（生产 = getBuiltinMcpServerNames）。自定义 MCP 撞上这些名字时
    * 会在装配层顶替内置 server 并继承其审批信任，因此创建 / 更新阶段直接拒收。
@@ -88,7 +88,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
   });
 
   // CRUD 成功后统一收尾：刷新 provider 数组 + 广播 + 失效 Codex app-server。
-  async function afterChange(): Promise<boolean> {
+  async function afterChange(): Promise<boolean | 'deferred'> {
     const scope = activeOwnerScopeKey();
     let refreshed = await deps.refreshProviders() !== false;
     if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
@@ -96,7 +96,9 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     // Codex 失效放最后：即使它慢 / 抛错(busy 会话),UI 列表与 Claude 侧已即时生效。
     // 生产实现自身 best-effort;这里再包一层,保证 CRUD 结果不被 Codex 重启失败带崩。
     try {
-      if (await deps.invalidateCodex?.() === false) refreshed = false;
+      const activation = await deps.invalidateCodex?.();
+      if (activation === false) refreshed = false;
+      if (refreshed && activation === 'deferred') return 'deferred';
     } catch {
       refreshed = false;
       /* best-effort:Codex 失效失败不影响 CRUD 已落库的结果 */

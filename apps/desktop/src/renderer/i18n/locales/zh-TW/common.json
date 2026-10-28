@@ -7747,6 +7747,8 @@
         "localOnly": "憑證僅交給本機 Cindy，用於此位址的連線驗證和加密儲存，不會傳送到訊息中。",
         "nextTask": "已儲存，Agent 下次啟動時可用。",
         "activationPending": "設定已儲存，執行環境尚未重新整理。可重試生效，無需重新建立。",
+        "activationRefreshing": "設定已儲存，正在套用…",
+        "activationDeferred": "已安排自動生效，無需手動重新整理。執行中的任務會繼續使用原設定。",
         "dismiss": "關閉",
         "states": {
           "verifying": "正在驗證連線…",

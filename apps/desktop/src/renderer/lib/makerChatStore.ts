@@ -2766,6 +2766,8 @@ export interface SessionChatState {
    */
   pendingInputHandoff: InputHandoffSnapshot | null;
   pendingMcpSetup: McpSetupSnapshot | null;
+  /** Local receipt dismissals also suppress later activation-only updates. */
+  dismissedMcpSetupRequestIds?: string[];
   /** rename_sessions_confirm: 批量改名写入前的确认卡片; null when none. */
   pendingRenameSessionsConfirm: PendingRenameSessionsConfirm | null;
   /** ghost_grant_confirm: ghost_call 过户 workdir 外文件的确认卡片; null when none. */
@@ -8658,6 +8660,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const parsed = request as unknown as McpSetupSnapshot;
       if (typeof parsed.revision !== 'number' || !parsed.draft || typeof parsed.draft.url !== 'string') return;
       setState(sessionId, s => {
+        if (s.dismissedMcpSetupRequestIds?.includes(parsed.requestId)) return s;
         if (s.pendingMcpSetup?.requestId === parsed.requestId && s.pendingMcpSetup.revision > parsed.revision) return s;
         return { ...s, pendingMcpSetup: parsed };
       });
@@ -19976,5 +19979,9 @@ if (import.meta.hot) {
 }
 
 export function dismissMcpSetupResult(sessionId: string): void {
-  setState(sessionId, state => state.pendingMcpSetup?.status === 'saved' ? { ...state, pendingMcpSetup: null } : state);
+  setState(sessionId, state => state.pendingMcpSetup?.status === 'saved' ? {
+    ...state,
+    dismissedMcpSetupRequestIds: [...(state.dismissedMcpSetupRequestIds ?? []), state.pendingMcpSetup.requestId].slice(-200),
+    pendingMcpSetup: null,
+  } : state);
 }

@@ -7956,12 +7956,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: async () => {
       const ownerScopeKey = activeOwnerScopeKey();
+      let deferred = false;
       const refreshed = await refreshCodexMcpEnvironment({
         restartCodex: restartCodexAfterAuthModeChange,
         shutdownCodexEnvironment,
         onDeferred: () => {
           if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) {
             scheduleDeferredCodexRestart('Custom MCP configuration changed');
+            deferred = deferredCodexRestartHolder?.isPending() === true;
           }
         },
         logger: log,
@@ -7970,7 +7972,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 否则新 Pi 会话仍暴露已删/已禁用的工具、拿不到新启用的工具(codex review P1)。
       // 与 codex 分支独立(不依赖 codexRestarted),下一次 startSession lazy 重建。
       if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey) invalidatePiEnvironment();
-      return refreshed.codexMcpRefreshed;
+      return refreshed.codexMcpRefreshed || (deferred ? 'deferred' : false);
     },
   });
   const mcpSetup = new CustomMcpSetupService({
@@ -7979,6 +7981,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (['saved', 'cancelled', 'expired'].includes(request.status)) broadcastToAllWindows(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId, requestId: request.requestId, reason: 'resolved', resolvedAs: 'allow' });
     },
     changed: afterCustomMcpChange,
+    activationPending: () => deferredCodexRestartHolder?.isPending() ?? false,
     executionKey: (sessionId) => {
       const session = maker.getSession(sessionId);
       return session ? session.instanceId + ':' + session.getTurnGeneration() : undefined;
@@ -20849,6 +20852,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .listActiveSessions()
         .filter((session) => session.agentKind === 'codex' && !session.remoteHostId)
         .map((session) => session.id),
+    onApplied: () => getCustomMcpSetupService()?.activationApplied(),
     onQueueGateReleased: createDeferredRestartSettledWake({
       wakeSession: (sessionId, reason) => inputCoordinator.wakeSession(sessionId, reason),
     }),

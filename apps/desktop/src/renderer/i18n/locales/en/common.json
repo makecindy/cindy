@@ -7778,6 +7778,8 @@
         "localOnly": "Credentials go only to Cindy on this computer to verify this address and save them encrypted. They are never sent as messages.",
         "nextTask": "Saved. Available the next time the Agent starts.",
         "activationPending": "Saved; runtime refresh is pending. Retry activation without creating another server.",
+        "activationRefreshing": "Configuration saved. Applying…",
+        "activationDeferred": "Cindy will apply this automatically. No manual refresh is needed. Running tasks keep their current configuration.",
         "dismiss": "Dismiss",
         "states": {
           "verifying": "Verifying connection…",

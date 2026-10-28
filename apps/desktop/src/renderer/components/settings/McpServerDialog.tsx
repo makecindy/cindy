@@ -213,7 +213,10 @@ export function McpServerDialog({
       </div>
       <fieldset
         disabled={saving}
-        className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1"
+        className={cn(
+          'flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1',
+          embedded && 'max-h-[min(320px,42vh)] overscroll-contain [scrollbar-gutter:stable]',
+        )}
       >
         <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
           {t('settings.mcp.dialog.desc')}
@@ -478,7 +481,7 @@ export function McpServerDialog({
       </div>
     </>
   );
-  if (embedded) return <div className="flex min-w-0 flex-col">{contents}</div>;
+  if (embedded) return <div className="flex min-h-0 min-w-0 flex-col">{contents}</div>;
 
   return (
     <Dialog.Root

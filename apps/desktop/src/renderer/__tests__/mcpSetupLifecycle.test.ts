@@ -163,6 +163,10 @@ describe('MCP card lifecycle', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup?.status).toBe('saved');
     dismissMcpSetupResult(SESSION_ID);
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup).toBeNull();
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...request, status: 'saved', activation: 'next_session', revision: 2 } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup).toBeNull();
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { ...request, requestId: 'desktop-mcp-new' } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingMcpSetup?.requestId).toBe('desktop-mcp-new');
   });
   it('clears a cancelled request on host dismissal', () => {
     onInteractionRequest?.({ sessionId: SESSION_ID, request });

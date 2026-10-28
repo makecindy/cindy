@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { McpSetupPrompt } from '../../../src/renderer/components/new-chat/McpSetupPrompt';
 import { McpServerDialog } from '../../../src/renderer/components/settings/McpServerDialog';
 import type {
@@ -25,12 +25,17 @@ function Scenario({ mode }: { mode: string }) {
     status:
       mode === 'verifying'
         ? 'verifying'
-        : mode === 'saved' || mode === 'activation-pending'
+        : mode === 'saved' || mode.startsWith('activation-')
           ? 'saved'
           : 'awaiting_user',
     errorCode: mode === 'failed' ? 'AUTH_REJECTED' : undefined,
-    activation: mode === 'activation-pending' ? 'pending' : 'next_session',
+    activation: mode === 'activation-pending' ? 'pending' : mode === 'activation-deferred' ? 'deferred' : mode === 'activation-refreshing' ? 'refreshing' : 'next_session',
   });
+  useEffect(() => {
+    const apply = () => setSnapshot(value => ({ ...value, activation: 'next_session' }));
+    window.addEventListener('fixture-mcp-applied', apply);
+    return () => window.removeEventListener('fixture-mcp-applied', apply);
+  }, []);
   const publish = (value: McpSetupSnapshot) => {
     setSnapshot(value);
     return value;
@@ -65,8 +70,20 @@ function Scenario({ mode }: { mode: string }) {
     // removes that shell minimum to exercise the card itself at 320 px.
     <div className={mode === 'narrow' ? '[&_[data-ui-frame=content]]:min-w-0' : undefined}>
       <AppFrame>
-        <div className="min-w-0 p-3" data-ui-mcp>
-          {mode === 'settings' ? (
+        <div className={mode.startsWith('layout') ? 'relative min-h-0 flex-1' : 'min-w-0 p-3'} data-ui-mcp>
+          {mode.startsWith('layout') ? (
+            <>
+              <div data-ui-messages className="absolute inset-0 overflow-y-auto px-4">
+                {Array.from({ length: 60 }, (_, index) => <p key={index} className="py-3 text-13">Message {index + 1}</p>)}
+              </div>
+              <div className="pointer-events-none absolute bottom-0 left-4 right-4">
+                <div className="pointer-events-auto mx-auto flex w-[90%] flex-col items-center gap-[10px] pb-5" data-chat-composer-stack>
+                  <McpSetupPrompt snapshot={snapshot} onDismiss={() => {}} />
+                  <textarea data-ui-composer aria-label="Composer" className="h-[100px] w-full shrink-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-3" />
+                </div>
+              </div>
+            </>
+          ) : mode === 'settings' ? (
             <McpServerDialog
               initial={{
                 id: 'custom_demo',

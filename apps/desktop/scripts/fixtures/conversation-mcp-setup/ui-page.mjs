@@ -16,6 +16,10 @@ export default {
     failed: { about: 'Safe failure and fresh empty credential fields' },
     saved: { about: 'Saved receipt and accurate next Agent session scope' },
     'activation-pending': { about: 'Retry runtime refresh without creating another server' },
+    'activation-deferred': { about: 'Automatic idle refresh updates the receipt without a manual retry' },
+    'activation-refreshing': { about: 'Applying saved configuration has no retry button' },
+    layout: { about: 'Composer-aligned form leaves messages scrollable in a short task view', viewport: { width: 600, height: 600 } },
+    'layout-narrow': { about: 'The same bounded form and aligned composer at a narrow desktop width', viewport: { width: 400, height: 600 } },
     settings: {
       about: 'Existing Settings modal keeps saved credentials without reading them back',
     },
@@ -24,6 +28,40 @@ export default {
     await page.locator('[data-ui-mcp]').waitFor({ state: 'attached' });
   },
   async check(page, ui) {
+    if (ui.case.startsWith('layout')) {
+      const card = page.locator('[data-ui-mcp] section');
+      const composer = page.locator('[data-ui-composer]');
+      const cardBox = await card.boundingBox();
+      const composerBox = await composer.boundingBox();
+      assert.ok(cardBox && composerBox);
+      assert.ok(Math.abs(cardBox.x - composerBox.x) < 1 && Math.abs(cardBox.width - composerBox.width) < 1, 'card edges must match the composer');
+      assert.ok(cardBox.y >= 100, 'the card must leave a visible message area');
+      const form = card.locator('fieldset').first();
+      assert.ok(await form.evaluate(el => el.scrollHeight > el.clientHeight), 'long form must have its own scrollport');
+      const save = page.getByRole('button', { name: await ui.t('settings.mcp.save'), exact: true });
+      const saveBefore = await save.boundingBox();
+      await form.hover();
+      await page.mouse.wheel(0, 600);
+      await page.waitForFunction(() => document.querySelector('[data-ui-mcp] section fieldset').scrollTop > 0);
+      const saveAfter = await save.boundingBox();
+      assert.equal(saveAfter.y, saveBefore.y, 'actions must stay visible while the form scrolls');
+      const messages = page.locator('[data-ui-messages]');
+      await page.mouse.move(cardBox.x + 10, cardBox.y - 30);
+      await page.mouse.wheel(0, 400);
+      await page.waitForFunction(() => document.querySelector('[data-ui-messages]').scrollTop > 0);
+      assert.ok(await messages.evaluate(el => el.scrollTop > 0), 'messages must still scroll above the card');
+      await ui.capture('scrolled');
+      return;
+    }
+    if (ui.case === 'activation-deferred' || ui.case === 'activation-refreshing') {
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.mcp.setup.retryActivation') }).count(), 0);
+      if (ui.case === 'activation-deferred') {
+        await page.getByText(await ui.t('settings.mcp.setup.activationDeferred'), { exact: true }).waitFor();
+        await page.evaluate(() => window.dispatchEvent(new Event('fixture-mcp-applied')));
+        await page.getByText(await ui.t('settings.mcp.setup.nextTask'), { exact: true }).waitFor();
+      }
+      return;
+    }
     if (ui.case === 'narrow') {
       assert.equal(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
