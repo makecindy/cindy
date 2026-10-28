@@ -67,16 +67,21 @@ describe('Model3DCardContent', () => {
     expect(img.getAttribute('src')).toBe('data:image/png;base64,AAAA');
   });
 
-  it('shows the file name and the upper-cased format', () => {
+  it('shows only the upper-cased format tag on the thumbnail, not the file name', () => {
     render(React.createElement(Model3DCardContent, { source: localSource }));
-    expect(screen.getByText('ship.fbx')).toBeTruthy();
     expect(screen.getByText('FBX')).toBeTruthy();
+    expect(screen.queryByText('ship.fbx')).toBeNull();
   });
 
-  it('uses the explicit file name for a managed GLB', () => {
+  it('derives the format tag from the explicit file name for a managed GLB', () => {
     render(React.createElement(Model3DCardContent, { source: blobSource, fileName: 'chair.glb' }));
-    expect(screen.getByText('chair.glb')).toBeTruthy();
     expect(screen.getByText('GLB')).toBeTruthy();
+    expect(screen.queryByText('chair.glb')).toBeNull();
+  });
+
+  it('exposes the file name as the card tooltip', () => {
+    render(React.createElement(Model3DCard, { source: localSource }));
+    expect(screen.getByTitle('ship.fbx')).toBeTruthy();
   });
 
   it('falls back to a placeholder (no image, no crash) when the thumbnail fails', async () => {

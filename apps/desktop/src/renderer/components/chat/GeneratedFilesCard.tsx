@@ -370,9 +370,16 @@ function GeneratedFileChip({
                 pending
                   ? 'block overflow-hidden'
                   : 'group block cursor-pointer overflow-hidden',
-                'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left',
-                pending ? undefined : 'hover:border-[var(--text-tertiary)]',
-                artifact || modelCard ? 'w-full max-w-[420px]' : 'min-w-0 flex-1 basis-[220px]',
+                // 模型卡片与图片一样不带边框 / hover 边框：缩略图本身就是卡片
+                modelCard
+                  ? 'rounded-xl text-left'
+                  : 'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left',
+                pending || modelCard ? undefined : 'hover:border-[var(--text-tertiary)]',
+                modelCard
+                  ? 'w-full max-w-[300px]'
+                  : artifact
+                    ? 'w-full max-w-[420px]'
+                    : 'min-w-0 flex-1 basis-[220px]',
               ]
             : cn(
                 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)]',
