@@ -11397,7 +11397,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentInputCoordinatorHolder
         ? agentInputCoordinatorHolder.continueAfterUsageLimitReset(sessionId, token, info)
         : 'superseded',
-    fallback: (sessionId, signals, token) => usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    fallback: (sessionId, signals, token) => handBackUsageLimitRecovery(sessionId, signals, token),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -17345,7 +17345,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     source: SessionRuntimeProfile,
     target: UsageLimitFallbackRoute,
   ): Promise<{ route: UsageLimitFallbackRoute } | { message: string }> => {
-    if (source.providerId === target.providerId && source.model === target.model) {
+    // 来源未知（null）时无法证明与原来源不同，按同模型处理，必须换模型。
+    const sameProvider = source.providerId === target.providerId || source.providerId === null;
+    if (sameProvider && source.model === target.model) {
       return { message: 'the fallback route must differ from the route it replaces' };
     }
     const providers = await getDesktopProviderService().listProviders({
@@ -17361,6 +17363,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return { message: `model "${target.model}" is unavailable for harness "${source.agentKind}"` };
     }
     return { route: { providerId: target.providerId, model: target.model } };
+  };
+
+  /** 远程 Agent（Agent 在另一台电脑）与 SSH 远程会话都不吃任务级额度备用。 */
+  const sessionRunsOffThisMachine = async (sessionId: string): Promise<boolean> => {
+    const row = await getSessionRowSnapshot(sessionId);
+    return Boolean(row?.agentDeviceId || row?.remoteHostId);
   };
 
   const sessionControlService = createSessionControlService({
@@ -17407,6 +17415,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           };
         }
         if (patch.usageLimitFallback !== null) {
+          // 待生效的选模选择占着下一条消息的路线：此时锚定的原组合马上就会变，
+          // 存下来的策略会静默失效。让调用方等它结算后读新的 generation 再配。
+          if (fallbackProfiles.pendingMutation) {
+            return {
+              ok: false,
+              errorCode: 'CONFLICT',
+              message: 'a pending runtime selection owns the next message; configure again after it settles',
+            };
+          }
           // 这里能判定的是“当前就不适用于额度自动继续”的任务：伙伴、Orca Worker、
           // 共享中的任务、执行已暂停、当前由目标模式托管。定时任务只能从入队消息的 origin
           // 看出来，会话行没这个标记，因此它不在写入门内，而是触发时不命中、照原规则恢复。
@@ -17417,11 +17434,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               message: 'usage-limit fallback applies to ordinary local tasks only',
             };
           }
-          if (await readSessionAgentDeviceId(targetSessionId)) {
+          if (await sessionRunsOffThisMachine(targetSessionId)) {
             return {
               ok: false,
               errorCode: 'INVALID_ARGS',
-              message: 'usage-limit fallback is unavailable while the agent runs on another computer',
+              message: 'usage-limit fallback is unavailable for tasks whose agent runs on another computer',
             };
           }
         }
@@ -19902,24 +19919,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 额度重置后的同一条续跑入口补发一次；没切成或续跑没发出就交回既有「等额度重置」。
    * 触发前提是任务仍跑在配置时的组合上，切过去后来源已变，所以不会回环。
    */
-  const recoverWithConfiguredUsageLimitFallback = async (params: {
+  async function recoverWithConfiguredUsageLimitFallback(params: {
     sessionId: string;
     signals: InterruptedTurnErrorSignals;
     policy: SessionUsageLimitFallback;
-    candidateToken: number;
-  }): Promise<boolean> => {
-    const { sessionId, signals, policy, candidateToken } = params;
+    /** 交回时有效的额度候选令牌（供应商组交接后会换成重新挂上的新令牌）。 */
+    token: number;
+  }): Promise<boolean> {
+    const { sessionId, signals, policy, token } = params;
     if (!isConfirmedUsageLimit(signals)) return false;
     // 供应商组自己有换电脑的优先级；定时任务、Orca Worker、伙伴、共享任务、目标模式
     // 都不在这条策略的范围内，与额度重置后的自动继续同一套排除。
     if (signals.providerGroupUsageLimit) return false;
+    if (!inputCoordinator.isUsageLimitWaitCurrent(sessionId, token)) return false;
     if (!await isUsageLimitAutoResumeEligible(sessionId)) return false;
+    if (await sessionRunsOffThisMachine(sessionId)) return false;
+    // 跨 await 复核：读库期间用户可能已发消息、点重试或换模型，那就不再替他改路线。
+    if (!inputCoordinator.isUsageLimitWaitCurrent(sessionId, token)) return false;
     const profiles = await readSessionRuntimeProfiles(sessionId);
     if (!profiles || !matchesUsageLimitFallbackSource(policy, profiles.effective)) return false;
     const generation = profiles.control.generation;
     if (!canApplyAutomaticRuntimeSelection(sessionId, generation)) return false;
+    // 换路可能让旧会话以 `runtime-refresh` 关闭，而关闭会撤销额度等待。先用句柄把那一次错误
+    // 租下来，换完再用它重新挂上等待（provider-group 交接同一条做法）。
+    const lease = inputCoordinator.leaseUsageLimitRecovery(sessionId, token);
+    if (!lease) return false;
     const switched = await withSendToSessionLock(sessionId, async () => {
       if (!canApplyAutomaticRuntimeSelection(sessionId, generation)) return false;
+      if (!inputCoordinator.isUsageLimitRecoveryLeaseCurrent(sessionId, lease)) return false;
       const result = await applySessionRuntimeSelection(
         sessionId,
         policy.target.model,
@@ -19940,13 +19967,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     });
     if (!switched) return false;
-    // 立即到点：复用额度重置后的续跑路径(有产出发续跑、零产出重发原文)，不另造发送通道，
-    // 也不排重置计时器。armUsageLimitWait 只认这次错误的候选令牌，用户已接手时直接放弃。
-    if (!inputCoordinator.armUsageLimitWait(sessionId, candidateToken, Date.now())) return false;
+    // 重新挂上等待并立即到点：复用额度重置后的续跑路径(有产出发续跑、零产出重发原文)，
+    // 不另造发送通道，也不排重置计时器。
+    const resumeToken = inputCoordinator.rearmUsageLimitWait(sessionId, lease, Date.now());
+    if (resumeToken === null) return false;
     const labels = usageLimitFallbackLabels(policy);
     const outcome = await inputCoordinator.continueAfterUsageLimitReset(
       sessionId,
-      candidateToken,
+      resumeToken,
       {
         reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
         agentSwitch: { from: labels.from, to: labels.to, cause: 'usage-limit', kind: 'model' },
@@ -19963,7 +19991,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       toModel: labels.to,
     });
     return outcome === 'resumed';
-  };
+  }
+
+  /**
+   * 额度错误最终的汇合点：所有路径（供应商组换电脑失败/不适用、无组服务）都落在这里。
+   * 配了任务级备用路线就先试换路，没成就交回「等额度重置」，保证两条恢复路只能中一条。
+   */
+  function handBackUsageLimitRecovery(
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    token: number,
+  ): void {
+    const policy = signals.providerGroupUsageLimit ? null : readSessionUsageLimitFallback(sessionId);
+    if (!policy) {
+      usageLimitAutoResume.onTurnError(sessionId, signals, token);
+      return;
+    }
+    void recoverWithConfiguredUsageLimitFallback({ sessionId, signals, policy, token })
+      .catch((error) => {
+        log.warn('session usage-limit fallback failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      })
+      .then((resumed) => {
+        if (resumed) return;
+        // 没续跑成：先撤掉可能已挂上的立即等待，再按原规则等重置，避免留下到点无定时器的等待。
+        inputCoordinator.cancelUsageLimitWait(sessionId, token);
+        usageLimitAutoResume.onTurnError(sessionId, signals, token);
+      });
+  }
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
@@ -20010,30 +20068,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         return;
       }
-      // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
+      // 供应商组分配的任务先试自动换电脑，不换时由它交回汇合点（同一个 handBackUsageLimitRecovery）。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
-        // 用户给这个任务配了额度备用路线：先试换路续跑，没成就照旧等额度重置。
-        const usageLimitPolicy = readSessionUsageLimitFallback(sessionId);
-        if (usageLimitPolicy) {
-          void recoverWithConfiguredUsageLimitFallback({
-            sessionId,
-            signals,
-            policy: usageLimitPolicy,
-            candidateToken,
-          })
-            .catch((error) => {
-              log.warn('session usage-limit fallback failed', {
-                sessionId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              return false;
-            })
-            .then((resumed) => {
-              if (!resumed) usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
-            });
-          return;
-        }
-        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        handBackUsageLimitRecovery(sessionId, signals, candidateToken);
         return;
       }
       // 先不呈现的那次错误：换成了丢掉，不换了先放出来再交回原有处理；一直没有结局时到点放出来。

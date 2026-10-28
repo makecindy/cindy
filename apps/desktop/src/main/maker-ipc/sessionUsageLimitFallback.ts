@@ -1,5 +1,6 @@
 import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 
 export interface UsageLimitFallbackRoute {
   providerId: string;
@@ -21,6 +22,9 @@ export interface SessionUsageLimitFallback {
 /**
  * 只认确定的账号额度耗尽。普通 HTTP 限流、认证失败、权限拒绝都不触发：
  * 那些失败换模型也救不回来，还可能白花一次备用额度。
+ *
+ * `signals.usageLimit` 位由文案正则置位（`rate limit` / `too many requests` 也会置），
+ * 所以它自己不算证据：要么有结构化标记（Codex tag / 重置时刻），要么文案本身确凿。
  */
 export function isConfirmedUsageLimit(signals: InterruptedTurnErrorSignals): boolean {
   if (
@@ -32,7 +36,12 @@ export function isConfirmedUsageLimit(signals: InterruptedTurnErrorSignals): boo
   ) {
     return false;
   }
-  return signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded';
+  if (signals.codexErrorInfo === 'usageLimitExceeded') return true;
+  if (signals.usageResetAt !== undefined) return true;
+  return (
+    signals.usageLimit === true &&
+    matchesDeterministicUsageExhaustionText(signals.message ?? '')
+  );
 }
 
 /** 策略只在任务仍跑在配置时的组合上生效；远程 Agent 任务不参与本机额度备用。 */

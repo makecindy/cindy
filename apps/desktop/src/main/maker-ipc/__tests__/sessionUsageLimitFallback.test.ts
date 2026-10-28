@@ -24,8 +24,22 @@ const policy: SessionUsageLimitFallback = {
 
 describe('isConfirmedUsageLimit', () => {
   it('accepts the structured account-exhaustion signals', () => {
-    expect(isConfirmedUsageLimit({ usageLimit: true })).toBe(true);
     expect(isConfirmedUsageLimit({ codexErrorInfo: 'usageLimitExceeded' })).toBe(true);
+    expect(isConfirmedUsageLimit({ usageResetAt: Date.parse('2026-10-29T02:40:00.000Z') })).toBe(true);
+  });
+
+  it('needs the message itself to be account exhaustion when only the text flag is set', () => {
+    // usageLimit 位由文案正则置位，`rate limit` / `too many requests` 也会置。
+    expect(
+      isConfirmedUsageLimit({
+        usageLimit: true,
+        message: "You've hit your usage limit. Upgrade to Pro or try again at 7:40 PM.",
+      }),
+    ).toBe(true);
+    expect(
+      isConfirmedUsageLimit({ usageLimit: true, message: 'rate limit reached, too many requests' }),
+    ).toBe(false);
+    expect(isConfirmedUsageLimit({ usageLimit: true })).toBe(false);
   });
 
   it('rejects ordinary rate limits and transient failures', () => {
@@ -37,8 +51,8 @@ describe('isConfirmedUsageLimit', () => {
   it('rejects auth and billing failures even when they look like quota exhaustion', () => {
     expect(isConfirmedUsageLimit({ usageLimit: true, errorStatus: 401 })).toBe(false);
     expect(isConfirmedUsageLimit({ usageLimit: true, errorStatus: 403 })).toBe(false);
-    expect(isConfirmedUsageLimit({ usageLimit: true, sdkError: 'billing_error' })).toBe(false);
-    expect(isConfirmedUsageLimit({ usageLimit: true, sdkError: 'authentication_error' })).toBe(false);
+    expect(isConfirmedUsageLimit({ usageResetAt: 1, sdkError: 'billing_error' })).toBe(false);
+    expect(isConfirmedUsageLimit({ codexErrorInfo: 'usageLimitExceeded', sdkError: 'authentication_error' })).toBe(false);
   });
 });
 
