@@ -728,3 +728,23 @@ describe("companion text selection and actions", () => {
     } finally { h.unmount(); }
   });
 });
+
+describe("table-heavy assistant replies", () => {
+  // Table-heavy replies (a translated report: 15 tables, ~470 cells) mounted one native
+  // selectable view per cell and stuttered while scrolling. Past the cell budget, cells
+  // are plain selectable RN Text; small tables keep per-cell native selection.
+  it.each([
+    [41, false],
+    [3, true],
+  ] as const)("renders a %i-row table with native cell text views: %s", (rows, nativeCells) => {
+    const markdown = ["| a | b | c |", "| --- | --- | --- |",
+      ...Array.from({ length: rows }, (_, i) => `| r${i} | x | y |`)].join("\n");
+    const h = mount([{ ...msg("tables", markdown, { turnCompleted: true }), role: "assistant" }]);
+    try {
+      const table = h.host.querySelector('[data-testid="message.markdownTable"]')!;
+      expect(table.textContent).toContain(`r${rows - 1}`);
+      expect(table.querySelector('[data-native-text-view]') !== null).toBe(nativeCells);
+      expect(table.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally { h.unmount(); }
+  });
+});

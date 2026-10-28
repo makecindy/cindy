@@ -281,7 +281,11 @@ import {
   mobileSessionMessageDisplayText,
   sentSessionMessageChipLabel,
 } from '@/session/sessionMessageText';
-import { buildMobileMarkdownTableColumnWidths } from '@/session/messageTableLayout';
+import {
+  buildMobileMarkdownTableColumnWidths,
+  MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
+  mobileMarkdownTableCellCount,
+} from '@/session/messageTableLayout';
 import { buildPayloadHeaderLayout, buildPayloadModalSafeArea } from '@/session/payloadHeaderLayout';
 import { buildPayloadBodyLayout, type PayloadBodyLayout } from '@/session/payloadBodyLayout';
 import {
@@ -5882,6 +5886,10 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const lightweightTableCells = useMemo(
+    () => mobileMarkdownTableCellCount(blocks) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
+    [blocks],
+  );
   const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
@@ -6174,6 +6182,34 @@ function MarkdownBodyBase({
         availableWidth: layout.markdownTableAvailableWidth,
         minWidth: layout.markdownTableCellMinWidth,
       });
+      // Table-heavy messages: hundreds of native selectable cells (UITextView on iOS, a
+      // selection-menu registration each on Android) make scrolling stutter. Cells keep
+      // system long-press copy but lose partial selection / the add-to-chat item.
+      const renderTableCell = (
+        cell: MobileMarkdownInline[],
+        key: string,
+        cellStyle: StyleProp<TextStyle>,
+      ) => {
+        const cellSelectable = inlinesSelectable(cell);
+        if (lightweightTableCells) {
+          return (
+            <Text key={key} selectable={cellSelectable} style={cellStyle}>
+              {renderInlines(cell, undefined)}
+            </Text>
+          );
+        }
+        return (
+          <MarkdownSelectableText
+            adjustVerticalAlignment={false}
+            allowIosUITextView={singleBlockAllowsIosUITextView}
+            key={key}
+            selectable={cellSelectable}
+            style={cellStyle}
+          >
+            {renderInlines(cell, singleBlockSpanFor(cellSelectable))}
+          </MarkdownSelectableText>
+        );
+      };
       return (
         <ScrollView
           horizontal
@@ -6183,41 +6219,19 @@ function MarkdownBodyBase({
         >
           <View style={styles.markdownTable}>
             <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
-              {columnWidths.map((columnWidth, index) => {
-                const cell = block.header[index] ?? [];
-                return (
-                  <MarkdownSelectableText
-                    adjustVerticalAlignment={false}
-                    allowIosUITextView={singleBlockAllowsIosUITextView}
-                    key={`${block.key}:th:${index}`}
-                    selectable={inlinesSelectable(cell)}
-                    style={[
-                      styles.markdownTableCell,
-                      { width: columnWidth },
-                      styles.markdownTableHeaderCell,
-                    ]}
-                  >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
-                  </MarkdownSelectableText>
-                );
-              })}
+              {columnWidths.map((columnWidth, index) => renderTableCell(
+                block.header[index] ?? [],
+                `${block.key}:th:${index}`,
+                [styles.markdownTableCell, { width: columnWidth }, styles.markdownTableHeaderCell],
+              ))}
             </View>
             {block.rows.map((row) => (
               <View key={row.key} style={styles.markdownTableRow}>
-                {columnWidths.map((columnWidth, index) => {
-                  const cell = row.cells[index] ?? [];
-                  return (
-                    <MarkdownSelectableText
-                      adjustVerticalAlignment={false}
-                      allowIosUITextView={singleBlockAllowsIosUITextView}
-                      key={`${row.key}:td:${index}`}
-                      selectable={inlinesSelectable(cell)}
-                      style={[styles.markdownTableCell, { width: columnWidth }]}
-                    >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
-                    </MarkdownSelectableText>
-                  );
-                })}
+                {columnWidths.map((columnWidth, index) => renderTableCell(
+                  row.cells[index] ?? [],
+                  `${row.key}:td:${index}`,
+                  [styles.markdownTableCell, { width: columnWidth }],
+                ))}
               </View>
             ))}
           </View>
@@ -6234,7 +6248,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, lightweightTableCells, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}

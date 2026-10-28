@@ -192,6 +192,7 @@ function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, b
   const spanFor = () => undefined;
   const renderInlines = inlines => inlines.map(inline => inline.text).join('');
   const t = i18n.t.bind(i18n);
+  const lightweightTableCells = false;
   ` + markdownStateCode + String.raw`
   const groups = [{ type: 'block', key: 'body', block: code
     ? { type: 'code', key: 'code', text, language: 'text' }
