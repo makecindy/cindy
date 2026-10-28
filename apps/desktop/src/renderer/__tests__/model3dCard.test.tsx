@@ -120,6 +120,14 @@ describe('Model3DCardContent', () => {
     await act(async () => { await Promise.resolve(); });
     expect(getModel3DThumbnail).toHaveBeenCalledTimes(1);
   });
+
+  it('requests the thumbnail again when the same path is written again (revision changes)', async () => {
+    const { rerender } = render(React.createElement(Model3DCardContent, { source: { ...localSource }, revision: 1 }));
+    reveal();
+    await waitFor(() => expect(getModel3DThumbnail).toHaveBeenCalledTimes(1));
+    rerender(React.createElement(Model3DCardContent, { source: { ...localSource }, revision: 2 }));
+    await waitFor(() => expect(getModel3DThumbnail).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('Model3DCard', () => {

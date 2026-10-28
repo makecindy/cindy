@@ -29,6 +29,19 @@ describe('isExplicitFailedToolResult', () => {
 });
 
 describe('collectGeneratedFiles', () => {
+  it('counts every write to the same path as a revision so dependants can refresh', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'out/dog.glb', content: 'a' }),
+        toolUse('Write', { file_path: 'out/dog.glb', content: 'b' }),
+        toolUse('Write', { file_path: 'out/cat.glb', content: 'c' }),
+      ],
+      WORKDIR,
+    );
+    expect(files.find((file) => file.name === 'dog.glb')?.revision).toBe(2);
+    expect(files.find((file) => file.name === 'cat.glb')?.revision).toBeUndefined();
+  });
+
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
     const files = collectGeneratedFiles(
       [

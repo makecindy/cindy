@@ -416,6 +416,7 @@ function GeneratedFileChip({
           <Model3DCardContent
             source={{ kind: 'local', absPath: file.path }}
             fileName={file.name}
+            revision={file.revision}
             enabled={!pending}
           />
         ) : botImage ? (
@@ -600,6 +601,7 @@ export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
     file.source,
     file.artifactConfirmed ? '1' : '0',
     artifactVisibleSignature(file.artifact),
+    String(file.revision ?? 1),
   ].join('\t');
 }
 

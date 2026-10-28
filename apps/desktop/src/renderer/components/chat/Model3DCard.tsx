@@ -29,7 +29,7 @@ type ThumbnailState =
   | { status: 'failed' };
 
 /** 进入视口后才触发缩略图生成；`enabled=false`（例如文件复核未落地）时保持 idle。 */
-function useModel3DThumbnail(source: Model3DSource, enabled: boolean) {
+function useModel3DThumbnail(source: Model3DSource, enabled: boolean, revision: number) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [visible, setVisible] = useState(false);
   const [state, setState] = useState<ThumbnailState>({ status: 'idle' });
@@ -71,7 +71,7 @@ function useModel3DThumbnail(source: Model3DSource, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, visible, sourceKey]);
+  }, [enabled, visible, sourceKey, revision]);
 
   return { ref, state };
 }
@@ -82,14 +82,19 @@ interface Model3DCardContentProps {
   fileName?: string;
   /** 为 false 时不触发缩略图生成（占位）。 */
   enabled?: boolean;
+  /**
+   * 同一路径被再次写出 / 覆盖的次数信号：变化就重新取缩略图。路径没变，但文件内容变了，
+   * 光靠路径依赖看不出来（缩略图缓存键里的修改时间 / 大小会保证取到新图，而不是旧图）。
+   */
+  revision?: number;
 }
 
 /** 缩略图区域 + 页脚。外层容器（按钮）负责边框、圆角、点击与右键菜单。 */
-export function Model3DCardContent({ source, fileName, enabled = true }: Model3DCardContentProps) {
+export function Model3DCardContent({ source, fileName, enabled = true, revision = 1 }: Model3DCardContentProps) {
   const { t } = useTranslation();
   const name = fileName ?? model3DFileName(source);
   const format = getModel3DFormat(name)?.toUpperCase() ?? '3D';
-  const { ref, state } = useModel3DThumbnail(source, enabled);
+  const { ref, state } = useModel3DThumbnail(source, enabled, revision);
 
   // 缩略图生成失败(格式不支持 / 超过大小上限 / 解析失败)时退化成一行「图标 + 名字」,
   // 不留一个空的 1:1 方块。ref 仍要挂在节点上,保持 IntersectionObserver 的目标稳定。
