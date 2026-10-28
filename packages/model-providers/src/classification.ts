@@ -89,7 +89,7 @@ export function exclusiveXaiCatalogModelId(model: string | null | undefined): st
 
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
 // 对话厂商组(anthropic..ungrouped)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
-// compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
+// decision/compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
 // 不能当 agent 用,仅分类展示,见 isChatEligible)。
 //
 // `ungrouped` = **认不出厂商的对话模型**(categorize 的兜底)。它属于对话厂商组
@@ -119,6 +119,7 @@ export type ModelCategory =
   | 'stt'
   | 'realtime'
   | 'embedding'
+  | 'decision'
   | 'compression'
   | 'other';
 
@@ -138,6 +139,7 @@ export const CATEGORY_ORDER: ModelCategory[] = [
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ];
@@ -176,7 +178,9 @@ export const CHAT_VENDOR_CATEGORY_ORDER: readonly ModelCategory[] = CATEGORY_ORD
  */
 const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
   embedding: 'embedding',
+  evaluation: 'decision',
   image_generation: 'image',
+  image_edit: 'image',
   video_generation: 'video',
   audio_speech: 'tts',
   audio_generation: 'audio',
@@ -363,7 +367,7 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
  * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮)。
  *
  * `mode` 缺省时,`group` 只在**声明已知的非聊天分类**(image/video/tts/stt/
- * realtime/embedding/compression/other)时才采信、直接拒——这个方向上 group
+ * realtime/embedding/decision/compression/other)时才采信、直接拒——这个方向上 group
  * 比 id 更可信(PR #744:自定义/网关供应商显式打的能力标签,seedream-5 这类
  * id 本身不含任何类型关键词的合成模型只能靠这个信号判定)。`group` 声明的是
  * 聊天厂商分组(anthropic/gpt/.../china/ungrouped)时**不采信**,仍按 id 正则判——那只是

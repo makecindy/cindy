@@ -502,3 +502,26 @@ describe('globals.css 的 stream-word 动画本体', () => {
     );
   });
 });
+
+// Performance regression: 500 entries could retain hundreds of long streaming
+// versions. Existing fade tests cover output/key semantics, not retained payload.
+// Exercise real segmentation/cache behavior without an ICU timing or process-heap
+// assertion: text stays exact, cold large entries are evicted, hot ones survive.
+it('bounds retained word payload while keeping hot small entries and exact text', () => {
+  const cold = 'cold-' + 'a'.repeat(60_000);
+  const first = splitWords(cold);
+  expect(first.join('')).toBe(cold);
+  const hot = 'hot-small-budget-probe';
+  const hotWords = splitWords(hot);
+  for (let index = 0; index < 12; index += 1) {
+    const text = `${index}-` + 'b'.repeat(60_000);
+    expect(splitWords(text).join('')).toBe(text);
+    expect(splitWords(hot)).toBe(hotWords);
+  }
+  expect(splitWords(cold)).not.toBe(first);
+  const huge = 'oversize-' + 'c'.repeat(600_000);
+  const hugeWords = splitWords(huge);
+  expect(hugeWords.join('')).toBe(huge);
+  expect(splitWords(huge)).not.toBe(hugeWords);
+  expect(splitWords(hot)).toBe(hotWords);
+});

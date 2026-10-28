@@ -288,7 +288,7 @@ export function resolveSimMetroHandoff({
           action: 'refuse',
           code: regionChanged ? 'target-region-stale' : 'target-env-stale',
           lines: [
-            `✗ 已补/改 apps/mobile/.env,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
+            `✗ apps/mobile/.env 或 --mock 模拟数据开关变了,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
             "  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。",
           ],
         };

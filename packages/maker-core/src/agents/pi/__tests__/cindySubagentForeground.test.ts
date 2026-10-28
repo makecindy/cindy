@@ -198,11 +198,12 @@ describe('Cindy PI Subagent foreground durable path', () => {
       await extension({ registerTool: (tool) => Object.assign(registered, tool), appendEntry: vi.fn() });
       expect(registered.execute).toBeTypeOf('function');
       const input = hostInput(f);
+      const progressFrames: Array<{ details?: { model?: unknown } }> = [];
       const result = await registered.execute!(
         'tool-foreground',
         { agent: 'worker', task: 'write the fixture', model: 'claude-fable-5' },
         new AbortController().signal,
-        () => undefined,
+        (frame) => { progressFrames.push(frame as { details?: { model?: unknown } }); },
         { ui: { input }, sessionManager: { getBranch: () => [] } },
       );
       expect(input).toHaveBeenCalledWith('cindy:permission', expect.stringContaining('write'));
@@ -224,6 +225,14 @@ describe('Cindy PI Subagent foreground durable path', () => {
       expect(configText).not.toContain('parent-session-token-1234567890abcdef');
       expect(configText).not.toContain(expectedRouteToken);
       expect(await readFile(f.runtimeFile, 'utf8')).not.toContain('Token');
+      // 前台卡片的模型 chip 只由这些进度帧提供:报父会话模型会让委派给别的模型的子代理
+      // 在卡片上显示成父模型(panel 读状态文件,两边同屏矛盾)。
+      const progressModels = progressFrames
+        .map((frame) => frame.details?.model)
+        .filter((model): model is string => typeof model === 'string');
+      expect(progressModels.length).toBeGreaterThan(0);
+      expect(progressModels).toContain('claude-fable-5');
+      expect(progressModels).not.toContain('fixture-model');
     } finally {
       for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
       Object.assign(process.env, previous);

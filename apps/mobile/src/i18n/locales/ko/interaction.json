@@ -21,6 +21,7 @@
     "allowOnceConfirm": "한 번 허용 확인",
     "highRisk": "고위험",
     "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+    "autoReviewReason": "자동 승인이 판단을 요청했어요: {{reason}}",
     "fullAccessConfirm": {
       "title": "전체 접근을 활성화할까요?",
       "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
@@ -384,7 +385,12 @@
       "allowTitle": "허용하면 컴퓨터에서 실행을 계속합니다",
       "tool": "도구: {{tool}}",
       "title": "{{tool}} 사용을 허용할까요?",
-      "risk": "이 명령은 시스템, 저장소 또는 외부 서비스 상태를 변경할 수 있습니다. 허용하기 전에 현재 작업과 명령을 신뢰할 수 있는지 확인하세요."
+      "risk": "이 명령은 시스템, 저장소 또는 외부 서비스 상태를 변경할 수 있습니다. 허용하기 전에 현재 작업과 명령을 신뢰할 수 있는지 확인하세요.",
+      "titleCommand": "이 명령 실행을 허용할까요?",
+      "titleFileRead": "파일 읽기를 허용할까요?",
+      "titleFileWrite": "파일 변경을 허용할까요?",
+      "titleBrowser": "이 브라우저 작업을 허용할까요?",
+      "titlePlugin": "{{plugin}} 플러그인 사용을 허용할까요?"
     },
     "ask": {
       "progress": "질문 {{current}}/{{total}}",

@@ -106,6 +106,117 @@ const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
 };
+
+/*
+ * 测试价值（unit，内存依赖 + 假时钟；不启动 Host）：
+ * - 生产入口/结果：RemotePluginManagement.invoke；回执到期/服务重建返回 NOT_FOUND，
+ *   真实已提交状态仍可读，取消不能把提交成功改成取消。
+ * - 依据：remotePluginManagement 的 15min 回执、进程内生命周期及提交后事实优先合同；
+ *   engineering-conventions §3.2 的公开入口与时序结果要求。
+ * - 缺口：已有用例仅覆盖重连保留回执及提交前取消，未覆盖到期、服务重建、提交后取消。
+ * - 最小输入：一条等待确认/已成功操作跨过 TTL；同一持久状态重建服务；提交与完成之间取消。
+ * - 实测耗时：本机单文件 Vitest 0.65s（35 项测试执行 16ms）；无真实等待/网络/用户数据。
+ */
+describe('remote plugin management receipt lifetime', () => {
+  it('expires a waiting confirmation at 15 minutes even when its receipt was just read', async () => {
+    const f = fixture();
+    const committed: string[] = [];
+    f.deps.market.install = vi.fn(async (id, _options, prompt, current) => {
+      const accepted = await prompt({
+        initiator: 'user',
+        origin: 'market',
+        facts: { kind: 'install', name: 'QA plugin', version: '1', permissions: [] },
+      });
+      if (!accepted) throw { code: 'MUTATION_CANCELLED' };
+      current();
+      committed.push(id);
+    });
+    await f.invoke('begin', {
+      operationId: 'expires-pending',
+      kind: 'install',
+      pluginId: 'qa-plugin',
+      expectedReleaseId: 'qa-release',
+    });
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    const receipt = await f.invoke('operation', { operationId: 'expires-pending' });
+    expect(receipt.phase).toBe('confirmation');
+    const requestId = receipt.consent!.requestId;
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(f.invoke('operation', { operationId: 'expires-pending' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(
+      f.invoke('answer', {
+        operationId: 'expires-pending',
+        requestId,
+        confirmed: true,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(committed).toEqual([]);
+    expect(f.deps.market.install).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a completed receipt at 15 minutes without undoing or replaying its mutation', async () => {
+    const f = fixture();
+    await f.begin('disable', 'expires-completed');
+    await flush();
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    expect((await f.invoke('operation', { operationId: 'expires-completed' })).phase).toBe('succeeded');
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(f.invoke('operation', { operationId: 'expires-completed' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect((await f.service.invoke('desktop-a', {
+      collectionId: 'plugins',
+      actionId: 'management:snapshot',
+      client: { protocolVersion: 1, primitives: ['action'] },
+      input: {},
+    })).result).toMatchObject({ ghosts: [{ enabled: false }, { enabled: true }] });
+    expect(f.deps.setEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes committed Host facts after service reconstruction without recovering an old receipt', async () => {
+    const f = fixture();
+    await f.begin('disable', 'before-restart');
+    await flush();
+    // Model a new Host service against the same installed state, not a real app restart.
+    const restarted = new RemotePluginManagement(f.deps);
+    const client = { protocolVersion: 1 as const, primitives: ['action'] };
+    await expect(restarted.invoke('desktop-a', {
+      collectionId: 'plugins',
+      actionId: 'management:operation',
+      client,
+      input: { operationId: 'before-restart' },
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect((await restarted.invoke('desktop-a', {
+      collectionId: 'plugins',
+      actionId: 'management:snapshot',
+      client,
+      input: {},
+    })).result).toMatchObject({ ghosts: [{ enabled: false }, { enabled: true }] });
+    expect(f.deps.setEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a committed result successful when cancellation arrives before the executor returns', async () => {
+    const f = fixture();
+    let finish!: () => void;
+    f.deps.setEnabled = vi.fn(async (id, enabled, _approval, current) => {
+      current();
+      f.ghosts.find((ghost) => installedGhostStoragePart(ghost) === id)!.enabled = enabled;
+      await new Promise<void>((resolve) => { finish = resolve; });
+    });
+    await f.begin('disable', 'cancel-after-commit');
+    expect(f.ghosts.map((ghost) => ghost.enabled)).toEqual([false, true]);
+    await f.invoke('cancel', { operationId: 'cancel-after-commit' });
+    finish();
+    await flush();
+    expect((await f.invoke('operation', { operationId: 'cancel-after-commit' })).phase).toBe('succeeded');
+    expect((await f.invoke('cancel', { operationId: 'cancel-after-commit' })).phase).toBe('succeeded');
+    expect(f.ghosts.map((ghost) => ghost.enabled)).toEqual([false, true]);
+    expect(f.deps.setEnabled).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('remote plugin management receipt boundaries', () => {
   it('binds preference reads and writes to the physical instance, approval and live controller', async () => {
     const f = fixture();

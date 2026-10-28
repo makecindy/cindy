@@ -4,7 +4,8 @@ import type { Session } from '@/lib/ccAgent.types';
 import { buildAgentIslandRemoteSessionInputs } from '../agentIslandRemoteSessions';
 import { applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity, type RemoteSessionActivity } from '../remoteSessionActivityStore';
 import { parseAgentIslandRemoteSessions } from '../../../../shared/agentIsland';
-import { createAgentIslandState, syncAgentIslandDeviceSessions } from '../../../../main/agent-island/state';
+import { agentIslandCompletionToken, buildAgentIslandDisplayState, createAgentIslandState, syncAgentIslandDeviceSessions } from '../../../../main/agent-island/state';
+import { normalizeActivityText } from '../../../../main/agent-island/activityTextStream';
 import { SessionActivityRelay } from '../../../../main/agent-island/sessionActivityRelay';
 import { MACHINE_ALL, MACHINE_LOCAL } from '../selectedMachineStore';
 
@@ -49,6 +50,61 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
+  // #7566 review, unit: new host plain text survives the complete transport chain;
+  // an old/unknown format still uses Markdown compatibility on the same text.
+  it('preserves literal code through relay, store, IPC and running/completed cards', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const relay = new SessionActivityRelay(payload => {
+      applyRemoteSessionActivity('device-a', payload);
+      const inputs = buildAgentIslandRemoteSessionInputs([remoteSession('a-1', 'device-a')], MACHINE_ALL, getRemoteSessionActivity);
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(inputs)!, 2000);
+    }, { minIntervalMs: 0 });
+    const plain = normalizeActivityText('`foo_bar **literal**`');
+    const activity = { sessionId: 'a-1', phase: 'running' as const, recordStatus: 'active',
+      compactDetail: plain, summaryFormat: 'plain-text' as const,
+      startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: plain,
+      attention: true, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
+    try {
+      for (const phase of ['running', 'completed'] as const) {
+        relay.publish([{ ...activity, phase }]);
+        expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe(plain);
+      }
+      // The text itself does not change: format changes must invalidate relay/store signatures.
+      relay.publish([{ ...activity, phase: 'completed', summaryFormat: undefined }]);
+      expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe('foo_bar literal');
+      relay.publish([{ ...activity, phase: 'completed' }]);
+      expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.compactDetail).toBe(plain);
+    } finally {
+      relay.dispose();
+      clearRemoteSessionActivity();
+    }
+  });
+  // Full production projection chain: a second completion with identical text
+  // must replace the owner token, while an old host must not gain swipe actions.
+  it('preserves completion identity through relay, store, parser and native projection', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const relay = new SessionActivityRelay(payload => {
+      applyRemoteSessionActivity('device-a', payload);
+      const inputs = buildAgentIslandRemoteSessionInputs([remoteSession('a-1', 'device-a')], MACHINE_ALL, getRemoteSessionActivity);
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(inputs)!, 2000);
+    }, { minIntervalMs: 0 });
+    const completion = { sessionId: 'a-1', phase: 'completed' as const, recordStatus: 'active',
+      compactDetail: 'Done', startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: 'Done',
+      attention: true, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
+    try {
+      relay.publish([{ ...completion, completionToken: 'owner:1' }]);
+      expect(agentIslandCompletionToken(state.sessions.get('a-1')!)).toBe('owner:1');
+      relay.publish([{ ...completion, completionToken: 'owner:2' }]);
+      expect(agentIslandCompletionToken(state.sessions.get('a-1')!)).toBe('owner:2');
+      relay.publish([completion]);
+      expect(agentIslandCompletionToken(state.sessions.get('a-1')!)).toBeUndefined();
+    } finally {
+      relay.dispose();
+      clearRemoteSessionActivity();
+    }
+  });
   const sessions = [
     remoteSession('a-1', 'device-a'),
     remoteSession('a-idle', 'device-a'),

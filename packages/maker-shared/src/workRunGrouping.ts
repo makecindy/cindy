@@ -6,6 +6,8 @@ export interface WorkRunGroupingAdapter<TItem, TChild extends TItem> {
   /** A recovery closes the interrupted attempt without requiring a final answer. */
   isContinuationBoundary?(item: TItem): boolean;
   isAnswer(item: TItem): boolean;
+  /** Explicit progress cannot be prepended to an adjacent final answer run. */
+  canPrependToAnswer?(item: TItem): boolean;
   isSealedAnswer(item: TItem): boolean;
   isCompactBoundary(item: TItem): boolean;
   isActivity(item: TItem): item is TChild;
@@ -201,7 +203,8 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
       while (
         answerStart > lastActivity + 1 &&
         answerStart > segmentStart &&
-        adapter.isAnswer(items[answerStart - 1])
+        adapter.isAnswer(items[answerStart - 1]) &&
+        adapter.canPrependToAnswer?.(items[answerStart - 1]) !== false
       ) {
         answerStart--;
       }
@@ -235,7 +238,8 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
     if (lastActivity >= 0) {
       while (
         answerStart > lastActivity + 1 &&
-        adapter.isAnswer(items[answerStart - 1])
+        adapter.isAnswer(items[answerStart - 1]) &&
+        adapter.canPrependToAnswer?.(items[answerStart - 1]) !== false
       )
         answerStart--;
     }

@@ -100,9 +100,10 @@ function fakeDeps(
 }
 
 function parsePayload(result: {
-  content: { text: string }[];
+  content: Array<{ type: string; text?: string }>;
 }): Record<string, unknown> {
-  return JSON.parse(result.content[0].text) as Record<string, unknown>;
+  // The first block is always the JSON text (ghost_call may append images).
+  return JSON.parse(result.content[0].text ?? "") as Record<string, unknown>;
 }
 
 const READY_WITH_REAUTH_SUGGEST = {
@@ -592,6 +593,22 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       tool: "gen_image",
       args: {},
     });
+  });
+
+  it("images the plugin shows the model follow the JSON text as image content and stay out of the JSON", async () => {
+    const callGhostTool = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { path: "/tmp/s.jpg" },
+      images: [{ data: "AAAA", mimeType: "image/jpeg" }],
+      imagesOmitted: 1,
+    });
+    const result = await handleGhostCall(fakeDeps({ callGhostTool }), { ghost_id: "sim", tool: "screenshot" });
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toEqual({ type: "image", data: "AAAA", mimeType: "image/jpeg" });
+    const payload = parsePayload(result);
+    expect(payload).toMatchObject({ ok: true, result: { path: "/tmp/s.jpg" }, images_omitted: 1 });
+    expect(payload).not.toHaveProperty("images");
+    expect(payload).not.toHaveProperty("imagesOmitted");
   });
 
   it("成功调用可附 setup.reauthSuggest，仍保持 ok:true", async () => {
@@ -1250,6 +1267,11 @@ describe("cindy_ghosts · server 构建", () => {
     };
     expect(Object.keys(server._registeredTools).sort()).toEqual([
       "ghost_call",
+      "ghost_cancel_plugin_review",
+      "ghost_contribution_prepare",
+      "ghost_contribution_status",
+      "ghost_contribution_stop",
+      "ghost_contribution_submit",
       "ghost_forge_guide",
       "ghost_forge_install",
       "ghost_forge_pack",
@@ -1259,6 +1281,7 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_info",
       "ghost_list",
       "ghost_manual",
+      "ghost_my_plugins",
       "media",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
@@ -1596,7 +1619,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
   });
 
   it("forge_install 透传源码目录与可选图标并返回真实安装动作;失败标 isError", async () => {
-    const requests: Array<{ dir: string; iconSource?: string }> = [];
+    const requests: Array<{ dir: string; iconSource?: string; targetInstanceId?: string }> = [];
     const installed = await handleForgeInstall(
       fakeDeps({
         forgeInstall: async (request) => {
@@ -1615,6 +1638,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       {
         dir: "/src/my-ghost",
         icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        target_instance_id: '_root__my-ghost',
       },
     );
     expect(parsePayload(installed)).toMatchObject({
@@ -1627,6 +1651,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       {
         dir: "/src/my-ghost",
         iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        targetInstanceId: '_root__my-ghost',
       },
     ]);
 
@@ -1874,7 +1899,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
         ],
       }),
     ) as unknown as {
-      _registeredTools: Record<string, { description?: string } | undefined>;
+      _registeredTools: Record<string, { description?: string; inputSchema?: { shape?: Record<string, { description?: string }> } } | undefined>;
     };
 
     const listDesc = server._registeredTools.ghost_list?.description ?? "";
@@ -1894,10 +1919,17 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
     expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
     expect(callDesc).toContain("ghost_info 或 ghost_list");
-    // 权限契约必须进入模型可见描述:本地 Full Access 自动交接,远程/降档
-    // 仍 fail closed，且自动交接不伪装成人工永久授权。
-    expect(callDesc).toContain("Full Access(bypassPermissions)");
-    expect(callDesc).toContain("远程会话仍向用户弹确认卡");
+    // PR #6731 权限协议：原生审核读取真实注册的工具/参数说明；不能因
+    // “之后还有确认卡”的错误承诺放行。旧测试只覆盖 Full Access 总说明，
+    // 漏掉 Auto 与四个参数入口。unit：核验模型可见协议，而非扫描源码。
+    const callTool = server._registeredTools.ghost_call;
+    for (const description of [callDesc, ...['grant_only', 'attachments', 'dir', 'save_dir'].map(
+      (name) => callTool?.inputSchema?.shape?.[name]?.description ?? '',
+    )]) {
+      expect(description).toContain("Auto 沿用实际审批负责人，可能直接交接");
+      expect(description).toContain("Ask 需用户确认");
+      expect(description).toContain("不保证另有确认卡");
+    }
     expect(callDesc).toContain("不写人工永久授权");
   });
 
@@ -2181,5 +2213,93 @@ describe("portable legacy plugin media", () => {
       expect(payload.hint).not.toContain("已自动送达");
       expect(payload.hint).not.toContain("媒体已由聊天气泡自动渲染");
     }
+  });
+});
+
+describe('personal community author MCP transport', () => {
+  async function connected(deps: CindyGhostsMcpDeps) {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const server = createCindyGhostsMcpServer(deps);
+    const client = new Client({ name: 'personal-author-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    await client.connect(ct);
+    return { client, close: async () => { await client.close(); await server.close(); } };
+  }
+
+  it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
+    const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));
+    const forgePublish = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution, forgePublish }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', namespace: null }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation' }],
+        ['ghost_contribution_status', { local_id: 'original-operation' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' }],
+        ['ghost_my_plugins', { query: 'hello', filter: 'needs_action', cursor: 'list-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', cursor: 'history-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', submission_id: 'submission-1' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).not.toBe(true);
+      }
+      expect(communityContribution.mock.calls.map(([input]) => input)).toEqual([
+        { action: 'prepare', ghostId: 'hello', namespace: null },
+        { action: 'submit', id: 'original-operation' },
+        { action: 'status', id: 'original-operation' },
+        { action: 'cancel', id: 'original-operation' },
+        { action: 'cancel-review', pluginId: 'plugin-1', release: { releaseId: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' } },
+        { action: 'list', query: 'hello', filter: 'needs_action', cursor: 'list-cursor' },
+        { action: 'detail', pluginId: 'plugin-1', cursor: 'history-cursor' },
+        { action: 'submission', pluginId: 'plugin-1', submissionId: 'submission-1' },
+      ]);
+      expect(forgePublish).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('rejects arbitrary paths, replacement identities and incomplete exact submission reads before Host', async () => {
+    const communityContribution = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', file: '/private/package.cindy' }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', resume: true }],
+        ['ghost_contribution_status', {}],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', authority: 'other-issuer' }],
+        ['ghost_contribution_status', { local_id: 'original-operation', token: 'not-a-host-token' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation', membershipId: 'other' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'bad', revision: 'not-a-date' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z', token: 'override' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', scope: 'organization' }],
+        ['ghost_my_plugins', { submission_id: 'submission-without-plugin' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).toBe(true);
+      }
+      expect(communityContribution).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('reports unavailable capabilities and sanitized Host failures as MCP errors without enterprise fallback', async () => {
+    const absent = await connected(fakeDeps());
+    try {
+      const result = await absent.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('UNSUPPORTED_CAPABILITY');
+    } finally { await absent.close(); }
+    const communityContribution = vi.fn()
+      .mockResolvedValueOnce({ ok: false, errorCode: 'CONTRIBUTION_NOT_AUTHORIZED', message: 'This account cannot publish this plugin.' })
+      .mockRejectedValueOnce(new Error('private-transport-token'));
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      const denied = await transport.client.callTool({ name: 'ghost_contribution_submit', arguments: { prepared_id: 'original-operation' } });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toContain('CONTRIBUTION_NOT_AUTHORIZED');
+      expect(JSON.stringify(denied)).toContain('This account cannot publish this plugin.');
+      const failed = await transport.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-transport-token');
+    } finally { await transport.close(); }
   });
 });

@@ -90,7 +90,7 @@ export function UploadLogsActionRow({
       : null;
   const descriptionClassName = inDialog
     ? 'text-12 leading-normal text-[var(--confirm-desc)]'
-    : 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
+    : 'text-12 leading-[1.4] text-[var(--text-secondary)]';
 
   return (
     // Same inherited Settings row gutter as OpenLogsRow; not an additional dialog inset.

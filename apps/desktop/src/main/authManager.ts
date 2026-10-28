@@ -65,6 +65,9 @@ import {
   awaitLoginProvidersWithPreparingGate,
   awaitWithStartupTimeout,
   mapLoginProvidersLoadFailure,
+  ColdStartAuthFallbackRegistry,
+  commitColdStartRefreshIfCurrent,
+  resolveColdStartTimeoutRecovery,
 } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
 import {
@@ -97,6 +100,7 @@ import {
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
+import { requestErrorMessage } from './requestErrorMessage';
 import { AuthOwnerChangeShellGate } from './authOwnerChangeShellGate';
 import {
   isGhostSkillProjectionBoundaryStableForOwner,
@@ -433,6 +437,12 @@ let loginFlowEpoch = 0;
 // A depth map keeps the guard correct even if two same-epoch commits briefly
 // overlap before authStateEpoch rejects the stale one.
 const sealedLoginFlowCommitDepths = new Map<number, number>();
+// Monotonic count of accepted login commits that have fully settled (including
+// the post-commit notifications in completeLogin). A sibling initialize()
+// snapshots this at entry: a startup timer firing after the snapshot must not
+// run signed-out recovery over a login that landed while it was pending, even
+// though the login reuses the epoch the sibling snapshotted at its entry.
+let settledLoginCommitCount = 0;
 // `accountDeletionRestored` may arrive before membership selection. Keep it
 // main-only until the final resource-token login commits.
 let pendingAccountDeletionRestored = false;
@@ -463,6 +473,9 @@ function createAuthClient(
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+    onRequestError: (apiPath, status, error) => {
+      log.warn('auth request failed', apiPath, { realm, status }, requestErrorMessage(error));
+    },
   });
 }
 
@@ -1658,7 +1671,10 @@ async function commitDesktopRefreshCredentials(
       }
     },
     { waitWhileBusyAfterRotation: true },
-  );
+  ).catch((error) => {
+    log.warn('refresh credential save failed', { realm }, requestErrorMessage(error));
+    throw error;
+  });
 }
 
 /**
@@ -2292,7 +2308,10 @@ async function apiFetch<T>(
     const retryAt = response.status === 429 ? retryAfterDeadline(response) : undefined;
     let data: T;
     try { data = (await response.json()) as T; }
-    catch { return { ok: false, status: response.status, data: null as T, retryAt }; }
+    catch (error) {
+      log.warn('auth response read failed', apiPath, { status: response.status }, requestErrorMessage(error));
+      return { ok: false, status: response.status, data: null as T, retryAt };
+    }
     const errorCode = (data as AuthErrorResponse | null)?.error?.code;
     if (response.status === 401 && errorCode === 'ACCOUNT_UNAVAILABLE' && currentUser) {
       // Internal auth-server calls (profile/feature flags/refresh) do not pass
@@ -2301,7 +2320,8 @@ async function apiFetch<T>(
     }
     return { ok: response.ok, status: response.status, data,
       ...(retryAt !== undefined ? { retryAt } : {}) };
-  } catch {
+  } catch (error) {
+    log.warn('auth request failed', apiPath, requestErrorMessage(error));
     return { ok: false, status: 0, data: null as T };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -2479,6 +2499,8 @@ async function withAccountFreeOwnerCommit(opts: {
   authAlreadyCleared?: boolean;
   validateBeforeCommit?: () => boolean;
   shouldClearOnFailure?: () => boolean;
+  /** 本次收敛是冷启动启动闸超时兜底;转发给 clearAuth 以便同步登记兜底代际。 */
+  coldStartTimeoutRecovery?: boolean;
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
@@ -2505,6 +2527,7 @@ async function withAccountFreeOwnerCommit(opts: {
         preservePersistedRefreshToken: true,
         credentialStoreUnavailable: opts.credentialStoreUnavailable,
         deferSessionCommit: true,
+        coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
       });
       authCleared = true;
     }
@@ -2554,6 +2577,7 @@ async function withAccountFreeOwnerCommit(opts: {
             preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
             credentialStoreUnavailable: opts.credentialStoreUnavailable,
             deferSessionCommit: true,
+            coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
           });
           authCleared = true;
         }
@@ -2578,6 +2602,7 @@ async function withAccountFreeOwnerCommit(opts: {
           preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
           credentialStoreUnavailable: opts.credentialStoreUnavailable,
           deferSessionCommit: true,
+          coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
         });
         authCleared = true;
       }
@@ -2608,6 +2633,11 @@ async function recoverAccountFreeOwnerAtStartup(
   mode: Extract<AppSessionMode, 'signed-out' | 'local'>,
   reason: string,
   credentialStoreUnavailable = false,
+  /**
+   * 本次收敛是冷启动启动闸超时兜底。必须由调用方显式声明并透传到 clearAuth:
+   * 兜底代际要在推进代际的同一同步时刻登记,不能等本函数返回(PR #6273 review P1)。
+   */
+  opts: { coldStartTimeoutRecovery?: boolean } = {},
 ): Promise<void> {
   const ownerId = mode === 'local' ? LOCAL_DATA_OWNER_ID : null;
   if (isGhostSkillProjectionBoundaryStableForOwner(ownerId)) {
@@ -2629,6 +2659,7 @@ async function recoverAccountFreeOwnerAtStartup(
     notify: false,
     clearOnFailure: mode === 'signed-out',
     preservePersistedRefreshToken: true,
+    coldStartTimeoutRecovery: opts.coldStartTimeoutRecovery,
   });
 }
 
@@ -3153,6 +3184,17 @@ const COLD_START_AUTH_GATE_TIMEOUT_MS = 20_000;
 let authStateEpoch = 0;
 
 /**
+ * 启动闸超时兜底(`cold-start-timeout-recovery`)自己造成的代际推进:从 `from`
+ * 推到 `to`,在 clearAuth 推进代际的**同一同步时刻**记录。
+ *
+ * 记成一对(而不是只记新代际)才能把豁免绑定到「这次兜底」:冷启动流程只在自己
+ * 当前代际等于 `from` 且现值为 `to` 时被豁免。若用户在该兜底之前已经显式登录过,
+ * 兜底的 `from` 就不等于流程起始代际,旧流程仍被正常作废(不会反过来覆盖新登录)。
+ * 见 authStartupGate 的 ColdStartAuthFallbackRegistry。
+ */
+const coldStartTimeoutFallbacks = new ColdStartAuthFallbackRegistry();
+
+/**
  * 登录态落地后异步同步灰度标记，不阻塞 renderer 进入主界面。
  *
  * expectedAuthEpoch + expectedUserId 防止慢响应在登出或换账号之后覆盖新身份；
@@ -3657,10 +3699,28 @@ function clearAuth(
      * namespace during teardown.
      */
     deferSessionCommit?: boolean;
+    /**
+     * 本次清理是冷启动启动闸超时的兜底(不是用户动作)。为 true 时在**推进代际的
+     * 同一同步时刻**记下该代际,让触发兜底的冷启动流程即使在本函数外层还没返回、
+     * 锁还没释放时也能认出「这一代是我自己的兜底」而不是用户改过登录态。
+     * 见 authStartupGate 的 ColdStartAuthFallbackRegistry。
+     */
+    coldStartTimeoutRecovery?: boolean;
   } = {},
 ): void {
   const notify = opts.notify ?? true;
+  const epochBeforeClear = authStateEpoch;
   authStateEpoch += 1; // 迟到的冷启动流程从此作废(见 authStateEpoch 注释)
+  // 必须与上一行同步记录:兜底流程外层还有 await commit / 释放锁 / 多层异步返回,
+  // 期间并发的刷新已经能看到新代际;若等到外层返回才登记,它仍会被误判为
+  // 「用户改过登录态」而丢弃(PR #6273 review P1)。
+  if (opts.coldStartTimeoutRecovery) {
+    coldStartTimeoutFallbacks.record(epochBeforeClear, authStateEpoch);
+  } else {
+    // A user logout/login or any non-timeout clear breaks the fallback chain even
+    // when no refresh guard ran between that action and a sibling window timeout.
+    coldStartTimeoutFallbacks.clear();
+  }
   refreshBackoff.clear();
   loginFlowEpoch += 1;
   // Explicit logout clears health. Failed startup keeps its recovery reason
@@ -4484,6 +4544,8 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  const initializeStartEpoch = authStateEpoch;
+  const settledLoginsAtInitialize = settledLoginCommitCount;
   // A renderer can mount after the boundary-pending broadcast. Keep startup
   // fail-closed until the serialized owner transition settles instead of
   // restoring the outgoing owner's credentials and turns from disk.
@@ -4650,6 +4712,9 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   if (coldStartAuthInFlight === null) {
     coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
       () => {
+        // Keep every fallback edge until the shared refresh settles: sibling renderer
+        // timeouts may append another edge while the network flow is still pending.
+        coldStartTimeoutFallbacks.clear();
         coldStartAuthInFlight = null;
       },
     );
@@ -4657,6 +4722,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
   const coldStartCompletion = coldStartAuthInFlight;
+  const startupTimeoutEpoch = initializeStartEpoch;
   return awaitWithStartupTimeout(coldStartCompletion, {
     timeoutMs: COLD_START_AUTH_GATE_TIMEOUT_MS,
     onTimeout: async () => {
@@ -4667,8 +4733,40 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       // A signed-out fallback is not safe until the shared Ghost projection
       // has been swept. Otherwise the previous cloud owner's links remain
       // available to local/anonymous Agent processes during a slow refresh.
-      await recoverAccountFreeOwnerAtStartup('signed-out', 'cold-start-timeout-recovery');
-      return snapshotLoggedOutAuthState();
+      // The refresh may already have crossed into its owner teardown while the
+      // startup deadline fires. That teardown owns the user-data boundary, so
+      // never wait on it here (its awaits are unbounded) and never start a
+      // competing account-free cleanup: return a fail-closed projection and let
+      // the transition's own commit/rollback broadcast publish the settled state.
+      const recovery = await resolveColdStartTimeoutRecovery({
+        ownerTransitionPending: ownerChangeShellGate.isPending(),
+        loginCommitPending: sealedLoginFlowCommitDepths.size > 0,
+        authChangedSinceInitialize: authStateEpoch !== initializeStartEpoch,
+        // A login that committed after this initialize() entered reuses the
+        // epoch snapshotted at entry (completeLogin increments before awaiting
+        // the durable commit), so the epoch guards above cannot see it. Treat a
+        // settled login as an auth change that must never be cleared by the
+        // startup deadline; its own commit already published the settled state.
+        loginCommittedSinceInitialize:
+          settledLoginCommitCount !== settledLoginsAtInitialize,
+        isStartupFallbackEpoch: (epoch) =>
+          epoch > initializeStartEpoch &&
+          coldStartTimeoutFallbacks.containsOnlyFallbacks(initializeStartEpoch, epoch),
+        timeoutStartEpoch: startupTimeoutEpoch,
+        currentEpoch: authStateEpoch,
+        currentState: snapshotAuthState(),
+        pendingState: snapshotLoggedOutAuthState(true),
+        recover: () =>
+          recoverAccountFreeOwnerAtStartup('signed-out', 'cold-start-timeout-recovery', false, {
+            coldStartTimeoutRecovery: true,
+          }).then(() => snapshotLoggedOutAuthState()),
+      });
+      if (recovery.ownerBoundaryPending) {
+        log.warn(
+          'cold-start startup deadline reached during owner transition; keeping the shell fail-closed',
+        );
+      }
+      return recovery;
     },
     onLateResult: (state) =>
       log.info(
@@ -4696,11 +4794,30 @@ async function runColdStartRefreshFlow(
   const attemptedOwnershipTokens = new Set(ownershipRecovery.attemptedTokens);
   attemptedOwnershipTokens.add(storedToken);
   const epochAtStart = authStateEpoch;
+  /**
+   * 本流程当前认可的代际。接受「自己的启动闸超时兜底」后前移到兜底那一代:
+   * 提交后的灰度/组织默认同步必须用这个代际,否则本次恢复登录会被自己的兜底
+   * 判成 stale-auth 而跳过同步(PR #6273 review P2);之后任何真实用户动作仍会
+   * 再次推进代际,继续正确作废这些任务。
+   */
+  let flowAuthEpoch = epochAtStart;
   const epochChanged = (point: string): boolean => {
-    if (authStateEpoch === epochAtStart) return false;
+    const resolution = commitColdStartRefreshIfCurrent({
+      registry: coldStartTimeoutFallbacks,
+      flowEpoch: flowAuthEpoch,
+      currentEpoch: authStateEpoch,
+      commit: () => undefined,
+    });
+    if (!resolution.superseded) {
+      // A committed result means the epoch is unchanged or every transition is
+      // this flow's startup fallback. Adopt the committed epoch before post-login sync.
+      flowAuthEpoch = resolution.flowEpoch;
+      return false;
+    }
     log.warn(
       `cold-start refresh flow superseded by manual auth change (${point}) — discarding late result`,
     );
+    coldStartTimeoutFallbacks.clear();
     return true;
   };
 
@@ -4913,13 +5030,17 @@ async function runColdStartRefreshFlow(
       },
     });
     await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
+    // Schedule with the epoch this flow actually commits under (flowAuthEpoch, which
+    // moves forward when the flow accepts its own startup-gate fallback) — passing the
+    // original epochAtStart would make these tasks treat a recovery login as stale-auth
+    // and skip the canary flag / org beta sync (PR #6273 review P2).
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
-      expectedAuthEpoch: epochAtStart,
+      expectedAuthEpoch: flowAuthEpoch,
       expectedUserId: refreshData.membership.id,
     });
     scheduleXdOrgBetaDefault({
-      expectedAuthEpoch: epochAtStart,
+      expectedAuthEpoch: flowAuthEpoch,
       expectedUserId: refreshData.membership.id,
     });
     scheduleRefresh(refreshData.accessToken);
@@ -5198,6 +5319,7 @@ async function completeLogin(
     loginFlowState = reduceAuthFlow(loginFlowState, { type: 'outcome', outcome });
     notifyRenderer();
     notifyAuthListeners();
+    settledLoginCommitCount += 1;
     return loginFlowState;
   } finally {
     releaseLoginFlowCommit();

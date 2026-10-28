@@ -39,6 +39,7 @@ vi.mock('@/device-link/peerFileCache', () => ({ createPeerFileCache: async (owne
 import { chatGroupView, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
 import { BotGroupAvatar, BotGroupDuoAvatar, useBotGroupIdentities } from '@/session/BotGroupAvatars';
 import { BotGroupListRow } from '@/session/BotGroupList';
+import { parseBotGroupChatData } from '@/session/botGroupRemote';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -99,6 +100,29 @@ it('renders a server member public avatar without computer resolution and recove
   snapshot.members[0].avatar = 'https://avatars.example.invalid/replaced.png';
   await act(async () => root!.render(createElement(Probe)));
   expect(host.querySelector('img')?.getAttribute('src')).toBe(snapshot.members[0].avatar);
+});
+
+// Regression: direct Chat Server rendering was covered, but the computer's
+// group block lost avatarUrl during parsing (PR #6807). Exercise that boundary
+// through the real identity hook and image component, including reset (unit).
+it('renders the computer group avatar and its reset to the account avatar', async () => {
+  let avatarUrl: string | null = 'https://avatars.example.invalid/group.png';
+  const Probe = () => {
+    const identityFor = useBotGroupIdentities('mac');
+    const member = parseBotGroupChatData({ id: 'group', name: 'Group', messages: [], members: [
+      { botId: 'person', name: 'Person', avatar: avatarUrl ? '' : '🙂', avatarUrl, status: 'active' },
+    ] })!.members[0];
+    return createElement(BotGroupAvatar, { deviceId: 'mac', identity: identityFor(member.botId, member.name, member), size: 28, online: true });
+  };
+  const host = document.createElement('div'); root = createRoot(host);
+  for (const next of [avatarUrl, 'https://avatars.example.invalid/account.png', null]) {
+    avatarUrl = next;
+    await act(async () => root!.render(createElement(Probe)));
+    if (next) expect(host.querySelector('img')?.getAttribute('src')).toBe(next);
+    else { expect(host.querySelector('img')).toBeNull(); expect(host.textContent).toBe('🙂'); }
+  }
+  expect(h.remoteMedia).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
 });
 
 it('keeps computer local media avatars on the existing resolver', async () => {

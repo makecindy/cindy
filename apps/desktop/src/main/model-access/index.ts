@@ -6,6 +6,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { createByokRuntime } from './byokRuntime.js';
 import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { isProviderDisabled } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
@@ -25,7 +26,11 @@ import {
   markXdGatewayModelAccessUnknown,
   setXdGatewayModels,
 } from '../maker-host/active-catalog.js';
-import { migrateLegacyNamespacedModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import {
+  migrateLegacyNamespacedModelDisableOverrides,
+  onProviderDisableChange,
+  readModelDisableOverrides,
+} from '../maker-host/model-disable-store.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -316,6 +321,7 @@ async function runModelsSync(
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
 function scheduleModelsSync(): void {
+  if (isProviderDisabled(readModelDisableOverrides(), 'xd')) return;
   const gen = authGeneration;
   // localDb takeover and /models run independently during startup. Capture the
   // authenticated owner here instead of asking localDb who owns the cache only
@@ -354,6 +360,7 @@ function scheduleModelsSync(): void {
 
 let syncInstance: CredentialsSync | null = null;
 let foregroundRefreshListener: (() => void) | null = null;
+let unsubscribeProviderDisable: (() => void) | null = null;
 
 /**
  * 企业 Provider 目录的刷新形态与 Cindy 自有目录一致:窗口聚焦触发 + 5 分钟节流,
@@ -403,6 +410,7 @@ function scheduleByokSync(byok: ByokRuntime, force = false): void {
 function getSync(): CredentialsSync {
   if (!syncInstance) {
     syncInstance = createCredentialsSync({
+      isProviderEnabled: () => !isProviderDisabled(readModelDisableOverrides(), 'xd'),
       fetchCredentials,
       rotateCredentials,
       readXdKey: () => getProviderSecretStore().get('xd'),
@@ -519,6 +527,10 @@ function mapServerError(err: unknown): never {
  */
 export function initModelAccess(): void {
   const sync = getSync();
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = onProviderDisableChange((providerId) => {
+    if (providerId === 'xd') sync.handleProviderAccessChange();
+  });
   setQuotaCredentialStatusReader(() => {
     const auth = authManager.getAuthState();
     if (auth.mode !== 'cloud' || !auth.user?.id || auth.user.id !== lastAuthUserId
@@ -622,6 +634,8 @@ export function initModelAccess(): void {
 
 /** 仅测试:重置单例。 */
 export function resetModelAccessForTest(): void {
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = null;
   lastByokSyncStartedAt = 0;
   byokCodexHostRefreshQueued = false;
   if (foregroundRefreshListener) {

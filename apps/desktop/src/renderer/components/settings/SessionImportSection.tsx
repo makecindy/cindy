@@ -216,7 +216,7 @@ export function SessionImportSection() {
       >
         {!scan ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-            <Download size={24} className="text-[var(--settings-section-title)] opacity-70" />
+            <Download size={24} className="text-[var(--text-secondary)]" />
             <div className="flex max-w-[420px] flex-col gap-1">
               <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.sessionImport.emptyTitle')}

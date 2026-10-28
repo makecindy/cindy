@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { MountedMenuContent } from '../MountedMenuContent';
 /**
  * ProjectNode — 单个 Project 节点（Header + 受控折叠的子 sessions）
@@ -480,7 +481,7 @@ const ProjectHeader = memo(function ProjectHeader({
             <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
           {!isEditingName && isDeviceLink ? (
-            <Tip text={remoteIdentity?.displayLabel ?? project.deviceLinkDeviceId ?? ''}>
+            <Tip text={remoteIdentity?.displayLabel ?? deviceDisplayName(project.deviceLinkDeviceId ?? '', project.deviceLinkDeviceName)}>
               <RemoteProjectIcon
                 kind="device-link"
                 connectionStatus={project.deviceLinkConnectionStatus}

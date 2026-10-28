@@ -1,5 +1,4 @@
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
-const forwarded = (text: string) => formatForwardedRequest({ userText: null }, text);
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
@@ -224,8 +223,8 @@ describe('session control domain service', () => {
       'queued-1',
       expect.objectContaining({
         clientId: 'queued-1',
-        text: forwarded('after'),
-        origin: expect.objectContaining({ displayText: forwarded('after') }),
+        text: 'after',
+        origin: expect.objectContaining({ displayText: 'after' }),
       }),
       expect.objectContaining({clientId:'queued-1',text:'before'}),
     );
@@ -299,10 +298,10 @@ describe('session control domain service', () => {
         'target',
         'queued-1',
         expect.objectContaining({
-          text: forwarded(replacement),
-          persistedContent: forwarded(replacement),
-          chatMessage: expect.objectContaining({ content: forwarded(replacement) }),
-          origin: expect.objectContaining({ displayText: forwarded(replacement) }),
+          text: replacement,
+          persistedContent: replacement,
+          chatMessage: expect.objectContaining({ content: replacement }),
+          origin: expect.objectContaining({ displayText: replacement }),
         }),
         queued,
       );
@@ -321,10 +320,10 @@ describe('session control domain service', () => {
     const updated = rebuildSessionQueueItem(queued, 'replacement');
 
     expect(JSON.parse(updated.persistedContent)).toMatchObject({
-      text: forwarded('replacement'),
+      text: 'replacement',
       files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
     });
-    expect(updated.origin).toMatchObject({ kind: 'session', displayText: forwarded('replacement') });
+    expect(updated.origin).toMatchObject({ kind: 'session', displayText: 'replacement' });
   });
 
   it('edits only the supplement and preserves an existing delegated continuation receipt', () => {

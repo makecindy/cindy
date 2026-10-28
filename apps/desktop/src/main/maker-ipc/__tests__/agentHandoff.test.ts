@@ -110,6 +110,21 @@ describe('extractAgentIslandPromptText', () => {
 describe('buildHandoffText', () => {
   const opts = { fromLabel: 'Claude Code', toLabel: 'Codex' };
 
+  it('retains trailing user corrections and tool outcomes within the unchanged total budget', () => {
+    const text = buildHandoffText([
+      msg('user', `Original goal\n${'background '.repeat(1000)}\nFinal correction: do not publish`),
+      { ...msg('tool_use', { toolName: 'shell', input: { command: 'test' } }), toolUseId: 'test-call' },
+      { ...msg('tool_result', `Test log\n${'log '.repeat(2000)}\nexit code 1: database fixture failed`), toolUseId: 'test-call' },
+      msg('assistant', `Investigation\n${'detail '.repeat(1000)}\nNext: fix the fixture`),
+    ], opts);
+    expect(text).toContain('Original goal');
+    expect(text).toContain('Final correction: do not publish');
+    expect(text).toContain('[Tool result id=test-call;');
+    expect(text).toContain('exit code 1: database fixture failed');
+    expect(text).toContain('Next: fix the fixture');
+    expect(text.length).toBeLessThanOrEqual(16000);
+  });
+
   it('framing 包含续接指令与双引擎名,并以结束标记收尾', () => {
     const text = buildHandoffText([msg('user', '第一个问题'), msg('assistant', '第一个回答')], opts);
     expect(text).toContain('Claude Code');
@@ -218,7 +233,7 @@ describe('buildHandoffText', () => {
     expect(text).not.toContain('[User]\n问题0');
   });
 
-  it('工具调用渲染为 name + input 摘要,tool_result/thinking 不进正文', () => {
+  it('显式省略工具结果时仅保留调用，thinking 不进正文', () => {
     const text = buildHandoffText(
       [
         msg('user', '改一下代码'),
@@ -227,7 +242,7 @@ describe('buildHandoffText', () => {
         msg('thinking', { kind: 'thinking', text: '内心戏' }),
         msg('assistant', '改好了'),
       ],
-      opts,
+      { ...opts, includeToolResults: false },
     );
     expect(text).toContain('[Tool] Read: {"file_path":"/a.ts"}');
     expect(text).not.toContain('内心戏');
@@ -805,7 +820,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).not.toContain('== Work ledger');
   });
 
-  it('把命令与 tool_result 成败收进 ledger,不把整段 stdout 写进去', () => {
+  it('把命令与 tool_result 成败收进 ledger，同时保留有界结果与末尾退出码', () => {
     const text = buildHandoffText(
       [
         msg('user', '跑测试'),
@@ -817,7 +832,7 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
         },
         {
           role: 'tool_result',
-          content: `${'FAIL src/foo.test.ts\n'.repeat(40)}exit code 1`,
+          content: `${'FAIL src/foo.test.ts\n'.repeat(400)}exit code 1`,
           createdAt: 1,
           toolUseId: 't1',
         },
@@ -827,7 +842,9 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     expect(text).toContain('- pnpm test:unit → exit 1');
     expect(text).toContain('Failed attempts:');
     expect(text).toContain('src/foo.test.ts');
-    expect(text).not.toContain('FAIL src/foo.test.ts\nFAIL src/foo.test.ts');
+    expect(text).toContain('[Tool result id=t1;');
+    expect(text).toContain('exit code 1');
+    expect(text).not.toContain('FAIL src/foo.test.ts\n'.repeat(100));
   });
 
   it('framing 包含「先核对工作区、以工作区为准」纪律', () => {
@@ -968,7 +985,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       toLabel: 'Codex',
       sessionId: 'sess-cap',
     });
-    expect(text.length).toBe(16_000); // 确实顶到上限 = 确实走了兜底分支
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('[Assistant]\nA24');
     expect(text).toContain('"session_ids":["sess-cap"]');
     expect(text).toContain('"limit":10');
     expect(text).toContain('"limit":20');
@@ -983,7 +1002,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       sessionId: 'sess-cap',
       reason: 'message-deletion',
     });
-    expect(text.length).toBe(16_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('[Assistant]\nA24');
     expect(text.trimEnd().endsWith("== End of rebuild note; the user's new message follows =="))
       .toBe(true);
   });

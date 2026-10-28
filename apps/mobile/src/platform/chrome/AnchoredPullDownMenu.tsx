@@ -95,23 +95,35 @@ export function AnchoredPullDownMenu({
   children,
   longPress = false,
   onAction,
+  onPress,
   style,
   testID,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   accessibilityLabel?: string;
   actions: readonly NativePullDownAction[];
   children: ReactNode;
   longPress?: boolean;
   onAction(id: string): void;
+  /** longPress 时的短按动作：触发器接管整块触摸，子元素自己的点按收不到，由这里转发。 */
+  onPress?(): void;
   /** 触发器在父布局里的样式(如 flex: 1);外层替子元素占据父布局里的位置。 */
   style?: StyleProp<ViewStyle>;
   testID?: string;
+  /**
+   * 由调用方控制打开（例如它自己识别长按）。传入后不再接管触摸：子元素里的链接、
+   * 横向滚动照常可用，菜单仍贴着这块内容弹出；关闭时回调 onOpenChange(false)。
+   */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }) {
   const styles = useThemedStyles(makeStyles);
   const anchorRef = useRef<View>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const open = anchor !== null;
+  const controlled = controlledOpen !== undefined;
 
   const show = useCallback(() => {
     const node = anchorRef.current;
@@ -121,11 +133,22 @@ export function AnchoredPullDownMenu({
       setAnchor({ x, y, width, height });
     });
   }, []);
-  const close = useCallback(() => setAnchor(null), []);
+  const close = useCallback(() => {
+    setAnchor(null);
+    onOpenChange?.(false);
+  }, [onOpenChange]);
+  useEffect(() => {
+    if (!controlled) return;
+    if (controlledOpen) show();
+    else setAnchor(null);
+  }, [controlled, controlledOpen, show]);
 
   const child = childAccessibility(children);
   return (
     <>
+      {controlled ? (
+        <View ref={anchorRef} collapsable={false} style={style} testID={testID}>{children}</View>
+      ) : (
       <Pressable
         ref={anchorRef}
         accessibilityHint={child.accessibilityHint}
@@ -135,7 +158,7 @@ export function AnchoredPullDownMenu({
         accessibilityValue={child.accessibilityValue}
         collapsable={false}
         onLongPress={longPress ? show : undefined}
-        onPress={longPress ? undefined : show}
+        onPress={longPress ? onPress : show}
         style={({ pressed }) => [style, pressed && styles.triggerPressed]}
         testID={testID}
       >
@@ -148,6 +171,7 @@ export function AnchoredPullDownMenu({
           {children}
         </View>
       </Pressable>
+      )}
       {open ? (
         <AnchoredMenuOverlay
           actions={actions}
@@ -351,6 +375,7 @@ function MenuRow({
   const { colors } = useTheme();
   const submenu = !!action.subactions?.length && !action.displayInline;
   const tint = action.destructive ? colors.destructive : colors.textPrimary;
+  const Icon = action.icon;
   return (
     <Pressable
       accessibilityLabel={
@@ -389,6 +414,8 @@ function MenuRow({
             size={iconSize.md}
             strokeWidth={iconStroke.medium}
           />
+        ) : Icon ? (
+          <Icon color={tint} size={iconSize.md} strokeWidth={iconStroke.regular} />
         ) : null}
       </View>
       <View style={styles.rowText}>

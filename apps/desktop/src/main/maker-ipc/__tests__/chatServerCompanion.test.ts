@@ -44,7 +44,9 @@ vi.mock('ws', async () => {
 import { withChatServer } from '../chatServer.js';
 import { createCompanionHomeRegistry } from '../../companion-cloud/homes.js';
 import { createCompanionCloudState } from '../../companion-cloud/state.js';
-import type { CompanionCloudHost } from '../../companion-cloud/runtime.js';
+import { activeCompanionCloud, type CompanionCloudHost } from '../../companion-cloud/runtime.js';
+import * as chatRoom from '../../companion-cloud/room.js';
+import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
 const selfId = '30000000-0000-4000-8000-000000000001';
@@ -99,7 +101,54 @@ describe('Chat Server cloud companions', () => {
     deps = { ensureLane: vi.fn(), abortLane: vi.fn(async () => {}), dispatch: vi.fn(), companionCloud: host } as unknown as BotGroupChatServiceDeps;
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
-  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); vi.restoreAllMocks(); });
+
+  // PR #7242, unit: production transcript paging must reuse a scan, but still
+  // observe delta edits, reset and revoked access. Existing room tests bypassed this injection.
+  it('reuses a checked transcript for older pages and revalidates changes before reusing it', async () => {
+    claimed = true;
+    const scans = vi.spyOn(chatRoom, 'readAllRoomMessages');
+    const saved = new Map<string, ChatHistoryState>();
+    deps.chatHistoryStore = () => ({
+      read: async room => structuredClone(saved.get(room)),
+      write: async (room, state) => { if (state) saved.set(room, structuredClone(state)); else saved.delete(room); },
+    });
+    const message = (seq: number, text = `text ${seq}`) => ({ id: `m${seq}`, seq: String(seq), authorId: selfId,
+      createdAt: new Date(seq * 1000).toISOString(), content: [{ type: 'text', text }] });
+    let cursor = '1', mode: 'same' | 'edit' | 'reset' | 'forbidden' = 'same';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations') return { body: { id: roomId } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'direct' }, messages: [], cursor } };
+      if (route.includes('/messages?')) {
+        const before = Number(new URL(`https://fixture${route}`).searchParams.get('before') ?? 111);
+        return { body: Array.from({ length: 110 }, (_, i) => message(110 - i, mode === 'reset' ? 'reset' : undefined))
+          .filter(m => Number(m.seq) < before).slice(0, 100) };
+      }
+      if (route.startsWith('/changes?')) {
+        if (mode === 'forbidden') return { status: 403, body: { error: { code: 'FORBIDDEN' } } };
+        if (mode === 'reset') return { status: 409, body: { error: { code: 'RESET_REQUIRED' } } };
+        return { body: { cursor, changes: mode === 'edit' ? [{ type: 'message.updated', data: { message: { ...message(1, 'edited'), revision: 2 } } }] : [] } };
+      }
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const runtime = activeCompanionCloud()!;
+    const first = await runtime.transcript('local-bot');
+    const reads = () => fixture.handle.mock.calls.filter(([route]) => route.startsWith('/changes?') || route.includes('/messages?')).length;
+    const initialReads = reads();
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages).toHaveLength(10);
+    expect(reads()).toBe(initialReads);
+    expect(scans).toHaveBeenCalledTimes(1);
+
+    cursor = '2'; mode = 'edit'; vi.setSystemTime(Date.now() + 31_000);
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages[0]!.text).toBe('edited');
+    expect(reads()).toBe(initialReads + 1);
+    expect(scans).toHaveBeenCalledTimes(2);
+    cursor = '3'; mode = 'reset'; vi.setSystemTime(Date.now() + 31_000);
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages[0]!.text).toBe('reset');
+    mode = 'forbidden'; vi.setSystemTime(Date.now() + 31_000);
+    await expect(runtime.transcript('local-bot', first.nextBefore)).rejects.toThrow('FORBIDDEN');
+  });
 
   it('claims an empty home for this computer once', async () => {
     claimed = true;
@@ -132,9 +181,13 @@ describe('Chat Server cloud companions', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls(`/actors/${botActor}`, 'PATCH').length).toBeGreaterThan(0);
     expect(calls('/executions/claim')).toHaveLength(0);
-    // Registration succeeds on a later cycle: this computer is the home and starts claiming.
+    // Registration is retried by the 60s actor refresh, not the former 5s cadence.
+    // A failed home registration must still fence claims throughout that interval.
     patch = () => { home = 'desk-1'; return { body: { id: botActor, homeDeviceId: 'desk-1' } }; };
     await vi.advanceTimersByTimeAsync(20_000);
+    expect(calls('/executions/claim')).toHaveLength(0);
+    expect(calls(`/actors/${botActor}`, 'PATCH')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(32_000);
     expect(calls('/executions/claim').length).toBeGreaterThan(0);
   });
 

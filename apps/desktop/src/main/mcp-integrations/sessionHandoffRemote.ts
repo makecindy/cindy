@@ -177,7 +177,8 @@ export function createRemoteSessionHandoff(deps: {
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
         message: captured?.message ?? request.message,
-        ...(captured ? { requestSource: captured.autoReviewUserText.request } : {}),
+        ...(captured?.autoReviewUserText.request?.userText != null
+          ? { requestSource: captured.autoReviewUserText.request } : {}),
         sender,
         taskActionReceipt,
       };

@@ -3477,16 +3477,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.145098,
-              0.133333,
-              0.133333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3495,16 +3496,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3515,16 +3517,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.435294,
-              0.435294,
-              0.435294
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.56
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3533,16 +3536,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.435294,
-              0.435294,
-              0.435294
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.55
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3933,16 +3937,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.145098,
-              0.133333,
-              0.133333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3951,16 +3956,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -3971,16 +3977,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.32
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -3989,16 +3996,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.435294,
-              0.435294,
-              0.435294
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.3
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4009,16 +4017,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.145098,
-              0.133333,
-              0.133333
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.88
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4027,16 +4036,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.831373,
-              0.831373,
-              0.831373
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.82
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -4047,16 +4057,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.435294,
-              0.435294,
-              0.435294
-            ]
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.56
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         },
@@ -4065,16 +4076,17 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.435294,
-              0.435294,
-              0.435294
-            ]
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.55
           },
           "$extensions": {
             "com.cindy.desktop": {
-              "format": "hex",
-              "uppercase": true,
-              "alpha": false
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }

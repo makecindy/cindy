@@ -20,10 +20,11 @@ import {
 } from './hub.js';
 
 export function registerBotAutonomyIpc(): void {
-  ipcMain.handle(BOT_AUTONOMY_IPC.glance, async (event, rawId: unknown) => {
+  ipcMain.handle(BOT_AUTONOMY_IPC.glance, async (event, rawId: unknown, refreshRemote: unknown = true) => {
     const remote = isDeviceLinkInvoke();
     if (!remote) assertTrustedAppRendererEvent(event);
     const botId = requireString(rawId, 'botId');
+    if (typeof refreshRemote !== 'boolean') throwIpcError('INVALID_PARAMS', 'refreshRemote must be boolean');
     if (remote) {
       // 远程只能看远程可见的伙伴（隐藏 / 归档的伙伴只在本机恢复）。
       const [profile] = await getDbClient().drizzle
@@ -37,9 +38,9 @@ export function registerBotAutonomyIpc(): void {
         .select({ id: botProfiles.id, hiddenAt: botProfiles.hiddenAt, status: botProfiles.status })
         .from(botProfiles);
       const excludeBotIds = new Set(profiles.filter((item) => !isBotVisibleRemotely(item)).map((item) => item.id));
-      return getBotAutonomyGlance(botId, { excludeBotIds });
+      return getBotAutonomyGlance(botId, { excludeBotIds }, refreshRemote);
     }
-    return getBotAutonomyGlance(botId);
+    return getBotAutonomyGlance(botId, undefined, refreshRemote);
   });
 
   ipcMain.handle(BOT_AUTONOMY_IPC.settingsGet, async (event) => {

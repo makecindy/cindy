@@ -34,6 +34,7 @@ import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
 import { resolveAuthorizedMedia } from './mediaFetch';
+import { mimeOf } from './mediaMime';
 import { readDeviceLinkSettings } from './settings-store';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
 import { captureFilePeerScope, invalidateFilePeerScopes } from './filePeerScope';
@@ -41,6 +42,7 @@ import { createLogger } from '../logger.js';
 import { handlePeerAttachment } from './peerAttachmentStore';
 import { fileVersion } from './fileVersion';
 import { remoteFileVersionCache, type FileVersionMetadata } from './remoteFileVersionCache';
+import { createSourceFileAccessError, isSourceFileAccessError, withSourceFileHandleContext } from './sourceFileError';
 
 // Local-only diagnostics (scope is not upload-allowlisted): stages, sizes and timings, never paths.
 const log = createLogger('device-link:filePeer');
@@ -494,23 +496,10 @@ async function handleFilePeerRequest(
       if (!stat.isFile() || stat.size > (authorized.maxBytes ?? FILE_PEER_MAX_BYTES))
         throw new Error('FILE_PEER_SIZE');
       const ticket = randomUUID();
-      const ext = (authorized.uploadExtHint ?? path.extname(authorized.absPath)).toLowerCase();
-      const mimeType =
-        authorized.mimeType ??
-        (
-          {
-            '.html': 'text/html',
-            '.htm': 'text/html',
-            '.png': 'image/png',
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.webp': 'image/webp',
-            '.svg': 'image/svg+xml',
-            '.gif': 'image/gif',
-            '.pdf': 'application/pdf',
-          } as Record<string, string>
-        )[ext] ??
-        'application/octet-stream';
+      const ext = (authorized.uploadExtHint ?? path.extname(authorized.absPath)).replace(/^\./, '').toLowerCase();
+      // Keep direct downloads aligned with mediaFetch, including video/audio.
+      const mimeType = authorized.mimeType ??
+        (ext === 'html' || ext === 'htm' ? 'text/html' : mimeOf(ext));
       const source: Source = {
         connection: r.connection,
         file,
@@ -1024,7 +1013,9 @@ export async function tryUploadPeerAttachment(
     try {
       if (typeof source === 'string')
         handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const size = handle ? (await handle.stat()).size : (source as Buffer).length;
+      const size = handle
+        ? (await withSourceFileHandleContext(source, () => handle!.stat())).size
+        : (source as Buffer).length;
       if (!size) return null;
       // 读整份文件算摘要之前先确认对端能收:对端离线、旧版或不支持时不白读一遍(随后还要走 OSS)。
       // The probe is the one wait with no checkpoint of its own; a late answer is ignored.
@@ -1035,7 +1026,9 @@ export async function tryUploadPeerAttachment(
         checkActive();
         if (!handle) return (source as Buffer).subarray(offset, offset + length);
         const bytes = Buffer.alloc(length);
-        if ((await handle.read(bytes, 0, length, offset)).bytesRead !== length)
+        const result = await withSourceFileHandleContext(source, () =>
+          handle!.read(bytes, 0, length, offset));
+        if (result.bytesRead !== length)
           throw new Error('FILE_PEER_CHANGED');
         return bytes;
       };
@@ -1096,9 +1089,12 @@ export async function tryUploadPeerAttachment(
         `uploaded peer=${short(peer)} bytes=${size} transferMs=${ms} bytesPerSecond=${Math.round((size * 1000) / Math.max(1, ms))}`,
       );
       return result;
-    } catch {
+    } catch (error) {
       check();
       if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      // The source is unreadable on this computer; another transport cannot fix it.
+      // Leave the healthy peer connection and its cooldown untouched.
+      if (isSourceFileAccessError(error, source)) throw createSourceFileAccessError();
       cooldown.fail(peer);
       const failed = outgoing.get(peer);
       if (failed) stopConnection(failed.id, 'upload-failed');

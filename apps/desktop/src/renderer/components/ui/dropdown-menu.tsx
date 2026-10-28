@@ -118,9 +118,12 @@ DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayNam
 
 const DropdownMenuContent = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content> & PanelHighlightProps
->(({ className, sideOffset = 4, hoverHighlight = true, children, ...props }, ref) => (
-  <DropdownMenuPrimitive.Portal>
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content> & PanelHighlightProps & {
+    /** Optional top-layer host, e.g. a menu above native fullscreen media. */
+    portalContainer?: HTMLElement | null;
+  }
+>(({ className, sideOffset = 4, hoverHighlight = true, children, portalContainer, ...props }, ref) => (
+  <DropdownMenuPrimitive.Portal container={portalContainer}>
     <DropdownMenuPrimitive.Content
       ref={useMenuPanel(ref, { highlight: hoverHighlight })}
       {...{ [MENU_PANEL_ATTR]: '' }}

@@ -8,6 +8,10 @@ const fit = vi.fn();
 const resize = vi.fn(async () => undefined);
 const entry = {
   terminal: {
+    options: {
+      fontFamily: '"SF Mono", Menlo, Monaco, "Cascadia Code", "Courier New", monospace',
+      fontSize: 13,
+    },
     cols: 80,
     rows: 24,
     element: undefined,
@@ -64,6 +68,8 @@ beforeEach(() => {
   entry.terminal.rows = 24;
   entry.lastSize = { cols: 80, rows: 24 };
   TestResizeObserver.callback = null;
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(480);
   vi.stubGlobal('ResizeObserver', TestResizeObserver);
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
     callback(0);
@@ -86,6 +92,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 

@@ -223,6 +223,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    supportsReadReceipts: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
   };
@@ -430,9 +431,17 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
             mentions: input.mentions,
             clientId: input.clientId,
             division: input.division === true,
+            ...(input.quote !== undefined ? { quote: input.quote } : {}),
             ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
           }, { controllerDeviceId: context.controllerDeviceId });
           break;
+        case 'read': {
+          if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'read', messageId: input.messageId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [] };
+        }
         case 'continue':
           result = await current.continueRound(groupId);
           break;

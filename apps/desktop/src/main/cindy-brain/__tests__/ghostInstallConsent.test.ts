@@ -52,6 +52,16 @@ const userPrompt = (answer: boolean | Error) =>
   });
 
 const reviewedDigest = 'a'.repeat(64);
+// A change of source needs account-impact consent even without new permissions.
+it('forces a source-change confirmation and pins it to the receiver receipt', async () => {
+  const next = manifest(['api.weather.test']), old = installed(next), prompt = userPrompt(true);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'agent', origin: 'forge', force: true,
+    target: { namespace: null, sourceChanged: true, otherCopies: 1 } }, old, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ target: { namespace: null, sourceChanged: true, otherCopies: 1 }, facts: expect.objectContaining({ kind: 'update', added: [] }) }));
+  assertGhostInstallConsent(decision, old, next, reviewedDigest);
+  expect(() => assertGhostInstallConsent(decision, installed(next, { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' }), next, reviewedDigest)).toThrow();
+  await expect(obtainGhostInstallConsent({ mode: 'prompt', prompt: userPrompt(false), initiator: 'agent', origin: 'forge', force: true }, old, next, reviewedDigest)).rejects.toThrow();
+});
 it('records tasks only when that capability was included in explicit install/update consent', async () => {
   const next = {...manifest(['api.weather.test']),agent:{tasks:true as const}};
   const policy = {mode:'prompt' as const,prompt:userPrompt(true),initiator:'user' as const,origin:'market' as const};
@@ -271,4 +281,23 @@ describe('pending consent prompts', () => {
     expect(first.signal.aborted).toBe(true);
     expect(second.signal.aborted).toBe(false);
   });
+});
+
+it('records target consent only when the independent capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { tasks: true } };
+  const next = { ...previous, agent: { tasks: true, targets: true } };
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ added: [expect.objectContaining({ key: 'agent:targets' })] }) }));
+  expect(confirmedTaskCapability(decision, before, next, 'targets')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next)).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'targets')).toBeUndefined();
+  const alreadyDeclared = installed(next);
+  const expanded = { ...next, network: { hosts: ['api.weather.test', 'other.test'] } };
+  const unrelated = await obtainGhostInstallConsent(policy, alreadyDeclared, expanded, reviewedDigest);
+  assertGhostInstallConsent(unrelated, alreadyDeclared, expanded, reviewedDigest);
+  expect(confirmedTaskCapability(unrelated, alreadyDeclared, expanded, 'targets')).toBeUndefined();
 });

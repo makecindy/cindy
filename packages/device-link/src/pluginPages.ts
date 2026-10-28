@@ -306,7 +306,7 @@ export interface PluginTaskPreferences {
     model?: string;
     providerId?: string;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     permissionMode?: string;
   };
   permissionModes: string[];

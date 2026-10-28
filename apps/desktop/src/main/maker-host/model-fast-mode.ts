@@ -12,7 +12,7 @@ export function fastModelId(providerId: string, agent: AgentKind, modelId: strin
 
 /** Called within xAI subscription routes. Fast intent must never become an upstream priority tier. */
 export function rewriteFastModel(
-  providerId: string, agent: AgentKind, body: Record<string, unknown>, fast: boolean,
+  providerId: string, agent: AgentKind, body: Record<string, unknown>, fast: boolean | 'ultrafast',
 ): Record<string, unknown> | null {
   if (!fast || typeof body.model !== 'string') return null;
   const target = fastModelId(providerId, agent, body.model);

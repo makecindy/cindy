@@ -35,6 +35,19 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  // #7081: the host outline must agree with raw grouping when progress directly precedes the final.
+  it.each([false, true])('folds adjacent companion commentary after history takeover (lazy=%s)', async (lazy) => {
+    const rows = [row(0, 'user', 'Work'),
+      { ...row(1, 'assistant', 'Checking'), agentMeta: { assistantPhase: 'commentary' } },
+      { ...row(2, 'assistant', 'Done'), agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }];
+    const { view, render } = harness(rows, false, lazy);
+    await view.refresh();
+    const loaded = companionConversationItems(render());
+    expect(loaded.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Work', 'Done']);
+    expect(outline(loaded)).toEqual(outline(companionConversationItems(buildMobileMessageRenderItems(rows))));
+    expect(JSON.stringify(loaded.find(item => item.type === 'work_group'))).toContain('Checking');
+    view.setActive(false);
+  });
   // Unit: a child inherits the transcript for the model but only its new turns
   // belong on screen. Exercise real rendering with both eager and lazy work.
   it.each([false, true])('hides inherited work and messages in a side chat (lazy=%s)', async (lazy) => {
@@ -52,9 +65,9 @@ describe('remote history preserves original folding', () => {
   // Regression: mobile's companion projection used to flatten away deferred
   // work after history takeover. Verify the production controller's expansion
   // still reads the original thinking/tool rows and never hides a provider final.
-  it('preserves companion replies and lazy work through history takeover and expansion', async () => {
+  it.each(['final_answer', 'commentary'])('preserves companion %s and lazy work through history takeover and expansion', async (assistantPhase) => {
     const rows = [row(0, 'user', 'Work'),
-      { ...row(1, 'assistant', 'First reply'), agentMeta: { assistantPhase: 'final_answer' } },
+      { ...row(1, 'assistant', 'First reply'), agentMeta: { assistantPhase } },
       thought(2), call(3), row(4, 'tool_result', 'Read result', 'tool-3')];
     const { view, render, details } = harness(rows, true, true);
     const raw = companionConversationItems(buildMobileMessageRenderItems(rows, { isSessionStreaming: true }));

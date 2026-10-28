@@ -18,7 +18,7 @@ vi.mock('expo-router', () => ({ Stack: {
     }, children),
   }),
 } }));
-vi.mock('@/platform/chrome/homeMenuIcon', () => ({ homeMenuIcon: 'narrow-home-menu', homeMenuAttentionIcon: 'small-dot-home-menu', homeMenuArtworkSize: 26 }));
+vi.mock('@/platform/chrome/homeMenuIcon', () => ({ homeMenuIcon: 'narrow-home-menu', homeMenuArtworkSize: 26 }));
 vi.mock('@/theme', async () => {
   const { lightColors, darkColors } = await import('@/theme/tokens');
   return { useTheme: () => ({ colors: h.dark ? darkColors : lightColors }) };
@@ -37,35 +37,30 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
-it.each([false, true])('keeps the native menu, neutral attention and title content across themes (dark=%s)', async dark => {
+it.each([false, true])('keeps the native menu and title content across themes (dark=%s)', async dark => {
   h.dark = dark;
   const open = vi.fn();
-  await act(async () => root.render(el(HomeStackHeader, {
-    title: el('span', null, '伙伴'), menuA11y: 'Open menu, 3 tasks', menuTestID: 'teammates.navigation', onOpenMenu: open, attention: true,
-  })));
-  expect(node.textContent).toContain('伙伴');
-  expect(h.options.headerTransparent).toBe(true);
-  expect(h.options.headerTintColor).toBe((dark ? darkColors : lightColors).textPrimary);
-  expect(node.querySelector('button')?.getAttribute('data-icon')).toBe('small-dot-home-menu');
-  expect(node.querySelector('[data-testid="custom-toolbar-item"]')).toBeNull();
-  expect(node.querySelector('button')?.getAttribute('aria-label')).toBe('Open menu, 3 tasks');
-  await act(async () => node.querySelector('button')!.click());
-  expect(open).toHaveBeenCalledOnce();
   await act(async () => root.render(el(HomeStackHeader, {
     title: el('span', null, 'All tasks'), menuA11y: 'Open menu', menuTestID: 'home.chromeMenu', onOpenMenu: open,
   })));
   expect(node.textContent).toContain('All tasks');
+  expect(h.options.headerTransparent).toBe(true);
+  expect(h.options.headerTintColor).toBe((dark ? darkColors : lightColors).textPrimary);
   expect(node.querySelector('button')?.getAttribute('data-icon')).toBe('narrow-home-menu');
+  expect(node.querySelector('[data-testid="custom-toolbar-item"]')).toBeNull();
+  expect(node.querySelector('button')?.getAttribute('aria-label')).toBe('Open menu');
+  await act(async () => node.querySelector('button')!.click());
+  expect(open).toHaveBeenCalledOnce();
 });
 
 it('keeps the Duo custom menu within the native toolbar and preserves its action', async () => {
   const open = vi.fn();
   await act(async () => root.render(el(HomeStackHeader, {
-    title: el('span', null, '伙伴'), menuA11y: 'Open menu', menuTestID: 'teammates.navigation', onOpenMenu: open,
-    keepMenuTopLeft: true, attention: true,
+    title: el('span', null, 'All tasks'), menuA11y: 'Open menu', menuTestID: 'home.chromeMenu', onOpenMenu: open,
+    keepMenuTopLeft: true,
   })));
   const toolbar = node.querySelector('[data-testid="custom-toolbar-item"]')!;
-  expect(toolbar.querySelector('[data-artwork]')?.getAttribute('data-artwork')).toBe('small-dot-home-menu');
+  expect(toolbar.querySelector('[data-artwork]')?.getAttribute('data-artwork')).toBe('narrow-home-menu');
   await act(async () => toolbar.querySelector('button')!.click());
   expect(open).toHaveBeenCalledOnce();
 });

@@ -1,6 +1,6 @@
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
-import { Text, Toggle } from '@expo/ui/swift-ui';
-import { disabled, tint } from "@expo/ui/swift-ui/modifiers";
+import { Text, Toggle, Picker } from '@expo/ui/swift-ui';
+import { disabled, tint, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { useTheme } from "@/theme";
 import { useTranslation } from "react-i18next";
 import type { ModelOptionsSheetViewProps } from "./ModelOptionsSheetView";
@@ -50,6 +50,10 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
     fastEditable: p.fastEditable,
     memory: p.modelMemory,
   });
+  const setFast = (value: boolean | 'ultrafast') => {
+    if (p.selected) void p.onChangeSelectedFastMode?.(value);
+    else if (p.providerId) p.modelMemory?.setFast(p.agentKind, p.providerId, p.model.id, value);
+  };
   return (
     <>
       {meta || price ? (
@@ -65,11 +69,24 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
           ) : null}
         </Section>
       ) : null}
-      {p.fastEditable ? (
+      {p.fastEditable && p.agentKind === 'codex' && p.model.supportsUltrafastMode ? (
+        <Section>
+          <Picker
+            label={t("models.options.speed.label")}
+            selection={fast === 'ultrafast' ? 'ultrafast' : fast ? 'fast' : 'standard'}
+            onSelectionChange={(value: string) => setFast(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}
+            modifiers={[pickerStyle("menu"), disabled(!!p.disabled)]}
+          >
+            {(['standard', 'fast', 'ultrafast'] as const).map(value => (
+              <Text key={value} modifiers={[tag(value)]}>{t(`models.options.speed.${value}`)}</Text>
+            ))}
+          </Picker>
+        </Section>
+      ) : p.fastEditable ? (
         <Section>
           <Toggle
             label={t("models.options.fastMode")}
-            isOn={fast}
+            isOn={!!fast}
             onIsOnChange={(value) => {
               if (p.selected) void p.onChangeSelectedFastMode?.(value);
               else if (p.providerId)

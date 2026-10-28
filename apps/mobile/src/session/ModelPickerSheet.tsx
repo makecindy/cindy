@@ -97,7 +97,7 @@ export interface ModelPickerSheetProps {
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   loading?: boolean;
   disabled?: boolean;
   emptyHint?: string;
@@ -106,7 +106,7 @@ export interface ModelPickerSheetProps {
   onSelectProviderRow(row: ProviderModelRow): void;
   onSelectFlatModel(option: MobileModelOption): void;
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   pricing?: MobileModelPricingMap | null;
   apiKeyStatus?: DeviceApiKeyStatus;

@@ -16,12 +16,13 @@ import {
   buildDesktopDevVerdictFromWhoami,
   desktopRestartArgvConflictMessage,
   normalizeDesktopRestartArgv,
+  UI_MOCK_ARG,
   printDesktopDevVerdict,
   resolveIsolatedArg,
   restartContextFromArgv,
   SHARED_USERDATA_ARG,
 } from './desktop-dev-verdict.mjs';
-import { collectDesktopWhoamiReport } from './desktop-whoami.mjs';
+import { PROCESS_TABLE_MAX_BYTES, collectDesktopWhoamiReport } from './desktop-whoami.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -203,6 +204,17 @@ function run(command, args, options = {}) {
   });
 }
 
+/**
+ * `ps -eo …` 在装了上千个进程的机器上已经超过 spawnSync 默认的 1 MiB，溢出时
+ * status 是 null、stdout 只剩半截。上限与 desktop-whoami 共用一个常量。
+ */
+function processScanError(code, detail) {
+  return new Error(
+    `[PROCESS_SCAN_FAILED] Could not read the process table (${code}): ${detail}. ` +
+      'Refusing to guess which desktop dev processes belong to this checkout; fix the process listing and re-run.',
+  );
+}
+
 function ensureDesktopEnv() {
   const envPath = path.join(rootDir, 'apps', 'desktop', '.env');
   const examplePath = path.join(rootDir, 'apps', 'desktop', '.env.example');
@@ -293,31 +305,50 @@ export function clearDesktopDevCaches(root = rootDir, { logger = console } = {})
   return removed;
 }
 
-function listWindowsProcesses() {
-  const script = `
+/**
+ * 读全量进程表。失败时抛错而不是返回空数组：scan 不到进程时「没找到本 checkout 的
+ * dev 进程」和「真的有进程」看起来一模一样，kill 阶段会因此静默地不杀任何东西，旧实例
+ * 残留后撞单实例锁。向上抛错 + 独立的 PROCESS_SCAN_FAILED verdict 才能让人看到原因。
+ */
+export function scanRestartProcessTable({ platform = process.platform, runCommand = run } = {}) {
+  if (platform === 'win32') {
+    const script = `
 $ErrorActionPreference = 'SilentlyContinue'
 Get-CimInstance Win32_Process |
   Where-Object { $_.CommandLine } |
   Select-Object ProcessId,ParentProcessId,CommandLine |
   ConvertTo-Json -Compress
 `;
-  const result = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
-  if (result.status !== 0 || !result.stdout.trim()) return [];
-  try {
-    const parsed = JSON.parse(result.stdout);
-    return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
-      pid: Number(item.ProcessId),
-      ppid: Number(item.ParentProcessId) || 0,
-      command: String(item.CommandLine ?? ''),
-    }));
-  } catch {
-    return [];
+    const result = runCommand('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      maxBuffer: PROCESS_TABLE_MAX_BYTES,
+    });
+    if (result.error || result.status !== 0) {
+      throw processScanError(
+        result.error?.code ?? `powershell.exe exit ${result.status}`,
+        result.error?.message ?? 'powershell.exe did not return a process table',
+      );
+    }
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
+        pid: Number(item.ProcessId),
+        ppid: Number(item.ParentProcessId) || 0,
+        command: String(item.CommandLine ?? ''),
+      }));
+    } catch {
+      throw processScanError('PROCESS_LIST_UNPARSABLE', 'powershell.exe output was not valid JSON');
+    }
   }
-}
 
-function listPosixProcesses() {
-  const result = run('ps', ['-eo', 'pid=,ppid=,tty=,command=']);
-  if (result.status !== 0) return [];
+  const result = runCommand('ps', ['-eo', 'pid=,ppid=,tty=,command='], {
+    maxBuffer: PROCESS_TABLE_MAX_BYTES,
+  });
+  if (result.error || result.status !== 0) {
+    throw processScanError(
+      result.error?.code ?? `ps exit ${result.status}`,
+      result.error?.message ?? 'ps did not return a process table',
+    );
+  }
   return result.stdout
     .split('\n')
     .map((line) => line.trim())
@@ -358,7 +389,7 @@ function hasRepositoryCheckoutPath(command, checkoutPaths = repositoryWorktreePa
 // kill 作用域虽已限本 checkout，但祖先就是这份 checkout 时仍会把本脚本一起收掉。
 // 宿主是正式版或另一个 worktree 时不拦：杀不到那份祖先，隔离启动可以继续。
 function findDevAncestor() {
-  const processes = process.platform === 'win32' ? listWindowsProcesses() : listPosixProcesses();
+  const processes = scanRestartProcessTable();
   const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
   const checkoutPaths = repositoryWorktreePaths();
   let cursor = byPid.get(process.pid)?.ppid ?? 0;
@@ -444,7 +475,7 @@ function sleep(ms) {
 }
 
 function listDesktopDevProcesses() {
-  const processes = process.platform === 'win32' ? listWindowsProcesses() : listPosixProcesses();
+  const processes = scanRestartProcessTable();
   const checkoutPaths = repositoryWorktreePaths();
   return processes.filter((proc) => isRepositoryDesktopDevProcess(proc, checkoutPaths));
 }
@@ -962,6 +993,8 @@ function devEnvEntries(env) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
+    // --mock 的 UI 模拟数据开关(main/index.ts 只在隔离沙箱里认)。
+    ['XDT_UI_MOCK', env.XDT_UI_MOCK],
     // Cindy Make 测试窗口标记必须穿过 restart → dev-env → Forge，
     // 否则测试进程会退化成普通开发窗口（数据虽隔离，关闭／前台行为却不再是测试版）。
     ['XDT_CINDY_MAKE_TEST', env.XDT_CINDY_MAKE_TEST],
@@ -1207,6 +1240,10 @@ async function main() {
   let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
   const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
   if (sharedArgvConflict) throw new Error(sharedArgvConflict);
+  // --mock: dev main seeds the shared UI mock tasks into this isolated sandbox
+  // (docs/dev-rules/ui-mock-data.md). Only the flag turns it on, never a stale shell env.
+  if (argv.includes(UI_MOCK_ARG)) process.env.XDT_UI_MOCK = '1';
+  else delete process.env.XDT_UI_MOCK;
   const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
   const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
   if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {

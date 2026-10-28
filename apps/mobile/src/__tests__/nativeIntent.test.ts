@@ -136,7 +136,7 @@ describe('mobile native deep-link redirects', () => {
     }
   });
 
-  it('waits for a pending batch on cold start and preserves the warm share handoff', () => {
+  it('lets the pending-batch bridge own cold and warm share navigation', () => {
     expect(redirectSystemPath({
       path: 'cindycn://expo-sharing',
       initial: true,
@@ -144,7 +144,7 @@ describe('mobile native deep-link redirects', () => {
     expect(redirectSystemPath({
       path: '/expo-sharing?source=share-extension',
       initial: false,
-    })).toBe('/sessions/new');
+    })).toBeNull();
   });
 
   it.each(['cindy://auth?code=fixture&state=fixture', 'cindycn://auth?error=access_denied&state=fixture', '/auth?code=fixture'])('keeps the current route for warm OAuth callbacks: %s', path => {

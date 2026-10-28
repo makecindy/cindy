@@ -7,7 +7,7 @@ import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_RE
 import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
 import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
-import { captureAgentRequest, formatForwardedRequest } from '../forwardedRequest.js';
+import { captureAgentRequest } from '../forwardedRequest.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
@@ -98,7 +98,8 @@ it('marks plugin dispatch and every queue fallback with the host-only receipt', 
   const dispatch = source.slice(start, end);
   expect(dispatch).toContain("message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
-  expect(queues).toHaveLength(4);
+  // Verified create handoffs add a fifth durable entry; all must retain provenance.
+  expect(queues).toHaveLength(5);
   for (const call of queues) {
     expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
     // 插件来源随每个入队回退分支传递(含 queued-before-dispatch 竞态),排队项不丢插件身份。
@@ -246,28 +247,30 @@ it('routes trusted script follow-ups through durable authorization restoration, 
   expect(end).toBeGreaterThan(start);
   const sendToSessionInternal = vi.fn(async (params) => params);
   const request = { userText: 'Inspect only.', sessionId: 'caller', clientId: 'owner-input' };
+  const capture = vi.fn((sessionId: string, message: string) => captureAgentRequest(sessionId, message,
+    { clientId: request.clientId, authoredText: request.userText }, async () => []));
   const send = new Function(
     'captureDataOwnerBroadcastScope', 'classifySessionMessagePurpose', 'isDataOwnerBroadcastScopeCurrent',
     'sendToSessionInternal', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'coordinationInput', 'captureSessionAgentRequest',
     compile(`return ({ ${source.slice(start, end)} }).sendToSession;`),
   )(() => 'owner', async () => ({ coordination: null, delegatedContinuation: false }), () => true,
     sendToSessionInternal, AUTO_REVIEW_DELEGATED_CONTINUATION, () => { throw new Error('not coordination'); },
-    (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
-      { clientId: request.clientId, authoredText: request.userText }, async () => []));
+    capture);
   const params = { dispatcherSessionId: 'caller', targetSessionId: 'task', message: 'CI failed; repair and push the PR' };
   expect(await send({ ...params, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true })).toMatchObject({
-    message: formatForwardedRequest(request, params.message),
-    autoReviewUserText: { kind: 'delegated-continuation', request },
+    message: params.message,
+    autoReviewUserText: { kind: 'delegated-continuation' },
     forceQueue: true,
     resumeWithStoredPermissionMode: true,
   });
+  expect(capture).not.toHaveBeenCalled();
   const untrusted = await send({ ...params, AUTO_REVIEW_DELEGATED_CONTINUATION: true });
   expect(untrusted).toMatchObject({
-    message: formatForwardedRequest(request, params.message),
-    autoReviewUserText: { kind: 'agent-request', request },
+    message: params.message,
+    autoReviewUserText: { kind: 'agent-request' },
   });
   expect(untrusted).not.toHaveProperty('forceQueue');
   expect(untrusted).not.toHaveProperty('resumeWithStoredPermissionMode');
   expect(await send({ dispatcherSessionId: 'caller', message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
-    .toMatchObject({ autoReviewUserText: { kind: 'agent-request', request } });
+    .toMatchObject({ autoReviewUserText: { kind: 'agent-request' } });
 });

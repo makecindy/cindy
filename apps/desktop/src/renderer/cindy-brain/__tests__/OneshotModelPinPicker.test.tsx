@@ -74,6 +74,21 @@ describe('OneshotModelPinPicker shared A adapter', () => {
   const mount = (extra = {}) => render(<OneshotModelPinPicker defaultOptionLabel="Automatic"
     options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
 
+  it('selects an approved Pi HTTP auxiliary route and retains an unavailable saved Pi route', async () => {
+    const option: OneshotPinOption = { ...options[0], id: 'cat:go:pi:deepseek-v4.1-flash',
+      providerId: 'go', group: 'OpenCode Go', agentKind: 'pi', modelId: 'deepseek-v4.1-flash', modelName: 'DeepSeek' };
+    const onChange = vi.fn();
+    const view = mount({ options: [option], onChange });
+    expect(picker.providersOverride?.[0].models.pi?.[0].id).toBe('deepseek-v4.1-flash');
+    expect(await picker.onUnifiedSelect!({ providerId: 'go', modelId: 'deepseek-v4.1-flash', engine: 'pi', fast: false, favoriteUid: null })).toBe(true);
+    expect(onChange).toHaveBeenCalledWith(option.id);
+    view.unmount();
+    mount({ options: [], value: option.id });
+    expect(picker.currentProviderId).toBe('go');
+    expect(picker.vendorKey).toBe('pi');
+    expect(picker.sourceDisconnected).toBe(true);
+  });
+
   it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
     mount();
     expect(screen.getByTestId('shared-picker')).toBeTruthy();

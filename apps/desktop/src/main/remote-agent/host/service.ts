@@ -5,6 +5,8 @@ import { readRemoteAgentLimitsState } from './limitsStore.js';
  * 供应商分享的受邀者(其他账号)另按分享快照准入，只能用分享给它的那个供应商。
  */
 import path from 'node:path';
+import { createNativeHistoryTransfer } from '../nativeHistoryTransfer';
+import { nativeHistoryStorage } from '../nativeHistoryStorage';
 
 import { isProviderSharePeer, parseProviderSharePeer } from '@cindy/device-link';
 import type { Maker, StartSessionOptions } from '@cindy/maker-core';
@@ -18,21 +20,27 @@ import {
 import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
 import { remoteBackgroundInvoke } from '../../device-link/index.js';
 import { providerShareGuestAccess } from '../../device-link/providerShareHost.js';
+import { remoteModelAccess } from '../../device-link/remoteModelAccess.js';
 import { handleProviderShareReshare, providerShareReshareAllows } from '../../device-link/providerShareReshare.js';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.js';
 import { providerGroupReshare } from '../../provider-group/reshareRuntime.js';
 import { getProviderGroupOwnerScope } from '../../provider-group/runtime.js';
 import { readProviderGroup } from '../../provider-group/store.js';
+import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, receiveGroupFastPolicy, startGroupFastPolicySync } from '../../provider-group/fastPolicyRuntime.js';
+import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
+import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
+import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
+import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 import { remoteAgentPollerFor } from '../controller/service';
 import { getProviderShareUsageStore, installProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { currentProviderPartyUsageStore, flushProviderPartyUsage } from '../../usage/providerPartyUsageStore.js';
 import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
-import { registerGuestProviderRoute } from '../../maker-host/guest-provider-route-store.js';
-import { bindHostedSessionProvider } from '../../maker-host/session-provider-store.js';
+import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
+import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route-store.js';
 import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
-import { guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
+import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type HostedStartInput, type RemoteAgentHost, type RunUsageRecord } from './runHost';
 import { purgeClaudeHostedSessionArtifacts, purgeClaudeHostedTranscripts, purgePiHostedSubagentRuns } from './transcripts';
 import { captureGeneratedImageStorage, generatedImageErrorCode, handleGeneratedImageArtifacts, prepareGeneratedImageTransport } from '../../cindy-media/generatedImageStorage';
@@ -92,6 +100,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
 }
 
 let host: RemoteAgentHost | null = null;
+let stopFastPolicySync: (() => void) | undefined;
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
 function guestAllows(controller: string, providerId: string): boolean {
@@ -102,8 +111,14 @@ function guestAllows(controller: string, providerId: string): boolean {
 export function installRemoteAgentHost(options: { getMaker: () => Maker; userDataDir: string }): void {
   if (host) return;
   const usage = installProviderShareUsageStore(options.userDataDir);
+  const isControllerAuthorized = (controller: string): boolean => {
+    if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
+    const settings = readDeviceLinkSettings();
+    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
+  };
   // 同一份受邀者分配器同时提供匿名状态，沿用实际分配时记录的版本兼容情况。
   const groupRelay = createProviderGroupGuestRelay({
+    bindFastPolicy: bindGroupFastPolicy,
     scope: getProviderGroupOwnerScope,
     readGroup: readProviderGroup,
     connect: (agentDeviceId) => {
@@ -120,6 +135,8 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     log,
   });
   host = createRemoteAgentHost({
+    nativeHistory: createNativeHistoryTransfer(path.join(options.userDataDir, 'native-history-transfers'), nativeHistoryStorage(options.userDataDir)),
+    fastPolicy: receiveGroupFastPolicy,
     prepareImageEvent: (sessionId, event, upstream, retainForRecovery) => prepareGeneratedImageTransport(`remote:${sessionId}`, event, { upstream, retainForRecovery, invoke: remoteBackgroundInvoke }),
     imageArtifacts: async (sessionId, request) => {
       try { return await handleGeneratedImageArtifacts(sessionId, request, remoteBackgroundInvoke); }
@@ -133,47 +150,69 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         return false;
       }
     },
-    startHosted: (input) => options.getMaker().startHostedAgentSession(input.kind, hostedStartOptions(input)),
-    bindOwnerProviderRoute: bindHostedSessionProvider,
-    isControllerAuthorized: (controller) => {
-      if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
-      const settings = readDeviceLinkSettings();
-      return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
+    startHosted: async (input) => {
+      if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
+      return options.getMaker().startHostedAgentSession(input.kind, {
+        ...hostedStartOptions(input),
+        fastModePolicy: createSubscriptionFastPolicy(input.hostSessionId, () => getSessionProvider(input.hostSessionId) ?? input.options.providerId),
+      });
     },
+    forkHosted: (kind, opts) => options.getMaker().forkSdkSession(kind, opts),
+    bindOwnerProviderRoute: bindHostedSessionProvider,
+    ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
+      && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
+    isControllerAuthorized,
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
+      models: async (kind, providerId, controller) => {
+        const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+        const access = isProviderSharePeer(controller) ? providerShareGuestAccess(controller) : null;
+        if (isProviderSharePeer(controller) && access?.providerId !== providerId) return [];
+        return guestProviderModelIds(views, providerId, kind)
+          .filter(model => isControllerAuthorized(controller) && isRemoteProviderInvocationAllowed(providerId)
+            && remoteModelAccess.allows(providerId, model, access?.memberId));
+      },
+      restricted: (providerId, controller) => {
+        try {
+          const access = isProviderSharePeer(controller) ? providerShareGuestAccess(controller) : null;
+          const rule = remoteModelAccess.read(providerId, access?.memberId);
+          return rule.models !== null || rule.providerModels !== null;
+        } catch { return true; }
+      },
       resolve: async (kind, model, providerId, controller) => {
         const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+        const memberId = isProviderSharePeer(controller) ? providerShareGuestAccess(controller)?.memberId : undefined;
+        const allowed = (id: string) => isRemoteProviderInvocationAllowed(id) && remoteModelAccess.allows(id, model, memberId);
         // 受邀者：来源钉在分享的供应商上，且要它提供所选模型(启动与每次换模型都核对)。
         if (isProviderSharePeer(controller)) {
           return resolveGuestProviderId(
             views,
             providerShareGuestAccess(controller)?.providerId,
-            (id) => guestAllows(controller, id),
+            (id) => guestAllows(controller, id) && allowed(id),
             kind,
             model,
             providerId,
           );
         }
-        return resolveSharedProviderId(views, isRemoteProviderInvocationAllowed, kind, model, providerId);
+        return resolveSharedProviderId(views, allowed, kind, model, providerId);
       },
-      isAllowed: (providerId, controller) =>
-        isProviderSharePeer(controller) ? guestAllows(controller, providerId) : isRemoteProviderInvocationAllowed(providerId),
+      isAllowed: (providerId, controller, model) => {
+        const access = isProviderSharePeer(controller) ? providerShareGuestAccess(controller) : null;
+        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId) : isRemoteProviderInvocationAllowed(providerId))
+          && remoteModelAccess.allows(providerId, model ?? '', access?.memberId);
+      },
     },
     // 受邀者任务的出站登记：本机 proxy 只让它经分享的供应商、用它提供的模型。
-    bindGuestProviderRoute: async ({ kind, hostSessionId, providerId, isCurrent }) => {
-      const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
-      // 读目录期间这次启动可能已被取代：此时不再登记(登记与检查之间没有 await)。
-      if (!isCurrent()) return null;
-      const binding = registerGuestProviderRoute(hostSessionId, providerId);
-      return {
-        routeToken: binding.token,
-        modelIds: guestProviderModelIds(views, providerId, kind),
-        release: binding.release,
-      };
-    },
+    bindGuestProviderRoute: createGuestProviderRouteBinder({
+      readProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+      guestAccess: providerShareGuestAccess,
+      ownerAllowed: isControllerAuthorized,
+      providerAllowed: isRemoteProviderInvocationAllowed,
+      modelAccess: remoteModelAccess,
+    }),
     // Codex 与 Pi 的会话历史在受邀者目录里，随它整体删除；这里清 Claude Code 的项目记录与 Pi 子代理运行目录。
     purgeHostedTranscripts: async (hostSessionIds, nativeIds) => {
+      const assertCurrent = captureProviderManagementScope();
       const images = captureGeneratedImageStorage();
       for (const id of hostSessionIds) {
         for (const record of await images.journal.list(`remote:${id}`)) await images.release(record.scope, record.id);
@@ -181,6 +220,9 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
       await purgeClaudeHostedTranscripts(hostSessionIds);
       await purgeClaudeHostedSessionArtifacts(nativeIds);
       await purgePiHostedSubagentRuns(hostSessionIds, path.join(options.userDataDir, 'pi-agent-home'));
+      // These histories have been permanently revoked and purged. Ordinary
+      // task close/idle retains bindings so resuming cannot restore Fast.
+      await groupFastPolicyStore.forgetSessions(hostSessionIds, assertCurrent);
     },
     recordGuestUsage: (controller, sample) => {
       const peer = parseProviderSharePeer(controller);
@@ -199,12 +241,14 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     log,
   });
   const current = host;
+  stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
     handle: (controller, raw) => current.handle(controller, raw),
     abortAll: () => {
       void current.abortAll();
     },
     abortControllers: (match) => current.abortControllers(match),
+    revalidateModelAccess: () => current.revalidateModelAccess(),
     abortReshare: (match, reshareKey) => current.abortReshare(match, reshareKey),
     purgeControllers: (match) => current.purgeControllers(match),
     activeControllers: () => current.activeControllers(),
@@ -225,6 +269,8 @@ export function resolveRemoteAgentHostClaudeSessionId(sdkSessionId: string): str
 
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
+  stopFastPolicySync?.();
+  stopFastPolicySync = undefined;
   setRemoteAgentHandler(null);
   host?.dispose();
   host = null;

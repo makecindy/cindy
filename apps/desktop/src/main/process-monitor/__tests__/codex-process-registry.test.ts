@@ -45,4 +45,14 @@ describe('codex process registry', () => {
     disposeNew();
     expect(resolveAgentProcessRegistration(202)).toBeNull();
   });
+
+  it('登记的宿主 sessionId 随登记可查;未传时为 null,换 spawn 时随新值替换', () => {
+    registerAgentProcess(203, 'pi', 'task-host');
+    expect(resolveAgentProcessRegistration(203)?.sessionId).toBeNull();
+
+    registerAgentProcess(204, 'pi', 'task-host', 'session-a');
+    expect(resolveAgentProcessRegistration(204)?.sessionId).toBe('session-a');
+    registerAgentProcess(204, 'pi', 'task-host', 'session-b');
+    expect(resolveAgentProcessRegistration(204)?.sessionId).toBe('session-b');
+  });
 });

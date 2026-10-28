@@ -148,7 +148,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
   });
 
   it('改回被控电脑的确认标题写那台电脑的名字', () => {
-    expect(chatInputSource).toContain('device: deviceLinkDeviceName || deviceLinkDeviceId,');
+    expect(chatInputSource).toContain('device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),');
   });
 
   it('会话视图:候选电脑去掉被控电脑本身,并入全部可用分享;目录跟随 Agent 所在电脑', () => {

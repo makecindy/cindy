@@ -145,6 +145,12 @@ interface Exemption {
 
 const EXEMPTIONS: Exemption[] = [
   {
+    file: 'src/renderer/features/region-screenshot/LiveCapturePanel.tsx',
+    rule: 'inline-size',
+    reason: 'DESIGN.md §3: user-approved 64px recording countdown, centered in a 160px indicator; ordinary controls keep token sizes.',
+    signatures: [{ match: 'fontSize …64', expected: 1 }],
+  },
+  {
     file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
     rule: 'tw-weight',
     reason: 'DESIGN §3: content strong is absolute 700, including nested strong; ordinary UI weights remain capped at 600.',

@@ -10,6 +10,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   command: Terminal,
   panel: PanelRight,
   'main-view': AppWindow,
+  'task-view': PanelRight,
   code: FileCode2,
   subscribe: Radio,
   card: LayoutTemplate,

@@ -1,6 +1,6 @@
 import { youtubeVideo } from '../richAnswer';
 import { describe, expect, it } from 'vitest';
-import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, type RichPalette } from '../richAnswer';
+import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, richMediaSource, type RichPalette } from '../richAnswer';
 // Tier 1: actual stream reducer. Regression targets are partial transport, edits,
 // replay and preservation of user input; no DOM/source-string contracts.
 const line = (seq: number, op: Record<string, unknown>) => JSON.stringify({ seq, ...op }) + '\n';
@@ -55,6 +55,19 @@ describe('streaming answer documents', () => {
     expect(doc.roots).toEqual(['text']);
     expect(doc.nodes.get('text')?.props.text).toBe('Readable');
     expect(doc.issues).toBe(1);
+  });
+  it('commits later operations after a malformed or skipped sequence instead of orphaning them', () => {
+    // Real-world regression (session 3c876950): one unescaped quote in a props.text
+    // used to reject every following line via the strict +1 gate, dropping 9 of 13 ops.
+    const heading = (seq: number, id: string) => line(seq, { op: 'create', id, kind: 'heading', props: { text: id } });
+    const malformed = '{"seq":3,"op":"create","id":"bad","kind":"markdown","props":{"text":"记了"注入"缺陷"}}\n';
+    const doc = new RichAnswerStream().update(heading(1, 'a') + heading(2, 'b') + malformed + heading(4, 'c') + heading(5, 'd'));
+    expect(doc.roots).toEqual(['a', 'b', 'c', 'd']);
+    expect(doc.nodes.has('bad')).toBe(false);
+    expect(doc.issues).toBe(2); // the malformed line itself + the skipped sequence 3
+    const skipped = new RichAnswerStream().update(heading(1, 'a') + heading(3, 'c') + heading(4, 'd'));
+    expect(skipped.roots).toEqual(['a', 'c', 'd']);
+    expect(skipped.issues).toBe(1);
   });
 });
 it('restores persisted controls without overwriting input entered during a slow load', async () => {
@@ -203,6 +216,18 @@ it("keeps small-valued axes distinguishable and dense dates on the same coordina
   ).toBeLessThanOrEqual(0);
 });
 
+// Unit: RFC 3986 schemes are case-insensitive. Existing media coverage missed
+// case normalization; only the scheme may change, and unsafe schemes stay denied.
+it.each([
+  ['HTTPS://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview', 'https://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview'],
+  ['CINDY-MEDIA://blobs/AbC123.PNG?Token=Aa%2Bb#Preview', 'cindy-media://blobs/AbC123.PNG?Token=Aa%2Bb#Preview'],
+])('normalizes only the allowed scheme in %s', (src, expected) => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBe(expected);
+});
+it.each(['JaVaScRiPt:alert(1)', 'DaTa:text/html;base64,PHNjcmlwdD4='])('rejects unsafe media scheme %s', src => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBeNull();
+});
+
 // Unit: the reported YouTube watch URL used to reach the file player. Existing
 // media tests cover file URLs only; verify host routing and the navigation boundary.
 it('routes YouTube pages to canonical players without turning arbitrary URLs into embeds', () => {
@@ -224,4 +249,53 @@ it("ignores model backgrounds and color values and keeps borders on the host bor
   ).nodes.get("card")!;
   expect(richVisualStyle(card, palette)).toEqual({ padding: 20, borderWidth: 1, borderStyle: "solid", borderColor: "B" });
   expect(richVisualStyle(card)).toEqual({ padding: 20, borderWidth: 1 });
+});
+
+// Unit: new explicit send protocol. Existing local-state tests cannot detect a
+// message duplicated on double-click/remount or an invalid expression submitted.
+it('resolves only bounded message text and keeps local actions independent', async () => {
+  const { richSendText, richAction } = await import('../richAnswer');
+  const node = { id: 'send', kind: 'button' as const, children: [], props: {
+    send: { op: 'concat', args: ['Plan: ', { ref: 'choice' }] },
+    set: { choice: 'local' },
+  } };
+  expect(richSendText(node, { choice: 'Park' })).toBe('Plan: Park');
+  expect(richSendText(node, {})).toBeUndefined();
+  for (const send of ['', '   ', false, { op: 'execute', args: ['bad'] }, 'x'.repeat(16001)])
+    expect(richSendText({ ...node, props: { send } }, {})).toBeUndefined();
+  expect(richAction(node, {})).toEqual({ choice: 'local' });
+});
+
+it('holds an in-flight submission across remounts and restores accepted receipts', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  let persisted = '';
+  const storage = { read: async () => persisted, write: async (v: string) => { persisted = v; } };
+  const memory = new RichInteractionMemory(storage), controller = new RichSubmissionController(memory);
+  let finish!: (accepted: boolean) => void;
+  const messages: string[] = [];
+  const send = (text: string) => { messages.push(text); return new Promise<boolean>(resolve => { finish = resolve; }); };
+  const first = controller.submit('owner:message:send', 'Plan: Park', send);
+  await memory.load();
+  await Promise.resolve();
+  await controller.submit('owner:message:send', 'Plan: Park', send);
+  expect(controller.status('owner:message:send', 'Plan: Park')).toBe('sending');
+  expect(messages).toEqual(['Plan: Park']);
+  finish(true); await first;
+  const restored = new RichSubmissionController(new RichInteractionMemory(storage));
+  await restored.submit('owner:message:send', 'Plan: Park', send);
+  expect(messages).toEqual(['Plan: Park']);
+  expect(restored.status('owner:message:send', 'Plan: Park')).toBe('sent');
+  expect(restored.status('owner:message:send', 'Plan: Museum')).toBe('idle');
+  expect(restored.status('other-owner:message:send', 'Plan: Park')).toBe('idle');
+});
+
+it('lets the user retry a refused submission without consuming field values', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  const memory = new RichInteractionMemory(), controller = new RichSubmissionController(memory);
+  memory.set('fields', { choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => false);
+  expect(controller.status('receipt', 'Park')).toBe('failed');
+  expect(memory.get('fields')).toEqual({ choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => true);
+  expect(controller.status('receipt', 'Park')).toBe('sent');
 });

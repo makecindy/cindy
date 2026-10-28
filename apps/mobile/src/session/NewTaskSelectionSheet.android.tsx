@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, View, useWindowDimensions } from "react-native";
@@ -91,7 +92,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           p.devices.map((device) => (
             <NewTaskSelectionRow
               key={device.deviceId}
-              title={device.name || device.deviceId}
+              title={deviceDisplayName(device.deviceId, device.name, p.devices)}
               leading={icon(Laptop)}
               selected={device.deviceId === p.selectedDeviceId}
               disabled={p.busy}

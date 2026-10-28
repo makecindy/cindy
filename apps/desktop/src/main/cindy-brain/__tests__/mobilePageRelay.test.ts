@@ -35,6 +35,8 @@ describe('mobile page relay', () => {
       data: { op: 'delete', mobilePageId: 'forged' },
     });
     expect(channels[0].sent).toEqual([{ op: 'delete', mobilePageId: 'a' }]);
+    run({ op: 'post', pageId: 'a', sourceId: 'document-a', channel: 'practice', data: { mobilePageId: 'forged' } });
+    expect(channels[0].sent[1]).toEqual({ mobilePageId: 'document-a' });
     channels[0].onmessage?.({ data: { saved: true } });
     expect(run({ op: 'poll', pageId: 'a', after: 0 })).toHaveLength(1);
     expect(run({ op: 'poll', pageId: 'a', after: 0 })).toHaveLength(1);

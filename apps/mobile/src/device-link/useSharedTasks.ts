@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { isSharedTaskPeer, sharedTaskHostPeer, type SharedTaskListItem } from '@cindy/device-link';
+import { AppState } from 'react-native';
+import { isSharedTaskPeer, sharedTaskHostPeer, startSharedTaskListPoller, type SharedTaskListItem } from '@cindy/device-link';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
@@ -8,6 +9,7 @@ import type { RemoteSession } from '@/session/types';
 import { useDeviceLink } from './DeviceLinkContext';
 import { useSharedTaskApi } from './useSharedTaskApi';
 import { filterVisibleSharedTasks, leaveHiddenSharedTask } from './sharedTaskVisibility';
+import { onSharedTaskMembershipChanged } from './sharedTaskMembershipSignal';
 
 /** Shared tasks have their own account authority list, separate from paired devices. */
 export function useSharedTasks(): readonly SharedTaskListItem[] {
@@ -16,21 +18,20 @@ export function useSharedTasks(): readonly SharedTaskListItem[] {
   const { openLink, closeLink, invoke, status, sharedTaskAvailable } = useDeviceLink();
   const [owned, setOwned] = useState<{ owner: ReturnType<typeof getMobileAuthOwner>; tasks: SharedTaskListItem[] } | null>(null);
   useEffect(() => {
+    // Reconnecting reruns this effect, which reads immediately.
     if (!isAuthenticated || status !== 'online' || sharedTaskAvailable !== true) return;
     const owner = getMobileAuthOwner();
     let disposed = false;
-    let busy = false;
     const current = () => !disposed && isMobileAuthOwnerCurrent(owner);
-    const poll = async () => {
-      if (busy || !current()) return;
-      busy = true;
+    const poll = async (): Promise<number | null> => {
+      if (!current()) return null;
       try {
         const all = await api.list();
-        if (!current()) return;
+        if (!current()) return null;
         const visibleOwned = await filterVisibleSharedTasks(
           all.filter(task => task.ownerAccountId === owner.accountId), owner.accountId, { openLink, closeLink, invoke }, current, api.leave,
         );
-        if (!current()) return;
+        if (!current()) return null;
         setOwned({ owner, tasks: visibleOwned });
         const tasks = all.filter(task => task.ownerAccountId !== owner.accountId);
         const peers = new Set(tasks.map((task) => sharedTaskHostPeer(task.sharedTaskId, task.hostDeviceId)));
@@ -42,7 +43,7 @@ export function useSharedTasks(): readonly SharedTaskListItem[] {
           }
         }
         for (const task of tasks) {
-          if (!current()) return;
+          if (!current()) return null;
           const peer = sharedTaskHostPeer(task.sharedTaskId, task.hostDeviceId);
           try {
             const known = remoteSessionStore.getSessions().find(session => session.id === task.sessionId && session.deviceLinkDeviceId === peer);
@@ -51,9 +52,9 @@ export function useSharedTasks(): readonly SharedTaskListItem[] {
               continue;
             }
             await openLink(peer);
-            if (!current()) return;
+            if (!current()) return null;
             const session = await invoke<RemoteSession>(peer, 'local-db:sessions:get', [task.sessionId]);
-            if (!current()) return;
+            if (!current()) return null;
             if (session.id !== task.sessionId) continue;
             if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) {
               await leaveHiddenSharedTask(task, closeLink, api.leave, current);
@@ -62,12 +63,18 @@ export function useSharedTasks(): readonly SharedTaskListItem[] {
             remoteSessionStore.setDeviceSessions(peer, task.title, [session]);
           } catch { /* Keep offline history; only the authority list removes membership. */ }
         }
-      } catch { /* A transient authority failure is not evidence of departure. */ }
-      finally { busy = false; }
+        return all.length;
+      } catch { return null; /* A transient authority failure is not evidence of departure. */ }
     };
-    void poll();
-    const timer = setInterval(() => { void poll(); }, 5_000);
-    return () => { disposed = true; clearInterval(timer); };
+    const poller = startSharedTaskListPoller({ poll, isVisible: () => AppState.currentState === 'active' });
+    const offMembership = onSharedTaskMembershipChanged(() => poller.refresh());
+    const subscription = AppState.addEventListener('change', () => poller.visibilityChanged());
+    return () => {
+      disposed = true;
+      poller.dispose();
+      offMembership();
+      subscription.remove();
+    };
   }, [accountGeneration, api, closeLink, invoke, isAuthenticated, openLink, sharedTaskAvailable, status]);
   return isAuthenticated && owned && isMobileAuthOwnerCurrent(owned.owner) ? owned.tasks : [];
 }

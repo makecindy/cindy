@@ -14,13 +14,14 @@ interface ModelCapabilities {
   /** true = 没有任何来源声明过档位,efforts 只是占位;显式档位交给引擎裁决而不是拒绝(#5535)。 */
   effortsUnknown?: boolean;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
 }
 
 export interface SendToSessionExecutionConfig {
   agentKind: AgentKind;
   model: string;
   effort?: Effort;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   providerId?: string | null;
 }
 
@@ -28,7 +29,7 @@ export interface SendToSessionExecutionOverrides {
   agentKind?: AgentKind;
   model?: string;
   effort?: Effort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 export type SendToSessionExecutionConfigResult =
@@ -228,7 +229,9 @@ export function resolveSendToSessionExecutionConfig(params: {
   const supportsFast = route.provider.fastModels
     ? route.provider.fastModels.includes(model)
     : modelCapabilities.supportsFastMode === true;
-  if (overrides.fastMode === true && !supportsFast) {
+  const supportsUltrafast = agentKind === 'codex'
+    && route.provider.ultrafastModels?.includes(model) === true;
+  if (overrides.fastMode && (!supportsFast || (overrides.fastMode === 'ultrafast' && !supportsUltrafast))) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',
@@ -236,7 +239,9 @@ export function resolveSendToSessionExecutionConfig(params: {
     };
   }
   const fastMode = overrides.fastMode
-    ?? (routeChanged ? source.fastMode && supportsFast : source.fastMode);
+    ?? (source.fastMode === 'ultrafast'
+      ? (supportsFast && supportsUltrafast ? source.fastMode : false)
+      : routeChanged ? (supportsFast ? source.fastMode : false) : source.fastMode);
   const effort = overrides.effort !== undefined || routeChanged
     ? normalizedEffort.effort
     : source.effort;

@@ -3,7 +3,7 @@
 // auth-server 回调 cindycn://auth / cindy://auth 与 Share Extension 的
 // cindycn://expo-sharing / cindy://expo-sharing 都没有对应路由页,默认会落到
 // expo-router 的 +not-found(「Unmatched Route」白屏)。这里在冷启动时把认证回跳重定向到首页，热回跳保留当前页面；分享跳到
-// 新建任务页；分享 payload 由根级 IncomingShareBridge 独立领取。
+// 目标选择页由根级 IncomingShareBridge 在确认待领取 payload 后统一打开。
 //
 // 实际的 PKCE code 交换**不依赖路由**:由 src/auth/AuthContext.tsx 的 Linking.addEventListener /
 // getInitialURL 监听器独立捕获原始 URL 并完成(见其 handleDeepLink)。本文件只负责别让路由 404。
@@ -45,7 +45,8 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     if (pathname === '/auth') return initial ? '/' : null;
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.
-    if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';
+    // Warm callbacks must not race that bridge with a second navigation.
+    if (pathname === '/expo-sharing') return initial ? '/' : null;
     // Invalid invitations must not leave secrets in router state or diagnostics.
     if (pathname === '/shared-session' || pathname === '/shared-task/join') {
       clearSharedTaskInvitationIntent();

@@ -11,8 +11,8 @@ describe('buildSessionNotifyPayload', () => {
     expect(first.sender?.id).toMatch(/^[a-f0-9]{64}$/);
     expect(buildSessionNotifyPayload({ ...opts, selfDeviceId: 'd2' }).sender?.id).not.toBe(first.sender?.id);
     expect(buildSessionNotifyPayload({ ...opts, sessionId: 's2' }).sender?.id).toBe(first.sender?.id);
-    expect(buildSessionNotifyPayload({ ...opts, kind: 'needs-reply' }).sender).toBeUndefined();
-    expect(buildSessionNotifyPayload({ ...opts, kind: 'error' }).sender).toBeUndefined();
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'needs-reply' }).sender).toEqual(first.sender);
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'error' }).sender).toEqual(first.sender);
     expect(buildSessionNotifyPayload({ ...opts, teammateBotId: undefined }).sender).toBeUndefined();
   });
   const base = {
@@ -155,7 +155,7 @@ it('uses final-message identity for completed replies, allowing distinct replies
 it('sends plain text to APNs, not Markdown or image paths', () => {
   const payload = { sessionId: 'bot', title: 'Cindy', kind: 'done' as const, selfDeviceId: 'home', fallbackBody: 'New reply' };
   expect(buildSessionNotifyPayload({ ...payload, detail: '**Report** [ready](https://example.com) `a_b`' }).body).toBe('Report ready a_b');
-  expect(buildSessionNotifyPayload({ ...payload, detail: '![private](/private/file.png)' }).body).toBe('New reply');
+  expect(buildSessionNotifyPayload({ ...payload, detail: '![private](/private/file.png)' }).body).toBe('private');
 });
 
 describe('buildBotGroupNotifyPayload', () => {

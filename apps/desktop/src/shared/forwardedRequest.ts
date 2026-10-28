@@ -4,6 +4,7 @@ import zhCN from '../renderer/i18n/locales/zh-CN/common.json';
 import zhTW from '../renderer/i18n/locales/zh-TW/common.json';
 import ja from '../renderer/i18n/locales/ja/common.json';
 import ko from '../renderer/i18n/locales/ko/common.json';
+export { verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
 
 // The same locale resources serve persisted text and host task context.
 const FORWARDED_REQUEST_COPY = {
@@ -19,6 +20,12 @@ export interface ForwardedRequestSource {
   userText: string | null;
   sessionId?: string;
   clientId?: string;
+  /**
+   * The sending host admitted this relay as the owner's request or its accepted continuation.
+   * Only then does the receiver treat userText as the owner's
+   * request for this task. Optional on the wire; older hosts drop or never send it.
+   */
+  ownerVerified?: true;
 }
 
 /** Kept under the existing protected, non-human input receipt. */
@@ -33,7 +40,8 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (source.userText === null) return { userText: null };
   if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
     || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
-  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId };
+  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
+    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 云端伙伴（docs/product-rules/cloud-companions.md §3.1）在手机上的纯逻辑：哪一行能在主力电脑离线时
  * 打开云端对话、同一伙伴只在主力电脑名下列一行（没见过的主力电脑补一行离线入口）、换电脑后的等待与超时。
@@ -6,7 +7,8 @@
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { RemoteResourceAvatar } from '@cindy/device-link';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { chatCursor, chatMessageText, type ChatActor, type ChatMessage, type ChatSetHomeResult } from './chatServerClient';
+import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
+import { chatCursor, chatMessageAttachments, chatMessageText, type ChatActor, type ChatMessage, type ChatSetHomeResult } from './chatServerClient';
 
 /** How long the phone waits for the new main computer to list the companion. */
 export const CLOUD_SWITCH_TIMEOUT_MS = 90_000;
@@ -50,7 +52,7 @@ export function cloudCompanionRows(items: readonly HostedRemoteCollectionItem[],
     const deviceId = actor.homeDeviceId!;
     if (listed.some(row => row.item.ref.kind === 'bot' && row.item.ref.id === actor.externalId && row.host.deviceId === deviceId)) return [];
     const ref = { collectionId: TEAMMATES, kind: 'bot', id: actor.externalId };
-    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceNames.get(deviceId) ?? deviceId },
+    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceDisplayName(deviceId, deviceNames.get(deviceId)) },
       item: { ref, display: { title: actor.name, avatar: cloudAvatar(actor) }, links: [], revision: CLOUD_ROW_REVISION } }];
   });
   return [...listed, ...added];
@@ -72,9 +74,24 @@ export function cloudHomeTargets<T extends { deviceId: string; online: boolean }
   return targets.filter(target => target.online && target.deviceId !== home && target.deviceId !== self);
 }
 
-export interface CloudMessage { id: string; fromCompanion: boolean; text: string; createdAt: number }
+export interface CloudMessage { id: string; fromCompanion: boolean; text: string; attachments: BotGroupAttachment[]; createdAt: number }
 
-/** Oldest first, deduplicated; the companion's actor wrote its replies, everyone else is the owner. */
+const PRIVATE_IMAGE = /!\[[^\]\n]*\]\((?:cindy-media|xdt-image|xdt-video|file):\/\/[^)\s]*\)/gi;
+
+/**
+ * A reply names the images it produced with the computer's private addresses, which the phone cannot open;
+ * the same files already arrive as attachments. Drops those image links, leaving http(s) images, links and code.
+ */
+export function stripPrivateImageLinks(text: string): string {
+  const parts = text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/);
+  const cleaned = parts.map((part, index) => (index % 2 ? part : part.replace(PRIVATE_IMAGE, ''))).join('');
+  return cleaned === text ? text : cleaned.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Oldest first, deduplicated; the companion's actor wrote its replies, everyone else is the owner.
+ * A message with only attachments stays; one with neither text nor attachments is dropped.
+ */
 export function cloudCompanionMessages(messages: readonly ChatMessage[], actorId: string): CloudMessage[] {
   const unique = [...new Map(messages.map(message => [message.id, message])).values()]
     .filter(message => !message.deleted && !message.threadRootId && message.origin !== 'system');
@@ -86,8 +103,12 @@ export function cloudCompanionMessages(messages: readonly ChatMessage[], actorId
     return left < right ? -1 : left > right ? 1 : 0;
   });
   return unique.flatMap(message => {
-    const text = chatMessageText(message).trim();
-    return text ? [{ id: message.id, fromCompanion: message.authorId === actorId, text, createdAt: Date.parse(message.createdAt) }] : [];
+    const fromCompanion = message.authorId === actorId;
+    const raw = chatMessageText(message);
+    const text = (fromCompanion ? stripPrivateImageLinks(raw) : raw).trim();
+    const attachments = chatMessageAttachments(message);
+    return text || attachments.length
+      ? [{ id: message.id, fromCompanion, text, attachments, createdAt: Date.parse(message.createdAt) }] : [];
   });
 }
 

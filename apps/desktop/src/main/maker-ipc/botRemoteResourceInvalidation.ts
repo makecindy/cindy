@@ -12,11 +12,13 @@ import {
 } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { botSessionLinks } from '../localDb/schema.js';
+import { botDelegations, botProfiles, botSessionLinks } from '../localDb/schema.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
 } from '../appSessionState.js';
+import { readTaskResponsibilities } from './botTaskResponsibility.js';
 
 const log = createLogger('maker-ipc:bot-remote-resource');
 
@@ -106,5 +108,68 @@ export function scheduleBotRemoteResourceChangedForSession(
           error: error instanceof Error ? error.message : String(error),
         });
       });
+  });
+}
+
+/**
+ * A background task the teammate started is one it looks after: once the task exists,
+ * remote task rows need the roster's follow links again.
+ */
+export function scheduleBotRemoteResourceChangedForDelegation(delegationId: string, childSessionId: string | null): void {
+  if (!childSessionId) return;
+  let ownerScope: string;
+  try {
+    ownerScope = activeOwnerScopeKey();
+  } catch {
+    return;
+  }
+  void getDbClient().drizzle
+    .select({ botId: botDelegations.requestingBotId })
+    .from(botDelegations)
+    .where(eq(botDelegations.id, delegationId))
+    .limit(1)
+    .then(([row]) => {
+      if (!row?.botId || !isOwnerScopeCurrent(ownerScope)) return;
+      broadcastBotRemoteResourceChanged(row.botId);
+    })
+    .catch((error: unknown) => {
+      log.warn('resolve teammate delegation invalidation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
+/**
+ * Roster rows link only open tasks, so archiving or restoring a task changes the rows of the
+ * teammates that started it or took it over. Extra rows re-read harmlessly; a missed one
+ * would leave the mark stale.
+ */
+export function scheduleBotRemoteResourceChangedForFollowedSession(sessionId: string): void {
+  let ownerScope: string;
+  try {
+    ownerScope = activeOwnerScopeKey();
+  } catch {
+    return;
+  }
+  void (async () => {
+    const db = getDbClient().drizzle;
+    const [started, bots] = await Promise.all([
+      db.select({ botId: botDelegations.requestingBotId }).from(botDelegations)
+        .where(eq(botDelegations.childSessionId, sessionId)),
+      db.select({ id: botProfiles.id }).from(botProfiles).where(eq(botProfiles.status, 'active')),
+    ]);
+    const botIds = new Set(started.map((row) => row.botId));
+    const root = ownerScopedUserDataPath();
+    await Promise.all(bots.filter(({ id }) => !botIds.has(id)).map(async ({ id }) => {
+      // A damaged store follows nothing (readFollowedTaskIds), so there is no row to refresh.
+      const records = await readTaskResponsibilities(root, id).catch(() => ({}));
+      if (Object.hasOwn(records, sessionId)) botIds.add(id);
+    }));
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    for (const botId of botIds) broadcastBotRemoteResourceChanged(botId);
+  })().catch((error: unknown) => {
+    log.warn('resolve followed task invalidation failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
 }

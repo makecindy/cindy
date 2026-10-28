@@ -19,7 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => {
   const updateSetCalls: Array<Record<string, unknown>> = [];
-  // 验证 SELECT 结果队列。若队列为空，makeUpdateChain.set 会自动把"UPDATE 成功"行
+  // 验证读回结果队列。若队列为空，makeUpdateChain.set 会自动把"UPDATE 成功"行
   // 填进来（userSendAt/updatedAt = 本次 ts），模拟正常路径。
   // 需要非默认结果（no-op/MAX updatedAt）的测试先 push 目标行再调函数。
   const selectResults: Array<Array<Record<string, unknown>>> = [];
@@ -35,7 +35,7 @@ const h = vi.hoisted(() => {
       // 自动填充"UPDATE 落地"场景（验证 SELECT 返回该行，广播触发）。
       // 若测试预先 push 了结果，队列非空，跳过自动填充，使用预设值。
       if (selectResults.length === 0 && typeof payload.userSendAt === 'number') {
-        selectResults.push([{ userSendAt: payload.userSendAt, updatedAt: payload.userSendAt }]);
+        selectResults.push([{ userSendAt: payload.userSendAt, lastActivityAt: payload.userSendAt, updatedAt: payload.userSendAt }]);
       }
       return chain;
     };
@@ -44,6 +44,7 @@ const h = vi.hoisted(() => {
       const committed = error === undefined ? Promise.resolve(undefined) : Promise.reject(error);
       return Object.assign(committed, {
         returning: () => committed.then(() => {
+          if (typeof update.userSendAt === 'number') return selectResults.shift() ?? [];
           if (!route.row) return [];
           Object.assign(route.row, update);
           return [{ ...route.row }];
@@ -208,7 +209,7 @@ describe('cross-agent committed model projection', () => {
     };
     type Snapshot = {
       agentKind: string; model: string; providerId: string | null; effort: SessionRuntimeProfile['effort'];
-      fastMode: boolean; runtimeEffective: SessionRuntimeProfile; agentSwitchIntent: PublicAgentSwitchIntent | null;
+      fastMode: SessionRuntimeProfile['fastMode']; runtimeEffective: SessionRuntimeProfile; agentSwitchIntent: PublicAgentSwitchIntent | null;
     };
     let snapshot: Snapshot = { ...initial, agentKind: makerToDbAgentKind(initial.agentKind), runtimeEffective: initial, agentSwitchIntent: null };
     const buffer = createSessionSnapshotPatchBuffer<Snapshot>();
@@ -315,6 +316,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     h.selectResults.push([
       {
         userSendAt: atMs,
+        lastActivityAt: atMs,
         updatedAt: atMs,
         source,
         workingDir,
@@ -345,6 +347,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     h.selectResults.push([
       {
         userSendAt: atMs,
+        lastActivityAt: atMs,
         updatedAt: atMs,
         workingDir: '/repo',
         ...fields,
@@ -360,6 +363,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     h.selectResults.push([
       {
         userSendAt: atMs,
+        lastActivityAt: atMs,
         updatedAt: atMs,
         workingDir: '/repo',
         source: 'desktop',
@@ -394,12 +398,12 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     // 本机所有窗口都收到(被控端自己的 renderer 据此把会话重归项目下)。
     expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-1',
-      patch: { userSendAt: iso, updatedAt: iso },
+      patch: { userSendAt: iso, lastActivityAt: iso, updatedAt: iso },
     });
     // device-link tap:经 topic 路由把权威 userSendAt 推给订阅 sessions 的控制端。
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-1',
-      patch: { userSendAt: iso, updatedAt: iso },
+      patch: { userSendAt: iso, lastActivityAt: iso, updatedAt: iso },
     });
   });
 
@@ -420,9 +424,9 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     expect(typeof payload.patch.updatedAt).toBe('string'); // ISO
   });
 
-  it('atomic guard: UPDATE no-op 时（验证 SELECT 返回空）跳过广播，不向 renderer 发送过时值', async () => {
+  it('atomic guard: UPDATE no-op 时（RETURNING 返回空）跳过广播，不向 renderer 发送过时值', async () => {
     const atMs = 1_700_000_000_000;
-    // 预设空结果：WHERE 条件为假，UPDATE 为 no-op，SELECT 找不到行。
+    // 预设空结果：WHERE 条件为假，UPDATE 为 no-op，RETURNING 没有行。
     h.selectResults.push([]);
     await touchUserSendInDb('sess-noop', atMs);
 
@@ -432,17 +436,18 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
   });
 
-  it('MAX updatedAt: 广播使用 SELECT 读回的实际 updatedAt，防止 finishedAt 被 firedAt 回退', async () => {
+  it('MAX updatedAt: 广播使用 RETURNING 读回的实际 updatedAt，防止 finishedAt 被 firedAt 回退', async () => {
     const firedAt = 1_700_000_000_000;
     const finishedAt = firedAt + 5_000; // run 完成路径已将 updatedAt 推进到 finishedAt
-    // 模拟 MAX(updated_at, firedAt) = finishedAt 的 SELECT 结果。
-    h.selectResults.push([{ userSendAt: firedAt, updatedAt: finishedAt }]);
+    // 模拟 MAX(updated_at, firedAt) = finishedAt 的 RETURNING 结果。
+    h.selectResults.push([{ userSendAt: firedAt, lastActivityAt: firedAt, updatedAt: finishedAt }]);
     await touchUserSendInDb('sess-max', firedAt);
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-max',
       patch: {
         userSendAt: new Date(firedAt).toISOString(),
+        lastActivityAt: new Date(firedAt).toISOString(),
         updatedAt: new Date(finishedAt).toISOString(), // 广播 finishedAt，不回退到 firedAt
       },
     });

@@ -146,6 +146,15 @@ describe('scheduleToCamel', () => {
 });
 
 describe('scheduleCreateToRow', () => {
+  // Unit: preserve the three location states across storage and partial edits.
+  it.each([undefined, '', 'shared:owner'])('round-trips Agent location %j without changing prior fields', (modelAgentDeviceId) => {
+    const original = baseSchedule({ modelAgentDeviceId, modelAgentKind: 'codex', model: 'remote-model', providerId: 'remote-provider' });
+    const row = scheduleCreateToRow(original);
+    const renamed = scheduleToCamel({ ...row, ...schedulePatchToRow({ name: 'renamed' }) } as ScheduleRowLike);
+    expect(renamed).toMatchObject({ ...original, name: 'renamed' });
+    const cleared = scheduleToCamel({ ...row, ...schedulePatchToRow({ modelAgentDeviceId: undefined }) } as ScheduleRowLike);
+    expect(cleared.modelAgentDeviceId).toBeUndefined();
+  });
   it('round-trips an explicit model Harness and clears it without changing the legacy agent', () => {
     const original = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', providerId: 'custom', fastMode: true });
     const row = scheduleCreateToRow(original);

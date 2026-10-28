@@ -104,10 +104,16 @@
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "任務完成通知",
-    "taskDoneHint": "電腦上的任務完成、出錯或等你回覆時推送通知，並附上最新回覆。",
-    "permissionDenied": "通知權限未開啟，請在 iOS「設定 → 通知 → {{appName}}」中允許。",
-    "unregisterQueued": "已關閉，連網後自動完成註銷。"
+    "taskDone": "訊息與任務通知",
+    "taskDoneHint": "收到新訊息，或任務完成、出錯、等你回覆時通知你。",
+    "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
+    "unregisterQueued": "已關閉，連網後自動完成註銷。",
+    "preview": "顯示訊息內容預覽",
+    "background": "在背景保持訊息連線",
+    "backgroundActive": "正在背景接收訊息",
+    "backgroundStop": "停止接收",
+    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
+    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",

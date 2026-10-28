@@ -233,7 +233,7 @@ export interface BridgeSessionPrefs {
   /** 用户选定的思维深度档(maker 6 档,handler 内收敛到 Responses 4 档);缺省走默认档。 */
   reasoningEffort?: string;
   /** Fast 模式;仅 provider 声明了 fastServiceTier 时映射成 service_tier。 */
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /** createResponsesHandler 的 handle 入参 —— 与 compat-proxy LocalRequestHandler 的 args 同形 + prefs。 */

@@ -61,6 +61,15 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
+  it('retains lane ownership and creator avatars across cold starts', async () => {
+    const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    const companion = { id: 'cindy-default', role: 'routine' };
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+  });
+
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 
@@ -131,6 +140,7 @@ describe('mobileHomeListCache', () => {
         source: 'scheduler',
         orcaRole: 'lead',
         worktreePath: '/repo/demo/.claude/worktrees/x',
+        remoteHostId: 'ssh-build-machine',
       }),
     ]);
 
@@ -140,6 +150,7 @@ describe('mobileHomeListCache', () => {
     expect(cached.source).toBe('scheduler');
     expect(cached.orcaRole).toBe('lead');
     expect(cached.worktreePath).toBe('/repo/demo/.claude/worktrees/x');
+    expect(cached.remoteHostId).toBe('ssh-build-machine');
     expect(cached.hasDraft).toBe(true);
     expect(cached.hasPausedQueue).toBe(true);
     // 显示菜单「任务信息」的 Token / 费用在行内展示,冷启动也要有。

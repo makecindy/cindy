@@ -30,6 +30,8 @@ export interface HomeViewPreferences {
   manualProjectOrder: string[];
   /** 项目 key 带设备与路径,只对保存它的账号身份有效(见 projectFilterOwner)。 */
   projectFilter: HomeProjectFilter;
+  teammateFilter: HomeProjectFilter;
+  teammateFilterOwner: string;
   /** 保存项目筛选时的账号身份(homeNavigationOwner);读取时与当前身份不符则视为不筛选。 */
   projectFilterOwner: string;
   vendorFilter: HomeVendorFilter;
@@ -51,6 +53,7 @@ export interface HomeViewPreferencePatch {
   manualProjectOrder?: string[];
   /** 写项目筛选必须同时给 owner,否则无法判断它属于哪个账号。 */
   projectFilter?: { owner: string; value: HomeProjectFilter };
+  teammateFilter?: { owner: string; value: HomeProjectFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
   viewMode?: HomeListViewMode;
@@ -71,9 +74,10 @@ export async function readHomeViewPreferences(owner: string): Promise<HomeViewPr
   } catch {
     return emptyPreferences();
   }
-  return owner && preferences.projectFilterOwner === owner
-    ? preferences
-    : { ...preferences, projectFilter: 'all', projectFilterOwner: '' };
+  return { ...preferences,
+    ...(!owner || preferences.projectFilterOwner !== owner ? { projectFilter: 'all' as const, projectFilterOwner: '' } : {}),
+    ...(!owner || preferences.teammateFilterOwner !== owner ? { teammateFilter: 'all' as const, teammateFilterOwner: '' } : {}),
+  };
 }
 
 // save 是 read-modify-write:并发调用会拿到同一份旧快照互相覆盖(后落盘者丢掉先落盘的 patch),
@@ -90,7 +94,7 @@ export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
 /**
  * 只持久化用户 override(docs/dev-rules/configuration-and-overrides.md §2):把 patch 合并进已存的
  * 稀疏记录,未写过的字段不落盘,读取时按当下默认值补齐,默认值演进时未自定义的用户自动跟随。
- * 三个筛选的 'all' 即「不筛选」= 默认,写入时删除字段(「重置筛选」由此恢复跟随默认);
+ * 筛选的 'all' 即「不筛选」= 默认,写入时删除字段(「重置筛选」由此恢复跟随默认);
  * 其余字段一经用户显式选择就保留为 override,即使恰好等于当前默认值。
  * 旧版本写下的完整记录无法区分是否自定义,按规则不猜测,原样当作 override。
  */
@@ -111,13 +115,15 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
   assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
   assign('viewMode', patch.viewMode);
   assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
-  if (patch.projectFilter) {
-    if (patch.projectFilter.value === 'all') {
-      delete record.projectFilter;
-      delete record.projectFilterOwner;
+  for (const field of ['projectFilter', 'teammateFilter'] as const) {
+    const filter = patch[field];
+    if (!filter) continue;
+    if (filter.value === 'all') {
+      delete record[field];
+      delete record[`${field}Owner`];
     } else {
-      record.projectFilter = [...patch.projectFilter.value];
-      record.projectFilterOwner = patch.projectFilter.owner;
+      record[field] = [...filter.value];
+      record[`${field}Owner`] = filter.owner;
     }
   }
   for (const field of ['vendorFilter', 'lastActivityFilter'] as const) {
@@ -163,6 +169,8 @@ function emptyPreferences(): HomeViewPreferences {
     projectOrder: 'activity',
     manualProjectOrder: [],
     projectFilter: 'all',
+    teammateFilter: 'all',
+    teammateFilterOwner: '',
     projectFilterOwner: '',
     vendorFilter: 'all',
     lastActivityFilter: 'all',
@@ -191,6 +199,8 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
     projectFilter: normalizeProjectFilter(record.projectFilter),
+    teammateFilter: normalizeProjectFilter(record.teammateFilter),
+    teammateFilterOwner: readString(record.teammateFilterOwner) ?? '',
     projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),
     lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
@@ -237,7 +247,6 @@ function readStringList(value: unknown): string[] {
 /** Explicit navigation overrides are separate from legacy device/display preferences.
  * Identity is account + host + resource, never a cached canonical Session or a name.
  */
-export type HomeMode = 'tasks' | 'teammates';
 export interface LastTeammateIdentity {
   deviceId: string;
   collectionId: string;
@@ -245,8 +254,10 @@ export interface LastTeammateIdentity {
   resourceId: string;
 }
 export interface HomeNavigationPreferences {
-  mode?: HomeMode;
+  /** Preselects the computer when creating another teammate; launch never reopens it. */
   lastTeammate?: LastTeammateIdentity;
+  /** The task home's teammate section: rows (false/absent) or the avatar strip (true). */
+  teammatesCollapsed?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -257,8 +268,9 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
   const identityFields = ['deviceId', 'collectionId', 'resourceId'] as const;
   const validLast = last?.resourceKind === 'bot' && identityFields.every((field) =>
     typeof last[field] === 'string' && last[field].trim().length > 0 && last[field].length <= 256);
+  // The retired tasks/teammates `mode` is dropped here, so the next write clears it.
   return {
-    ...(record.mode === 'tasks' || record.mode === 'teammates' ? { mode: record.mode } : {}),
+    ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
       deviceId: last!.deviceId as string,
       collectionId: last!.collectionId as string,
@@ -278,7 +290,7 @@ export async function readHomeNavigationPreferences(owner: string): Promise<Home
 
 export function saveHomeNavigationPreferences(
   owner: string,
-  patch: { mode?: HomeMode; lastTeammate?: LastTeammateIdentity | null },
+  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean },
 ): Promise<void> {
   if (!owner) return Promise.resolve();
   // Share the existing serialized writer; each operation captures its own owner.

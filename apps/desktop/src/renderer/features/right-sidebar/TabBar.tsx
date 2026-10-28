@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, MessagesSquare, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, LayoutGrid, ListTodo, Pin, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Wrench } from 'lucide-react';
+import { Activity, MessagesSquare, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, ListTodo, Pin, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -153,10 +153,10 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'side-chat': MessagesSquare,
   'background-tasks': ListTodo,
   routines: ListTodo,
-  'bot-workbench': LayoutGrid,
   'resource-usage': Activity,
   'cindy-make': Wrench,
   'plugin-view': Puzzle,
+  'plugin-task': Puzzle,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -171,10 +171,10 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'side-chat': 'chat.sideChat.title',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   routines: 'routines.title',
-  'bot-workbench': 'bots.workbench.title',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
   'cindy-make': 'settings.cindyMake.title',
   'plugin-view': 'rightSidebar.tabs.kinds.pluginView',
+  'plugin-task': 'rightSidebar.tabs.kinds.pluginTask',
 };
 
 /**

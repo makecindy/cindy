@@ -7,7 +7,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getAllKeys: vi.fn(async () => [...disk.keys()]),
   multiRemove: vi.fn(async (keys: string[]) => { keys.forEach((key) => disk.delete(key)); }),
 } }));
-import { cacheChatRoster, readCachedChatRoster, cacheRemoteResourceHome, cacheRemoteResourceItems, clearRemoteResourceCache, isRemoteResourceUnread, markRemoteResourceRead, readRemoteResourceSnapshot, remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { cacheChatRoster, readCachedChatRoster, cacheRemoteResourceHome, cacheRemoteResourceItems, cachedTaskFollowers, clearRemoteResourceCache, isRemoteResourceUnread, markRemoteResourceRead, readRemoteResourceSnapshot, remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { chatReadAt, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
 const rows = (deviceId: string, lastReplyAt: number) => [{
   key: `${deviceId}:bot:writer`, host: { deviceId, deviceName: deviceId },
@@ -39,6 +39,41 @@ it('does not restore routines from an old offline snapshot while retaining compa
   expect(snapshot.items.teammates).toHaveLength(1);
   await cacheRemoteResourceHome('alice', home);
   expect((await readRemoteResourceSnapshot('alice')).home.map((item) => item.id)).toEqual(['teammates']);
+});
+// Task rows draw the teammate mark from the roster's `following` links (desktop useSessionFollowers).
+// The same task id on another computer, or a link the host withdrew, must never keep a mark.
+it('finds the teammates following a task on its own computer, by name, and drops withdrawn links', async () => {
+  const follower = (deviceId: string, id: string, title: string, sessionIds: string[]) => ({
+    key: JSON.stringify([deviceId, 'teammates', 'bot', id]), host: { deviceId, deviceName: deviceId },
+    item: { ref: { collectionId: 'teammates', kind: 'bot', id }, display: { title }, revision: '1',
+      links: sessionIds.map((sessionId) => ({ rel: 'following', target: { kind: 'session' as const, sessionId } })) },
+  });
+  await cacheRemoteResourceItems('alice', 'teammates', [
+    follower('home', 'lizi', 'LiZi', ['task']), follower('home', 'cindy', 'Cindy', ['task']), follower('office', 'dash', 'Dash', ['other']),
+  ]);
+  expect(cachedTaskFollowers('alice', 'home', 'task').map((row) => row.item.ref.id)).toEqual(['cindy', 'lizi']);
+  expect(cachedTaskFollowers('alice', 'office', 'task')).toEqual([]);
+  expect(cachedTaskFollowers('bob', 'home', 'task')).toEqual([]);
+  await cacheRemoteResourceItems('alice', 'teammates', [follower('home', 'lizi', 'LiZi', []), follower('home', 'cindy', 'Cindy', ['task'])]);
+  expect(cachedTaskFollowers('alice', 'home', 'task').map((row) => row.item.ref.id)).toEqual(['cindy']);
+});
+// A task row can ask before the disk cache answers on a cold start (#7066 review).
+it('tells rows that read before the saved roster loaded once it arrives', async () => {
+  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({ items: { teammates: [{
+    key: JSON.stringify(['home', 'teammates', 'bot', 'cindy']), host: { deviceId: 'home', deviceName: 'home' },
+    item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'cindy' }, display: { title: 'Cindy' }, revision: '1',
+      links: [{ rel: 'following', target: { kind: 'session', sessionId: 'task' } }] },
+  }] } }));
+  expect(cachedTaskFollowers('alice', 'home', 'task')).toEqual([]);
+  const listener = vi.fn();
+  const unsubscribe = subscribeRemoteResourceCache(listener);
+  try {
+    await readRemoteResourceSnapshot('alice');
+    expect(listener).toHaveBeenCalledOnce();
+    expect(cachedTaskFollowers('alice', 'home', 'task').map((row) => row.item.ref.id)).toEqual(['cindy']);
+  } finally {
+    unsubscribe();
+  }
 });
 it('keeps device-qualified read positions and treats only later host replies as unread', async () => {
   await cacheRemoteResourceItems('alice', 'teammates', [...rows('home', 100), ...rows('office', 100)]);

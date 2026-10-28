@@ -25,7 +25,7 @@ export interface CindyAutoRoute {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 /** 该路由的 Auto 已被服务端挪到另一家 Cindy 来源时返回新来源，否则 null。 */

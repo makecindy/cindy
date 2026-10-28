@@ -7,6 +7,7 @@ const larkMocks = vi.hoisted(() => {
   const request = vi.fn(async () => ({ code: 0 }));
   const list = vi.fn<() => Promise<{ code: number; data: { items: Array<{
     message_id: string; thread_id: string; chat_id: string; deleted?: boolean;
+    msg_type?: string; body?: { content: string };
   }> } }>>(async () => ({ code: 0, data: { items: [] } }));
   const create = vi.fn(async (payload: { params: unknown; data: { content: string } }) => {
     void payload;
@@ -31,13 +32,13 @@ const larkMocks = vi.hoisted(() => {
     },
   );
   const deleteMessage = vi.fn(
-    function (this: unknown): Promise<{ code?: number; msg?: string; data?: {} }> {
+    function (this: unknown): Promise<{ code?: number; msg?: string; data?: object }> {
       deleteOwners.push(this);
       return Promise.resolve({ data: {} });
     },
   );
   const patch = vi.fn(
-    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+    async (): Promise<{ code?: number; msg?: string; data?: object }> => ({ data: {} }),
   );
   const getMessage = vi.fn(
     function (
@@ -49,6 +50,7 @@ const larkMocks = vi.hoisted(() => {
       data?: {
         items?: Array<{
           message_id?: string;
+          upper_message_id?: string;
           thread_id?: string;
           chat_id?: string;
           msg_type?: string;
@@ -154,10 +156,13 @@ describe('feishu outbound lane routing', () => {
       await handle.finalize('finished');
       expect(larkMocks.patch).toHaveBeenCalledTimes(3);
       for (const client of larkMocks.patch.mock.contexts) expect(client).toBe(creator);
-      expect(larkMocks.patch).toHaveBeenLastCalledWith({
+      expect(larkMocks.create.mock.contexts.at(-1)).toBe(creator);
+      expect(larkMocks.create).toHaveBeenCalledTimes(1);
+      expect(larkMocks.patch).toHaveBeenLastCalledWith(expect.objectContaining({
         path: { message_id: handle.messageId },
-        data: { content: expect.stringContaining('finished') },
-      });
+        data: expect.objectContaining({ content: expect.stringContaining('finished') }),
+      }));
+      expect(larkMocks.request).not.toHaveBeenCalled();
     },
   );
 
@@ -175,6 +180,48 @@ describe('feishu outbound lane routing', () => {
       method: 'DELETE',
       url: `open-apis/im/v1/messages/${handle.messageId}`,
     });
+  });
+
+  it.each([false, true])('final stays in its lane and does not consume the next queued turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    expect(larkMocks.reply.mock.calls[0][0].path).toEqual({ message_id: 'om_first' });
+    await handle.finalize('answer');
+    if (!thread) expect(larkMocks.reply.mock.calls[0][0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+    expect(larkMocks.patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      path: { message_id: handle.messageId },
+      data: expect.objectContaining({ content: expect.stringContaining('answer') }),
+    }));
+    expect(larkMocks.request).not.toHaveBeenCalled();
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
+  });
+
+  it.each([false, true])('failed final edit falls back in the same lane without taking the next turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    larkMocks.patch.mockRejectedValueOnce(new Error('card no longer editable'));
+    await handle.finalize('answer');
+    if (thread) {
+      expect(larkMocks.reply.mock.calls[1][0].path).toEqual({ message_id: 'om_first' });
+      expect(larkMocks.create).not.toHaveBeenCalled();
+    } else {
+      expect(larkMocks.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        params: { receive_id_type: 'chat_id' },
+        data: expect.objectContaining({ receive_id: 'oc_chat', content: expect.stringContaining('answer') }),
+      }));
+    }
+    expect(larkMocks.request).not.toHaveBeenCalled();
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
   });
 
   it('sends p2p messages via open_id unchanged', async () => {
@@ -433,7 +480,7 @@ describe('feishu outbound lane routing', () => {
     });
   });
 
-  it('renders replied media as context markers without downloading it as trigger attachments', async () => {
+  it('retains quoted media references for screened host downloads', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -452,9 +499,100 @@ describe('feishu outbound lane routing', () => {
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
       replyContext: {
         author: 'Alice', text: '[图片]',
-        unavailableAttachments: ['引用图片：仅提供原消息记录，未下载文件内容'],
       },
+      attachments: [{ kind: 'image', imageKey: 'img_parent', messageId: 'om_parent_image' }],
     });
+  });
+
+  // Regression: message.get returns envelope + children; items[0] loses all content.
+  // Unit tier, through the production reply/history entry; nested/foreign/deleted
+  // children distinguish membership and resource-owner semantics, not source text.
+  it('expands only descendants of the requested merged forward and preserves image ownership', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_foreign', chat_id: 'oc_other', msg_type: 'text', body: { content: '{"text":"private"}' } },
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward', body: { content: 'Merged and Forwarded Message' } },
+      { message_id: 'om_text', upper_message_id: 'om_bundle', msg_type: 'text', body: { content: '{"text":"first"}' }, sender: { sender_type: 'user', sender_name: 'Alice' } },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+      { message_id: 'om_image', upper_message_id: 'om_nested', msg_type: 'image', body: { content: '{"image_key":"img_child"}' } },
+      { message_id: 'om_deleted', upper_message_id: 'om_bundle', deleted: true, msg_type: 'text', body: { content: '{"text":"deleted"}' } },
+      { message_id: 'om_unrelated', upper_message_id: 'om_elsewhere', msg_type: 'text', body: { content: '{"text":"unrelated"}' } },
+      { message_id: 'om_cross_chat', upper_message_id: 'om_bundle', chat_id: 'oc_other', msg_type: 'text', body: { content: '{"text":"cross-chat"}' } },
+    ] } });
+    const result = await outbound.resolveReplyMessage('om_bundle', 'oc_group1');
+    expect(result?.replyContext.text).toBe('[合并转发消息]\n[Alice] first\n[user] [合并转发消息]\n[user] [图片]\n[user] cross-chat');
+    expect(result?.attachments).toEqual([{ kind: 'image', imageKey: 'img_child', messageId: 'om_image' }]);
+  });
+
+  it('expands nested envelopes whose descendants require another read', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_nested', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_nested', msg_type: 'text', body: { content: '{"text":"nested content"}' } },
+    ] } });
+    expect((await outbound.resolveReplyMessage('om_bundle', 'oc_group1'))?.replyContext.text).toContain('nested content');
+  });
+
+  it('includes merged-forward text and child resource ownership in group history', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_history', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward', body: { content: 'Merged and Forwarded Message' } },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_history', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_history', msg_type: 'image', body: { content: '{"image_key":"img_history"}' } },
+    ] } });
+    const page = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1' });
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0]).toMatchObject({
+      messageId: 'om_history', text: '[合并转发消息]\n[user] [图片]',
+      attachments: [{ kind: 'image', imageKey: 'img_history', messageId: 'om_child' }],
+    });
+  });
+
+  // Unit regressions r4374812162, through the production history entry: excluded
+  // envelopes must cause no reads, and nested reads must share the turn's budget.
+  it('excludes the trigger and other topics before expanding merged history', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_trigger', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+      { message_id: 'om_other_topic', chat_id: 'oc_group1', thread_id: 'omt_other', msg_type: 'merge_forward' },
+      { message_id: 'om_kept', chat_id: 'oc_group1', thread_id: '', msg_type: 'text', body: { content: '{"text":"retained"}' } },
+    ] } });
+    const result = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', excludeMessageId: 'om_trigger' });
+    expect(result.messages.map((item) => item.text)).toEqual(['retained']);
+    expect(larkMocks.getMessage).not.toHaveBeenCalled();
+  });
+
+  it('shares merged-history reads across nested envelopes and pages', async () => {
+    const mergeForwardReadBudget = { remaining: 2 };
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_nested', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_nested', msg_type: 'text', body: { content: '{"text":"nested record"}' } },
+    ] } });
+    const first = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', mergeForwardReadBudget });
+    expect(first.messages[0]?.text).toContain('nested record');
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_older_bundle', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+      { message_id: 'om_text', chat_id: 'oc_group1', thread_id: '', msg_type: 'text', body: { content: '{"text":"older text"}' } },
+    ] } });
+    const second = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', pageToken: 'older', mergeForwardReadBudget });
+    expect(second.messages.map((item) => item.text)).toEqual(['older text', '[合并转发消息：读取预算已用完]']);
+    expect(larkMocks.getMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an unreadable merged forward visible rather than dropping it', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_empty', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+    ] } });
+    expect((await outbound.resolveReplyMessage('om_empty', 'oc_group1'))?.replyContext.text).toContain('未能读取子消息');
   });
 
   it('extracts markdown from a replied bot v2 interactive card', async () => {

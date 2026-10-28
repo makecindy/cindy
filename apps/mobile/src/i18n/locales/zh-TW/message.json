@@ -69,6 +69,7 @@
     "copyStateCopied": "已複製",
     "copyStateFailed": "複製失敗",
     "copyStateCopy": "複製",
+    "copyCode": "複製程式碼",
     "thinkingHidden": "思考內容已隱藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -103,6 +104,7 @@
     "subagentSummary": "Subagent 小結",
     "agentSwitchLabel": "已從 {{from}} 切換到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，檢視交接內容",
+    "sessionFallbackPill": "已用摘要接續",
     "sessionResumedPill": "已續接原任務",
     "handoffContentDesc": "交接內容——切換時傳送給新引擎的上下文摘要（不計入對話記錄，僅在此展示）",
     "handoffContentDescEnglishSource": "交接內容——切換時傳送給新引擎的上下文摘要，原文為英文（不計入對話記錄，僅在此展示）",
@@ -171,7 +173,9 @@
     "diffEditCount": "{{n}} 處編輯",
     "groupSentNamed": "從群聊「{{name}}」傳送",
     "groupSent": "從群聊傳送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "選取文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -232,6 +236,10 @@
     "cancel": "取消",
     "edit": "編輯",
     "steer": "插話",
+    "steerQueued": "尚未送達，訊息仍保留在佇列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延後一位",
+    "cancelSend": "取消傳送",
     "collapseQueued": "收起排隊訊息",
     "expandRemainingQueued": "展開剩餘 {{n}} 條排隊訊息",
     "collapse": "收起",
@@ -240,7 +248,15 @@
     "sendingMessage": "傳送中的訊息：{{text}}",
     "uploadingAttachments": "附件上傳中 {{uploaded}}/{{total}}",
     "delete": "刪除",
-    "retry": "重試"
+    "retry": "重試",
+    "notSent": "未傳送",
+    "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
+    "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
+    "waitingForComputer": "等電腦連上後傳送",
+    "waitingForNetwork": "等網路恢復後傳送",
+    "queued": "排隊中",
+    "retryImage": "重新上傳這張圖片",
+    "waitingMessage": "等待傳送的訊息：{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -294,6 +310,7 @@
     "agentSwitchLocation": "Agent 改到 {{device}} 執行",
     "agentSwitchLocationThisComputer": "Agent 改回這台電腦執行",
     "agentSwitchLocationOtherComputer": "Agent 改到另一台電腦執行",
+    "agentSwitchLocationQuotaRebalance": "這個帳號的配額更該先用",
     "learnStarted": "技能學習已啟動",
     "learnStartedBody": "蒸餾在電腦端後臺進行，完成後請到電腦端檢視並評審技能草案。",
     "learnFailed": "技能學習未能啟動",
@@ -396,6 +413,10 @@
     "skillUpdated": "已更新技能：{{title}}"
   },
   "richAnswer": {
+    "send": "傳送訊息",
+    "sending": "正在傳送…",
+    "sent": "已提交",
+    "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "openVideoSource": "開啟原影片",
     "calculationUnavailable": "此項暫時無法計算。",

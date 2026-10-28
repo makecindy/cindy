@@ -11,15 +11,22 @@ import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
+  browserUploadDirectory,
   setBrowserControlRuntimeConfig,
   type BrowserProxyRoute,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
+import type { BrowserMcpDeps } from '@cindy/mcps';
+
 import { createLogger } from '../logger.js';
+import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
+import { createRecipeFileBroker } from './browser-backend/rsb-webview-upload-policy.js';
+import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
-import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
+import { loadUserBrowserRecipes, userRecipesDir, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
+import { browserExperienceStore } from '../browser-recipes/experience.js';
 import {
   BrowserBackendController,
   BrowserBackendHealthService,
@@ -60,9 +67,12 @@ import {
   readCopiedLoginsCdpPort,
   wrapRuntimeWithRealProfile,
   wrapRuntimeWithProfileLifecycleQueue,
+  activeManagedProfileName,
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
 import { hasSecretPages, isSecretPage } from '../input-handoff/secretTaint.js';
 import {
@@ -437,7 +447,9 @@ async function applyBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
 }
 
 export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
-  return browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled));
+  return backendController.runLifecycle(() =>
+    browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled)),
+  );
 }
 
 /**
@@ -447,17 +459,45 @@ export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
  * BrowserControlRuntime contract so the desktop host does not depend on an
  * upstream product API or product-facing name.
  */
+function browserRecipeSecretId(key: string): string {
+  if (!['spotify', 'xiaoyuzhou'].includes(key)) throw new Error('Unknown browser recipe credential');
+  return `browser-recipe-${key}`;
+}
+
 export function getBrowserMcpDeps(): {
+  experienceStore: NonNullable<BrowserMcpDeps['experienceStore']>;
   getRuntime(): BrowserControlRuntime;
+  resolveProfile: NonNullable<BrowserMcpDeps['resolveProfile']>;
+  getBackendScope: NonNullable<BrowserMcpDeps['getBackendScope']>;
+  resolveScreenshot: NonNullable<BrowserMcpDeps['resolveScreenshot']>;
+  compressInlineImage: NonNullable<BrowserMcpDeps['compressInlineImage']>;
   setBackend(kind: BackendKind): Promise<BackendKind>;
   supportsResourceDownloads(): boolean;
   supportsSemanticQueries(): boolean;
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  recipeSecrets: { read(key: string): string | null; write(key: string, value: string): boolean };
+  recipeFiles: NonNullable<BrowserMcpDeps['recipeFiles']>;
   pageReadsRestricted(target: { profile?: string; targetId?: string }): Promise<boolean>;
 } {
   return {
+    experienceStore: browserExperienceStore(userRecipesDir()),
+    recipeFiles: async (sessionId) => {
+      const sessionRoots = sessionId ? await resolveSessionUploadRoots(sessionId) : [];
+      const roots = sessionId ? [
+        artifactSessionRoot(nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'), sessionId),
+        ...sessionRoots,
+      ] : [];
+      // Both backends keep invocation copies under their existing upload root.
+      // A checked path grants metadata inspection, never subsequent writes.
+      return createRecipeFileBroker(roots, sessionRoots, sessionId ? (backendController.kind === 'external'
+        ? artifactSessionRoot(browserUploadDirectory, sessionId) : roots[0]) : undefined);
+    },
+    recipeSecrets: {
+      read: (key) => genericOAuthSecretIo.readStrict(browserRecipeSecretId(key)),
+      write: (key, value) => genericOAuthSecretIo.write(browserRecipeSecretId(key), value),
+    },
     setBackend: async (kind) => {
       await setActiveBrowserBackendKind(kind);
       return backendController.getCurrentBackendKind();
@@ -471,6 +511,14 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    resolveProfile: (profile) => backendController.kind === 'rsb-webview'
+      ? 'rsb' : profile || activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
+    getBackendScope: () => backendController.getBackendScope(),
+    resolveScreenshot: (result) =>
+      resolveBrowserScreenshot(result, {
+        runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,
+      }),
+    compressInlineImage,
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     // 代输入: pause page-state reads on a tab still showing a page where the owner typed a secret.

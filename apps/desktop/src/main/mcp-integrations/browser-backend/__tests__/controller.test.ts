@@ -32,6 +32,87 @@ function fakeBackend(kind: BackendKind): BrowserBackend & {
 }
 
 describe('BrowserBackendController', () => {
+  // Review regression, unit: cached page evidence must expire both when a
+  // transition is admitted and when its backend actually becomes active.
+  it('exposes stable scope identities across queued, applied and return transitions', async () => {
+    const external = fakeBackend('external');
+    let release!: () => void;
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    const initial = controller.getBackendScope();
+    expect(controller.getBackendScope()).toEqual(initial);
+    const changed = controller.setKind('rsb-webview', () => new Promise<void>(resolve => { release = resolve; }));
+    const queued = controller.getBackendScope();
+    expect(queued.lifecycle).not.toBe(initial.lifecycle);
+    expect(queued.backend).toBe(initial.backend);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    release();
+    await changed;
+    const applied = controller.getBackendScope();
+    expect(applied.lifecycle).not.toBe(queued.lifecycle);
+    expect(applied.backend).not.toBe(queued.backend);
+    await controller.setKind('external');
+    const returned = controller.getBackendScope();
+    expect(returned.backend).toBe(initial.backend);
+    expect(returned.lifecycle).not.toBe(initial.lifecycle);
+  });
+
+  // Same failure family as backend switching: consent changes must invalidate
+  // evidence even when kind/profile later return to their original values.
+  // Unit/host protocol: queued and settled changes differ; ordinary page work
+  // does not change the scope. This distinguishes the previous partial fix.
+  it.each(['resolve', 'reject'] as const)('scopes profile consent changes without another queue or backend selection (%s)', async outcome => {
+    const profileQueue = createBrowserProfileLifecycleQueue();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    let enabled = true;
+    const initial = controller.getBackendScope();
+    await profileQueue.run(async () => undefined); // Ordinary page work.
+    expect(controller.getBackendScope()).toEqual(initial);
+    let release!: () => void;
+    const change = controller.runLifecycle(() => profileQueue.run(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      if (outcome === 'reject') throw new Error('stop failed');
+      enabled = false;
+      return enabled;
+    }));
+    const queued = controller.getBackendScope();
+    expect(queued.lifecycle).not.toBe(initial.lifecycle);
+    expect(queued.backend).toBe(initial.backend);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const settled = outcome === 'reject'
+      ? expect(change).rejects.toThrow('stop failed') : expect(change).resolves.toBe(false);
+    let releaseLater!: () => void;
+    const later = controller.runLifecycle(() => profileQueue.run(() => new Promise<void>(resolve => { releaseLater = resolve; })));
+    const bothQueued = controller.getBackendScope();
+    release();
+    await settled;
+    expect(controller.getBackendScope().lifecycle).not.toBe(queued.lifecycle);
+    const firstSettled = controller.getBackendScope();
+    await vi.waitFor(() => expect(releaseLater).toBeTypeOf('function'));
+    releaseLater();
+    await later;
+    expect(firstSettled.lifecycle).not.toBe(bothQueued.lifecycle);
+    expect(controller.getBackendScope().lifecycle).not.toBe(firstSettled.lifecycle);
+    expect(enabled).toBe(outcome === 'reject');
+    await controller.runLifecycle(() => profileQueue.run(async () => { enabled = true; }));
+    expect(enabled).toBe(true);
+    expect(controller.getBackendScope().lifecycle).not.toBe(initial.lifecycle);
+    expect(controller.getBackendScope().backend).toBe(initial.backend);
+    // A later backend choice cannot be undone by a profile setter that
+    // captured the earlier kind; the lifecycle operation never selects it.
+    await Promise.all([
+      controller.setKind('rsb-webview'),
+      controller.runLifecycle(() => profileQueue.run(async () => { enabled = false; })),
+    ]);
+    expect(controller.kind).toBe('rsb-webview');
+    expect(enabled).toBe(false);
+  });
+
   it('serializes reset cleanup after outgoing profile disposal without deadlocking', async () => {
     const queue = createBrowserProfileLifecycleQueue();
     const external = fakeBackend('external');

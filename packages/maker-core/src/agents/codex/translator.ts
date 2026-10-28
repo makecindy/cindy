@@ -93,6 +93,8 @@ export interface CodexRuntimeState {
   generationDurationMs: number;
   /** Model time sampled with the latest accepted output usage. */
   generationOutputDurationMs: number;
+  /** Native-turn output for speed, independent of the billing ledger lifecycle. */
+  generationOutputTokens: number;
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
@@ -142,6 +144,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
     generationOutputDurationMs: 0,
+    generationOutputTokens: 0,
     generationTurnId: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -190,13 +193,15 @@ function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
-export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed = false): void {
   stopCodexGenerationHeartbeat(rt);
-  rt.tokenSpeed.reset();
+  if (preserveSpeed) rt.tokenSpeed.startSegment();
+  else rt.tokenSpeed.reset();
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
   rt.generationOutputDurationMs = 0;
+  rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
   rt.generationTimingReliable = true;
 }
@@ -221,7 +226,7 @@ export function beginCodexGenerationTurn(
   startedAt = Date.now(),
 ): void {
   if (rt.generationTurnId !== turnId) {
-    resetCodexGenerationTiming(rt);
+    resetCodexGenerationTiming(rt, true);
     rt.generationTurnId = turnId;
   }
   if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {

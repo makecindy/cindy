@@ -6,6 +6,7 @@ import {
 import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
 import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { i18n } from '@/i18n';
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 
 export {
   formatRemoteError,
@@ -104,9 +105,11 @@ export function describeAgentAuthError(error: string | null | undefined): string
   });
 }
 
-/** 自动恢复类连接错误保留结构化 marker 做状态分类，展示文案则复用 Mobile i18n。 */
-function localizedConnectionRecoveryCopy(error: unknown): string | null {
+/** 结构化运行错误保留 marker 做状态分类，展示文案复用 Mobile i18n。 */
+function localizedRuntimeErrorCopy(error: unknown): string | null {
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
+  const agentCode = parseAgentErrorCode(formatted)?.code;
+  if (agentCode && i18n.exists(`session.remoteError.${agentCode}`)) return i18n.t(`session.remoteError.${agentCode}`);
   if (formatted.includes('DEVICE_OFFLINE')) return i18n.t('session.menu.aiRenameOffline');
   if (formatted.includes('NOT_CONNECTED')) return i18n.t('session.screen.networkReconnecting');
   return null;
@@ -121,7 +124,7 @@ export function humanizeRemoteError(error: unknown): string {
   if (isDeviceUnresponsiveRemoteError(error)) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
-  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  const recoveryCopy = localizedRuntimeErrorCopy(error);
   if (recoveryCopy) return recoveryCopy;
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
   const localized = localizedStableRemoteError(formatted);
@@ -169,7 +172,7 @@ export function describeRemoteError(error: string | null): string | null {
   if (error.includes('DEVICE_UNRESPONSIVE')) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
-  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  const recoveryCopy = localizedRuntimeErrorCopy(error);
   if (recoveryCopy) return recoveryCopy;
   const agentAuth = describeAgentAuthError(error);
   if (agentAuth) return agentAuth;

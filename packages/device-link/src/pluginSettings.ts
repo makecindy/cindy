@@ -2,6 +2,7 @@ export const PLUGIN_SETTINGS_ACTION = "settings-page";
 const oauthId = (value: unknown): value is string =>
   typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
 export type PluginSettingsCommand =
+  | { kind: "document"; epoch: number }
   | { kind: "fetch"; path: string; method: string; body?: string }
   | { kind: "asset"; path: string; offset: number }
   | { kind: "subscribe"; channels: string[] }
@@ -53,6 +54,9 @@ export function parsePluginSettingsRequest(
     /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(name);
   let valid = false;
   switch (c.kind) {
+    case "document":
+      valid = exact(["kind", "epoch"]) && Number.isSafeInteger(c.epoch) && (c.epoch as number) > 0;
+      break;
     case "fetch":
       valid =
         exact([

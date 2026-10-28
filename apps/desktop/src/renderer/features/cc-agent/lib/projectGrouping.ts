@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * projectGrouping — CC Agent Sidebar 分组算法（纯函数）
  * ---------------------------------------------------------------------------
@@ -10,10 +11,8 @@
  *                    组内 sessions 先按 status (active 在 archived 之上) 再按 sortTime desc
  *
  * 时间轴：
- *   - 排序唯一字段是 `sortTime = userSendAt ?? updatedAt`
- *     · userSendAt = "用户最近一次按下发送" 的瞬间，由 sendMessage 入口同步 bump，
- *       不会被 model/effort/title 等字段类改动污染
- *     · 老数据 / 未发过消息的草稿 userSendAt 可能为 null —— 回落到 updatedAt 兜底
+ *   - 排序时间为 `lastActivityAt ?? userSendAt ?? updatedAt`，按接活与交还结果推进。
+ *     老数据无活动时间时保留原有回退；字段修改和流式输出不推进新时钟。
  *
  * 草稿识别（归未分类）：
  *   - workingDir 缺失 OR
@@ -38,7 +37,11 @@
  * 全部纯函数；输入为空 / 异常 → 静默返回合理默认。
  */
 
+import { extractDisplayName, splitPathSegments, tailJoin } from '../../../../shared/projectDisplayName';
+export { extractDisplayName } from '../../../../shared/projectDisplayName';
+
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import { resolveProjectAliasForSessions, type ProjectAliasesByDevice } from '@cindy/maker-shared/project-alias-sync';
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import {
@@ -89,7 +92,7 @@ export interface ProjectNode {
   segments: number;
   /** 该 Project 下所有 session，已按 status 然后 sortTime desc 排序 */
   sessions: Session[];
-  /** 组内任意 session 的最大 sortTime（userSendAt ?? updatedAt），用于 Project 间排序 */
+  /** 组内任意 session 的最大活动时间，用于 Project 间排序 */
   latestActivityAt: string;
   /** 来自本地持久项目目录；即使当前视图没有匹配会话也应保留项目节点。 */
   isPersistentLocal?: boolean;
@@ -115,6 +118,17 @@ export interface BotGroupNode {
   latestActivityAt: string;
 }
 
+/** Filtering/sorting must not discard grouping's structural reuse when the
+ * actual rows and their order are unchanged. Compare objects, never just IDs:
+ * fresh titles/status and same-ID tasks on other devices must still propagate.
+ */
+export function withProjectSessions(project: ProjectNode, sessions: Session[]): ProjectNode {
+  return sessions.length === project.sessions.length &&
+    sessions.every((session, index) => session === project.sessions[index])
+    ? project
+    : { ...project, sessions };
+}
+
 /** 分组时用来认伙伴的最小信息。渲染层从 botStore 的会话投影现拼。 */
 export interface BotSessionOwner {
   botId: string;
@@ -134,6 +148,9 @@ export interface ProjectGroupsResult {
 
 export interface GroupSessionsOptions {
   projectAliases?: ReadonlyMap<string, string> | Record<string, string>;
+  remoteProjectAliases?: ProjectAliasesByDevice;
+  /** Complete members before status/activity/pinning filters; used only for host alias identity. */
+  projectAliasMembers?: readonly Session[];
   /**
    * Build a project catalogue that also contains individually pinned sessions.
    * The normal sidebar keeps this false so a pinned conversation only appears
@@ -143,6 +160,8 @@ export interface GroupSessionsOptions {
   includePinnedInProjects?: boolean;
   /** Resource catalogues include created project sessions even before their first message. */
   includeDraftsInProjects?: boolean;
+  /** Keep the new-task draft in its selected project, including first-send handoff. */
+  provisionalDraftTaskId?: string | null;
   /** 与会话生命周期解耦的本地项目目录，用于保留零会话项目。 */
   persistentLocalProjects?: readonly PersistentLocalProject[];
   /** 本地路径身份比较所需的平台；Windows 盘符与 UNC 路径忽略大小写。 */
@@ -285,58 +304,6 @@ export function getProjectIdentity(session: Session): ProjectIdentity | null {
 
 /* ============================== displayName ============================== */
 
-/**
- * 根据 workingDir 与全集，提取最短可识别的 displayName。
- * 算法（按 prod_spec F-PJ-2 扩展）：
- *   1. 取 basename
- *   2. 若全集内无其他 workingDir 的 basename 与之相同 → 1 段
- *   3. 否则逐步加上父目录段，直到不冲突；若完整路径仍冲突，则接受完整路径
- *
- * minSegments：从该段数起步搜索（默认 1）。groupSessions 在"先创建保留 basename"
- * 规则下，会把后创建的同名 Project 传 minSegments=2，强制至少加上 parent 段。
- */
-export function extractDisplayName(
-  workingDir: string,
-  allWorkingDirs: readonly string[],
-  minSegments: number = 1,
-): { name: string; segments: number } {
-  const segs = splitPathSegments(workingDir);
-  const ownSegs = segs;
-  const ownBasename = ownSegs[ownSegs.length - 1] ?? workingDir;
-
-  // 收集其它 workingDir 的逐段拆分
-  const others: string[][] = [];
-  let maxSegments = Math.max(1, ownSegs.length, minSegments);
-  for (const w of allWorkingDirs) {
-    if (w === workingDir) continue;
-    const parts = splitPathSegments(w);
-    if (parts.length > 0) {
-      others.push(parts);
-      maxSegments = Math.max(maxSegments, parts.length);
-    }
-  }
-
-  for (let n = minSegments; n <= maxSegments; n += 1) {
-    const myTail = tailJoin(ownSegs, n);
-    const collision = others.some((parts) => tailJoin(parts, n) === myTail);
-    if (!collision) {
-      return { name: myTail || ownBasename, segments: n };
-    }
-  }
-
-  const fallback = tailJoin(ownSegs, maxSegments) || ownBasename;
-  return { name: fallback, segments: maxSegments };
-}
-
-function splitPathSegments(workingDir: string): string[] {
-  return workingDir.split('/').filter(Boolean);
-}
-
-// 取从尾部往前 N 段（如 segments=2 → `parent/basename`）。
-function tailJoin(parts: readonly string[], n: number): string {
-  return parts.slice(Math.max(0, parts.length - n)).join('/');
-}
-
 interface DisplayNameIndex {
   tailCounts: Map<number, Map<string, number>>;
   workingDirCounts: Map<string, number>;
@@ -425,16 +392,12 @@ const toMs = (iso: string | null | undefined): number => {
 };
 
 /**
- * 排序时间轴：以 userSendAt（用户最近一次按下发送）为主键。
- * - userSendAt 存在时只认它 —— agent 回复 / /clear 等只 bump
- *   updatedAt 的路径不再重排列表，会话顺序稳定跟随"用户上次发送"。
- * - userSendAt == null 时回落到 updatedAt：兼容 touchUserSendInDb 失败的 scheduler fire
- *   与从未发送过的草稿会话，避免这类会话因取 0 沉到列表最底。
+ * 排序与显示时间共用换手时钟；没有新字段的存量任务保留原有回退。
  */
 const sortTimeMs = (s: Session): number =>
-  s.userSendAt != null ? toMs(s.userSendAt) : toMs(s.updatedAt);
+  toMs(getSessionListActivityAt(s));
 
-const sortTimeIso = (s: Session): string => s.userSendAt ?? s.updatedAt;
+const sortTimeIso = (s: Session): string => getSessionListActivityAt(s);
 
 export const compareSessionsBySortTimeDesc = (a: Session, b: Session): number =>
   sortTimeMs(b) - sortTimeMs(a);
@@ -494,7 +457,7 @@ export function pinnedSessionIdsInDisplayOrder(sessions: readonly Session[]): st
  * 排序合约：
  *   - pinned          按 status → pinnedAt desc
  *   - dialogues       按 status → sortTime desc
- *   - unclassified    按 status → sortTime desc (sortTime = userSendAt ?? updatedAt)
+ *   - unclassified    按 status → sortTime desc (sortTime = lastActivityAt ?? userSendAt ?? updatedAt)
  *   - projects        按 latestActivityAt desc；组内 sessions 按 status → sortTime desc
  *
  * 草稿判定：workingDir 缺失 OR
@@ -535,6 +498,18 @@ export function groupSessions(
   const aliases = normalizeProjectAliases(options.projectAliases, localPlatform);
   if ((!sessions || sessions.length === 0) && !options.persistentLocalProjects?.length) {
     return { pinned: [], dialogues: [], bots: [], unclassified: [], projects: [] };
+  }
+
+  const aliasMembersByProject = new Map<string, Session[]>();
+  for (const member of options.projectAliasMembers ?? sessions) {
+    if (member.status === 'deleted' || member.workspaceKind === 'dialogue' || member.orcaRole === 'worker'
+      || !member.deviceLinkDeviceId || options.botOwnerBySessionId?.has(member.id)) continue;
+    const dir = normalizeWorkingDir(member.workingDir);
+    if (!dir) continue;
+    const key = deviceLinkProjectKey(member.deviceLinkDeviceId, dir);
+    const members = aliasMembersByProject.get(key);
+    if (members) members.push(member);
+    else aliasMembersByProject.set(key, [member]);
   }
 
   // 1. Pinned —— active 在 archived 之上，同状态按 pinnedAt desc
@@ -596,7 +571,9 @@ export function groupSessions(
     const dir = normalizeWorkingDir(s.workingDir);
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
-    const isAutoPlacedSession = s.source === 'scheduler' || s.source === 'plugin';
+    // 新建页里正在输入、还没发送的任务：已经选好项目，就放在那个项目下。
+    const isAutoPlacedSession =
+      s.source === 'scheduler' || s.source === 'plugin' || s.id === options.provisionalDraftTaskId;
     if (
       dir == null ||
       (!options.includeDraftsInProjects &&
@@ -798,7 +775,10 @@ export function groupSessions(
 
     let name: string;
     let segments: number;
-    const alias = aliases.get(projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey);
+    const alias = aliases.get(projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey)
+      ?? (options.remoteProjectAliases
+        ? resolveProjectAliasForSessions(aliasMembersByProject.get(projectKey) ?? sess, options.remoteProjectAliases)
+        : null);
     if (alias) {
       name = alias;
       segments = 0;

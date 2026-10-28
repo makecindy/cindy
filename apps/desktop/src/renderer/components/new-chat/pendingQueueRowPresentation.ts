@@ -1,4 +1,4 @@
-import { isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -93,7 +93,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
       : isScheduler || isSession || isPlugin
-        ? queueItemVisibleText(entry)
+        ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           : entry.text,

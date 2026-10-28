@@ -1,7 +1,9 @@
 import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
   | 'pluginUsage.execute'
@@ -56,9 +58,12 @@ export type DbTxName =
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
+  | 'bots.reconcileLanePermission'
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
+  | 'bots.createRoutineLane'
+  | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
   | 'botGroups.setMembers'
@@ -186,7 +191,7 @@ export interface ForkSessionArgs {
     contextTokens: number;
     contextWindow: number;
     contextWindowRuntime?: number | null;
-    fastMode: boolean | number;
+    fastMode: boolean | 'ultrafast' | number;
     clearedAt: number | null;
     pinnedAt: number | null;
     userSendAt: number | null;
@@ -273,7 +278,8 @@ export interface OrcaRemoteWorkerProxySessionSeed {
   model: string;
   effort: string | null;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+  agentDeviceId?: string | null;
 }
 
 export interface OrcaUpsertWorkerArgs {
@@ -418,7 +424,7 @@ export interface ContextRebuildArgs {
     model: string;
     providerId: string | null;
     effort: string | null;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
   };
 }
 
@@ -553,7 +559,7 @@ export interface SessionImportShareSessionRow {
   totalCostUsd: number;
   contextTokens: number;
   contextWindow: number;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planModeEnabled: boolean;
   agentKind: string;
   /** Orca 角色标记:协同包导入时 lead='lead'、Worker='worker';普通导入缺省(NULL)。 */
@@ -666,6 +672,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** A saved model choice supersedes automation restores in the same commit. */
+  clearScheduledModelBaseline?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
@@ -716,7 +724,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     agentDeviceId?: string | null;
     parentSessionId?: string | null;
     extraDirs: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     source: string;
     createdAt: number;
     updatedAt: number;
@@ -835,12 +843,26 @@ export interface BotGroupsCreateLaneArgs {
 export interface BotGroupsCreateLaneResult {
   sessionId: string;
   created: boolean;
+  /** Existing runtimes must follow a canonical permission repaired during creation. */
+  permissionRepairCanonicalSessionId?: string;
 }
 
 /** 伙伴接管的个人 IM 群 / 话题专线(`role = 'channel'`)。 */
 export interface BotsCreateChannelLaneArgs {
   botId: string;
   routeKey: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+/**
+ * 主人私聊里的话题(`role = 'thread'`)。根消息必须是这位伙伴当前主任务里可见的
+ * user / assistant 消息;`routeKey` 由调用方按 `botDmThreadRouteKey` 生成。
+ */
+export interface BotsCreateThreadLaneArgs {
+  botId: string;
+  routeKey: string;
+  rootSessionId: string;
+  rootClientId: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
 }
 
@@ -1019,7 +1041,7 @@ export interface ImRotateSessionArgs {
     model: string;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     agentKind: string;
     source: string;
     providerId: string | null;
@@ -1393,6 +1415,7 @@ export type DbTxArgsByName = {
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
   'pluginUsage.execute': PluginUsageTransaction;
+  'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
@@ -1421,9 +1444,12 @@ export type DbTxArgsByName = {
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
+  'bots.reconcileLanePermission': { sessionId: string };
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
+  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
+  'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
@@ -1487,6 +1513,7 @@ export type DbTxResultByName = {
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
   'pluginUsage.execute': PluginUsageHandle | null;
+  'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
@@ -1519,9 +1546,12 @@ export type DbTxResultByName = {
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
+  'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
+  'bots.createRoutineLane': BotGroupsCreateLaneResult;
+  'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;

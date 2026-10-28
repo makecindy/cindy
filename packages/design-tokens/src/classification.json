@@ -278,8 +278,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -292,8 +292,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -1254,16 +1254,16 @@
       "id": "login-callback-title",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-body",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1350,32 +1350,32 @@
       "id": "login-control-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-placeholder",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-title-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {

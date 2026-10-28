@@ -247,7 +247,7 @@ export interface ShareImportDraftPrefs {
   effort?: string;
   permissionMode?: string;
   planMode?: boolean;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
 }
 
@@ -1547,7 +1547,7 @@ function buildSessionRow(params: {
     totalCostUsd: num(snapshot.totalCostUsd, 0),
     contextTokens: num(snapshot.contextTokens, 0),
     contextWindow: num(snapshot.contextWindow, 0),
-    fastMode: draftPrefs?.fastMode === true,
+    fastMode: (draftPrefs?.fastMode === 'ultrafast' ? 'ultrafast' : draftPrefs?.fastMode === true),
     planModeEnabled: draftPrefs?.planMode === true,
     agentKind,
     orcaRole,

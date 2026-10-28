@@ -261,7 +261,7 @@ export async function settleBotTodoForSession(
 export async function todoForCaller(callerSessionId: string, ownerAuthored = () => false): Promise<BotTodoAccess> {
   const owner = activeOwnerScopeKey();
   const caller = await resolveWorkbenchCaller(callerSessionId);
-  if (!caller.ok) throw new TodoError(caller.errorCode);
+  if (!caller.ok) throw new TodoError(caller.errorCode, caller.message);
   if (owner !== activeOwnerScopeKey()) throw new TodoError('OWNER_SCOPE_CHANGED');
   return todoAccess(caller.botId, ownerAuthored);
 }

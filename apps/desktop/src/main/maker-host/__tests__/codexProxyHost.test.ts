@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -147,6 +148,16 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
         get size() { return map.size; },
       };
     },
+  };
+});
+
+// Media-store persistence is covered by oversized-attachment-recovery.test.ts; keep the
+// real request rewrite and replace only where the preserved file is published.
+vi.mock('../oversized-attachment-recovery.js', async () => {
+  const { recoverInlineAttachments } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  return {
+    createAttachmentRecovery: () => () => (body: Parameters<typeof recoverInlineAttachments>[0], target: number) =>
+      recoverInlineAttachments(body, target, { prepare: async () => '/tmp/preserved.png', commit: async () => {} }),
   };
 });
 
@@ -880,13 +891,57 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ['https://api.moonshot.ai/v1', 'kimi-k2.7-code'],
     ['https://api.moonshot.cn/v1', 'kimi-k2.7-code-highspeed'],
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
-  ])('enables image_url for Kimi on official Moonshot host: %s / %s', async (upstream, model) => {
+    ['https://api.moonshot.cn/v1', 'kimi-k3.1-pro'],
+    ['https://api.moonshot.ai/v1', 'kimi-k3.1-pro-highspeed'],
+    ['https://api.kimi.com/coding/v1', 'k3.1-pro'],
+    ['https://api.kimi.com/coding/v1', 'k3.1-pro-highspeed'],
+    ['https://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-for-coding'],
+  ])('translates image input for Kimi on its official route: %s / %s', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
-    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const imageUrl = 'data:image/png;base64,eA==';
+    try {
+      // V5 servers cannot send interface bindings; existing image routes must survive negotiation.
+      for (const modelRegistry of [BUNDLED_CATALOG.modelRegistry, {
+        schemaVersion: 5 as const, updatedAt: BUNDLED_CATALOG.modelRegistry!.updatedAt, models: [],
+      }]) {
+        setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry });
+        const capabilities = chatBridgeCapabilitiesForRoute(upstream, model);
+        const translated = translateResponsesRequest({ model, input: [{ type: 'message', role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        }] }, { capabilities });
+        expect(translated.messages).toEqual([{ role: 'user', content: [{ type: 'image_url', image_url: { url: imageUrl } }] }]);
+      }
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it.each(['empty', 'retired'] as const)('honors %s V6 declarations instead of restoring bundled image support', async (state) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const registry = catalog.modelRegistry!;
+    registry.interfaceProfiles = state === 'empty' ? [] : registry.interfaceProfiles!.map(profile => ({ ...profile, retired: true }));
+    try {
+      setActiveCatalog(catalog);
+      const capabilities = chatBridgeCapabilitiesForRoute('https://api.kimi.com/coding/v1', 'k3.1-pro');
+      expect(capabilities.imageInput).toBeUndefined();
+      expect(() => translateResponsesRequest({ model: 'k3.1-pro', input: [{ type: 'message', role: 'user',
+        content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+      }] }, { capabilities })).toThrow(/input_image/);
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.5'],
+    ['https://api.kimi.com.evil.example/coding/v1', 'k3.1-pro'],
+    ['https://api.deepseek.com/v1', 'kimi-k3.1-pro'],
     // Kimi Code: non-HTTPS, spoofed subdomain, and models without verified image support stay closed.
     ['http://api.kimi.com/coding/v1', 'k3'],
     ['https://api.kimi.com.evil.example/coding/v1', 'k3'],
@@ -2774,6 +2829,46 @@ describe('codex proxy host', () => {
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
   });
 
+  // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
+  // whole image-heavy history, so every retry was rejected until the turn timed out.
+  it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
+    };
+    const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const send = async (input: unknown[]): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+      const header = Buffer.alloc(14);
+      header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
+      const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
+      const forwarded: Buffer[] = [];
+      outbound.on('data', chunk => forwarded.push(chunk));
+      const ended = once(outbound, 'end');
+      outbound.end(Buffer.concat([header, payload])); // zero mask
+      await ended;
+      let message: Buffer = Buffer.alloc(0);
+      const reader = createWebSocketMessageTransform(true, decoded => { message = decoded; return decoded; });
+      reader.resume(); const read = once(reader, 'end'); reader.end(Buffer.concat(forwarded)); await read;
+      return message;
+    };
+    const image = { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3 << 20, 1).toString('base64')}` };
+
+    const ordinary = await send([image, image]);
+    expect(JSON.parse(ordinary.toString()).input).toEqual([image, image]);
+
+    const oversized = await send([image, image, image, image, image]);
+    expect(oversized.length).toBeLessThanOrEqual(12 << 20);
+    const input = JSON.parse(oversized.toString()).input;
+    expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
+    expect(input.at(-1)).toEqual(image);
+  });
+
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -2798,6 +2893,24 @@ describe('codex proxy host', () => {
     expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
       'https://chatgpt.com/backend-api/codex',
     );
+  });
+
+  // Review 4327641928 / unit: opaque WS frames would bypass the live remote model
+  // gate. Earlier transport tests had only local sessions; the minimum input is
+  // one registered hosted owner task on an OAuth proxy.
+  it('uses HTTP for hosted owner requests while preserving local WebSockets', async () => {
+    const host = await freshCodexProxyHost();
+    const { bindHostedSessionProvider } = await import('../session-provider-store');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed('remote-owner', 'remote-thread', 'prompt');
+    const binding = bindHostedSessionProvider('remote-owner', 'openai', () => true);
+    try {
+      const resolve = mockState.createAnthropicCompatProxy.mock.calls[0][0].resolveWebSocketUpstream;
+      expect(resolve({ headers: { 'thread-id': 'remote-thread' } })).toBeNull();
+      expect(resolve({ headers: { 'thread-id': 'local-thread' } })).toBe('https://chatgpt.com/backend-api/codex');
+    } finally { binding.release(); }
   });
 
   it('forgets only the closing session websocket proofs before a provider-route resume', async () => {
@@ -3923,6 +4036,60 @@ describe('codex proxy host', () => {
     expect(secondDispose).toHaveBeenCalledOnce();
   });
 
+  // Unit regression for review 4326867248: a headerless custom request must use
+  // its proxy's guest binding. Existing proxy tests had no simultaneous members;
+  // one restricted member must not deny an unrestricted member or lend its identity.
+  it('binds headerless custom requests to the scoped guest and checks live model grants', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders, getActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { registerGuestProviderRoute, resetGuestProviderRoutesForTest } = await import('../guest-provider-route-store.js');
+    const providerId = 'guest-scope-provider';
+    setCustomProviders([buildUserProvider({ id: providerId, name: 'Shared', runtimes: { codex: {
+      baseUrl: 'https://guest-scope.example/v1', wireProtocol: 'openai-responses', supportsImageGeneration: true,
+      models: [{ id: 'allowed', name: 'Allowed' }, { id: 'private', name: 'Private' }],
+    } } })]);
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog()).filter(route => route.providerId === providerId);
+    const first = registerGuestProviderRoute('member-a-session', providerId, model => model === 'allowed', () => true);
+    let secondAllowed = true;
+    const second = registerGuestProviderRoute('member-b-session', providerId, () => secondAllowed, () => false);
+    host.registerComposed('member-b-session', 'member-b-thread', 'prompt');
+    setCustomProviderKeyReader(() => 'shared-provider-key');
+    mockState.createAnthropicCompatProxy
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41001', dispose: vi.fn(async () => undefined) })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:41002', dispose: vi.fn(async () => undefined) });
+    try {
+      await host.ensureCodexCustomContextProxyReady('member-a-proxy', 'env-key', routes, providerId, 'member-a-session');
+      await host.ensureCodexCustomContextProxyReady('member-b-proxy', 'env-key', routes, providerId, 'member-b-session');
+      const request = async (index: number, model: string, headers: Record<string, string> = {}) => {
+        const decision = await mockState.createAnthropicCompatProxy.mock.calls[index]![0].routingTransform({ model }, {
+          reqId: 1, method: 'POST', url: `/_cindy/custom-provider/${routes[0]!.routeId}/responses`, headers,
+        });
+        return decision?.localHandler ? (await runLocalRefusal(decision)).status : decision?.upstreamOverride;
+      };
+      expect(await request(1, 'private')).toBe('https://guest-scope.example/v1');
+      expect(await request(0, 'allowed')).toBe('https://guest-scope.example/v1');
+      expect(await request(0, 'private')).toBe(403);
+      expect(await request(0, 'private', { 'thread-id': 'member-b-thread' })).toBe(403);
+      secondAllowed = false;
+      expect(await request(1, 'private')).toBe(403);
+      expect(await request(0, 'allowed')).toBe('https://guest-scope.example/v1');
+      secondAllowed = true;
+      second.release();
+      expect(await request(1, 'private')).toBe(403);
+    } finally {
+      await host.releaseCodexCustomContextProxy('member-a-proxy');
+      await host.releaseCodexCustomContextProxy('member-b-proxy');
+      first.release(); second.release();
+      host.unregister('member-b-session');
+      resetGuestProviderRoutesForTest();
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
   it('keeps Gateway provider search tools out of Guardian review requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -4573,8 +4740,10 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toEqual(original);
-    await expect(Promise.resolve(routingTransform(current, ctx))).resolves.toEqual({
+    await expect(Promise.resolve(routingTransform(current, ctx))).resolves.toMatchObject({
       upstreamOverride: 'https://chatgpt.com/backend-api/codex',
+      transformRequestBody: expect.any(Function),
+      dispatchGenerationValid: expect.any(Function),
     });
     host.clearCodexProxyAuthInjection();
     clearSessionProvider('session-subscription-search');
@@ -8278,7 +8447,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       provider: {
         id, name: id, connectionRevision: 1,
         models: [{ id: `${id}/chat`, mode: 'chat', agents: ['codex'], currency: 'CNY',
-          perAgent: { codex: { wireProtocol: 'openai-responses' } } }],
+          perAgent: { codex: { wireProtocol: 'openai-responses' } } },
+          { id: `${id}/gpt-image-2`, mode: 'image_generation', currency: 'CNY', perAgent: {} }],
         imageBinding: { enabled: true, modelId: 'gpt-image-2', wireModel: 'gpt-image-2',
           litellmModel: `${id}/gpt-image-2`, supportsEdit: true },
       },
@@ -8357,6 +8527,76 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       expect(rejected.status).toBe(502);
       await rejected.text();
       expect(received).toHaveLength(count);
+
+      // Unit regression for review 4328205904 / provider-sharing §12, through
+      // the real HTTP proxy. Existing image tests had no hosted grant: an
+      // allowed chat model silently authorized JSON and opaque image requests.
+      // Cover native wire IDs and frozen BYOK aliases without another server.
+      const { bindHostedSessionProvider } = await import('../session-provider-store.js');
+      const { registerGuestProviderRoute } = await import('../guest-provider-route-store.js');
+      let allowedImage: string | undefined;
+      // Reviews 4328897464/4328897455 (unit): the old fixture only bound an owner.
+      // A catalog ID distinct from the native wire ID plus a headerless
+      // guest must permit its catalog grant and send no JSON/multipart on denial.
+      for (const scope of ['owner', 'guest']) {
+        const allowsModel = (model: string) => model === 'byok-a/chat' || model === allowedImage;
+        const sessionId = `remote-image-${scope}`;
+        const binding = scope === 'owner'
+          ? bindHostedSessionProvider(sessionId, 'byok-a', (providerId, model) => providerId === 'byok-a' && allowsModel(model))
+          : registerGuestProviderRoute(sessionId, 'byok-a', allowsModel, () => true);
+        host.registerComposed(sessionId, 'remote-image-thread', 'prompt');
+        try {
+          for (const bound of [true, false]) {
+            const imageRoute = { ...routes[0]!, routing: { ...routes[0]!.routing } };
+            if (!bound) delete imageRoute.routing.imageModel;
+            const contextId = `remote-image-${scope}-${bound}`;
+            await host.ensureCodexCustomContextProxyReady(contextId, 'env-key', [imageRoute],
+              scope === 'guest' ? 'byok-a' : undefined, scope === 'guest' ? sessionId : undefined);
+            const endpoint = host.getCodexCustomContextProxyEndpoint(contextId);
+            const post = (multipart: boolean) => {
+              const form = new FormData();
+              form.set('model', 'gpt-image-2');
+              form.set('image', new Blob([new Uint8Array([0, 255, 128])], { type: 'image/png' }), 'input.png');
+              return fetch(`${endpoint}/_cindy/custom-provider/${imageRoute.routeId}/images/${multipart ? 'edits' : 'generations'}`, {
+                method: 'POST', headers: { ...(scope === 'owner' ? { 'thread-id': 'remote-image-thread' } : {}),
+                  ...(!multipart ? { 'content-type': 'application/json' } : {}) },
+                body: multipart ? form : JSON.stringify(payload),
+              });
+            };
+            allowedImage = undefined;
+            for (const multipart of [false, true]) {
+              const before = received.length;
+              const denied = await post(multipart);
+              expect(denied.status).toBe(multipart ? 502 : 403);
+              await denied.text();
+              expect(received).toHaveLength(before);
+            }
+            allowedImage = bound ? 'byok-a/gpt-image-2' : 'gpt-image-2';
+            for (const multipart of [false, true]) {
+              const allowed = await post(multipart);
+              expect(allowed.status).toBe(200);
+              await allowed.text();
+              const upstreamRequest = received.at(-1)!;
+              const parsed = multipart
+                ? await new Response(new Uint8Array(upstreamRequest.body), { headers: { 'content-type': String(upstreamRequest.headers['content-type']) } }).formData()
+                : JSON.parse(upstreamRequest.body.toString());
+              expect(multipart ? parsed.get('model') : parsed.model).toBe(bound ? 'byok-a/gpt-image-2' : 'gpt-image-2');
+              if (multipart) expect(new Uint8Array(await (parsed.get('image') as File).arrayBuffer())).toEqual(new Uint8Array([0, 255, 128]));
+            }
+            allowedImage = undefined;
+            for (const multipart of [false, true]) {
+              const before = received.length;
+              const revoked = await post(multipart);
+              expect(revoked.status).toBe(multipart ? 502 : 403);
+              await revoked.text();
+              expect(received).toHaveLength(before);
+            }
+          }
+        } finally {
+          binding.release();
+          host.unregister(sessionId);
+        }
+      }
     } finally {
       await host.disposeCodexProxy();
       host.setCodexAppliedCustomProviderRoutes([]);

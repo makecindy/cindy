@@ -22,6 +22,7 @@ import {
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   extractPlanOutline,
+  describePermissionAction,
   formatPermissionInput,
   interactionBlocksRemoteComposer,
   isFreeTextAskOptionLabel,
@@ -266,9 +267,81 @@ describe('interaction shared model', () => {
         title: '高风险授权需要二次确认',
         detail: '先核对命令内容，再点一次确认允许；不确定就拒绝。',
       },
-      title: '允许使用 Bash?',
+      title: '允许运行这条命令？',
       toolName: 'Bash',
     });
+  });
+
+  // 2026-10-24: an Auto ask from Codex showed "Allow Codex to run this command?" with raw JSON
+  // and no reason. The card must say what runs, why Auto asked, and warn on risky exec commands.
+  it('explains Auto asks with the reviewer reason and the readable operation across harness tool names', () => {
+    const exec = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-ask',
+      toolName: 'exec',
+      title: 'Allow Codex to run this command?',
+      input: { command: 'xcrun simctl delete all', cwd: '/repo' },
+      metadata: { autoReviewReason: '这会删除电脑上的所有 iOS 模拟器，你只让我排查键盘问题。' },
+    });
+    expect(exec).toMatchObject({
+      title: '允许运行这条命令？',
+      code: 'xcrun simctl delete all\n# cwd: /repo',
+      autoReviewReason: '这会删除电脑上的所有 iOS 模拟器，你只让我排查键盘问题。',
+    });
+
+    const plugin = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-plugin',
+      toolName: 'mcp:cindy:ghost_call',
+      input: { ghost_id: 'cindy-github', tool: 'call_tool', args: { name: 'get_user', args: { username: 'octo' } } },
+    });
+    expect(plugin).toMatchObject({ title: '允许使用插件「cindy-github」？', code: 'get_user {"username":"octo"}', autoReviewReason: null });
+
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-browser',
+      toolName: 'mcp:cindy_browser:call_tool',
+      input: { name: 'browser', args: { action: 'navigate', url: 'https://x.com/compose/post' } },
+    })).toMatchObject({ title: '允许浏览器执行这一步？', code: expect.stringContaining('navigate {"url":"https://x.com/compose/post"}') });
+
+    // The summary must not hide what the user is approving (review 2026-10-24: recipe/typed text, move/diff).
+    expect(describePermissionAction('mcp:cindy_browser:call_tool', {
+      name: 'browser', args: { action: 'recipe', recipeId: 'post-reply', site: 'x.com', text: 'hello' },
+    }).preview).toBe('recipe {"recipeId":"post-reply","site":"x.com","text":"hello"}');
+    // MCP names parse by plain string scan: both separators work and hostile names stay linear (CodeQL ReDoS).
+    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'plugin', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
+    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'plugin', subject: 'my-server', preview: 'do_it' });
+    expect(describePermissionAction('mcp__', {}).kind).toBe('tool');
+    const hostile = `mcp:9${'-9'.repeat(50_000)}`;
+    const started = Date.now();
+    expect(describePermissionAction(hostile, {}).kind).toBe('tool');
+    expect(Date.now() - started).toBeLessThan(500);
+    // argv arrays keep argument boundaries.
+    expect(describePermissionAction('shell', { command: ['printf', '%s', 'a b', "it's", ''] }).preview)
+      .toBe("printf %s 'a b' 'it'\\''s' ''");
+    expect(describePermissionAction('exec', { command: 'rm -rf build', cwd: '/repo/app' }).preview)
+      .toBe('rm -rf build\n# cwd: /repo/app');
+    expect(describePermissionAction('Grep', { pattern: 'AKIA', path: '/Users/me' }).preview).toBe('AKIA \u2192 /Users/me');
+    expect(describePermissionAction('grep', { pattern: 'TODO' }).preview).toBe('TODO');
+    // call_tool.args stringified by the caller (issue #350) is parsed like the approval policy does.
+    expect(describePermissionAction('mcp:cindy_browser:call_tool', {
+      name: 'browser', args: JSON.stringify({ action: 'recipe', recipeId: 'post-reply' }),
+    }).preview).toBe('recipe {"recipeId":"post-reply"}');
+    expect(describePermissionAction('mcp:cindy:ghost_call', {
+      ghost_id: 'cindy-github', tool: 'call_tool', args: JSON.stringify({ name: 'get_user', args: JSON.stringify({ username: 'octo' }) }),
+    }).preview).toBe('get_user {"username":"octo"}');
+    expect(describePermissionAction('file_change', { changes: [
+      { path: '/repo/a.ts', kind: { type: 'update', move_path: '/repo/b.ts' }, diff: '@@ -1 +1 @@' },
+      { path: '/repo/old.ts', kind: { type: 'delete' } },
+    ] }).preview).toBe('update /repo/a.ts \u2192 /repo/b.ts\n@@ -1 +1 @@\ndelete /repo/old.ts');
+
+    // A failed review shows its own fixed copy, never a stale model reason.
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-down',
+      toolName: 'Bash',
+      metadata: { autoReviewUnavailable: true, autoReviewReason: 'stale' },
+    }).autoReviewReason).toBeNull();
   });
 
   it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {

@@ -1,4 +1,4 @@
-import { formatForwardedRequest, captureAgentRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import type { CapturedAgentRequest } from './forwardedRequest.js';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -37,6 +37,11 @@ const MAX_SENDER_ID_CHARS = MAX_BOT_PEER_ADDRESS_CHARS;
 const MAX_MESSAGES_PER_THREAD = 12;
 const THREAD_IDLE_TIMEOUT_MS = 15 * 60_000;
 const LIMIT_COOLDOWN_MS = 5 * 60_000;
+
+/** Routine lanes speak as their companion, with the same per-turn tool authorization. */
+function isCompanionMessageSource(role: string | null | undefined): boolean {
+  return role === 'canonical' || role === 'routine';
+}
 
 function trustedHeaderLabel(value: string, maxChars: number): string {
   const withoutControlCharacters = Array.from(value, (character) => {
@@ -104,8 +109,9 @@ export interface BotMessageTransport {
 }
 
 export interface BotDirectMessageServiceDeps {
-  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   transport?: BotMessageTransport;
+  /** Capture the accepted caller input, never model-written claims of approval. */
+  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
@@ -311,13 +317,13 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
   };
 
   // senderSessionId and the durable Bot link retain the source identity across
-  // restarts. A missing local link cannot prove canonical authority either.
+  // restarts. A missing local link cannot prove companion ownership either.
   const canRestoreDelivery = async (db: ReturnType<typeof getDbClient>['drizzle'], row: typeof botDirectMessages.$inferSelect): Promise<boolean> => {
     if (row.deliveryStatus === 'failed') return false;
     if (!row.senderSessionId) return !!parseBotPeerAddress(row.senderBotId); // Remote peer, not a deleted local source.
     const [link] = await db.select({ role: botSessionLinks.role }).from(botSessionLinks)
       .where(and(eq(botSessionLinks.sessionId, row.senderSessionId), eq(botSessionLinks.botId, row.senderBotId))).limit(1);
-    return link?.role === 'canonical';
+    return isCompanionMessageSource(link?.role);
   };
 
   const assertRestoredQueuedDelivery = async (sessionId: string, clientId: string): Promise<void> => {
@@ -474,12 +480,16 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
 
-    const captured = remoteSender
-      ? { message: remoteSender.requestSource ? rawMessage : formatForwardedRequest({ userText: null }, rawMessage),
-          autoReviewUserText: { kind: 'agent-request' as const, request: remoteSender.requestSource ?? { userText: null } } }
-      : await (deps.captureRequest ?? ((id, text) => captureAgentRequest(id, text, null, async () => [])))(input.callerSessionId, input.message);
+    const captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
+      autoReviewUserText: { kind: 'agent-request',
+        ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
+      : await deps.captureRequest?.(input.callerSessionId, rawMessage)
+        ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
+    // No original words means a normal peer message, including on older peers
+    // whose optional requestSource validator requires a quotation envelope.
+    if (captured.autoReviewUserText.request?.userText === null)
+      captured.autoReviewUserText = { kind: 'agent-request' };
     const message = captured.message;
-    if (message.length > 200_000) return failed('INVALID_ARGS', '原话与补充合计过长，消息未发送');
 
     const caller = remoteSender ? {
       botId: remoteSender.id, botName: remoteSender.name, sessionSource: 'bot',
@@ -494,7 +504,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     }
     const groupAuthority = caller.role === 'group'
       ? await authorizeGroupTool(input.callerSessionId, caller.botId, 'owner-action') : null;
-    if ((!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null) {
+    if ((!groupAuthority && !isCompanionMessageSource(caller.role)) || caller.linkArchivedAt !== null) {
       return failed('NOT_CANONICAL_BOT_SESSION', 'send_to_agent 只能从伙伴主任务发送');
     }
     if (caller.botId === input.targetBotId) {
@@ -938,7 +948,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     const caller = await loadCaller(callerSessionId);
     const groupAuthority = caller?.role === 'group'
       ? await authorizeGroupTool(callerSessionId, caller.botId, 'owner-action') : null;
-    if (!caller || (!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null
+    if (!caller || (!groupAuthority && !isCompanionMessageSource(caller.role)) || caller.linkArchivedAt !== null
       || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active canonical teammate is required' };
     }
@@ -980,7 +990,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       || row.content !== input.message.trim() || row.deliveryStatus === 'failed' || !row.senderSessionId) return false;
     const caller = await loadCaller(row.senderSessionId);
     if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope)) return false;
-    return !!caller && caller.botId === input.senderBotId && caller.role === 'canonical' && caller.linkArchivedAt === null
+    return !!caller && caller.botId === input.senderBotId && isCompanionMessageSource(caller.role) && caller.linkArchivedAt === null
       && caller.sessionSource === 'bot' && caller.sessionStatus === 'active' && caller.botStatus === 'active';
   };
   /** Read only the receipt belonging to the authenticated source device and exact pair. */
@@ -1009,7 +1019,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const caller = await loadCaller(input.callerSessionId);
       if (
         !caller ||
-        caller.role !== 'canonical' ||
+        !isCompanionMessageSource(caller.role) ||
         caller.linkArchivedAt !== null ||
         caller.sessionSource !== 'bot' ||
         caller.sessionStatus !== 'active' ||
@@ -1039,7 +1049,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           await withPairLock(pairKey, async () => {
             const currentCaller = await loadCaller(input.callerSessionId);
             assertCurrent();
-            if (!currentCaller || currentCaller.botId !== caller.botId || currentCaller.role !== 'canonical'
+            if (!currentCaller || currentCaller.botId !== caller.botId || !isCompanionMessageSource(currentCaller.role)
               || currentCaller.linkArchivedAt !== null || currentCaller.sessionStatus !== 'active' || currentCaller.botStatus !== 'active')
               throw Object.assign(new Error('Caller inactive'), { code: 'OWNER_CHANGED' });
             const [row] = await db.select().from(botDirectMessages).where(eq(botDirectMessages.id, sent.id)).limit(1);
@@ -1071,7 +1081,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           if (
             !currentCaller ||
             currentCaller.botId !== caller.botId ||
-            currentCaller.role !== 'canonical' ||
+            !isCompanionMessageSource(currentCaller.role) ||
             currentCaller.linkArchivedAt !== null ||
             currentCaller.sessionStatus !== 'active' ||
             currentCaller.botStatus !== 'active'

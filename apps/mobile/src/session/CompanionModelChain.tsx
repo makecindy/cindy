@@ -3,9 +3,8 @@ import { findCatalogModel } from '@cindy/model-providers';
 import { buildMobileModelSections } from './providerModelSections';
 import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
 import { iconSize, lineHeight } from '@/theme';
-import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { ChevronDown, ChevronRight, ChevronUp, MinusCircle, Plus, ArrowUp } from 'lucide-react-native';
+import { ChevronRight, MinusCircle, Plus, ArrowUp } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { useDeviceProviders } from '@/device-link/useDeviceProviders';
@@ -24,7 +23,7 @@ export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
   if (typeof value !== 'string') return [];
   try {
     const rows: unknown = JSON.parse(value);
-    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || typeof r.fastMode !== 'boolean')) return [];
+    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || (typeof r.fastMode !== 'boolean' && r.fastMode !== 'ultrafast'))) return [];
     const normalized = rows.map(normalizeModelRoute);
     return normalized.every((row): row is ModelRoute => row !== null) ? normalized : [];
   } catch { return []; }
@@ -39,7 +38,6 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     controlledDeviceId: deviceId, keepDeviceIds: chain.flatMap(route => route.agentDeviceId ? [route.agentDeviceId] : []), keepOnly: true });
   const following = values.followsDefault === true;
   const update = (chain: CompanionModelRoute[]) => onChange({ ...values, modelChain: serializeModelRoutes(chain) });
-  const [showBackups, setShowBackups] = useState(false);
   const routeRow = (route: CompanionModelRoute, index: number) => {
     const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
     const remote = route.agentDeviceId ? routeCatalogs.find(item => item.deviceId === route.agentDeviceId) : undefined;
@@ -50,7 +48,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     const source = [provider ? mobileProviderAccountTitle(provider) : route.providerId, remote?.name].filter(Boolean).join(' · ');
     return <View key={JSON.stringify([route.agentDeviceId ?? null, route.harness, route.providerId, route.model])} style={styles.row}>
       <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
-        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? 'Fast' : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ ...styles.title, color: colors.textPrimary }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? t(route.fastMode === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
       </Pressable>
       {/* Desktop BotModelChainEditor: the first model stays primary (change it with the picker);
           backups reorder among themselves and can be removed. */}
@@ -63,12 +61,10 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     <View style={styles.row}><Text style={{ ...styles.title, color: colors.textPrimary, flex: 1 }}>{inheritanceLabel ?? t('devices.companionProfile.modelFollowsDefault')}</Text><NativeSwitch accessibilityLabel={inheritanceLabel ?? t('devices.companionProfile.modelFollowsDefault')} value={following} disabled={disabled} onValueChange={value => onChange({ ...values, followsDefault: value })} seedColor={colors.inputCaret} /></View>
     {chain.length ? routeRow(chain[0], 0) : addRow}
     {chain.length && !single ? <>
-      {/* The backup chain stays folded inside this editor, as on Desktop. */}
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: showBackups }} onPress={() => setShowBackups(value => !value)} style={styles.row} testID="companionModels.backups">
+      <View style={styles.row} testID="companionModels.backups">
         <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, flex: 1 }}>{t('devices.companionProfile.backupModels', { count: chain.length - 1 })}</Text>
-        {showBackups ? <ChevronUp size={iconSize.md} color={colors.textSecondary} /> : <ChevronDown size={iconSize.md} color={colors.textSecondary} />}
-      </Pressable>
-      {showBackups ? <>{chain.slice(1).map((route, offset) => routeRow(route, offset + 1))}{addRow}</> : null}
+      </View>
+      {chain.slice(1).map((route, offset) => routeRow(route, offset + 1))}{addRow}
     </> : null}
   </View>;
 }

@@ -77,8 +77,8 @@ describe('formatWecomInteractionPrompt', () => {
     );
 
     expect(prompt).toContain('需要确认工具“运行命令”');
-    expect(prompt).toContain('"command": "pnpm test"');
-    expect(prompt).toContain('"path": "D:\\\\workspace\\\\cindy"');
+    // Shell tools show the command itself, not a JSON envelope.
+    expect(prompt).toContain('操作：\n```\npnpm test\n```');
     expect(prompt).toContain('回复“允许”执行一次');
     expect(prompt).not.toContain('自动审批没完成');
   });

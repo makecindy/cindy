@@ -295,7 +295,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
               placeholder={t('rightSidebar.browser.urlPlaceholder')}
               className={cn(
                 'min-w-0 flex-1 bg-transparent text-12 leading-none text-[var(--text-primary)]',
-                'placeholder:text-[var(--text-tertiary)] outline-none',
+                'placeholder:text-[var(--text-placeholder)] outline-none',
               )}
             />
           ) : (

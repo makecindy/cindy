@@ -363,3 +363,33 @@ describe('HookTaskCard attached context', () => {
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
   });
 });
+
+describe('teammate DM attachment-only bubbles in share images', () => {
+  // Value: real UserMessage -> production stripMessageSources, the share-image path.
+  // Regression: #6624 moved teammate DM attachments into the bubble, which was still
+  // marked as a removable source label when it had no text, so sharing dropped the attachment.
+  // Coverage gap: the existing share test only covers IM source headers, not DM attachments.
+  // Minimal unit input: a teammate DM user message with one image or one file and no text.
+  // Standalone file: 3.00s Vitest, including the existing HookTaskCard cases.
+  it.each([
+    ['image', { images: [{ base64: 'iVBORw0KGgo=', mimeType: 'image/png', originalName: 'shot.png' }] }],
+    ['file', { files: [{ name: 'report.pdf', path: '/fixture/report.pdf' }] }],
+  ])('keeps an %s-only message when the share image strips source labels', async (_kind, attachments) => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <MemoryRouter>
+          <ConfirmDialogProvider>
+            <Tooltip.Provider>
+              <UserMessage content="" workingDir="" simplifiedBotConversation {...attachments} />
+            </Tooltip.Provider>
+          </ConfirmDialogProvider>
+        </MemoryRouter>,
+      ));
+    });
+    const clone = container.cloneNode(true) as HTMLElement;
+    stripMessageSources(clone);
+    if ('images' in attachments) expect(clone.querySelector('img[alt="shot.png"]')).toBeTruthy();
+    else expect(clone.textContent).toContain('report.pdf');
+  });
+});

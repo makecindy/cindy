@@ -186,18 +186,42 @@ export class TokenSpeedMeter {
 export class UsageTokenSpeedMeter {
   private tokens = 0;
   private elapsedMs = 0;
+  private peak = 0;
+  private source = { tokens: 0, elapsedMs: 0 };
   private baseline = { tokens: 0, elapsedMs: 0 };
   private intervals: { tokens: number; elapsedMs: number }[] = [];
   private streaming = true;
   private invalid = false;
+  private paired = true;
+  private observed = false;
+  /** A native turn with missing timing cannot attach its full billed output to a duration. */
+  private completeSegment = true;
 
   reset(): void {
     this.tokens = 0;
     this.elapsedMs = 0;
-    this.baseline = { tokens: 0, elapsedMs: 0 };
+    this.peak = 0;
     this.intervals = [];
+    this.startSegment();
+  }
+
+  /** Native continuation: its counters restart together; measured product-turn totals remain. */
+  startSegment(): void {
+    this.source = { tokens: 0, elapsedMs: 0 };
+    this.baseline = { tokens: this.tokens, elapsedMs: this.elapsedMs };
     this.streaming = true;
     this.invalid = false;
+    this.paired = true;
+    this.observed = false;
+    this.completeSegment = true;
+  }
+
+  isReliable(): boolean {
+    return !this.invalid && this.paired;
+  }
+
+  isSegmentComplete(): boolean {
+    return this.completeSegment && !this.invalid;
   }
 
   invalidate(): void {
@@ -207,31 +231,52 @@ export class UsageTokenSpeedMeter {
   recordUsage(tokens: number, elapsedMs: number): void {
     if (this.invalid || !this.streaming) return;
     if (!Number.isFinite(tokens) || !Number.isFinite(elapsedMs) ||
-      tokens < this.tokens || elapsedMs < this.elapsedMs) {
+      tokens < this.source.tokens || elapsedMs < this.source.elapsedMs) {
       this.invalidate();
       return;
     }
     // Repeated usage cannot pair old tokens with a newer clock.
-    if (tokens === this.tokens) return;
-    this.tokens = tokens;
-    this.elapsedMs = elapsedMs;
-    const duration = elapsedMs - this.baseline.elapsedMs;
+    if (tokens === this.source.tokens) return;
+    const tokenDelta = tokens - this.source.tokens;
+    const durationDelta = elapsedMs - this.source.elapsedMs;
+    this.source = { tokens, elapsedMs };
+    if (durationDelta === 0) {
+      // Code-mode/background tools can leave the generation clock paused while
+      // output keeps arriving. Drop this unpaired interval from BOTH statistics;
+      // never attach its tokens to the next interval's time or to the average.
+      this.paired = false;
+      this.completeSegment = false;
+      this.intervals = [];
+      this.baseline = { tokens: this.tokens, elapsedMs: this.elapsedMs };
+      return;
+    }
+    this.paired = true;
+    this.observed = true;
+    this.tokens += tokenDelta;
+    this.elapsedMs += durationDelta;
+    const duration = this.elapsedMs - this.baseline.elapsedMs;
     if (duration < 1_000) return;
-    this.intervals.push({ tokens: tokens - this.baseline.tokens, elapsedMs: duration });
+    this.intervals.push({ tokens: this.tokens - this.baseline.tokens, elapsedMs: duration });
     this.intervals = this.intervals.slice(-3);
-    this.baseline = { tokens, elapsedMs };
+    this.baseline = { tokens: this.tokens, elapsedMs: this.elapsedMs };
+    const total = this.recentTotal();
+    this.peak = Math.max(this.peak, total.tokens * 1_000 / total.elapsedMs);
   }
 
   stop(): void {
     this.streaming = false;
   }
 
-  snapshot(): TokenSpeedSnapshot | undefined {
-    if (this.invalid || this.tokens <= 0 || this.elapsedMs <= 0) return undefined;
-    const total = this.intervals.reduce((sum, interval) => ({
+  private recentTotal(): { tokens: number; elapsedMs: number } {
+    return this.intervals.reduce((sum, interval) => ({
       tokens: sum.tokens + interval.tokens,
       elapsedMs: sum.elapsedMs + interval.elapsedMs,
     }), { tokens: 0, elapsedMs: 0 });
+  }
+
+  snapshot(): TokenSpeedSnapshot | undefined {
+    if (!this.isReliable() || !this.observed || this.tokens <= 0 || this.elapsedMs <= 0) return undefined;
+    const total = this.recentTotal();
     const average = this.tokens * 1_000 / this.elapsedMs;
     return {
       rate: this.streaming ? (total.elapsedMs > 0 ? total.tokens * 1_000 / total.elapsedMs : 0) : average,
@@ -239,6 +284,7 @@ export class UsageTokenSpeedMeter {
       tokens: this.tokens,
       elapsedMs: this.elapsedMs,
       streaming: this.streaming,
+      peak: this.peak,
     };
   }
 }

@@ -119,6 +119,18 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   }
 
+  // Async discovery adds an await window: preserve the sync reader's no-follow
+  // parent gate. A linked namespace must never become an approved installation.
+  // Unit; one valid receipt behind a directory link (junction on Windows).
+  it('async reading rejects a linked namespace parent', async () => {
+    const outside = path.join(workDir, 'outside');
+    await fs.promises.mkdir(outside);
+    await fs.promises.writeFile(path.join(outside, 'hello.json'), JSON.stringify(createSetupReceipt()));
+    await fs.promises.mkdir(path.join(stateRoot, '_ns'));
+    await fs.promises.symlink(outside, path.join(stateRoot, '_ns', 'acme'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await store.readAsync('_ns/acme/hello')).toMatchObject({ state: 'invalid' });
+  });
+
   // Unit regression: repeated store.read() must reuse only icon format validation.
   // Existing receipt tests do not cover unchanged revision/path with replaced icon
   // bytes. A same-length invalid replacement must fail, and enabled stays fresh.
@@ -280,6 +292,19 @@ describe('GhostInstallReceiptStore cleanup', () => {
     await store.write(loaded.receipt);
     const saved = JSON.parse(await fs.promises.readFile(file, 'utf8'));
     expect(saved).toEqual(raw);
+  });
+
+  it('round trips independent target approval without inferring it from old tasks grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.targetCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, targetCapabilityApproved: true });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({ state: 'approved', receipt: { taskCapabilityApproved: true, targetCapabilityApproved: true, revision: receipt.revision } });
   });
 
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {

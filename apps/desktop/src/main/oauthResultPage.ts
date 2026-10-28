@@ -422,9 +422,9 @@ function renderBrandLoginCallbackPage(
 <meta name="color-scheme" content="light dark">
 <title>${title} · Cindy</title>
 <style>
-:root{color-scheme:light;--page:#eeeeee;--card:#fbfbfb;--card-border:#d4d4d4;--title:#252222;--body:#6f6f6f;--detail:#a3a3a3;--cta:#2a2828;--cta-border:#434343;--cta-text:#d4d4d4;--cta-hover:rgba(255,255,255,.08);--cta-active:rgba(0,0,0,.5)}
-:root[data-theme="dark"]{color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:#d4d4d4;--body:#6f6f6f;--detail:#737373;--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
-@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:#d4d4d4;--body:#6f6f6f;--detail:#737373;--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
+:root{color-scheme:light;--page:#eeeeee;--card:#fbfbfb;--card-border:#d4d4d4;--title:rgba(0,0,0,.88);--body:rgba(0,0,0,.56);--detail:rgba(0,0,0,.44);--cta:#2a2828;--cta-border:#434343;--cta-text:#d4d4d4;--cta-hover:rgba(255,255,255,.08);--cta-active:rgba(0,0,0,.5)}
+:root[data-theme="dark"]{color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
+@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:var(--page);font-family:"HarmonyOS Sans SC",Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 .stage{position:relative;margin:0 auto 24px}

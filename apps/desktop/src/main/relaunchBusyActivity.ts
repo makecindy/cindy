@@ -76,7 +76,7 @@ export interface RelaunchBusyActivitySources {
   anySchedulerRunRunning: () => Promise<boolean>;
 }
 
-/** 判定出的忙闲,附带命中的来源(只用于日志/诊断,不进 UI 文案)。 */
+/** 判定出的忙闲,附带命中的来源。reasons 仍只进日志;给用户的类别在 IPC 边界另算,不把 reasons 原样送进界面。 */
 export interface RelaunchBusyActivity {
   busy: boolean;
   /** 命中的来源标签;fail-closed 时是抛错的那个来源。 */

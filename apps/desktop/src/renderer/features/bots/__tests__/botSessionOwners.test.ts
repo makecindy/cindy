@@ -57,6 +57,30 @@ function profile(over: Partial<BotProfile> = {}): BotProfile {
 }
 
 describe('伙伴归属表', () => {
+  // 测试价值: 灵动岛/通知统一入口遇到 IM channel 原先落入不可用的可写页。
+  // 最小失败输入: 只有一条 channel 投影; unit, 直接验证生产路由结果。
+  it('opens hidden IM tasks in the ordinary task page', () => {
+    const bot = profile({ sessions: [
+      { id: 's/feishu', role: 'channel', kind: 'channel', status: 'active' },
+    ] as BotProfile['sessions'] });
+    expect(botRouteForOwnedSession([bot], 's/feishu')).toEqual({
+      route: '/cc-agent/s%2Ffeishu', consumesAlert: false,
+    });
+  });
+
+  // Regression: kind=chat used to win over the unique durable canonical role.
+  // Unit, production route; the older fixture put canonical first and missed this ordering.
+  it('keeps old chat links and ambiguous canonical projections on their original task', () => {
+    const bot = profile({ sessions: [
+      { id: 'old', kind: 'chat', role: 'history' },
+      { id: 'current', kind: 'chat', role: 'canonical' },
+    ] as BotProfile['sessions'] });
+    expect(botRouteForOwnedSession([bot], 'old')?.route).toBe('/cc-agent/old');
+    expect(botRouteForOwnedSession([bot], 'current')?.route).toBe('/bots/bot-a/session/current');
+    bot.sessions.push({ id: 'duplicate', role: 'canonical' } as BotProfile['sessions'][number]);
+    expect(botRouteForOwnedSession([bot], 'current')?.route).toBe('/cc-agent/current');
+  });
+
   it('主对话、渠道任务、归档历史三种都收', () => {
     const owners = buildBotSessionOwners([profile()]);
     expect([...owners.keys()].sort()).toEqual(['s-main', 's-old', 's-telegram']);
@@ -92,20 +116,20 @@ describe('伙伴归属表', () => {
         { id: 's-lane', role: 'group', kind: 'group' },
       ] as unknown as BotProfile['sessions'],
     });
-    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa', consumesAlert: false });
-    expect(botRouteForOwnedSession([bot], 's-telegram')).toEqual({ route: '/bots/bot%2Fa/session/s-telegram', consumesAlert: false });
-    expect(botRouteForOwnedSession([bot], 's-old')).toEqual({ route: '/bots/bot%2Fa/history/s-old', consumesAlert: false, gateConsumesAlert: true });
+    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa/session/s-main', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-telegram')).toEqual({ route: '/cc-agent/s-telegram', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-old')).toEqual({ route: '/cc-agent/s-old', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-task')).toEqual({ route: '/cc-agent/s-task', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-worker')).toEqual({ route: '/cc-agent/s-worker', consumesAlert: false });
-    expect(botRouteForOwnedSession([bot], 's-lane')).toEqual({ route: '/bots/bot%2Fa', consumesAlert: true });
+    expect(botRouteForOwnedSession([bot], 's-lane')).toEqual({ route: '/cc-agent/s-lane', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 'not-owned')).toBeNull();
   });
 
   it('通知点击把主任务送回伙伴页，子任务保留自己的任务地址', () => {
     const bot = profile({ id: 'bot/a' });
-    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-main')).toEqual({ route: '/bots/bot%2Fa/session/s-main', consumesAlert: false });
     expect(botRouteForOwnedSession([bot], 's-telegram')).toEqual({
-      route: '/bots/bot%2Fa/session/s-telegram',
+      route: '/cc-agent/s-telegram',
       consumesAlert: false,
     });
     expect(botRouteForOwnedSession([bot], 'not-owned')).toBeNull();
@@ -113,11 +137,10 @@ describe('伙伴归属表', () => {
 
   // 伙伴任务页只挂活的主对话;其它角色送过去只会落到「这个伙伴任务已不可用」,
   // 那里没有能处置报错的横幅,灵动岛上的报错卡就永远消不掉。
-  it('历史任务走只读历史路由，由历史页自己的归属门禁处置它的提醒', () => {
+  it('历史任务走普通任务路由，由任务页处理提醒', () => {
     expect(botRouteForOwnedSession([profile()], 's-old')).toEqual({
-      route: '/bots/bot-a/history/s-old',
+      route: '/cc-agent/s-old',
       consumesAlert: false,
-      gateConsumesAlert: true,
     });
   });
 
@@ -139,7 +162,7 @@ describe('伙伴归属表', () => {
   it('主力电脑在别的设备上的伙伴，点击回到那台设备的伙伴页', () => {
     const remote = [{ id: 'opus', deviceId: 'mac studio', sessionId: 's-remote' }];
     expect(remoteBotRouteForSession(remote, 's-remote')).toEqual({
-      route: '/bots/remote/mac%20studio/opus',
+      route: '/bots/remote/mac%20studio/opus/session/s-remote',
       consumesAlert: false,
     });
     expect(remoteBotRouteForSession(remote, 's-other')).toBeNull();
@@ -154,14 +177,54 @@ describe('伙伴归属表', () => {
         { id: 's-legacy-lane', role: 'group', kind: 'group' },
       ] as unknown as BotProfile['sessions'],
     });
-    expect(botRouteForOwnedSession([bot], 's-lane')).toEqual({ route: '/bots/groups/g%2F1', consumesAlert: true });
-    expect(botRouteForOwnedSession([bot], 's-plan')).toEqual({ route: '/bots/groups/g-2', consumesAlert: true });
-    expect(botRouteForOwnedSession([bot], 's-legacy-lane')).toEqual({ route: '/bots/bot-a', consumesAlert: true });
+    expect(botRouteForOwnedSession([bot], 's-lane')).toEqual({ route: '/cc-agent/s-lane', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-plan')).toEqual({ route: '/cc-agent/s-plan', consumesAlert: false });
+    expect(botRouteForOwnedSession([bot], 's-legacy-lane')).toEqual({ route: '/cc-agent/s-legacy-lane', consumesAlert: false });
   });
 
 });
 
 describe('通知入口在伙伴投影未加载时的路由', () => {
+  // External task links carry a device, including this computer's own id. Resolve
+  // it within the existing latest-entry guard before consulting local Bot ownership.
+  it.each([true, false])('routes an explicit device without letting a same-id local Bot win (remote=%s)', async (remote) => {
+    const openOrdinary = vi.fn();
+    const openBotRoute = vi.fn();
+    const readKnownBotRoute = vi.fn(() => ({ route: '/bots/local', consumesAlert: false }));
+    const open = createSessionEntryNavigator({
+      isRemoteDevice: async () => remote,
+      readKnownBotRoute,
+      resolveBotRoute: vi.fn(),
+      openBotRoute, consumeAlert: vi.fn(), openOrdinary,
+    });
+    open('same', 'message-1', undefined, 'device-1');
+    await Promise.resolve();
+    if (remote) {
+      expect(openOrdinary).toHaveBeenCalledWith('same', 'message-1', expect.any(Function), 'device-1');
+      expect(readKnownBotRoute).not.toHaveBeenCalled();
+      expect(openBotRoute).not.toHaveBeenCalled();
+    } else {
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/local', undefined, 'message-1', 'same');
+      expect(openOrdinary).not.toHaveBeenCalled();
+    }
+  });
+
+  it('drops a delayed device lookup after a newer entry has opened', async () => {
+    let resolveDevice!: (remote: boolean) => void;
+    const openOrdinary = vi.fn();
+    const open = createSessionEntryNavigator({
+      isRemoteDevice: () => new Promise((resolve) => { resolveDevice = resolve; }),
+      readKnownBotRoute: () => null, resolveBotRoute: async () => null,
+      openBotRoute: vi.fn(), consumeAlert: vi.fn(), openOrdinary,
+    });
+    open('old', undefined, undefined, 'other-mac');
+    open('new');
+    resolveDevice(true);
+    await Promise.resolve();
+    expect(openOrdinary).toHaveBeenCalledTimes(1);
+    expect(openOrdinary).toHaveBeenCalledWith('new', undefined, expect.any(Function));
+  });
+
   function deps(over: {
     current?: BotProfile[];
     loaded?: BotProfile[];
@@ -179,18 +242,17 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
   it('投影已含该任务时直接回伙伴页，不重载', async () => {
     const { deps: d, loadProfiles } = deps({ current: [profile()] });
     await expect(resolveBotRouteForSessionEntry('s-main', d)).resolves.toEqual({
-      route: '/bots/bot-a',
+      route: '/bots/bot-a/session/s-main',
       consumesAlert: false,
     });
     expect(loadProfiles).not.toHaveBeenCalled();
   });
 
-  it('启动后从未进过伙伴页时先加载投影，再回伙伴页', async () => {
+  it('启动后从未进过伙伴页时先加载投影，再打开原历史任务', async () => {
     const { deps: d, loadProfiles } = deps({ loaded: [profile()] });
     await expect(resolveBotRouteForSessionEntry('s-old', d)).resolves.toEqual({
-      route: '/bots/bot-a/history/s-old',
+      route: '/cc-agent/s-old',
       consumesAlert: false,
-      gateConsumesAlert: true,
     });
     expect(loadProfiles).toHaveBeenCalledWith(true);
   });
@@ -263,6 +325,34 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
     expect(isSecondLatest()).toBe(false);
   });
 
+  it('preserves message anchors through a late companion correction and cancels on owner change or manual navigation', async () => {
+    let currentOwner = true;
+    let resolve!: (value: BotSessionEntryTarget | null) => void;
+    const openOrdinary = vi.fn();
+    const openBotRoute = vi.fn();
+    const open = createSessionEntryNavigator({
+      captureOwner: () => () => currentOwner,
+      readKnownBotRoute: () => null,
+      resolveBotRoute: () => new Promise(done => { resolve = done; }),
+      openOrdinary, openBotRoute, consumeAlert: vi.fn(),
+    });
+    open('original', 'reply');
+    resolve({ route: '/bots/b/session/original', consumesAlert: false });
+    await Promise.resolve();
+    expect(openBotRoute).toHaveBeenLastCalledWith('/bots/b/session/original', undefined, 'reply', 'original');
+    openBotRoute.mockClear();
+    open('old-owner', 'reply');
+    currentOwner = false;
+    resolve({ route: '/bots/b/session/old-owner', consumesAlert: false });
+    await Promise.resolve();
+    expect(openBotRoute).not.toHaveBeenCalled();
+    expect(openOrdinary.mock.lastCall![2]()).toBe(false);
+    currentOwner = true;
+    open('slow');
+    open.locationCommitted('/settings');
+    expect(openOrdinary.mock.lastCall![2]()).toBe(false);
+  });
+
   it('后台任务走普通任务入口，保留消息锚点与灵动岛上报，也不重读投影', async () => {
     const openBotRoute = vi.fn();
     const openOrdinary = vi.fn();
@@ -308,7 +398,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open.locationCommitted('/cc-agent/s-lane');
       resolve(lane);
       await Promise.resolve();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       open.locationCommitted('/bots/groups/g-1');
       expect(consumeAlert).toHaveBeenCalledWith('s-lane', 'entry-1');
     });
@@ -319,7 +409,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open('s-lane');
       resolve(lane);
       await Promise.resolve();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       expect(isOrdinaryLatest()).toBe(false);
     });
 
@@ -362,20 +452,21 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
   describe('灵动岛点击的处置等目标地址提交后才发', () => {
     const targets: Record<string, BotSessionEntryTarget> = {
       's-lane': { route: '/bots/groups/g-1', consumesAlert: true },
-      's-main': { route: '/bots/bot-a', consumesAlert: false },
-      's-old': { route: '/bots/bot-a/history/s-old', consumesAlert: false, gateConsumesAlert: true },
+      's-main': { route: '/bots/bot-a/session/s-main', consumesAlert: false },
+      's-old': { route: '/cc-agent/s-old', consumesAlert: false },
     };
     function setup(over: { openBotRoute?: (route: string, islandEntryId?: string) => void } = {}) {
       const openBotRoute = vi.fn(over.openBotRoute ?? (() => undefined));
       const consumeAlert = vi.fn();
+      const openOrdinary = vi.fn();
       const open = createSessionEntryNavigator({
         readKnownBotRoute: (sessionId) => targets[sessionId] ?? null,
         resolveBotRoute: async () => null,
         openBotRoute,
         consumeAlert,
-        openOrdinary: vi.fn(),
+        openOrdinary,
       });
-      return { open, openBotRoute, consumeAlert };
+      return { open, openBotRoute, consumeAlert, openOrdinary };
     }
     const settle = async () => {
       await Promise.resolve();
@@ -387,7 +478,7 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       open.locationCommitted('/cc-agent/new');
       open('s-lane', undefined, 'entry-1');
       await settle();
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined);
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/groups/g-1', undefined, undefined, 's-lane');
       expect(consumeAlert).not.toHaveBeenCalled();
       open.locationCommitted('/bots/groups/g-1');
       expect(consumeAlert).toHaveBeenCalledTimes(1);
@@ -423,24 +514,12 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
       expect(consumeAlert).not.toHaveBeenCalled();
     });
 
-    it('历史目标把点击编号交给历史页的归属门禁，导航器自己不处置', async () => {
-      const { open, openBotRoute, consumeAlert } = setup();
+    it('历史任务交给普通任务页处理错误，不提前消除提醒', async () => {
+      const { open, openOrdinary, consumeAlert } = setup();
       open.locationCommitted('/cc-agent/new');
       open('s-old', undefined, 'entry-6');
       await settle();
-      expect(openBotRoute).toHaveBeenLastCalledWith('/bots/bot-a/history/s-old', 'entry-6');
-      open.locationCommitted('/bots/bot-a/history/s-old');
-      // Already open: the click id is handed over again rather than consumed here.
-      open('s-old', undefined, 'entry-7');
-      await settle();
-      expect(openBotRoute).toHaveBeenLastCalledWith('/bots/bot-a/history/s-old', 'entry-7');
-      // Entries without a click id, and other targets, hand nothing over.
-      open('s-old');
-      await settle();
-      expect(openBotRoute).toHaveBeenLastCalledWith('/bots/bot-a/history/s-old', undefined);
-      open('s-lane', undefined, 'entry-8');
-      await settle();
-      expect(openBotRoute).toHaveBeenLastCalledWith('/bots/groups/g-1', undefined);
+      expect(openOrdinary).toHaveBeenCalledWith('s-old', undefined, expect.any(Function));
       expect(consumeAlert).not.toHaveBeenCalled();
     });
 

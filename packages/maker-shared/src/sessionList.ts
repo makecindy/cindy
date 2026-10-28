@@ -2,13 +2,14 @@ import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { presentationDate, presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
-import { hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
+import { getSessionListActivityAt, hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
 import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
 /** Call when the host resumes after system locale/region preferences may change. */
@@ -34,7 +35,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   agentDeviceId?: string | null;
   createdAt: string;
   effort?: string | null;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   id: string;
   model: string;
   orcaRole?: 'lead' | 'worker' | string | null;
@@ -46,8 +47,11 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   updatedAt: string;
   userId?: string;
   userSendAt?: string | null;
+  lastActivityAt?: string | null;
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
+  remoteHostId?: string | null;
+  deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
   // device-link 会话列表(local-db:sessions:list)带的最近一条 user/assistant 消息纯文本预览,
   // 由桌面 sessionToCamel 产出(已处理 clearedAt / rewind / 角色过滤);idle 会话直接显示,
@@ -170,6 +174,9 @@ export interface RemoteSessionListContext {
 export type RemoteSessionStatusFilter = 'active' | 'waiting' | 'automation' | 'archived' | 'all';
 
 export interface RemoteSessionListOptions {
+  projectAliases?: ProjectAliasDisplayIndex;
+  /** A single-device detail view may have rows without controller-local device metadata. */
+  projectAliasDeviceId?: string;
   statusFilter?: RemoteSessionStatusFilter;
   messagePreviewIndex?: ReadonlyMap<string, string>;
   liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
@@ -228,7 +235,7 @@ export function buildRemoteSessionSections(
     sections.push({ key: 'pinned', title: '置顶', data: pinned });
   }
 
-  sections.push(...buildProjectSections(rest, now, groupAutomations, options.localizer));
+  sections.push(...buildProjectSections(rest, now, groupAutomations, options.localizer, options, sessions));
 
   return sections;
 }
@@ -389,9 +396,23 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
 function buildProjectSections(
   items: readonly RemoteSessionListItem[],
   now: number,
-  groupAutomations = true,
-  localizer?: PresentationLocalizer,
+  groupAutomations: boolean,
+  localizer: PresentationLocalizer | undefined,
+  options: RemoteSessionListOptions,
+  allSessions: readonly RemoteSession[],
 ): RemoteSessionSection[] {
+  // Use the same group key as displayed rows, but retain membership before any
+  // search/status/pinning filter so a mixed local/SSH project cannot change names.
+  const projectMembers = new Map<string, RemoteSession[]>();
+  if (options.projectAliases) {
+    for (const session of allSessions) {
+      if (session.status === 'deleted' || isDialogueSession(session)) continue;
+      const key = session.workingDir ? collapseWorktreeDirForGrouping(session.workingDir) : 'unknown';
+      const members = projectMembers.get(key) ?? [];
+      members.push(session);
+      projectMembers.set(key, members);
+    }
+  }
   const dialogue = groupAutomationListItems(items.filter((item) => isDialogueSession(item.session)), now, groupAutomations, undefined, localizer);
   const sections: RemoteSessionSection[] = [];
   if (dialogue.length > 0) {
@@ -411,7 +432,8 @@ function buildProjectSections(
   for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => compareSessionListStrings(a, b))) {
     sections.push({
       key: `project:${workingDir}`,
-      title: projectTitle(workingDir),
+      title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
+        ?? projectTitle(workingDir),
       data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
     });
   }
@@ -454,7 +476,7 @@ export function toRemoteSessionListItem(
   unnamedLabel?: string,
   localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
-  const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
   const worktreeLabel = sessionWorktreeLabel(session);
   return {
@@ -670,7 +692,11 @@ export function buildSessionScheduleIndex(
       if (isUnreadScheduleRun(run) && (run.status === 'success' || isUnreadFailure)) {
         unreadRunIds.push(run.id);
       }
-      const candidate = activeFailures.has(run.id) ? { runId: run.id, firedAt, scheduleId: run.scheduleId, failureKind: classifyScheduleFailure(run) } : undefined;
+      const candidate = activeFailures.has(run.id) ? {
+        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        failureKind: classifyScheduleFailure(run),
+        errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+      } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
         ? candidate : existing?.latestFailedRun;
       const running = (existing?.running ?? false) || run.status === 'running';
@@ -798,7 +824,7 @@ function isDialogueSession(session: RemoteSession): boolean {
 }
 
 function lastActivity(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function projectTitle(workingDir: string): string {
@@ -1126,7 +1152,7 @@ function contentRefName(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   for (const key of ['name', 'originalName', 'fileName', 'path', 'url']) {
     const item = record[key];
-    if (typeof item === 'string' && item.trim()) return item.trim().split('/').pop() ?? item.trim();
+    if (typeof item === 'string' && item.trim()) return item.trim().split(/[\\/]/).pop() ?? item.trim();
   }
   return null;
 }

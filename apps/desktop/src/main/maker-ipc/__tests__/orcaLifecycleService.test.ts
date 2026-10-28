@@ -35,6 +35,7 @@ function createdWorker(overrides: Partial<Extract<OrcaWorkerCreationResult, { ok
     teamId: 'team-1',
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
+    workingDir: '/repo',
     softLimitExceeded: false,
     resolved: {
       agent: 'codex',

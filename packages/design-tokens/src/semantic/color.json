@@ -229,8 +229,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -243,8 +243,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -259,8 +259,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }
@@ -273,8 +273,8 @@
             "com.cindy.governance": {
               "protected": {
                 "family": "u2-secondary-info",
-                "owner": "DESIGN.md §15.5",
-                "rule": "U2 二级信息色，never darken unilaterally",
+                "owner": "DESIGN.md §15.16",
+                "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
                 "mode": "semantic-modeled"
               }
             }

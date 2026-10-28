@@ -116,6 +116,8 @@ const deviceLinkKeys = exposedNestedKeys(source, 'deviceLink');
 const mirrorCacheKeys = exposedNestedKeys(source, 'mirrorCache');
 const localDbBody = extractBlock(source, 'localDb') ?? '';
 const localDbKeys = objectKeys(localDbBody);
+const botsKeys = exposedNestedKeys(localDbBody, 'bots');
+const botAutonomyKeys = exposedNestedKeys(localDbBody, 'autonomy');
 const rightSidebarTabsKeys = exposedNestedKeys(localDbBody, 'rightSidebarTabs');
 const subagentRunsKeys = exposedNestedKeys(localDbBody, 'subagentRuns');
 const orcaWorkflowKeys = exposedNestedKeys(localDbBody, 'orcaWorkflows');
@@ -216,6 +218,18 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
       'onChanged', 'onRuntimeChanged', 'onPreviewMedia',
       'unreadSync', 'clearUnread', 'onBadge', 'onUnreadSnapshot',
     ]));
+  });
+
+  it('exposes only the workbench read, change event, and permission action', () => {
+    expect(localDbKeys).toContain('bots');
+    expect(botsKeys).toEqual(['autonomy']);
+    expect(botAutonomyKeys).toEqual(['glance']);
+    expect(makerKeys).toEqual(expect.arrayContaining([
+      'onBotAutonomyChanged', 'getPendingInteractions', 'allowBotWorkbenchPermission',
+    ]));
+    expect(makerKeys).not.toContain('resolveInteraction');
+    expect(source).toContain("ipcRenderer.invoke('local-db:bots:autonomy:glance', botId)");
+    expect(source).toContain("ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId })");
   });
 
   it('涓嶆毚闇?maker / agent / voice / login 鑷不鑳藉姏', () => {

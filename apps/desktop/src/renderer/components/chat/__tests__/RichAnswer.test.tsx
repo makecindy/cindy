@@ -309,3 +309,44 @@ it('bounds fixed widths and leaves backgrounds and literal colors to the host', 
   expect(screen.getByText('Faint').style.color).toBe('');
 });
 
+
+// Unit: production action renderer and normal-send boundary. Selection changes
+// must stay local; the clicked, visible payload sends once, without running set.
+it('submits visible edited values only on a click and survives remount', async () => {
+  const { SessionQuickSendProvider } = await import('../SessionQuickSendContext');
+  const { act, waitFor } = await import('@testing-library/react');
+  let finish!: (accepted: boolean) => void;
+  const send = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+  const source = [
+    { id: 'choice', kind: 'input', props: { label: 'Destination', default: 'Park' } },
+    { id: 'send', kind: 'button', props: { label: 'Plan trip', send: { op: 'concat', args: ['Plan: ', { ref: 'choice' }] }, set: { choice: 'WRONG' } } },
+  ].map((op, i) => line(i + 1, { op: 'create', ...op })).join('');
+  const props = { source, complete: true, stateKey: 'explicit-send', renderMarkdown: (text: string) => <span>{text}</span> };
+  const element = <SessionQuickSendProvider value={{ send }}><RichAnswer {...props} /></SessionQuickSendProvider>;
+  const view = render(element);
+  fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'Museum' } });
+  expect(screen.getByText('Plan: Museum')).toBeTruthy();
+  expect(send).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Plan trip' }));
+  await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  expect(send).toHaveBeenCalledWith('Plan: Museum', { literalText: true, independent: true });
+  view.unmount(); render(element);
+  fireEvent.click(screen.getByRole('button', { name: 'richAnswer.sending' }));
+  expect(send).toHaveBeenCalledTimes(1);
+  await act(async () => { finish(true); });
+  expect((screen.getByRole('button', { name: 'richAnswer.sent' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText('Destination') as HTMLInputElement).value).toBe('Museum');
+});
+
+it('disables message actions outside a writable conversation while local buttons still work', () => {
+  const source = [
+    { id: 'form', kind: 'form', props: { label: 'Send form', send: 'My answer' } },
+    { id: 'count', kind: 'stat', props: { value: { ref: 'counter' } } },
+    { id: 'counter', kind: 'input', props: { default: '0' } },
+    { id: 'local', kind: 'button', props: { label: 'Calculate', set: { counter: '1' } } },
+  ].map((op, i) => line(i + 1, { op: 'create', ...op })).join('');
+  render(<RichAnswer source={source} complete stateKey="readonly-send" renderMarkdown={text => <span>{text}</span>} />);
+  expect((screen.getByRole('button', { name: 'Send form' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Calculate' }));
+  expect(screen.getByText('1')).toBeTruthy();
+});

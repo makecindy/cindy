@@ -30,6 +30,7 @@ import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shar
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import { normalizeGhostModelImages } from './ghostModelImages.js';
 import type { PluginUsageOutcome } from '../../shared/pluginUsage.js';
 
 /** Internal observation only; no parameters or result bodies leave the dispatcher. */
@@ -245,6 +246,8 @@ export class GhostPipeDispatcher {
     if (ghost.manifest.mail === true && ghost.manifest.mailReader?.tool === tool) {
       toolArgs = { ...args };
       delete toolArgs.markRead;
+      delete toolArgs.openDraft;
+      if (request.mailReaderOpened === true) toolArgs.openDraft = true;
       if (request.mailReaderOpened === true && ghost.manifest.mailReader.markRead === true)
         toolArgs.markRead = true;
     }
@@ -513,6 +516,7 @@ export class GhostPipeDispatcher {
       callId?: unknown;
       ok?: unknown;
       result?: unknown;
+      images?: unknown;
       errorCode?: unknown;
       message?: unknown;
     };
@@ -536,8 +540,13 @@ export class GhostPipeDispatcher {
       this.settle(p.callId, this.ownerBoundaryResult());
       return { accepted: false, reason: '账号边界已变化' };
     }
+    // Images for the model ride next to `result`; invalid ones are dropped here.
+    const shown = p.ok ? normalizeGhostModelImages(p.images) : { images: [], dropped: 0 };
+    if (shown.dropped) {
+      this.deps.log?.warn('ghost tool result images dropped', { callId: p.callId, dropped: shown.dropped });
+    }
     const result: GhostToolCallResult = p.ok
-      ? { ok: true, result: p.result ?? null }
+      ? { ok: true, result: p.result ?? null, ...(shown.images.length ? { images: shown.images } : {}) }
       : {
           ok: false,
           errorCode: isGhostPluginErrorCode(p.errorCode) ? p.errorCode : 'INTERNAL',

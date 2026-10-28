@@ -147,6 +147,7 @@
     "electron-window-state": "^5.0.3",
     "exceljs": "^4.4.0",
     "fix-path": "^5.0.0",
+    "gifenc": "1.0.3",
     "gray-matter": "^4.0.3",
     "harmonyos-sans-sc-webfont-splitted": "1.1.0",
     "highlight.js": "^11.11.1",

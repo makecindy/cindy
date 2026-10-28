@@ -60,6 +60,8 @@ describe('local model descriptions', () => {
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'image_generation' }, t)).toBe(cn.modelDescriptions.image);
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'audio_transcription' }, t)).toBe(cn.modelDescriptions.transcription);
     expect(localizedModelDescription({ id: 'gpt-new', mode: 'future_unknown_mode' }, t)).toBeUndefined();
+    // A new non-chat category must not fall through to a vendor's coding description.
+    expect(localizedModelDescription({ id: 'gpt-new', mode: 'evaluation' }, t)).toBeUndefined();
     expect(localizedModelDescription({ id: 'new-company/new-video', mode: 'video_generation' }, t)).toBe(cn.modelDescriptions.video);
   });
 

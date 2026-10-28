@@ -225,7 +225,7 @@ export function queueItemVisibleText(item: {
 }): string {
   const text = item.text ?? '';
   if (!isAutoSentQueueItem(item)) return text;
-  const persisted = item.persistedContent || text;
+  const persisted = item.persistedContent ?? text;
   if (!item.files?.length) return persisted;
   try {
     const envelope = JSON.parse(persisted) as unknown;

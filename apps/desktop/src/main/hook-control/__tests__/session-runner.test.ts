@@ -24,6 +24,7 @@ import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 
 const h = vi.hoisted(() => {
   /** 跨模块调用顺序记录: 'touch:<id>' / 'created:<id>' */
@@ -76,6 +77,7 @@ const h = vi.hoisted(() => {
     getWorkspaceProviderSource: vi.fn((..._args: unknown[]): string | null => null),
     agentDeviceId: null as string | null,
     readRemoteRoute: vi.fn(),
+    readRemoteAutomaticDefaults: vi.fn(),
     readRemotePermissionModes: vi.fn(async () => ['ask', 'bypassPermissions']),
     getWorkspacePref: vi.fn((): unknown => null),
     isWorkspacePrefsMigrated: vi.fn(() => true),
@@ -139,6 +141,9 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
+    autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
+    AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
@@ -191,7 +196,8 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
   setWorktreePathInDb: vi.fn(async () => undefined),
   touchUserSendInDb: h.touchUserSendInDb,
 }));
-vi.mock('../../maker-host/session-provider-store.js', () => ({
+vi.mock('../../maker-host/session-provider-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../maker-host/session-provider-store.js')>(),
   getSessionProvider: () => null,
   setSessionProvider: h.setSessionProvider,
   hydrateSessionProvider: h.hydrateSessionProvider,
@@ -199,6 +205,12 @@ vi.mock('../../maker-host/session-provider-store.js', () => ({
 vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getResponsesBridgeHandler: () => ({ handle: h.bridgeHandle }),
   getPiNativeSubscriptionHandler: vi.fn(),
+}));
+// The bridge preferences fixture uses the default allowing policy and must not
+// read Electron's owner/config files. Restriction behavior is exercised through
+// the real policy and async handler in subscription-fast-policy/Bridge tests.
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({
+  createSubscriptionFastPolicy: () => ({ isAllowed: () => true, isRequestAllowed: () => true }),
 }));
 vi.mock('../../maker-host/claude-fast-mode-log.js', () => ({
   createClaudeFastModeRequestTransform: () => () => null,
@@ -266,6 +278,7 @@ vi.mock('../workspaceProviderSourceStore.js', () => ({
 }));
 vi.mock('../../im/remoteProviderRoute.js', () => ({
   readImRemoteProviderRoute: h.readRemoteRoute,
+  readImRemoteAutomaticDefaults: h.readRemoteAutomaticDefaults,
   readImRemotePermissionModes: h.readRemotePermissionModes,
 }));
 vi.mock('../workspacePrefsStore.js', async (importOriginal) => ({
@@ -278,6 +291,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../maker-host/model-visibility-mirror.js', () => ({
   getModelVisibilityOverride: h.getModelVisibilityOverride,
+  waitForModelVisibilityMirror: vi.fn(async () => {}),
 }));
 vi.mock('../defaults.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../defaults.js')>();
@@ -499,6 +513,7 @@ beforeEach(() => {
   h.getWorkspaceProviderSource.mockReturnValue(null);
   h.agentDeviceId = null;
   h.readRemoteRoute.mockReset();
+  h.readRemoteAutomaticDefaults.mockReset();
   h.readRemotePermissionModes.mockReset();
   h.readRemotePermissionModes.mockResolvedValue(['ask', 'bypassPermissions']);
   h.readImDefaultSettings.mockReturnValue({ agentKind: 'claude-code', agents: {
@@ -514,6 +529,48 @@ beforeEach(() => {
 });
 
 describe('hook task model selection on next send', () => {
+  // PR #7291 unit: automatic selection must use the execution location and still
+  // reach the existing stale-source rule; previous coverage used pinned defaults.
+  it('creates an automatic remote workspace task and follows its resolved route', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    h.getWorkspaceProviderSource.mockReturnValue('remote-provider');
+    h.agentDeviceId = 'share:owner';
+    const resolved = { ...IM_DEFAULT_SETTINGS, agentKind: 'codex', agents: { ...IM_DEFAULT_SETTINGS.agents,
+      codex: { model: 'remote-model', providerId: 'remote-provider', effort: 'high', agentDeviceId: 'share:owner' },
+    } };
+    h.readRemoteAutomaticDefaults.mockResolvedValue(resolved);
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const req = baseReq({ createOnly: true, workspaceAlias: 'repo', source: { im: 'telegram' } });
+    expect((await createMakerHookSessionRunner({ log }).run(req)).status).toBe('ok');
+    expect(h.readRemoteAutomaticDefaults).toHaveBeenCalledWith(IM_DEFAULT_SETTINGS, {
+      agentDeviceId: 'share:owner', agentKind: undefined, providerId: 'remote-provider',
+    });
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'remote-model', agentDeviceId: 'share:owner' }));
+    expect(h.writeDefaultRecord.mock.calls[0][1]).toContain('remote-model');
+    h.readRemoteAutomaticDefaults.mockResolvedValue(null);
+    await expect(createMakerHookSessionRunner({ log }).run(req)).rejects.toThrow('no available default model');
+  });
+
+  it.each([true, false])('applies stale workspace source checks after automatic selection (connected=%s)', async (connected) => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    h.getWorkspaceProviderSource.mockReturnValue('old-claude');
+    h.getWorkspacePref.mockReturnValue({ workspace: 'repo', agentKind: 'codex', model: null, effort: null, permissionMode: null });
+    h.listProviders.mockResolvedValue([
+      { ...connectedProvider('old-claude', [catalogModel('old-claude')]), connected },
+      { ...connectedProvider('openai', [catalogModel('gpt-6.1-sol')], 'codex'), access: { kind: 'subscription' } },
+    ]);
+    const run = () => createMakerHookSessionRunner({ log }).run(baseReq({ createOnly: true, workspaceAlias: 'repo', source: { im: 'telegram' } }));
+    if (connected) {
+      expect((await run()).status).toBe('ok');
+      expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'gpt-6.1-sol' }));
+      expect(h.setSessionProviderIdInDb).toHaveBeenCalledWith('sess-new', 'openai');
+    } else {
+      await expect(run()).rejects.toThrow('selected provider "old-claude"');
+      expect(h.createSessionRow).not.toHaveBeenCalled();
+    }
+  });
   // Regression #6493: createSession options do not hydrate Claude's bridge.
   // Exercise the production runner + routing transform at provider startup,
   // with no profile switch, both after restart and when clearing old axes (unit).
@@ -542,7 +599,8 @@ describe('hook task model selection on next send', () => {
       }));
       return makeFakeSession(opts.id ?? req.sessionId);
     });
-    expect((await createMakerHookSessionRunner({ log }).run(req)).status).toBe('ok');
+    const outcome = await createMakerHookSessionRunner({ log }).run(req);
+    expect(outcome.status, outcome.errorMessage ?? undefined).toBe('ok');
     expect(h.bridgeHandle).toHaveBeenCalledOnce();
   });
 
@@ -596,6 +654,25 @@ describe('hook task model selection on next send', () => {
     expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
   });
 
+  it.each(['telegram', 'slack', 'x'])('resolves automatic %s defaults and follows catalog changes', async (channel) => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    const provider = { ...connectedProvider('openai', [catalogModel('current-recommendation')], 'codex'), access: { kind: 'subscription' as const } };
+    h.listProviders.mockResolvedValue([provider]);
+    const req = baseReq({ workspaceAlias: 'repo', source: { im: channel, userText: 'hello' } });
+    const runner = createMakerHookSessionRunner({ log });
+    expect((await runner.run({ ...req, createOnly: true })).status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'current-recommendation' }));
+    const creationFingerprint = h.writeDefaultRecord.mock.calls[0][1];
+    await runner.run({ ...req, isNew: false });
+    const policy = h.followPolicy.mock.calls[0][0];
+    expect(policy.fingerprint()).not.toBe(creationFingerprint);
+    provider.models.codex = [catalogModel('next-recommendation')];
+    const next = await policy.resolveTarget([provider]);
+    expect(next).toMatchObject({ agentKind: 'codex', model: 'next-recommendation', providerId: 'openai' });
+    expect(next.fingerprint).not.toBe(creationFingerprint);
+  });
+
   it.each([false, true])('records new official tasks with their creation defaults (createOnly=%s)', async (createOnly) => {
     const outcome = await createMakerHookSessionRunner({ log }).run(baseReq({
       createOnly, source: { im: 'telegram', userText: 'hello' },
@@ -603,6 +680,20 @@ describe('hook task model selection on next send', () => {
     expect(outcome.status).toBe('ok');
     expect(h.writeDefaultRecord).toHaveBeenCalledWith('sess-new', expect.stringContaining('hook'));
     expect(h.acquirePendingAgentSwitch).not.toHaveBeenCalled();
+  });
+
+  it('uses the common automatic policy for a workspace with only an explicit engine', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({ ...IM_DEFAULT_SETTINGS, agents: { ...IM_DEFAULT_SETTINGS.agents,
+      'claude-code': { providerId: 'xd', model: 'pinned-claude', effort: 'high' },
+    } });
+    h.getWorkspacePref.mockReturnValue({ channel: 'telegram', teamId: null, workspace: 'repo',
+      agentKind: 'codex', model: null, effort: null, permissionMode: null });
+    h.listProviders.mockResolvedValue([{ ...connectedProvider('openai', [catalogModel('automatic-codex')], 'codex'), access: { kind: 'subscription' } }]);
+    expect((await createMakerHookSessionRunner({ log }).run(baseReq({ createOnly: true,
+      workspaceAlias: 'repo', source: { im: 'telegram', userText: 'hello' },
+    }))).status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'automatic-codex' }));
   });
 
   it.each(['telegram', 'slack', 'x'])('preserves %s dispatch defaults until workspace migration completes', async (channel) => {

@@ -48,7 +48,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
   note: "干完了"
 }});
 // 失败交卷：errorCode 是可选的插件业务错误码；主机保留码
-// (GHOST_NOT_FOUND / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)不可由插件写入。
+// (GHOST_NOT_FOUND / GHOST_NAMESPACE_MISMATCH / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)
+// 不可由插件写入；GHOST_NAMESPACE_MISMATCH 只由主机在派发前产生，插件交卷时已执行，不能冒用。
 // message 必须包含用户可执行的恢复指引；不要把失败对象 JSON.stringify 到 message。
 cindy.send({
   type: 'tool-result',
@@ -57,6 +58,24 @@ cindy.send({
   errorCode: 'CONFIRM_REQUIRED',
   message: '删除需要确认，请传 confirm:true 后重试',
 });
+
+// 给模型看的图片：工具的用途就是让当前 Agent「看一眼」时(截图、渲染预览、
+// 图表快照),在 tool-result **顶层**(与 result 平级,不要放进 result)附 images,
+// 主机把它们作为图片内容放在结果文字之后交给模型,省掉模型再去读文件的一步:
+cindy.send({ type: 'tool-result', callId: msg.callId, ok: true,
+  result: { path: '/…/shot.jpg', width: 402, height: 874 },   // 文字照常给
+  images: [{ data: '<base64>' }],                              // 最多 2 张
+});
+// - 格式由主机按字节判定,只收 PNG / JPEG / WebP / GIF(不收 SVG),单张解码后
+//   ≤6MB;无效项静默丢弃。一次结果里所有图合计约 140KB:小于份额的原样交给
+//   模型,超出的由主机重新编码(可能缩小像素尺寸),仍放不下的不附,结果里会多
+//   images_omitted:N。图上的像素若有含义(例如可直接点击的坐标),自己先压到
+//   份额以内,别让主机替你缩放。
+// - 每张图都占模型上下文(几百到一千多 token)且留在对话里:只在 Agent 明确要看
+//   时附,自动附带的观察结果给路径即可。
+// - 图片只交给模型和本次工具步骤展示,不入媒体库、不进产物账本、不会自动发到
+//   IM;要交付给用户的产物仍走上面的 xdt_image_urls 等媒体字段。
+// - 旧版 Cindy 不认这个字段,会直接忽略:result 里仍要给出够用的文字或路径。
 
 // 长任务续命(超时窗口默认 330s,从派发起算绝对上限 30 分钟):
 // - 经 cindy-request 请主机代办且带 callId 的署名单(出图/视频)在途时,

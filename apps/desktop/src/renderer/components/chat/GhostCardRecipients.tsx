@@ -100,8 +100,8 @@ export function GhostCardRecipients({
     <div ref={root} className="relative w-full min-w-0 overflow-hidden border-b border-border py-1">
       {expanded ? (
         fields.map((field, i) => (
-          <div key={field.name} className="flex items-start gap-2 py-1">
-            <span aria-hidden className="shrink-0 pt-1 text-12 text-muted-foreground">
+          <div key={field.name} className="flex items-start gap-2 py-0.5">
+            <span aria-hidden className="shrink-0 pt-0.5 text-12 text-muted-foreground">
               {field.label}
             </span>
             <Textarea
@@ -110,7 +110,7 @@ export function GhostCardRecipients({
               value={field.value}
               rows={1}
               maxLength={GHOST_CARD_FORM_MAX_VALUE}
-              className="min-h-0 flex-1 resize-none overflow-hidden border-transparent bg-transparent p-1 leading-5 shadow-none"
+              className="min-h-0 flex-1 resize-none overflow-hidden border-transparent bg-transparent px-1 py-0.5 leading-5 shadow-none"
               onChange={(value) => onChange(field.name, value)}
             />
             {i === 0 && (

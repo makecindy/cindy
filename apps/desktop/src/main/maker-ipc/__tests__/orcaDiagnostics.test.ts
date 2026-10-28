@@ -163,3 +163,25 @@ describe('orca diagnostics read-only helpers', () => {
     expect(deps.readLatestAssistantMessage).toHaveBeenCalledWith('worker-session-1');
   });
 });
+
+// PR2 unit: ownership affects archive behavior; cwd alone cannot distinguish inherited trees.
+// Existing diagnostics only cover the directory and queue state.
+it('reports only Worker-owned checkouts and never queries local ownership for execution-device Workers', async () => {
+  const deps = createDeps();
+  const [base] = await deps.listWorkersByLead('lead');
+  deps.listWorkersByLead = async () => ['owned', 'inherited', 'remote'].map(sessionId => ({...base!, sessionId,
+    session: {...base!.session, workingDir: '/repo/.cindy-worktrees/tree'},
+    ...(sessionId === 'remote' ? {executionDevice: {deviceId: 'other', workingDir: '/remote/project'}} : {}),
+  }));
+  deps.getWorkerWorktree = vi.fn(id => id === 'owned' ? {path: '/repo/.cindy-worktrees/tree', branch: 'cindy/new'} : undefined);
+  const result = await getOrcaWorkspaceInfoReadOnly(deps, 'lead');
+  expect(result).toMatchObject({workers: [
+    {session_id: 'owned', owns_worktree: true, worktree: {path: '/repo/.cindy-worktrees/tree', branch: 'cindy/new'}},
+    {session_id: 'inherited', owns_worktree: false},
+    {session_id: 'remote', owns_worktree: false, working_dir: '/remote/project'},
+  ]});
+  if (!result.ok) throw new Error('Expected workspace info');
+  expect(result.workers[1]).not.toHaveProperty('worktree');
+  expect(result.workers[2]).not.toHaveProperty('worktree');
+  expect(deps.getWorkerWorktree).not.toHaveBeenCalledWith('remote');
+});

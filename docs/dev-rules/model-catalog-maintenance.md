@@ -30,6 +30,7 @@ Catalog (version)
 ├─ providers[]                 内置接入、授权、routing、各引擎 models
 ├─ presets[].runtimes          新建连接的地址、协议和默认资料
 └─ modelRegistry (schemaVersion / updatedAt)
+   ├─ interfaceProfiles[]      V6：产品作用域内的接口模板
    ├─ baseModels[]             公共型号
    ├─ models[]                 接入条目：modelRef → baseModels；perAgent 与 routes 同级
    ├─ nativeApiRules[]         原生协议判定
@@ -57,6 +58,57 @@ Catalog (version)
 Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）。媒体 route 使用 `agents: []`。
 `contextWindowMax` 是客户端容量投影，不能填进 Registry；容量与工作预算见 [运行时细则](model-catalog-runtime.md)。
 
+### 多接口目录（Registry V6）
+
+一个模型的身份与其接口绑定分开维护。`interfaceProfiles` 正本位于 Server 的
+`source/registry/interface-profiles.json`：`id/providerId/api/baseUrl/inputBaseUrls` 声明接口与精确
+凭证作用域；`requestPath` 为可选相对路径；`defaults` 为通道能力；`compatibility/requires`
+只引用客户端已实现的具名能力。`inputBaseUrls` 必须与目标同源，不能借目录把密钥换域发送。
+`modelIds` 限制旧配置自动采用该模板的成员，显式 `routes[].interfaces` 为新模型绑定已有模板。
+
+`routes[].interfaces[]` 通过 `profileId` 绑定模板，可声明 `wireModelId/defaults/compatibility/requires/retired`；
+`preferredInterfaces` 按 Claude Code、Codex、Pi 分别列优先级。模板被撤回、绑定被撤回或必需能力未知时，
+该绑定不可执行；不能回填离线数据复活。`nativeApis` 是经核实的型号原生协议集合（`null` 明确未知），
+不从 Pi adapter 或代理协议反推。保留 `nativeApi` 作为旧客户端的稳定声明。
+
+三引擎共用 `availableModelInterfaces/providerInterfaceModelRoute`。能力覆盖依次为公共/产品默认、
+接口默认、引擎差异、实报、`forceOverrides`、用户覆盖；数组整体替换，`false/null/[]` 不丢失。
+界面展示当前接口的能力，输入不支持时不自动重放到另一协议。`interfaceId: "auto"` 跟随目录默认；
+显式 profile ID 固定用户选择。旧 `api/piApi/route/requestPath` 保留；仅已声明的旧导入修正规则
+通过 `legacyApis` 迁移。用户配置只保存原始选择，不保存解析后的 API、模板或完整快照。
+高级模型设置沿用既有入口显示自动与可用接口；手机/设备互联仍使用执行端投影，不在控制端重新选路。
+
+任务首次派发把非敏感接口、模型 ID 与能力快照存入 owner-scoped `model-interface-snapshots/`，
+同一任务/来源/引擎/型号在目录刷新与重启后保留接口。旧任务首次恢复按保存的 transport 迁移。
+鉴权、来源是否存在、暂停与撤回仍实时检查；快照不存 Key/headers。删除任务清理其快照；
+归档和关闭不清理。SSH 由执行宿主复用选路结果；新接口若不能由既有远端协议表达，沿用启动前明确报错。
+
+V6 请求使用 `registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1`；旧服务端返回低版本时，
+在同一时间预算内重试一次 V5。缓存按实际 URL 变体隔离；同 revision 的 V5→V6 只有旧形状完全相等
+才视为升级，反向不覆盖 V6。服务端 V5/V4/冻结 legacy 投影不泄漏新字段或新默认接口。
+
+维护步骤：
+
+1. 在 Server 正本修改模型绑定/通道能力/优先级，增加 `updatedAt`，运行 `pnpm --filter model-access-server catalog:generate`。
+2. 更新离线副本时，在客户端运行 `node packages/model-providers/scripts/sync-registry.mjs <Server生成的providers.json>`；
+   运行解析、目录一致性及受影响路由回归。旧 `provider-interface-models.json` 与客户端硬编码接口表已删除。
+3. 新型号绑定已有模板可以只发目录。新增/改变模板端点、鉴权边界或兼容行为走常规服务发布；
+   新执行行为还必须发布客户端。发布门比较组装后的模板，不能通过换分片绕过。
+4. 回撤用新的完整 revision 和 `retired`，不回发旧日期快照。先部署可兼容投影的 Server，再发布客户端，
+   最后调整目录默认；目录发布与真实上游推理验收分别记录。
+
+回归入口：`providerInterfaceRoutes`、`source-registry`、`modelAccessValidator`、Desktop `providerRoute`
+（真实 HTTP 目录→解析→三接口出站、快照冷恢复）、`codexProxyHost`、`piProviderTransport`。
+“客户端已实现”“服务已部署”“账号真实推理通过”是三个独立结论。
+
+Agnes AI 离线副本与 Server 正本同步：四个聊天型号用官方 Messages / Responses / Chat 接口，
+Messages 使用域名根路径（适配器追加 `/v1/messages`），Responses / Chat 保留 `/v1` base，
+模型发现保持 `/v1/models`；不能把三接口机械地写成同一个 base，否则 Messages 会重复 `/v1`。
+Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,000，输出 65,536。
+原有连接仅补缺失资料，不重置显式窗口、协议或启用开关。三个图片、两个视频型号本次仅收录
+身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
+可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
+
 ### Gateway 复杂价目展示
 
 Model Access V5 通过 `X-Cindy-Model-Capabilities: display_pricing` 协商可选 `displayPricing`。
@@ -65,10 +117,21 @@ Registry/defaults、ModelPriceQuote 或 token 成本估算，不跨供应商补�
 成功刷新缺字段或价目不可解析时清除旧价目，模型仍正常更新；新增属性忽略，未知单位保留。
 展示字段变化不构成整份目录失败；网络或核心模型协议失败仍沿用既有目录恢复语义。
 
-Desktop 模型详情优先展示结构化价目，缺字段沿用原有价格。`price` 为每 `quantity` 个
-`unit` 的折扣前报价，只在展示时应用一次折扣，保留币种与“约/起价”语义；label、tier、
-notes 仅按纯文本呈现，未知单位不猜换算。列表不新增价格入口，统一从既有模型详情查看，也不从混合单位挑最低价。
-共享目录可传递这些可选展示字段，旧端缺字段仍合法；首期 UI 仅覆盖 Desktop 现有详情入口。
+Desktop 设置页模型详情有 `displayPricing.summary` 时优先按输入、输出、缓存读取、缓存写入
+展示主报价，每个角色允许 1–4 段、各带单位与数量，区间统一用 `maxPrice` 表示。摘要的
+`priceType` 仅允许缺省、`exact` 或 `estimated`；任一段为 `starting_at` 时整份 summary 无效，
+只丢弃摘要，保留价目表。items 的已发布契约不变，仍支持 `starting_at`。summary 缺失或无效时
+沿用原价目表；summary 无效只清除摘要，不丢价目表。补充价目表仅在以下条件全部满足时隐藏：
+有 summary 且没有 notes；所有 item 都没有 tier，priceType 缺省或 exact；item 总数等于
+所有角色报价段数，且每个 item 能按 unit、quantity、price 一一匹配不同的摘要报价，
+匹配报价没有 maxPrice 或 tier。其余情况保留在摘要下方。设置页列表对带 displayPricing 的
+模型不显示价格；选择器、浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
+摘要的 tier 单独一行使用次要文字，金额、原价区间和单位分别保持完整，同一角色的多段报价逐条换行、靠右对齐，不插入分隔点。
+`price` / `maxPrice` 为每 `quantity` 个 `unit` 的折扣前报价，只在展示时应用一次折扣，保留币种
+与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化，label、tier、notes 仅按纯文本呈现，未知单位不猜换算。
+数量 1 省略，百万按语言简写，其余按本地数字格式显示。共享目录可传递这些可选展示字段，旧端
+缺字段仍合法，不新增能力声明；此 UI 仅覆盖 Desktop 设置页。解析与展示回归见
+`modelDisplayPricing.test.ts`、`DisplayPricingDetails.test.tsx` 与 `ModelAdvancedDrawer.test.tsx`。
 
 ### 覆盖顺序
 

@@ -1,15 +1,19 @@
 /**
  * 群聊消息正文。伙伴的回复是 Markdown：这里只做轻量排版（段落、标题、引用、列表、代码块、
- * 行内强调 / 代码），与伙伴私聊回看同样是只读文本，不加载任务页的完整消息渲染器；链接只
+ * 表格、行内强调 / 代码），与伙伴私聊回看同样是只读文本，不加载任务页的完整消息渲染器；链接只
  * 显示文字，不在群聊里打开。用户自己的消息保留原文，`@名字` 画成点名标记。
  */
-import { useMemo, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
+import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { ScrollView, StyleSheet, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { splitBotGroupMentionSegments } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
+import { buildMessageContentLayout } from './messageContentLayout';
+import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -30,18 +34,49 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles)
       case 'emphasis': return <Text key={index} style={styles.emphasis}>{inline.text}</Text>;
       case 'strikethrough': return <Text key={index} style={styles.strike}>{inline.text}</Text>;
       case 'code': return <Text key={index} style={styles.inlineCode}>{inline.text}</Text>;
-      case 'link': return <Text key={index} style={styles.link}>{inline.text}</Text>;
+      case 'link': return <Text key={index}>{inline.text}</Text>;
       case 'image': return <Text key={index}>{inline.alt ? `[${inline.alt}]` : ''}</Text>;
       default: return <Text key={index}>{inline.text}</Text>;
     }
   });
 }
 
-function tableText(block: Extract<MobileMarkdownBlock, { type: 'table' }>): string {
-  const cell = (inlines: readonly MobileMarkdownInline[]) => inlines.map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('');
-  return [block.header, ...block.rows.map((row) => row.cells)]
-    .map((cells) => cells.map(cell).join(' | '))
-    .join('\n');
+function BotGroupMarkdownTable({ block, styles }: {
+  block: Extract<MobileMarkdownBlock, { type: 'table' }>;
+  styles: Styles;
+}) {
+  const { width: screenWidth } = useWindowDimensions();
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const onLayout = useCallback((event: LayoutChangeEvent) => {
+    setAvailableWidth(event.nativeEvent.layout.width);
+  }, []);
+  // This read-only renderer shows image alt text, so measure that same text, not a preview.
+  const measureCells = (cells: readonly MobileMarkdownInline[][]) => cells.map(cell => cell.map(
+    (inline): MobileMarkdownInline => inline.type === 'image'
+      ? { type: 'text', text: inline.alt ? `[${inline.alt}]` : '' }
+      : inline,
+  ));
+  const widths = buildMobileMarkdownTableColumnWidths({
+    header: measureCells(block.header), rows: block.rows.map(row => ({ ...row, cells: measureCells(row.cells) })), availableWidth,
+    minWidth: buildMessageContentLayout({ screenWidth }).markdownTableCellMinWidth,
+  });
+  const renderRow = (cells: readonly MobileMarkdownInline[][], key: string, header = false) => (
+    <View key={key} style={[styles.tableRow, header && styles.tableHeaderRow]}>
+      {widths.map((width, index) => (
+        <View key={index} style={[styles.tableCell, { width }]}>
+          <Text selectable style={[styles.tableText, header && styles.tableHeaderText]}>
+            {renderInlines(cells[index] ?? [], styles)}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+  return <ScrollView horizontal style={styles.tableScroll} onLayout={onLayout}>
+    <View style={styles.table}>
+      {renderRow(block.header, `${block.key}:header`, true)}
+      {block.rows.map(row => renderRow(row.cells, row.key))}
+    </View>
+  </ScrollView>;
 }
 
 function renderBlock(block: MobileMarkdownBlock, styles: Styles): ReactNode {
@@ -64,17 +99,17 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles): ReactNode {
         <Text selectable style={styles.codeText}>{block.text}</Text>
       </View>;
     case 'table':
-      return <View key={block.key} style={styles.codeBlock}>
-        <Text selectable style={styles.codeText}>{tableText(block)}</Text>
-      </View>;
+      return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} />;
     default:
       return <Text key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles)}</Text>;
   }
 }
 
-export function BotGroupMarkdownText({ content }: { content: string }) {
+export function BotGroupMarkdownText({ content, authorKind }: { content: string; authorKind?: BotGroupAuthorKind }) {
   const styles = useThemedStyles(makeStyles);
-  const blocks = useMemo(() => parseMobileMarkdown(content), [content]);
+  const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
+    ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
+    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
   return <View style={styles.body}>{blocks.map((block) => renderBlock(block, styles))}</View>;
 }
 
@@ -97,7 +132,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   strong: { fontWeight: fontWeight.semibold },
   emphasis: { fontStyle: 'italic' },
   strike: { textDecorationLine: 'line-through' },
-  link: { textDecorationLine: 'underline' },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },
   quoteText: { color: colors.textSecondary },
@@ -106,5 +140,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   codeBlock: { backgroundColor: colors.chatCodeSurface, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.control, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   codeText: { color: colors.textPrimary, fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+  tableScroll: { maxWidth: '100%' },
+  table: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container, overflow: 'hidden' },
+  tableRow: { flexDirection: 'row' },
+  tableHeaderRow: { backgroundColor: colors.surfaceElevated },
+  tableCell: { flexShrink: 0, borderRightColor: colors.border, borderRightWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  tableText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+  tableHeaderText: { color: colors.textSecondary, fontWeight: fontWeight.medium },
   mention: { fontWeight: fontWeight.medium, backgroundColor: colors.surfaceChip },
 });

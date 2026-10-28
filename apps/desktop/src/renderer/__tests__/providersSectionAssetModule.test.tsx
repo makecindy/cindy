@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
 
 const {
   providersState,
@@ -243,6 +244,29 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+// PR #7031: settings and chip must both open the queried account's dashboard.
+// Unit/jsdom, a CN-first configuration whose usable key belongs to Global/Pi.
+it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings card (%s)', async (status) => {
+  const dashboardUrl = 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+  Object.assign(window.electronAPI, { openExternal: vi.fn(async () => undefined) });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: vi.fn(async () => ({
+    status, dashboardUrl,
+    ...(status === 'ready'
+      ? { agent: 'pi', stale: false, snapshot: { kind: 'zhipu-coding-plan-quota', noPlan: true, level: null, fiveHour: null, weekly: null, fetchedAt: 1 } }
+      : { error: 'auth' }),
+  })) });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'mixed-glm', auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' },
+      pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText(status === 'ready' ? 'Pi' : 'providerAccountUsage.error.auth');
+  fireEvent.click(screen.getByRole('button', { name: 'providerAccountUsage.zhipuCodingPlan.usage' }));
+  expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
 });
 
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {

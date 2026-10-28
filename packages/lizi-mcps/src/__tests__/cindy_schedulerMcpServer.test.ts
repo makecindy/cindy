@@ -221,6 +221,26 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Integration: schema parsing used to strip the Agent location. Follow the real
+  // MCP dispatcher through create/update and verify the saved route and null clear.
+  it('persists shared model selections and clears their location through MCP', async () => {
+    try {
+      const route = { modelAgentKind: 'codex', modelAgentDeviceId: 'shared:owner',
+        model: 'shared-model', providerId: 'remote-provider', fastMode: 'ultrafast' };
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, ...route },
+      } });
+      expect(result.isError).not.toBe(true);
+      const [created] = await h.storage.list();
+      expect(created).toMatchObject(route);
+      const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_update', args: { id: created.id, modelAgentDeviceId: null },
+      } });
+      expect(updated.isError).not.toBe(true);
+      expect(await h.storage.get(created.id)).toMatchObject({ ...route, modelAgentDeviceId: undefined });
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools without category returns the scheduler category', async () => {
     const result = await h.client.callTool({ name: 'list_tools', arguments: {} });
     const first = (result.content as Array<{ type: string; text: string }>)[0];
@@ -609,6 +629,18 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     const result = await h.client.callTool({
       name: 'call_tool',
       arguments: { name: 'schedule_run_now', args: { id: 'does-not-exist' } },
+    });
+    const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    if (env.ok) throw new Error('unreachable');
+    expect(env.message).toMatch(/not found/i);
+    await h.cleanup();
+  });
+
+  it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
     expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
@@ -1553,6 +1585,7 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     withService?: boolean;
     scheduleRow?: Record<string, unknown> | null;
     resolveSessionWorkDir?: (sessionId: string) => Promise<string | undefined>;
+    isSessionAgentOnOtherDevice?: (sessionId: string) => Promise<boolean>;
   }) {
     const installCalls: InstallCall[] = [];
     const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
@@ -1571,6 +1604,9 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
         ? {}
         : {
             hookScript: {
+              ...(opts.isSessionAgentOnOtherDevice
+                ? { isSessionAgentOnOtherDevice: opts.isSessionAgentOnOtherDevice }
+                : {}),
               ...(opts.resolveSessionWorkDir
                 ? { resolveSessionWorkDir: opts.resolveSessionWorkDir }
                 : {}),
@@ -1659,6 +1695,27 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     const data = env.data as Record<string, unknown>;
     expect(data.attached).toBe(true);
     expect((data.test as Record<string, unknown>).decision).toBe('skip');
+  });
+
+  // PR #6832: the real tool must select the local utility route for remote bound
+  // tasks. Existing tests only inherited cwd, without remote-only model/provider.
+  // Minimal input: targetSessionId + remote provider, no schedule.agentDeviceId.
+  // Tier: unit; fake installer captures its public route and attachment result.
+  // Windows standalone: 0.85s for the file's 70 tests.
+  it.each([true, false])('uses the bound task location for hook generation (remote=%s)', async (remote) => {
+    const { registry, installCalls, updates } = setup({
+      scheduleRow: { id: 'sch-1', targetSessionId: 'bound', providerId: 'selected-provider',
+        agentKind: 'claude-code', model: 'selected-model' },
+      isSessionAgentOnOtherDevice: async () => remote,
+    });
+    const env = await callTool(registry, { scheduleId: 'sch-1', description: 'Check for pending work' });
+    expect(env.ok).toBe(true);
+    expect(installCalls[0]).toMatchObject({
+      providerId: remote ? undefined : 'selected-provider',
+      agentKind: remote ? undefined : 'claude-code',
+      model: remote ? undefined : 'selected-model',
+    });
+    expect(updates).toHaveLength(1);
   });
 
   it('bound script hooks are installed in script cwd rather than owner cwd', async () => {

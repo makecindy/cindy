@@ -99,7 +99,7 @@ export interface CindyMakeTaskOptions {
   effort?: string;
   providerId?: string | null;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   planModeEnabled?: boolean;
 }
 

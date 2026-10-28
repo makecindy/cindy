@@ -1,5 +1,7 @@
 import { FILE_PEER_LOCAL, type FilePeerHostApi, type FilePeerCommand } from '../shared/filePeer';
 import { contextBridge, ipcRenderer } from 'electron';
+import { DIRECT_LINK_LOCAL, type DirectLinkHostApi } from '../shared/directLink';
+import type { DirectRuntimeCommand } from '@cindy/device-link';
 import {
   DESKTOP_LOCAL,
   type DesktopCaptureApi,
@@ -26,7 +28,18 @@ const api: DesktopCaptureApi = {
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
   nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),
 };
-if (location.search === '?mode=files') {
+if (location.search === '?mode=direct') {
+  const direct: DirectLinkHostApi = {
+    register: () => ipcRenderer.invoke(DIRECT_LINK_LOCAL.REGISTER),
+    event: (event) => { void ipcRenderer.invoke(DIRECT_LINK_LOCAL.EVENT, event).catch(() => {}); },
+    onCommand: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, command: DirectRuntimeCommand) => listener(command);
+      ipcRenderer.on(DIRECT_LINK_LOCAL.COMMAND, wrapped);
+      return () => { ipcRenderer.removeListener(DIRECT_LINK_LOCAL.COMMAND, wrapped); };
+    },
+  };
+  contextBridge.exposeInMainWorld('directLinkHost', direct);
+} else if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {
     closed: (connection) => ipcRenderer.invoke(FILE_PEER_LOCAL.CLOSED, connection),
     register: () => ipcRenderer.invoke(FILE_PEER_LOCAL.REGISTER),

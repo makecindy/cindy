@@ -48,6 +48,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
   getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => undefined,
   confirmTaskAction: vi.fn(async () => true),
 }));
 
@@ -226,6 +227,51 @@ describe('collab send outcome semantics', () => {
       } as never),
     ).toBe(true);
 
+  });
+
+  it('maps send_to_worker images to the host imagePaths field at the collab boundary', async () => {
+    const sendToWorker = vi.fn(async () => ({
+      ok: true as const,
+      agentKind: 'codex' as const,
+      wakeKind: 'already-active' as const,
+      targetTitle: null,
+      targetLastUserSendAt: null,
+    }));
+    mockState.collabService = createCollabService({ sendToWorker });
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(),
+    });
+    const orca = mockState.capturedProvidersConfig?.orca as {
+      sendToWorker: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      images: ['C:/tmp/a.png'],
+    });
+    expect(sendToWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      imagePaths: ['C:/tmp/a.png'],
+    });
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
+    expect(sendToWorker).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
   });
 
   // #6439: real Desktop host callbacks + worker DB, only the external IM service

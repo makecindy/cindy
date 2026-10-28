@@ -2,7 +2,7 @@ import type { PluginPageEvent } from '@cindy/device-link';
 
 export type MobileRelayOperation =
   | { op: 'connect'; pageId: string; channels: string[] }
-  | { op: 'post'; pageId: string; channel: string; data: unknown }
+  | { op: 'post'; pageId: string; channel: string; data: unknown; sourceId?: string }
   | { op: 'poll'; pageId: string; after: number }
   | { op: 'disconnect'; pageId: string };
 
@@ -80,7 +80,7 @@ function relay(operation: MobileRelayOperation) {
   // Plugins forward this opaque origin when requesting a host confirmation.
   channel.postMessage(
     data && typeof data === 'object' && !Array.isArray(data)
-      ? { ...data, mobilePageId: operation.pageId }
+      ? { ...data, mobilePageId: operation.sourceId ?? operation.pageId }
       : data,
   );
 }

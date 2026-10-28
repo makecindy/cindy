@@ -486,12 +486,12 @@ const GENERATED_DEFAULTS = {
     "dark": "#434343"
   },
   "login-callback-title": {
-    "light": "#252222",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-callback-body": {
-    "light": "#6F6F6F",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.56)",
+    "dark": "rgba(255, 255, 255, 0.55)"
   },
   "login-callback-cta-bg": {
     "light": "#2A2828",
@@ -534,20 +534,20 @@ const GENERATED_DEFAULTS = {
     "dark": "#B4B4B4"
   },
   "login-control-text": {
-    "light": "#252222",
-    "dark": "#EEEEEE"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-control-placeholder": {
-    "light": "#D4D4D4",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.32)",
+    "dark": "rgba(255, 255, 255, 0.30)"
   },
   "login-title-text": {
-    "light": "#252222",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-secondary-text": {
-    "light": "#6F6F6F",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.56)",
+    "dark": "rgba(255, 255, 255, 0.55)"
   },
   "login-primary-button-bg": {
     "light": "#2A2828",
@@ -2415,8 +2415,9 @@ registerColor('welcome-text', GENERATED_DEFAULTS["welcome-text"], 'Stone #737373
 // 语义 = 跨主题恒定品牌豁免色(规则 16 豁免族):Cindy 品牌登录入口不随编辑器主题
 // 染色,任何 builtin/扩展主题都不应 override 本组 token。
 // 本组为现行登录 token(旧 `login-*` 9 token 已于 PR5 全族退役,见上方注释);
-// 禁止撞名混义。参数权威:design.md §8(wave4)/figma-component-spec.md §10/
-// token-decision-table.md(wave4 改判)。
+// 禁止撞名混义。参数权威:DESIGN.md §16 色板表(由 packages/design-tokens 生成)。
+// 文字类(title / control-text / placeholder / secondary / callback-title / -body)
+// 自 2026-10-23 起取主界面墨水阶梯同值(DESIGN §15.16),由 loginInkLadder.test.ts 守护。
 //
 // 底色:figma 帧 fill 标注 #F1F0F1,用户拍板 2026-07-22 改为固定 #EDEDED
 // (= PR #104 白底机制在 cindy-light 下的实际渲染值)。2026-07-20 的
@@ -2466,8 +2467,8 @@ registerColor('login-link-pressed', GENERATED_DEFAULTS["login-link-pressed"], 'L
 // 品牌豁免族:非默认主题不 override(与 wave4 组同口径)。
 registerColor('login-callback-card-bg', GENERATED_DEFAULTS["login-callback-card-bg"], 'Login callback card — 卡底(White/Dark 卡,figma §6.1)');
 registerColor('login-callback-card-border', GENERATED_DEFAULTS["login-callback-card-border"], 'Login callback card — 1px 卡描边');
-registerColor('login-callback-title', GENERATED_DEFAULTS["login-callback-title"], 'Login callback card — 标题');
-registerColor('login-callback-body', GENERATED_DEFAULTS["login-callback-body"], 'Login callback card — 副文案(两模式同值)');
+registerColor('login-callback-title', GENERATED_DEFAULTS["login-callback-title"], 'Login callback card — 标题(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-callback-body', GENERATED_DEFAULTS["login-callback-body"], 'Login callback card — 副文案(墨水次要档 黑 56% / 白 55%)');
 registerColor('login-callback-cta-bg', GENERATED_DEFAULTS["login-callback-cta-bg"], 'Login callback card — CTA 底(反相)');
 registerColor('login-callback-cta-border', GENERATED_DEFAULTS["login-callback-cta-border"], 'Login callback card — CTA 1px 描边');
 registerColor('login-callback-cta-text', GENERATED_DEFAULTS["login-callback-cta-text"], 'Login callback card — CTA 文字(反相)');
@@ -2483,10 +2484,10 @@ registerColor('login-back-border', GENERATED_DEFAULTS["login-back-border"], 'Log
 registerColor('login-control-border', GENERATED_DEFAULTS["login-control-border"], 'Login — 控件 default 描边(亮色 #D4D4D4 / 暗色 #434343)');
 registerColor('login-control-border-active', GENERATED_DEFAULTS["login-control-border-active"], 'Login — 控件 focus/filled 描边(亮色 #2A2828 / 暗色 #EEEEEE 反相)');
 registerColor('login-control-border-disabled', GENERATED_DEFAULTS["login-control-border-disabled"], 'Login — disabled 控件描边(两模式同构,§16.5 disabled 特例)');
-registerColor('login-control-text', GENERATED_DEFAULTS["login-control-text"], 'Login — 控件已填文本/标题(亮色 #252222 / 暗色 #EEEEEE)');
-registerColor('login-control-placeholder', GENERATED_DEFAULTS["login-control-placeholder"], 'Login — 控件 placeholder/countdown(亮色 #D4D4D4 / 暗色 #6F6F6F;figma 539:754 dark_倒计时重发)');
-registerColor('login-title-text', GENERATED_DEFAULTS["login-title-text"], 'Login — 面板标题 32 Bold(亮色 #252222 / 暗色 #D4D4D4)');
-registerColor('login-secondary-text', GENERATED_DEFAULTS["login-secondary-text"], 'Login — 副标题/说明文字(两模式同值 #6F6F6F)');
+registerColor('login-control-text', GENERATED_DEFAULTS["login-control-text"], 'Login — 控件已填文本(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-control-placeholder', GENERATED_DEFAULTS["login-control-placeholder"], 'Login — 控件 placeholder(墨水占位档 黑 32% / 白 30%);倒计时与提示文本走 login-secondary-text');
+registerColor('login-title-text', GENERATED_DEFAULTS["login-title-text"], 'Login — 面板标题 32 Bold(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-secondary-text', GENERATED_DEFAULTS["login-secondary-text"], 'Login — 副标题/说明文字(墨水次要档 黑 56% / 白 55%)');
 registerColor('login-primary-button-bg', GENERATED_DEFAULTS["login-primary-button-bg"], 'Login — 主按钮/第三方圆钮底(亮色深 #2A2828 / 暗色白 #EEEEEE 反相;社交圆图标保品牌色)');
 registerColor('login-primary-button-border', GENERATED_DEFAULTS["login-primary-button-border"], 'Login — 主按钮/圆钮描边(亮色 #434343 / 暗色 #FFFFFF)');
 registerColor('login-primary-button-text', GENERATED_DEFAULTS["login-primary-button-text"], 'Login — 主按钮文字(亮色 #D4D4D4 / 暗色 #2A2828 反相)');

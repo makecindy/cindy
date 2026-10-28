@@ -166,6 +166,43 @@ describe('filterResultsByWorkingDirs', () => {
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
   });
+
+  // 回归价值：两个公开过滤入口必须保留同目录、排除异目录；现有 POSIX 用例未覆盖
+  // Windows 大小写变体被误排除的 bug。最小失败输入为仅盘符/UNC 大小写不同的目录（unit）。
+  it.each([
+    {
+      name: 'drive',
+      selected: 'c:\\Work\\Repo',
+      matching: 'C:/work/repo',
+      different: 'C:/Work/Other',
+    },
+    {
+      name: 'UNC',
+      selected: '\\\\Server\\Share\\Repo',
+      matching: '//server/share/repo',
+      different: '//server/share/other',
+    },
+  ])('keeps Windows $name case variants but drops genuinely different directories', ({ selected, matching, different }) => {
+    const page = filterResultsByWorkingDirs(
+      response([
+        result('keep', 1, { workingDir: matching }),
+        result('drop', 1, { workingDir: different }),
+      ]),
+      [selected],
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('keeps POSIX directory matching case-sensitive', () => {
+    const page = filterResultsByWorkingDirs(
+      response([
+        result('keep', 1, { workingDir: '/Work/Repo' }),
+        result('drop', 1, { workingDir: '/work/repo' }),
+      ]),
+      ['/Work/Repo'],
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
 });
 
 describe('filterResultsByRequestFilters', () => {
@@ -209,7 +246,7 @@ describe('filterResultsByRequestFilters', () => {
         },
       },
     );
-    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep', 'worker']);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {
@@ -246,5 +283,48 @@ describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
         ['/repo-remote'],
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: 'drive',
+      selected: 'c:\\Work\\Repo',
+      matching: 'C:/work/repo',
+      different: 'C:/Work/Other',
+    },
+    {
+      name: 'UNC',
+      selected: '\\\\Server\\Share\\Repo',
+      matching: '//server/share/repo',
+      different: '//server/share/other',
+    },
+  ])('uses Windows $name case-insensitive matching when detecting ignored filters', ({ selected, matching, different }) => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('keep', 1, { workingDir: matching })]),
+        [selected],
+      ),
+    ).toBe(false);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('drop', 1, { workingDir: different })]),
+        [selected],
+      ),
+    ).toBe(true);
+  });
+
+  it('uses POSIX case-sensitive matching when detecting ignored filters', () => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('keep', 1, { workingDir: '/Work/Repo' })]),
+        ['/Work/Repo'],
+      ),
+    ).toBe(false);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('drop', 1, { workingDir: '/work/repo' })]),
+        ['/Work/Repo'],
+      ),
+    ).toBe(true);
   });
 });

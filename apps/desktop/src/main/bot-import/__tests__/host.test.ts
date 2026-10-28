@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
-import { deserializeImportSnapshotAsync, fingerprint } from '../files.js';
+import { deserializeImportSnapshotAsync, serializeImportSnapshotAsync, fingerprint } from '../files.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
 import { t } from '../../i18n.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
@@ -121,8 +121,12 @@ afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: t
 const nativeIdentity = async (packageId: string) => (await readNativeBotPackage(path.resolve('resources/bot-packages'), packageId))
   .snapshot.items.find(item => item.role === 'identity')!.text;
 async function nativeFinished(result: Awaited<ReturnType<typeof inviteNativeBotPackage>>) {
-  for (let i = 0; result.status === 'running' && i < 100; i++) {
-    await new Promise(resolve => setTimeout(resolve, 5));
+  // Admission can return while the transfer still owns the profile lock.
+  // Wait for that transfer (including file writes and checkpoint cleanup),
+  // rather than racing Windows IO against a fixed 500ms polling budget.
+  if (result.status === 'running') {
+    await withBotProfileLocks([result.botId], async () => {});
+    // The result reader may acquire the same lock for reconciliation.
     result = (await getCompanionImportResult(result.requestId))!;
   }
   expect(result.status).not.toBe('running');
@@ -142,7 +146,7 @@ it('invites a bundled native package through the original receipt and full file 
   expect(h.pause).not.toHaveBeenCalled(); expect(verifyImportedAutomation).not.toHaveBeenCalled();
   expect(discoverImportSources).not.toHaveBeenCalled(); expect(inspectImportSource).not.toHaveBeenCalled();
   expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, 'zh-CN', expect.objectContaining({
-    onboardingSkill: 'nightly-audit-engineer-getting-started', capabilities: expect.arrayContaining(['限定审计范围']) }));
+    onboardingSkill: 'nightly-audit-engineer-getting-started', capabilities: entry.capabilities.map(capability => capability.label) }));
   expect(createMessage).not.toHaveBeenCalled();
   const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', result.requestId + '.json'), 'utf8'));
   expect(receipt.nativePackage).toMatchObject({ packageId: entry.packageId, packageHash: entry.packageHash });
@@ -173,8 +177,18 @@ it('recovers a failed native knowledge write using the same receipt without copy
 const olderInstall = async (requestId: string) => {
   const file = path.join(h.root, 'companion-imports', `${requestId}.json`);
   const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
-  receipt.nativePackage.packageVersion = '0.4.0';
+  receipt.nativePackage.packageVersion = '0.5.0';
+  receipt.nativePackage.packageHash = fingerprint('older package');
+  receipt.nativePackage.opening.welcome = 'Older package welcome';
   await fs.writeFile(file, JSON.stringify(receipt));
+  const stored = await h.store.read(h.root, receipt.result.botId, () => {});
+  if (stored?.pendingImport) {
+    const snapshot = await deserializeImportSnapshotAsync(stored.pendingImport.snapshotJson, () => {});
+    snapshot.nativePackage = { ...snapshot.nativePackage!, ...receipt.nativePackage };
+    stored.pendingImport.snapshotJson = await serializeImportSnapshotAsync(snapshot, () => {});
+    await h.store.write(h.root, receipt.result.botId, stored, () => {});
+  }
+  return receipt.nativePackage;
 };
 it('resumes an unfinished save of an older installed version from its stored checkpoint, as the same request', async () => {
   h.native = true;
@@ -182,10 +196,13 @@ it('resumes an unfinished save of an older installed version from its stored che
   const entry = (await listNativeBotPackages())[0]!;
   const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   expect(partial.status).toBe('needs-attention');
-  await olderInstall(partial.requestId);
+  const originalPackage = await olderInstall(partial.requestId);
   const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(partial.requestId); expect(complete.botId).toBe(partial.botId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${partial.requestId}.json`), 'utf8'));
+  expect(receipt.nativePackage).toEqual(originalPackage);
+  expect(h.invitation).toHaveBeenCalledWith(partial.botId, partial.requestId, originalPackage.locale, originalPackage.opening);
 });
 it('keeps an older installed version unchanged when it has no unfinished checkpoint', async () => {
   h.native = true;
@@ -197,6 +214,51 @@ it('keeps an older installed version unchanged when it has no unfinished checkpo
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(h.importDocument).toHaveBeenCalledTimes(1);
 });
+it('restarts an older install that never saved its checkpoint, as the same request and companion', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  // The request index is written before the checkpoint; a failure in between leaves a receipt with nothing created or copied.
+  vi.spyOn(h.store, 'write').mockRejectedValueOnce(new Error('fixture failure before checkpoint'));
+  await inviteNativeBotPackage(entry, 'renderer:1').catch(() => undefined);
+  const indexes = await fs.readdir(path.join(h.root, 'companion-imports'));
+  expect(indexes).toHaveLength(1);
+  const requestId = indexes[0]!.slice(0, -'.json'.length);
+  expect(h.created).toBe(false);
+  await olderInstall(requestId);
+  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+});
+// PR #6520 discussion_r4358525338 (unit): inviteNativeBotPackage must persist the package actually installed.
+// Existing restart tests covered completion/name only; a pre-checkpoint failure followed by an upgrade left stale receipt metadata.
+it('restarts with current package metadata while preserving the original language and rejecting later hash drift', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  vi.spyOn(h.store, 'write').mockRejectedValueOnce(new Error('fixture failure before checkpoint'));
+  await inviteNativeBotPackage({ ...entry, locale: 'ja' }, 'renderer:1').catch(() => undefined);
+  const indexes = await fs.readdir(path.join(h.root, 'companion-imports'));
+  expect(indexes).toHaveLength(1);
+  const requestId = indexes[0]!.slice(0, -'.json'.length);
+  await olderInstall(requestId);
+  // The profile name is part of the stored selection identity, so a language switched since then must not change it.
+  const complete = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ name: entry.locales!.ja!.name }));
+  const file = path.join(h.root, 'companion-imports', `${requestId}.json`);
+  const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
+  const ja = entry.locales!.ja!;
+  expect(receipt.nativePackage).toMatchObject({ packageId: entry.packageId, packageVersion: entry.packageVersion,
+    packageHash: entry.packageHash, locale: 'ja', opening: { welcome: ja.welcome,
+      capabilities: ja.capabilities.map(capability => capability.label) } });
+  expect(receipt.nativePackage.opening).toEqual(h.invitation.mock.calls[0]![3]);
+  expect(receipt.result.requestId).toBe(requestId);
+  // Keep the catalog identity valid: only the saved hash differs, so this exercises the receipt's drift fence.
+  receipt.nativePackage.packageHash = fingerprint('different content at the same version');
+  await fs.writeFile(file, JSON.stringify(receipt));
+  await expect(inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:3')).rejects.toMatchObject({ code: 'SELECTION_CHANGED' });
+});
 it('saves the teammate, opening and routine names in the language the invite was made in', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'engineer-bot')!;
@@ -207,11 +269,10 @@ it('saves the teammate, opening and routine names in the language the invite was
   expect(h.routines[0]).toMatchObject({ name: ja.routines[0]!.name, enabled: false });
   // The opening (scripted fallback and model input) is Japanese too: greeting and starter choices of this package.
   expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, 'ja', expect.objectContaining({
-    welcome: expect.stringContaining('こんにちは'), capabilities: ja.capabilities.map(capability => capability.label),
-    onboardingSkill: 'engineer-bot-getting-started', starterOptions: expect.arrayContaining(['進行中のPR/MRを追う']) }));
-  // The identity prompt stays the package's own (it tells the teammate to answer in the user's language).
+    welcome: ja.welcome, capabilities: ja.capabilities.map(capability => capability.label),
+    onboardingSkill: 'engineer-bot-getting-started', starterOptions: expect.arrayContaining([expect.stringMatching(/[぀-ヿ]/)]) }));
+  // The identity prompt stays the package's own, whatever language the invite was made in.
   expect(h.profile.identitySource).toBe(await nativeIdentity(entry.packageId));
-  expect(h.profile.identitySource).toContain('Always reply in the language the user is currently using');
 });
 it('respects the original memory switch without enabling it or importing identity as reference', async () => {
   h.native = true; h.profile = { config: { memory: false } };
@@ -1413,9 +1474,13 @@ it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])
   const [source] = await listCompanionImportSources('phone');
   const preview = await previewCompanionImport(source!.id, 'phone');
   const selection = { previewId: preview.id, requestId: 'fixture-recovered-docs', name: 'Ada', entryIds: ['memory-original-entry'], takeover: false, deferSetup: true };
-  await startCompanionImport(selection, 'phone');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const accepted = await startCompanionImport(selection, 'phone');
+  // CI on Windows can accept before real memory writes finish. Join the host's
+  // existing profile lock instead of polling under a fixed wall-clock budget;
+  // retain the partial-save and stable-ID assertions through the real import.
+  await withBotProfileLocks([accepted.botId], async () => {});
   const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result.status).toBe('needs-attention');
   // Simulate the old durable checkpoint, without an available source tree.
   await h.store.update(h.root, result.botId, () => {}, environment => {
     const snapshot = JSON.parse(environment.pendingImport!.snapshotJson);
@@ -1425,7 +1490,9 @@ it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])
   const firstFiles = (await storage.list()).map(record => record.filename);
   expect(firstFiles).toHaveLength(1);
   await startCompanionImport(selection, 'reconnected');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  await withBotProfileLocks([result.botId], async () => {});
+  const completed = await getCompanionImportResult(selection.requestId);
+  expect(completed?.status).toBe('complete');
   expect((await storage.list()).map(record => record.filename)).toEqual(firstFiles);
   const ids = h.importDocument.mock.calls.map(call => call[1] as string);
   expect(ids[0]).toBe(ids[1]);

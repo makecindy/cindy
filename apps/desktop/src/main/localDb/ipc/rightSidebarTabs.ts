@@ -95,6 +95,19 @@ function rowToTab(row: typeof rightSidebarTabs.$inferSelect): TabRow {
   };
 }
 
+/** Main-only check for the narrow permission action from a popped-out workbench tab. */
+export async function hasAssignedBotWorkbenchTab(sessionId: string, tabIds: readonly string[], botId: string): Promise<boolean> {
+  if (tabIds.length === 0) return false;
+  const ids = new Set(tabIds);
+  const rows = await getDbClient().drizzle.select({
+    id: rightSidebarTabs.id,
+    kind: rightSidebarTabs.kind,
+    state: rightSidebarTabs.state,
+  }).from(rightSidebarTabs).where(eq(rightSidebarTabs.sessionId, sessionId));
+  return rows.some((row) => ids.has(row.id) && row.kind === 'bot-workbench' &&
+    (parseState(row.state) as { botId?: unknown } | null)?.botId === botId);
+}
+
 function requireInt(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throwIpcError('INVALID_PARAMS', `${name} must be a non-negative integer`);

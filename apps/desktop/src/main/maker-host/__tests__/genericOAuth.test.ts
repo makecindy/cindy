@@ -13,7 +13,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
  *   - setDiscoveredProviderModels 的 additions-only merge。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import type { OAuthProviderDescriptor, ProviderView } from '@cindy/model-providers';
 import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.js';
@@ -136,22 +136,35 @@ describe('manual model refresh for saved OAuth providers', () => {
     };
   }
 
+  // Unit: refresh must reuse the saved login for both OpenRouter catalogs. The
+  // former single-response fixture rejected the speech URL and hid its models.
   for (const presetId of ['openrouter', 'nous']) {
     it.each(['claude-code', 'codex', 'pi'] as const)(`${presetId} refresh uses the saved login and upstream protocol for %s`, async agent => {
       const provider = savedProvider(presetId);
       // Display IDs and owner-scoped storage IDs deliberately differ.
       seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
-      let requests = 0;
+      const requests: string[] = [];
       const result = await fetchSavedOAuthProviderModels(provider, agent, 'scoped-account', () => true,
         async (url, init) => {
-          requests++;
-          expect(url).toBe(provider.auth.oauth!.modelsDiscoveryUrl);
+          requests.push(String(url));
           expect(init?.headers).toEqual({ authorization: 'Bearer fake-oauth-access' });
           expect(init?.redirect).toBe('error');
+          if (new URL(String(url)).searchParams.get('output_modalities') === 'speech') {
+            return new Response(JSON.stringify({ data: [{
+              id: 'minimax/speech-2.8-turbo', architecture: { output_modalities: ['speech'] },
+            }] }));
+          }
           return new Response(JSON.stringify({ data: [{ id: 'new-model', context_length: 123456 }] }));
         });
-      expect(requests).toBe(1);
-      expect(result).toMatchObject({ ok: true, models: [{ id: 'new-model', contextWindow: 123456 }] });
+      const modelsUrl = provider.auth.oauth!.modelsDiscoveryUrl!;
+      expect(requests).toEqual(presetId === 'openrouter'
+        ? [modelsUrl, `${modelsUrl}?output_modalities=speech`] : [modelsUrl]);
+      expect(result).toMatchObject({ ok: true, models: [
+        { id: 'new-model', contextWindow: 123456 },
+        ...(presetId === 'openrouter' ? [{
+          id: 'minimax/speech-2.8-turbo', discoveredMetadata: { mode: 'audio_speech' },
+        }] : []),
+      ] });
       expect(JSON.stringify(result)).not.toContain('fake-oauth-access');
     });
   }
@@ -195,14 +208,20 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(requests).toBe(0);
   });
 
-  it.each(['before-request', 'during-request'])('discards a refresh after account/config changes %s', async phase => {
+  // A new catalog must not reuse a revoked owner snapshot or publish a late result.
+  // Keep the original one-request maximum when ownership changes on the first reply.
+  it.each(['before-request', 'during-request', 'during-speech-request'])('discards a refresh after account/config changes %s', async phase => {
     seedBlob('scoped-account', { access_token: 'fake-access' });
     let current = phase !== 'before-request';
     let requests = 0;
     const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'scoped-account', () => current,
-      async () => { requests++; current = false; return new Response('{"data":["model"]}'); });
+      async () => {
+        requests++;
+        if (phase === 'during-request' || requests === 2) current = false;
+        return new Response('{"data":["model"]}');
+      });
     expect(result).toEqual({ ok: false, code: 'AUTH_INVALID' });
-    expect(requests).toBe(phase === 'before-request' ? 0 : 1);
+    expect(requests).toBe(phase === 'before-request' ? 0 : phase === 'during-request' ? 1 : 2);
   });
 });
 
@@ -613,6 +632,48 @@ describe('登录流与凭证落盘失败', () => {
 });
 
 describe('discoverGenericOAuthModels', () => {
+  // PR #6900 unit regression: the login follow-up (unlike saved refresh) could
+  // send more Bearer requests after cancellation. Hold a real catalog response
+  // at each async boundary; no subsequent page or late result may escape.
+  it.each(['before-request', 'first-page', 'next-page', 'speech-page', 'active'] as const)(
+    'checks login ownership before every catalog request: %s', async (phase) => {
+      seedBlob('router', { access_token: 'fake-login-key' });
+      const oauth = providerPresetOAuth('openrouter')!;
+      const endpoint = oauth.modelsDiscoveryUrl!;
+      let current = phase !== 'before-request';
+      let release!: (value: unknown) => void;
+      const waiting = new Promise<unknown>(resolve => { release = resolve; });
+      const pausedUrl = phase === 'next-page' ? `${endpoint}?cursor=next`
+        : phase === 'speech-page' ? `${endpoint}?output_modalities=speech` : endpoint;
+      fetchResponder = (url) => {
+        const payload = url.includes('output_modalities=speech')
+          ? { data: [{ id: 'tts', architecture: { output_modalities: ['speech'] } }] }
+          : { data: ['chat'], ...(url === endpoint ? { next_cursor: 'next' } : {}) };
+        const response = new Response(JSON.stringify(payload));
+        if (url === pausedUrl && current && phase !== 'active') {
+          response.json = () => waiting.then(() => payload);
+        }
+        return response;
+      };
+      const pending = discoverGenericOAuthModels('router', oauth, undefined, 'claude-code', () => current);
+      if (phase !== 'before-request' && phase !== 'active') {
+        await vi.waitFor(() => expect(fetchCalls.at(-1)?.url).toBe(pausedUrl));
+        current = false;
+        release(undefined);
+      }
+      const result = await pending;
+      expect(fetchCalls.map(({ url }) => url)).toEqual(
+        phase === 'before-request' ? [] : [endpoint,
+          ...(['next-page', 'speech-page', 'active'].includes(phase) ? [`${endpoint}?cursor=next`] : []),
+          ...(['speech-page', 'active'].includes(phase) ? [`${endpoint}?output_modalities=speech`] : []),
+        ],
+      );
+      for (const request of fetchCalls) expect(request.headers).toEqual({ authorization: 'Bearer fake-login-key' });
+      if (phase === 'active') expect(result?.map(model => model.id)).toEqual(['chat', 'tts']);
+      else expect(result).toBeNull();
+    },
+  );
+
   it('解析 {data:[{id}]} 形状并去重', async () => {
     seedBlob('acme', { access_token: 'at' });
     fetchResponder = () =>

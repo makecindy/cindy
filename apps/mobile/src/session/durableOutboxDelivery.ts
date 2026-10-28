@@ -23,6 +23,16 @@ export interface DurableOutboxDeliveryDeps {
   canRun(record: DurableOutboxRecord): boolean;
   sessionPolicy?(record: DurableOutboxRecord): Promise<OutboxSessionPolicy>;
   projection(record: DurableOutboxRecord): Promise<DeliveryProjection>;
+  /**
+   * A never-sent record may skip the pre-enqueue projection RPC when this host
+   * is already known to support durable delivery and the task's clear boundary
+   * is known. Return undefined to use the projection RPC.
+   */
+  knownProjection?(record: DurableOutboxRecord): DeliveryProjection | undefined;
+  /** Host rejected a clear-boundary precondition that came from `knownProjection`. */
+  staleClearBoundary?(error: unknown): boolean;
+  /** Phone-local timing diagnostics only; never receives message content. */
+  trace?(event: string, fields: Record<string, number | string | boolean>): void;
   session(record: DurableOutboxRecord): Promise<{ id: string; status: string } | null>;
   prepare(record: DurableOutboxRecord): Promise<QueuedRemoteMessage>;
   upload(
@@ -52,17 +62,33 @@ export interface DurableOutboxDeliveryDeps {
 
 /** One owner for writes; pages only add records or request retry/cancellation. */
 export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
-  let running = false;
+  let scanning = false;
+  let rescan = false;
   let stopped = false;
   let cursor = 0;
   const due = new Map<string, number>();
   const attempts = new Map<string, number>();
+  /** Records currently inside `deliver`; a later run never starts the same record twice. */
+  const inFlight = new Set<string>();
+  /** A stale known boundary was rejected once; this record must ask the host instead. */
+  const requireProjection = new Set<string>();
   const id = (r: DurableOutboxRecord) =>
     JSON.stringify([r.deviceId, r.item.sessionId, r.item.clientId]);
   const current = (r: DurableOutboxRecord) =>
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
   const hasDurableOwnership = (r: DurableOutboxRecord) =>
     r.state === "host-owned" && isDurableOutboxHandedOff(r);
+  /** Nothing has been sent or prepared, so no host receipt can matter yet. */
+  const neverSent = (r: DurableOutboxRecord) =>
+    r.state === "queued" && isDurableOutboxUnsent(r) && !r.prepared
+    && !r.cancelRequested && !r.refreshUploads && !requireProjection.has(id(r));
+  const trace = (event: string, fields: Record<string, number | string | boolean>) => {
+    try {
+      deps.trace?.(event, fields);
+    } catch {
+      /* diagnostics never affect delivery */
+    }
+  };
   const hasHistory = async (record: DurableOutboxRecord): Promise<boolean> => {
     try {
       return await deps.history(record);
@@ -75,7 +101,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   };
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
+    // The upload in progress when an attempt throws is the image that did not get through.
+    let uploadingSlot: number | undefined;
     due.set(id(record), Date.now() + 5_000);
+    const startedAt = Date.now();
+    let markAt = startedAt;
+    const stagesMs: Record<string, number> = {};
+    const stage = (name: string) => {
+      const now = Date.now();
+      stagesMs[name] = now - markAt;
+      markAt = now;
+    };
     const update = async (patch: Partial<DurableOutboxRecord>) => {
       if (!current(record)) throw new Error("OUTBOX_STALE_WRITE");
       record = await deps.store.update(record, patch);
@@ -91,9 +127,14 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       await deps.store.remove(record);
       due.delete(id(record));
       attempts.delete(id(record));
+      requireProjection.delete(id(record));
     };
     const finishHistory = async () => {
       if (!current(record)) return;
+      trace("send history confirmed", {
+        client: record.item.clientId.slice(0, 8),
+        clickToHistoryMs: Date.now() - record.createdAt,
+      });
       if (deps.cacheHistory && !await deps.cacheHistory(record)) {
         // Even a legacy host has durably accepted this row. Retaining its local
         // bubble must not block later sends or make the old message retryable.
@@ -108,6 +149,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         const policy = await deps.sessionPolicy(record);
         if (!current(record) || policy === 'wait') return;
         if (policy === 'discard') return await finish(isDurableOutboxUnsent(record));
+        stage('policy');
       }
       if (record.draftHandoff) {
         await deps.store.reconcileDrafts(record.item.sessionId);
@@ -126,8 +168,14 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         return;
       }
       if (!current(record)) return;
+      // A first attempt has no receipt to reconcile. When the host's durable
+      // delivery support and the task's clear boundary are already known, the
+      // enqueue itself is the only round trip; the host still enforces the
+      // boundary and a stale one is retried once through the projection below.
+      const knownProjection = neverSent(record) ? deps.knownProjection?.(record) : undefined;
       let projection: DeliveryProjection;
-      try {
+      if (knownProjection) projection = knownProjection;
+      else try {
         projection = await deps.projection(record);
       } catch (error) {
         if (!current(record)) return;
@@ -145,7 +193,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         throw error;
       }
       if (!current(record)) return;
-      deps.applyProjection(record, projection);
+      if (!knownProjection) deps.applyProjection(record, projection);
+      stage('projection');
       const receipt = projection.deliveryReceipts?.find(
         (r) => r.clientId === record.item.clientId,
       );
@@ -253,7 +302,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (!record.prepared) {
         for (const upload of record.uploads) {
           if (record.item.attachmentSlots[upload.slot]) continue;
+          uploadingSlot = upload.slot;
           const attachment = await deps.upload(record, upload);
+          uploadingSlot = undefined;
           let retained = false;
           try {
             if (!current(record)) return;
@@ -270,6 +321,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
                   (localId) => record.item.slotByLocalId[localId] !== upload.slot,
                 ),
               },
+              failedUploadSlot: undefined,
             });
             retained = true;
           } finally {
@@ -296,12 +348,36 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             ? projection.clearBoundaryMs : record.clearBoundaryMs,
           sendAtMs: record.sendAtMs ?? Date.now(),
         });
+        stage('prepare');
       }
       await deps.beforeEnqueue?.(record);
       if (!current(record) || !deps.canRun(record)) return;
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
       await update({ state: "sending", enqueueStarted: true, error: undefined });
-      const result = await deps.enqueue(record);
+      let result: InputProjection;
+      try {
+        result = await deps.enqueue(record);
+      } catch (error) {
+        // The host refused the known boundary before accepting anything. Undo
+        // only that local preparation and ask the host once, like the first send
+        // would have; a second refusal follows the ordinary cleared-task path.
+        if (knownProjection && current(record) && deps.staleClearBoundary?.(error)) {
+          requireProjection.add(id(record));
+          await update({
+            state: "queued",
+            prepared: undefined,
+            retrySafe: undefined,
+            clearBoundaryMs: undefined,
+            enqueueStarted: false,
+            error: undefined,
+          });
+          due.delete(id(record));
+          rescan = true;
+          trace("send known boundary rejected", { client: record.item.clientId.slice(0, 8) });
+          return;
+        }
+        throw error;
+      }
       if (!current(record)) return;
       deps.applyProjection(record, result);
       const durableEnqueue = record.prepared?.durableDelivery === true &&
@@ -312,6 +388,15 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         : { state: "confirming", error: deps.confirmationMessage });
       attempts.delete(id(record));
       due.set(id(record), Date.now() + 1_000);
+      stage('enqueue');
+      trace("send accepted", {
+        client: record.item.clientId.slice(0, 8),
+        knownProjection: knownProjection !== undefined,
+        durable: durableEnqueue,
+        clickToAcceptedMs: Date.now() - record.createdAt,
+        deliverMs: Date.now() - startedAt,
+        ...stagesMs,
+      });
     } catch (error) {
       if (!current(record)) return;
       const count = (attempts.get(id(record)) ?? 0) + 1;
@@ -331,11 +416,75 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
                 ? record.state
                 : "failed",
         error: deps.describe(error),
+        failedUploadSlot: uploadingSlot,
         ...(!isDurableOutboxSettled(record) && deps.mediaFailed?.(error) && record.uploads.length
           ? { refreshUploads: true }
           : {}),
       }).catch(() => undefined);
     }
+  }
+  // Bound aggregate replay as well as concurrency; reconnecting many tasks must not
+  // recreate a relay backpressure burst.
+  const MAX_IN_FLIGHT = 2;
+  async function run(): Promise<void> {
+    if (stopped || !deps.isCurrent()) return;
+    // A request that arrives while another run is choosing work, or while every
+    // delivery slot is busy, is remembered and replayed as soon as a slot frees.
+    // A new message therefore never waits for the periodic tick behind an
+    // unrelated reconciliation.
+    if (scanning || inFlight.size >= MAX_IN_FLIGHT) {
+      rescan = true;
+      return;
+    }
+    scanning = true;
+    rescan = false;
+    const work: DurableOutboxRecord[] = [];
+    try {
+      await deps.store.ready();
+      if (stopped || !deps.isCurrent()) return;
+      const groups = new Map<string, DurableOutboxRecord[]>();
+      for (const record of deps.store.getSnapshot()) {
+        const key = JSON.stringify([record.deviceId, record.item.sessionId]);
+        const group = groups.get(key) ?? [];
+        group.push(record);
+        groups.set(key, group);
+      }
+      // Session FIFO, while one unavailable computer never blocks a different task.
+      // A head already being delivered still holds its session's place in line.
+      const candidates = [...groups.values()]
+        .flatMap((group) => {
+          const head = group.find((r) => !isDurableOutboxHandedOff(r));
+          return [
+            ...(head ? [head] : []),
+            ...group.filter(isDurableOutboxHandedOff),
+          ];
+        })
+        .filter((r) => !inFlight.has(id(r)) && deps.canRun(r) && (due.get(id(r)) ?? 0) <= Date.now());
+      // Round robin prevents one failed head starving peers.
+      const capacity = Math.min(MAX_IN_FLIGHT - inFlight.size, candidates.length);
+      for (let n = 0; n < capacity; n++) {
+        work.push(candidates[(cursor + n) % candidates.length]!);
+      }
+      cursor = candidates.length
+        ? (cursor + work.length) % candidates.length
+        : 0;
+      for (const record of work) inFlight.add(id(record));
+    } finally {
+      scanning = false;
+    }
+    // Each delivery frees its own slot as soon as it settles, so a message added
+    // while a slow peer is still replying can use that slot immediately.
+    await Promise.all(
+      work.map((record) =>
+        deliver(record).finally(() => {
+          inFlight.delete(id(record));
+          if (rescan && !stopped) {
+            rescan = false;
+            void run().catch(() => undefined);
+          }
+        }),
+      ),
+    );
   }
   return {
     stop() {
@@ -344,42 +493,6 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     wake() {
       due.clear();
     },
-    async run() {
-      if (running || stopped || !deps.isCurrent()) return;
-      running = true;
-      try {
-        await deps.store.ready();
-        if (stopped || !deps.isCurrent()) return;
-        const groups = new Map<string, DurableOutboxRecord[]>();
-        for (const record of deps.store.getSnapshot()) {
-          const key = JSON.stringify([record.deviceId, record.item.sessionId]);
-          const group = groups.get(key) ?? [];
-          group.push(record);
-          groups.set(key, group);
-        }
-        // Session FIFO, while one unavailable computer never blocks a different task.
-        const candidates = [...groups.values()]
-          .flatMap((group) => {
-            const head = group.find((r) => !isDurableOutboxHandedOff(r));
-            return [
-              ...(head ? [head] : []),
-              ...group.filter(isDurableOutboxHandedOff),
-            ];
-          })
-          .filter((r) => deps.canRun(r) && (due.get(id(r)) ?? 0) <= Date.now());
-        // Bound aggregate replay as well as concurrency; reconnecting many tasks must not
-        // recreate a relay backpressure burst. Round robin prevents one failed head starving peers.
-        const work: DurableOutboxRecord[] = [];
-        for (let n = 0; n < Math.min(2, candidates.length); n++) {
-          work.push(candidates[(cursor + n) % candidates.length]!);
-        }
-        cursor = candidates.length
-          ? (cursor + work.length) % candidates.length
-          : 0;
-        await Promise.all(work.map(deliver));
-      } finally {
-        running = false;
-      }
-    },
+    run,
   };
 }

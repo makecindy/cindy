@@ -73,11 +73,13 @@ export function buildAgentIslandRemoteSessionInputs(
 
 function remoteActivityInput(activity: RemoteSessionActivity): Pick<
   AgentIslandRemoteSessionInput,
-  'phase' | 'detail' | 'completionNotification' | 'workingPhase' | 'interactionKind'
+  'phase' | 'detail' | 'summaryFormat' | 'completionNotification' | 'completionToken' | 'workingPhase' | 'interactionKind'
 > {
   return {
     phase: activity.phase,
+    ...(activity.completionToken ? { completionToken: activity.completionToken } : {}),
     detail: activity.compactDetail,
+    ...(activity.summaryFormat ? { summaryFormat: activity.summaryFormat } : {}),
     ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
     ...(activity.workingPhase ? { workingPhase: activity.workingPhase } : {}),
     ...(activity.interactionKind

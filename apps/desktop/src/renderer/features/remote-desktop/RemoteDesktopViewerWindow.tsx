@@ -981,6 +981,7 @@ function ZoomModeIcon({ actual = false }: { actual?: boolean }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      data-ink-icon=""
     >
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />

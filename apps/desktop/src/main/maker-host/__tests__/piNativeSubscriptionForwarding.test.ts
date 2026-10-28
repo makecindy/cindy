@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
+import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
@@ -8,8 +8,17 @@ const { ownerState } = vi.hoisted(() => ({
   ownerState: {
     pending: false,
     scope: 'cloud:owner-a:1',
+    fastAllowed: true,
+    afterFastRead: undefined as 'relax' | 'owner' | undefined,
   },
 }));
+
+// Measure actual asynchronous zstd work on the production HTTP path. The
+// synchronous fixture encoder/decoder remains untouched.
+vi.mock('node:zlib', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:zlib')>();
+  return { ...actual, zstdCompress: vi.fn(actual.zstdCompress), zstdDecompress: vi.fn(actual.zstdDecompress) };
+});
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
@@ -19,6 +28,18 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => ownerState.pending,
   activeOwnerScopeKey: () => ownerState.scope,
 }));
+vi.mock('../subscription-fast-policy.js', () => ({ createSubscriptionFastPolicy: () => ({
+  isAllowed: () => {
+    const allowed = ownerState.fastAllowed;
+    const action = ownerState.afterFastRead;
+    ownerState.afterFastRead = undefined;
+    if (action) queueMicrotask(() => {
+      if (action === 'relax') ownerState.fastAllowed = true;
+      else ownerState.scope = 'cloud:owner-b:2';
+    });
+    return allowed;
+  },
+}) }));
 
 vi.mock('../logger-adapter.js', () => ({
   createMakerLogger: () => {
@@ -41,7 +62,8 @@ import {
   getPiNativeSubscriptionHandler,
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
-import { setXaiDiscoveredModels } from '../active-catalog.js';
+import { buildUserProvider } from '@cindy/model-providers';
+import { setCustomProviders, setXaiDiscoveredModels } from '../active-catalog.js';
 import { registerUsagePricing, clearUsagePricing } from '../model-usage-pricing.js';
 import { setSessionFastMode } from '../session-effort-store.js';
 
@@ -94,11 +116,124 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 
 describe('PI native subscription forwarding', () => {
   afterEach(() => {
+    setCustomProviders([]);
     setXaiDiscoveredModels(null);
     setSessionFastMode('session-fast', false);
     clearUsagePricing('session-fast');
     ownerState.pending = false;
     ownerState.scope = 'cloud:owner-a:1';
+    ownerState.fastAllowed = true;
+    ownerState.afterFastRead = undefined;
+    vi.mocked(zstdCompress).mockClear();
+    vi.mocked(zstdDecompress).mockClear();
+  });
+
+  // The same HTTP request used to decode twice and discard
+  // compression when the final Fast restriction applied. Assert real bytes,
+  // semantics and codec calls, rather than helper return values.
+  it.each(['openai', 'openai-account-fixture'].flatMap(provider => [false, true].flatMap(compressed =>
+    [false, true].flatMap(profile => [false, true].map(fastAllowed => ({ provider, compressed, profile, fastAllowed }))))))(
+    'preserves encoding and applies both rewrites once: %j', async ({ provider, compressed, profile, fastAllowed }) => {
+      setCustomProviders([buildUserProvider({ id: 'openai-account-fixture', name: 'Fixture account',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: {} })]);
+      ownerState.fastAllowed = fastAllowed;
+      // Exercise the combined compressed rewrite with a 10 MiB history too.
+      const repeats = compressed && profile && !fastAllowed ? 655360 : 4096;
+      const payload = { model: 'gpt-6.1-sol' + (profile ? '[1m]' : ''), service_tier: 'priority',
+        input: [{ role: 'user', content: 'fixture-history-'.repeat(repeats) }] };
+      const raw = Buffer.from(JSON.stringify(payload));
+      const bytes = compressed ? zstdCompressSync(raw) : raw;
+      const injected = deps();
+      await getPiNativeSubscriptionHandler(provider, 'fixture-codec-session', injected)({
+        rawBody: bytes, parsedBody: compressed ? undefined : payload,
+        ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+        res: responseRecorder(),
+      } as never);
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+      const sentBytes = Buffer.from(sent.body as Uint8Array);
+      if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+      else expect(sent.headers).not.toHaveProperty('content-encoding');
+      const decoded = JSON.parse((compressed ? zstdDecompressSync(sentBytes) : sentBytes).toString());
+      expect(decoded).toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: fastAllowed ? 'priority' : 'default' });
+      expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+      expect(zstdCompress).toHaveBeenCalledTimes(compressed && (profile || !fastAllowed) ? 1 : 0);
+      if (!profile && fastAllowed) expect(sentBytes).toEqual(bytes);
+    },
+  );
+
+  it.each([false, true])('passes already-standard requests byte-for-byte, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const payload = { model: 'gpt-6.1-sol', service_tier: 'default', input: [] };
+    const raw = Buffer.from('{ "model": "gpt-6.1-sol", "service_tier": "default", "input": [] }');
+    const bytes = compressed ? zstdCompressSync(raw) : raw;
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-standard', injected)({
+      rawBody: bytes, parsedBody: compressed ? undefined : payload,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(Buffer.from(sent.body as Uint8Array)).toEqual(bytes);
+    if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(zstdCompress).not.toHaveBeenCalled();
+    expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+  });
+
+  it('rechecks Fast after asynchronous profile recompression before dispatch', async () => {
+    const actual = await vi.importActual<typeof import('node:zlib')>('node:zlib');
+    vi.mocked(zstdCompress).mockImplementationOnce(((...args: unknown[]) => {
+      ownerState.fastAllowed = false;
+      return Reflect.apply(actual.zstdCompress, actual, args);
+    }) as typeof zstdCompress);
+    const payload = { model: 'gpt-6.1-sol[1m]', service_tier: 'priority', input: [] };
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-policy-race', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify(payload))), parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()))
+      .toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: 'default' });
+    expect(zstdDecompress).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('does not dispatch malformed restricted requests, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const malformed = Buffer.from('{invalid json');
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-malformed', injected)({
+      rawBody: compressed ? zstdCompressSync(malformed) : malformed, parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res,
+    } as never);
+    expect(injected.fetch).not.toHaveBeenCalled();
+    expect(res.status).toBe(502);
+  });
+
+  it.each(['relax', 'owner'] as const)('preserves the final boundary when %s changes during request rewriting', async action => {
+    ownerState.fastAllowed = false;
+    ownerState.afterFastRead = action;
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'session-fast', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify({ model: 'gpt-6.1-sol', input: [], service_tier: 'priority' }))),
+      parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res,
+    } as never);
+    if (action === 'owner') {
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+    } else {
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0][1]!;
+      expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()).service_tier).toBe('default');
+      expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    }
   });
 
   it.each([['grok-4.7', true, 'grok-4.7-build-fast'], ['grok-4.7', false, 'grok-4.7'],

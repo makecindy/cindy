@@ -4594,6 +4594,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(JSON.stringify(review.mock.calls[0]?.[0])).not.toContain('PRIVATE_FILE_BODY');
     expect(JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description).executionEvidence)
       .toMatchObject({ kind: 'file-write', path: input.path, resolvedPath: input.path, resolvedWritableRoots: [cwd] });
+    // The same active policy must follow the owner's live choice, then resume
+    // normal confirmation when the owner tightens back to Ask.
+    await handle.setPermissionMode!('bypassPermissions');
+    firePermissionRequest('policy-full-access', 'write', input);
+    expect(await waitForResponse('policy-full-access')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.setPermissionMode!('ask');
+    firePermissionRequest('policy-ask-restored', 'write', input);
+    expect(await waitForResponse('policy-ask-restored')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
   });
 
   it('reviews MCP operations when turn policy cannot classify them', async () => {
@@ -4631,6 +4642,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('delivers Auto-Review ask to the channel on policy turns', async () => {
     const handle = await start('auto', async () => ({
       verdict: 'ask' as const,
+      reason: 'Writes outside the project.',
     }));
     await handle.send(
       { type: 'user', content: 'Touch an outside file.' },
@@ -4654,6 +4666,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolver).toHaveBeenCalledOnce();
+    // The channel card explains why Auto asked.
+    expect((resolver.mock.calls as unknown as Array<[{ metadata?: Record<string, unknown> }]>)[0]?.[0].metadata)
+      .toMatchObject({ autoReviewReason: 'Writes outside the project.' });
   });
 
   it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {
@@ -5179,11 +5194,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    * 已经失效的卡。此前 resolver 只挂在卡上、切档不会唤醒它,工具调用会一直卡住(codex P1)。
    * 与 Claude / Codex 的 dismissAllPending 同口径,并发 interaction_dismissed 让 UI 收卡。
    */
-  it('settles an in-flight permission card when the mode widens to Full access', async () => {
+  it.each([false, true])('settles an in-flight permission card when the mode widens to Full access (IM policy=%s)', async (imPolicy) => {
     const handle = await start('ask', undefined, false, {
       serverNames: ['cindy_browser'],
       // prompt(非 prompt-each-time)→ 放宽档位时接受替用户放行。
       policy: () => 'prompt',
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Open the page.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {

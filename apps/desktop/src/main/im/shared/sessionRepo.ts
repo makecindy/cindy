@@ -58,7 +58,7 @@ export interface ImSessionRow {
   effort: Effort;
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   sdkSessionId: string | null;
   /** Non-empty means workingDir and Agent file paths live on an SSH host. */
   remoteHostId?: string | null;

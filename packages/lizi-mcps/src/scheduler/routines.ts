@@ -41,7 +41,7 @@ export function registerRoutineTools(
     name: "routine_list",
     category: "scheduler",
     description:
-      "列出伙伴的例行任务。它们复用伙伴的长期任务与权限，可同时由时间和本地事件触发。",
+      "列出伙伴的例行任务。每项使用独立的持久任务和可选模型配置，共享伙伴身份与权限，可同时由时间和本地事件触发。",
     inputShape: { botId: z.string().min(1) },
     handler: ({ botId }) => result(() => service.list(botId)),
   });
@@ -64,6 +64,15 @@ export function registerRoutineTools(
       name: z.string().min(1),
       prompt: z.string().min(1),
       enabled: z.boolean(),
+      modelOverride: z.object({
+        agentKind: z.enum(['claude-code', 'codex', 'pi']),
+        agentDeviceId: z.string().min(1).max(512).nullable().optional(),
+        model: z.string().min(1).max(512),
+        providerId: z.string().min(1).max(512).nullable().optional(),
+        effort: z.enum(['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
+        fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
+      }).nullable().optional().describe('Model for this routine only. Use an available model/provider pair. null follows the companion; omission preserves the saved choice. Also configurable for built-in follow-up and todo checks.'),
+      sessionMode: z.enum(['persistent', 'fresh']).optional().describe('How to carry context between triggers: persistent reuses one routine session; fresh creates and closes an isolated session for each trigger. Omission preserves the saved choice.'),
       silentWhenIdle: z.boolean().optional().describe('Set true for checks: no routine chatter, report only when needed via schedule_notify_current_run. Reminders and scheduled delivery default to false. Preserve existing user choices.'),
       preRunHook: z.object({
         command: z.string().min(1).max(32000),

@@ -36,6 +36,13 @@ import {
 interface ProfileEditDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Explicit group destination; no account reads or writes in this mode. */
+  avatarEditor?: {
+    title: string;
+    hint: string;
+    getState(): Promise<ProfileState>;
+    save(avatar: Parameters<Window['electronAPI']['profileUpdate']>[0]['avatar']): Promise<void>;
+  };
 }
 
 type AvatarDraft =
@@ -60,12 +67,13 @@ interface CropSession {
 interface ProfileState {
   name: string;
   avatarUrl: string | null;
+  defaultAvatarUrl?: string | null;
 }
 
 // Tooltip 默认 z-[60],会被 z-[10000] 的弹窗盖住(DESIGN §4 Dialog & Modal)。
 const DIALOG_TIP_CLASS = 'z-[10001]';
 
-export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps) {
+export function ProfileEditDialog({ open, onOpenChange, avatarEditor }: ProfileEditDialogProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<ProfileState | null>(null);
   const [name, setName] = useState('');
@@ -145,8 +153,8 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     setAvatarDraft({ type: 'keep' });
   }, [endCropSession, setAvatarDraft]);
 
-  // 打开时拉预填数据并复位草稿(异步取数期间不渲染内容,避免半空帧;
-  // 数据都在本地 main,毫秒级返回,无需 loading 态 —— 规则 7)。
+  // 打开时拉预填数据；群资料刷新只更新默认值，保留正在编辑的头像。
+  // 草稿由关闭 / 卸载清理；切换群时父组件通过 key 重新挂载编辑器。
   useEffect(() => {
     if (!open) {
       chooseGenerationRef.current += 1;
@@ -156,13 +164,11 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     }
     setStepSwitched(false);
     let stale = false;
-    void window.electronAPI
-      .profileGetState()
+    void (avatarEditor ? avatarEditor.getState() : window.electronAPI.profileGetState())
       .then((s) => {
         if (stale) return;
         setState(s);
         setName(s.name);
-        releaseAll();
       })
       .catch(() => {
         if (!stale) onOpenChange(false);
@@ -170,7 +176,7 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     return () => {
       stale = true;
     };
-  }, [open, onOpenChange, releaseAll]);
+  }, [open, onOpenChange, releaseAll, avatarEditor]);
 
   useEffect(
     () => () => {
@@ -256,13 +262,11 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     try {
       const trimmed = name.trim();
       const draft = draftRef.current;
-      await window.electronAPI.profileUpdate({
-        name: trimmed === '' ? null : trimmed,
-        avatar:
-          draft.type === 'set'
-            ? { type: 'set', data: draft.exported.bytes, mimeType: draft.exported.mimeType }
-            : { type: draft.type },
-      });
+      const avatar = draft.type === 'set'
+        ? { type: 'set' as const, data: draft.exported.bytes, mimeType: draft.exported.mimeType }
+        : { type: draft.type };
+      if (avatarEditor) await avatarEditor.save(avatar);
+      else await window.electronAPI.profileUpdate({ name: trimmed === '' ? null : trimmed, avatar });
       savingRef.current = false;
       setSaving(false);
       onOpenChange(false);
@@ -271,7 +275,7 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
       setSaving(false);
       toast.error(t('settings.userProfile.edit.saveFailed'));
     }
-  }, [state, name, onOpenChange, t]);
+  }, [state, name, onOpenChange, t, avatarEditor]);
 
   if (!state) return null;
 
@@ -319,8 +323,8 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     avatarDraft.type === 'set'
       ? avatarDraft.previewUrl
       : avatarDraft.type === 'reset'
-        ? null
-        : state.avatarUrl;
+        ? state.defaultAvatarUrl ?? null
+        : state.avatarUrl ?? state.defaultAvatarUrl ?? null;
   const effectiveName =
     name.trim() !== '' ? name.trim() : state.name || t('settings.userProfile.fallbackName');
   const initial = effectiveName.charAt(0).toUpperCase();
@@ -336,7 +340,7 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
     <ConfirmDialog
       open={open}
       onOpenChange={handleOpenChange}
-      title={t('settings.userProfile.edit.title')}
+      title={avatarEditor?.title ?? t('settings.userProfile.edit.title')}
       confirmText={t('settings.userProfile.edit.save')}
       cancelText={t('settings.userProfile.edit.cancel')}
       autoFocusConfirm
@@ -407,7 +411,7 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
           </div>
 
           {/* 名字行:预填当前名字,留空 = 不改名 */}
-          <label className="flex flex-col gap-1.5">
+          {!avatarEditor && <label className="flex flex-col gap-1.5">
             <span className="text-12 text-[var(--text-secondary)]">
               {t('settings.userProfile.edit.nameLabel')}
             </span>
@@ -426,11 +430,11 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
             <span className="text-11 text-[var(--text-tertiary)]">
               {t('settings.userProfile.edit.nameHint')}
             </span>
-          </label>
+          </label>}
 
           {/* 资料跨设备同步的透明化说明 */}
           <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-            {t('settings.userProfile.edit.syncHint')}
+            {avatarEditor?.hint ?? t('settings.userProfile.edit.syncHint')}
           </p>
         </div>
       }

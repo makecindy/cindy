@@ -44,3 +44,14 @@ it('deduplicates identical favorites but keeps distinct configurations and accou
 it('an explicitly empty catalog never revives capability models', () => {
   expect(mobileUnifiedEntries([],['codex'],{},false)).toEqual([]);
 });
+
+it('restores Ultrafast only while the selected account advertises that tier', () => {
+  const favorite = { uid: 'ultrafast', providerId: entry.providerId, modelId: 'codex/model',
+    agent: 'codex' as const, effort: 'high', fast: 'ultrafast' as const };
+  expect(resolveMobileModelConfig(entry, { fastCapable, favorite }).fast).toBe(false);
+  const available = { ...entry, capabilities: { ...entry.capabilities,
+    codex: { ...entry.capabilities.codex!, supportsUltrafastMode: true } } };
+  const actual = resolveMobileModelConfig(available, { fastCapable, favorite });
+  expect(actual.fast).toBe('ultrafast');
+  expect(sameConfiguration(actual, { ...actual, fast: true })).toBe(false);
+});

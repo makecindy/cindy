@@ -57,6 +57,12 @@ export default {
   },
   async check(page, ui) {
     if (ui.case === 'owner') {
+      // The owner page reads run limits (including idle reclaim) on mount. A missing fixture
+      // reply would turn that read into a forbidden operation and render an error.
+      const idleMinutes = page.getByTestId('remote-agent-limit-idleMinutes');
+      await idleMinutes.waitFor();
+      assert.equal(await idleMinutes.inputValue(), '30');
+      assert.equal(await page.getByRole('alert').count(), 0);
       const quota = page.getByRole('switch', {
         name: await ui.t('providerShare.insights.allowQuota'),
         exact: true,

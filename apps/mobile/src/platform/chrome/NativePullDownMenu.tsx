@@ -1,5 +1,6 @@
 import { MenuView, type MenuAction } from "@react-native-menu/menu";
 import { cloneElement, isValidElement, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react-native";
 import {
   NativeModules,
   Platform,
@@ -16,6 +17,8 @@ export type NativePullDownAction = {
   displayInline?: boolean;
   id: string;
   image?: MenuAction["image"];
+  /** 与 iOS image 对应的跨平台菜单图标。 */
+  icon?: LucideIcon;
   keepPresented?: boolean;
   preferredElementSize?: "small" | "medium" | "large";
   state?: "on" | "off" | "mixed";
@@ -112,6 +115,7 @@ export function NativePullDownMenu({
   disabled = false,
   longPress = false,
   onAction,
+  onPress,
   style,
   testID,
 }: {
@@ -123,6 +127,11 @@ export function NativePullDownMenu({
   disabled?: boolean;
   longPress?: boolean;
   onAction(id: string): void;
+  /**
+   * longPress 时的短按动作。Android 触发器接管整块触摸，子元素的点按收不到，必须经这里转发；
+   * iOS 系统菜单只拦长按，短按仍交给子元素，这里不重复调用。
+   */
+  onPress?(): void;
   /**
    * 菜单外层在父布局里的样式。外层替代子元素成为父布局的直接子节点,子元素原本
    * 依赖父布局的样式(如 flex: 1 占满标题区)要同时交给这里。
@@ -146,6 +155,7 @@ export function NativePullDownMenu({
         actions={actions}
         longPress={longPress}
         onAction={onAction}
+        onPress={onPress}
         style={style}
         testID={testID}
       >

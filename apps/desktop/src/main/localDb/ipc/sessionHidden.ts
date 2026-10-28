@@ -2,7 +2,7 @@ import { and, eq, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { DbClient } from '../client/DbClient.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../client/current.js';
 import { sessions } from '../schema.js';
-import { noteSessionHidden } from '../hiddenSessionRegistry.js';
+import { noteSessionHidden } from '../sessionFlagRegistry.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch.js';
 import { broadcastSessionPatched } from './sessions.js';
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';

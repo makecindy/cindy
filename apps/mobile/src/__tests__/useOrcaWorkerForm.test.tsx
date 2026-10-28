@@ -51,6 +51,25 @@ function ExecutionProbe({ maker, target, enabled = true }: { maker: MobileMakerT
   return null;
 }
 
+// Unit regression: a Worker on B may use C's provider, with model/effort kept
+// as one explicit route. Old execution hosts must retain the local-only form.
+it.each([false, true])('permits remote providers on the selected work computer only with support %s', async supported => {
+  const lead = { ...fakeMaker(), orca: { listExecutionDevices: vi.fn(async () => ({ devices: [
+    { deviceId: 'b', name: 'B', supported: true, ...(supported ? { supportsAgentDevice: true } : {}) },
+  ] })) } } as unknown as MobileMakerTransport;
+  const remote = fakeMaker();
+  function Host() { latest = useOrcaWorkerForm({ maker: lead, executionMakerForDevice: () => remote,
+    executionDevicesEnabled: true, agentLocationSelectable: true, leadAgentDeviceId: 'lead-model-pc',
+    prefsScope: 'user-1', active: true, setSheetOpen: () => undefined }); return null; }
+  await act(async () => { root.render(<Host />); await flush(); });
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  expect(latest!.agentLocationSelectable).toBe(supported);
+  await act(async () => { await latest!.modelPicker.select({ agent: 'codex', modelId: 'remote-only', providerId: 'remote-openai', effort: 'high', fast: false }, { deviceId: 'c' }); });
+  expect(latest!.form.executionDeviceId).toBe('b');
+  if (supported) expect(latest!.form).toMatchObject({ agentDeviceId: 'c', model: { id: 'remote-only', providerId: 'remote-openai', effort: 'high' } });
+  else expect(latest!.form.agentDeviceId).toBeUndefined();
+});
+
 it('reads selectable devices from the Lead and reads Agent/model capabilities from the chosen device', async () => {
   const lead = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['codex']), orca: { listExecutionDevices: vi.fn(async () => ({ devices: [
     { deviceId: 'b', name: 'B', supported: true }, { deviceId: 'old', supported: false },

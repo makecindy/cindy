@@ -108,6 +108,10 @@ export {
   type ArchiveWorkerDeps,
 } from './archive_worker.js';
 export {
+  registerUpdateWorkerTool,
+  type UpdateWorkerDeps,
+} from './update_worker.js';
+export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
   type ModelDescriptor,
@@ -220,6 +224,7 @@ export type {
   HistoryPage,
   HistoryWorkdir,
   HistorySession,
+  HistoryCompanion,
   HistoryMessage,
   ListWorkdirsArgs,
   ListSessionsArgs,

@@ -18,7 +18,7 @@
  * `[消息来源]` 不在此列:它陈述的是"本条"由谁发,逐条都要带。
  */
 
-export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat';
+export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat' | 'bot-thread' | 'task-delivery';
 
 export type RepeatableWireNotes = Partial<Record<RepeatableWireNoteKind, string | null>>;
 
@@ -30,12 +30,12 @@ export interface WireNotePlan {
 }
 
 export interface WireNoteMemory {
-  plan(sessionId: string, notes: RepeatableWireNotes, opts?: { force?: boolean }): WireNotePlan;
+  plan(sessionId: string, notes: RepeatableWireNotes, opts?: { force?: boolean; partial?: boolean }): WireNotePlan;
   /** 原生上下文失去连续性(压缩边界 / clear / 重建):下一轮整体重发。 */
   reset(sessionId: string): void;
 }
 
-const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat'];
+const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat', 'bot-thread', 'task-delivery'];
 
 export function createWireNoteMemory(): WireNoteMemory {
   const lastSent = new Map<string, Map<RepeatableWireNoteKind, string | null>>();
@@ -62,8 +62,10 @@ export function createWireNoteMemory(): WireNoteMemory {
         commit() {
           // plan 之后 reset 过:这份计划面对的是旧上下文,不记为已发送,下一轮整体重发。
           if (epochOf(sessionId) !== epoch) return;
-          const next = new Map<RepeatableWireNoteKind, string | null>();
-          for (const kind of KINDS) next.set(kind, notes[kind] ?? null);
+          const next = opts?.partial && !opts.force ? new Map(lastSent.get(sessionId)) : new Map<RepeatableWireNoteKind, string | null>();
+          for (const kind of KINDS) {
+            if (!opts?.partial || kind in notes) next.set(kind, notes[kind] ?? null);
+          }
           lastSent.set(sessionId, next);
         },
       };

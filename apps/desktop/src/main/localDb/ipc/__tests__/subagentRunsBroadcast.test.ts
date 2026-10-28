@@ -28,6 +28,8 @@ const h = vi.hoisted(() => {
     scopeCurrent: true,
     activeStamp: { dataOwnerId: 'active-owner', ownerGeneration: 2 },
     deviceLinkInvoke: false,
+    sharedTask: false,
+    tapWindowBroadcast: vi.fn(),
     ownerScopeKey: 'owner-a:1',
   };
 });
@@ -56,9 +58,11 @@ vi.mock('../../../appSessionState.js', () => ({
 }));
 vi.mock('../../../device-link/invoke-context.js', () => ({
   isDeviceLinkInvoke: () => h.deviceLinkInvoke,
+  getDeviceLinkInvokeContext: () => (h.deviceLinkInvoke ? { sharedTask: h.sharedTask ? {} : undefined } : null),
 }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   isDataOwnerBroadcastScopeCurrent: () => h.scopeCurrent,
+  tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
@@ -93,6 +97,7 @@ describe('Subagent runs broadcast boundary', () => {
     h.persistSubagentTaskUpdate.mockResolvedValue(null);
     h.scopeCurrent = true;
     h.deviceLinkInvoke = false;
+    h.sharedTask = false;
     h.ownerScopeKey = 'owner-a:1';
     __resetSubagentReconcileFingerprintsForTests();
   });
@@ -757,6 +762,15 @@ describe('Subagent runs broadcast boundary', () => {
     );
   });
 
+  it('forwards the change to device-link controllers with the same owner stamp', () => {
+    broadcastSubagentRunsInvalidated('session-1');
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      SUBAGENT_RUNS_CHANGED_CHANNEL,
+      { sessionId: 'session-1', runId: null, created: false, firstForSession: false },
+    );
+  });
+
   it('broadcasts a session-level invalidation for clear and rewind boundaries', () => {
     broadcastSubagentRunsInvalidated('session-1');
 
@@ -979,6 +993,18 @@ describe('Subagent runs broadcast boundary', () => {
     })).resolves.toEqual({ supported: false, entries: [] });
     expect(h.getSubagentRunDetail).not.toHaveBeenCalled();
   });
+
+  it.each([[false, true], [true, undefined]])(
+    'declares the change push only to peers that can receive it (sharedTask=%s)', async (sharedTask, expected) => {
+      h.deviceLinkInvoke = true;
+      h.sharedTask = sharedTask;
+      h.listSubagentRuns.mockResolvedValue({ runs: [] });
+      registerSubagentRunsIpc();
+      const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+      const response = await list({}, { sessionId: 'session-1' }) as { changePush?: boolean };
+      expect(response.changePush).toBe(expected);
+    },
+  );
 
   it('validates and forwards provider-scoped detail lookups', async () => {
     registerSubagentRunsIpc();

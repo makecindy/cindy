@@ -239,6 +239,20 @@ if (devFlags.needsIsolatedDeviceId) {
   stderr.write(`[cindy] dev isolated deviceId → ${isolatedDeviceId}\n`);
 }
 
+// UI 模拟数据(restart --mock,见 docs/dev-rules/ui-mock-data.md):只在源码运行的
+// 隔离沙箱里生效。其它任何 profile 一律清掉开关,模拟任务绝不写进正式或共享数据。
+const uiMockData = !app.isPackaged
+  && process.env.XDT_UI_MOCK === '1'
+  && devFlags.profileKind === 'isolated-sandbox';
+if (process.env.XDT_UI_MOCK === '1' && !uiMockData) {
+  stderr.write('[cindy] WARN: XDT_UI_MOCK ignored outside an unpackaged isolated sandbox\n');
+}
+if (uiMockData) {
+  stderr.write('[cindy] dev UI mock data enabled (account-free, demo tasks)\n');
+} else {
+  delete process.env.XDT_UI_MOCK;
+}
+
 // 实例注册表对 dev 与 packaged 一律登记:dev/release 按 flavor 分锁域、共享同一
 // userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
 // 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
@@ -292,6 +306,10 @@ async function dispatch(): Promise<void> {
   // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
   process.once('exit', cleanupDevInstance);
   app.once('will-quit', cleanupDevInstance);
+  if (uiMockData) {
+    const { startFreshProfileInLocalMode } = await import('./appSessionState.js');
+    startFreshProfileInLocalMode();
+  }
   const mod = await import('./bootstrap-electron.js');
   await mod.bootstrapElectron();
 }

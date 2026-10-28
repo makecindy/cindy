@@ -674,13 +674,13 @@
     },
     {
       "id": "login-callback-title",
-      "light": "#252222",
-      "dark": "#D4D4D4"
+      "light": "rgba(0, 0, 0, 0.88)",
+      "dark": "rgba(255, 255, 255, 0.82)"
     },
     {
       "id": "login-callback-body",
-      "light": "#6F6F6F",
-      "dark": "#6F6F6F"
+      "light": "rgba(0, 0, 0, 0.56)",
+      "dark": "rgba(255, 255, 255, 0.55)"
     },
     {
       "id": "login-callback-cta-bg",
@@ -734,23 +734,23 @@
     },
     {
       "id": "login-control-text",
-      "light": "#252222",
-      "dark": "#EEEEEE"
+      "light": "rgba(0, 0, 0, 0.88)",
+      "dark": "rgba(255, 255, 255, 0.82)"
     },
     {
       "id": "login-control-placeholder",
-      "light": "#D4D4D4",
-      "dark": "#6F6F6F"
+      "light": "rgba(0, 0, 0, 0.32)",
+      "dark": "rgba(255, 255, 255, 0.30)"
     },
     {
       "id": "login-title-text",
-      "light": "#252222",
-      "dark": "#D4D4D4"
+      "light": "rgba(0, 0, 0, 0.88)",
+      "dark": "rgba(255, 255, 255, 0.82)"
     },
     {
       "id": "login-secondary-text",
-      "light": "#6F6F6F",
-      "dark": "#6F6F6F"
+      "light": "rgba(0, 0, 0, 0.56)",
+      "dark": "rgba(255, 255, 255, 0.55)"
     },
     {
       "id": "login-primary-button-bg",

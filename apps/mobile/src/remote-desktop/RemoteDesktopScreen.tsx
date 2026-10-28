@@ -1,7 +1,17 @@
-import { foldDesktopLayout } from './foldDesktopLayout';
-import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
-import { windowDivision, controlRegion } from '@/platform/windowGeometry';
-import { FoldTouchpad } from './FoldTouchpad';
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
+import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
+import { controlRegion } from "@/platform/windowGeometry";
+import { FoldTouchpad } from "./FoldTouchpad";
+import {
+  FoldDesktopBezel,
+  FoldDesktopDeck,
+  FoldDesktopKeycap,
+  FoldDesktopSkinSwitch,
+  retroDesktopViewport,
+  foldDesktopSkinColors,
+  type FoldDesktopSkin,
+} from "./FoldDesktopSkin";
 import {
   useCallback,
   useMemo,
@@ -92,6 +102,7 @@ import {
 } from "./rtcDiagnostics";
 import {
   fontWeight,
+  darkColors,
   iconSize,
   iconStroke,
   lineHeight,
@@ -198,14 +209,19 @@ const LABELS: Record<string, string> = {
 };
 
 export default function RemoteDesktopScreen() {
-  const { deviceId: rawId, deviceName: rawName, handoff: rawHandoff } = useLocalSearchParams<{
+  const {
+    deviceId: rawId,
+    deviceName: rawName,
+    handoff: rawHandoff,
+  } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
     handoff?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
-  const deviceName = typeof rawName === "string" ? rawName : deviceId;
-  const handoff = typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
+  const deviceName = deviceDisplayName(deviceId, typeof rawName === "string" ? rawName : undefined);
+  const handoff =
+    typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
   const router = useRouter();
   const focused = useIsFocused();
   return (
@@ -309,37 +325,55 @@ export function RemoteDesktopSession({
   });
   const screenSize = windowSize;
   const geometry = useAdaptiveWindow();
-  const division = windowDivision(geometry);
-  const tableRegion = division && division.first.height >= 160 && division.second.height >= 160 && division.first.width >= 160 && division.second.width >= 160 ? division : null;
+  const tableRegion = foldDesktopRegion(geometry);
 
-  const systemSideRail = Platform.OS === 'ios' && !tableRegion && (geometry.barEdge !== 'none' || (geometry.reservedRegionsSupported && geometry.regularWidth && windowSize.width > windowSize.height));
+  const systemSideRail =
+    Platform.OS === "ios" &&
+    !tableRegion &&
+    (geometry.barEdge !== "none" ||
+      (geometry.reservedRegionsSupported &&
+        geometry.regularWidth &&
+        windowSize.width > windowSize.height));
   // Android adjustResize shrinks the window for the IME, not the display.
   // Keep its device orientation stable; iOS/Duo still use the adaptive window.
-  const orientationSize = Platform.OS === 'android' ? Dimensions.get('screen') : windowSize;
-  const landscape = systemSideRail || (!tableRegion && orientationSize.width > orientationSize.height);
+  const orientationSize =
+    Platform.OS === "android" ? Dimensions.get("screen") : windowSize;
+  const landscape =
+    systemSideRail ||
+    (!tableRegion && orientationSize.width > orientationSize.height);
   const sideRailWidth = Math.max(60, geometry.insets.right + spacing.md);
   // The native status/navigation center sits 6pt inward from the safe strip center.
   // Use the reported status reservation for vertical clearance when available.
-  const statusReservation = geometry.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= geometry.width);
-  const sideRailTop = Math.max(insets.top, statusReservation.length ? Math.max(...statusReservation.map(r => r.y + r.height)) : 120);
+  const statusReservation = geometry.regions.filter(
+    (r) =>
+      r.kind === "occlusion" && r.y === 0 && r.x + r.width >= geometry.width,
+  );
+  const sideRailTop = Math.max(
+    insets.top,
+    statusReservation.length
+      ? Math.max(...statusReservation.map((r) => r.y + r.height))
+      : 120,
+  );
   const [interfaceAngle, setInterfaceAngle] = useState<number | null>(null);
-  const toolbarOnLeft =
-    systemSideRail ? false :
-    Platform.OS === "ios" &&
-    landscape &&
-    (interfaceAngle === 270 ||
-      (interfaceAngle === null && insets.right > insets.left));
+  const toolbarOnLeft = systemSideRail
+    ? false
+    : Platform.OS === "ios" &&
+      landscape &&
+      (interfaceAngle === 270 ||
+        (interfaceAngle === null && insets.right > insets.left));
   const webview = useRef<ComponentRef<typeof WebView>>(null);
   const nativeViewer = useRef<NativeRemoteDesktopHandle>(null);
   // Memo survives ordinary renders, but Fast Refresh invalidates it when the
   // bundled viewer changes. A ref kept the old script alongside new RN layout.
-  const html = useMemo(() =>
-    remoteDesktopViewerHtml(
-      colors.surface,
-      colors.textPrimary,
-      Boolean(NativeRemoteDesktopView),
-    ),
-  []);
+  const html = useMemo(
+    () =>
+      remoteDesktopViewerHtml(
+        colors.surface,
+        colors.textPrimary,
+        Boolean(NativeRemoteDesktopView),
+      ),
+    [],
+  );
   const [viewerReadyRevision, setViewerReadyRevision] = useState(0);
   const active = useRef<RemoteDesktopLease | null>(null);
   // View only is a local guard against stray touches. The host keeps control
@@ -347,7 +381,8 @@ export function RemoteDesktopSession({
   const [viewOnlySelected, setViewOnlySelected] = useState(false);
   const viewOnlyRef = useRef(false);
   /** Input reaches the computer only with host control and outside view only. */
-  const inputAllowed = (controlling: boolean) => controlling && !viewOnlyRef.current;
+  const inputAllowed = (controlling: boolean) =>
+    controlling && !viewOnlyRef.current;
   // Last control bit we asked the host for but have not confirmed. Overflow and
   // take-control can time out after the local bit already moved; heartbeats use
   // this to retry a release or restore local control instead of ignoring host-true.
@@ -500,14 +535,72 @@ export function RemoteDesktopSession({
   const [nativeKeyboardHeight, setNativeKeyboardHeight] = useState(0);
   const [keyboardPanelHeight, setKeyboardPanelHeight] = useState(0);
   const [backControlHeight, setBackControlHeight] = useState(44);
+  // On a wide iOS window the status reservation can occupy only the trailing
+  // corner. Share that row, with the native toolbar's bottom spacing, when the
+  // complete back button fits in its unobstructed leading corner, including
+  // tabletop posture: the fold below does not obstruct this status row.
+  const sharedBackTop = insets.top - backControlHeight - spacing.md;
+  const portraitBackLeft = edgePadding.paddingLeft + spacing.lg;
+  const sharedStatusRow =
+    Platform.OS === "ios" &&
+    !landscape &&
+    geometry.reservedRegionsSupported &&
+    geometry.regularWidth &&
+    statusReservation.length > 0 &&
+    sharedBackTop >= spacing.md &&
+    !geometry.regions.some(
+      (region) =>
+        region.x < portraitBackLeft + navigationChrome.target &&
+        region.x + region.width > portraitBackLeft &&
+        region.y < sharedBackTop + backControlHeight &&
+        region.y + region.height > sharedBackTop,
+    );
   // Android's system keyboard already resizes the window. Keep its existing
   // flow layout; only iOS needs an offset above the native keyboard.
   const landscapeKeyboardOverlay =
     landscape && (Platform.OS === "ios" || fullKeys);
   const keyboardBottom =
     Platform.OS === "ios" && keyboard && !fullKeys ? nativeKeyboardHeight : 0;
-  const foldLayout = foldDesktopLayout(geometry, keyboardBottom, keyboardPanelHeight, keyboard);
-  const fullScreenFoldBackground = Boolean(foldLayout && division?.axis === 'horizontal');
+  const foldLayout = foldDesktopLayout(
+    geometry,
+    keyboardBottom,
+    keyboardPanelHeight,
+    keyboard,
+  );
+  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
+  const foldSkinAvailable = Platform.OS === "ios" && Boolean(foldLayout);
+  const retroDesktop =
+    foldSkinAvailable &&
+    foldSkin !== "modern" &&
+    frameReady &&
+    !keyboard &&
+    !operations;
+  const viewerColors = retroDesktop ? darkColors : colors;
+  // Artwork covers both physical halves, including the division and system
+  // reservations. Only interactive content is constrained to the safe regions.
+  const foldSeam = tableRegion
+    ? (tableRegion.first.y + tableRegion.first.height + tableRegion.second.y) /
+      2
+    : 0;
+  const hardwareMedia = { x: 0, y: 0, width: geometry.width, height: foldSeam };
+  const hardwareControls = {
+    x: 0,
+    y: foldSeam,
+    width: geometry.width,
+    height: geometry.height - foldSeam,
+  };
+  const retroViewport =
+    retroDesktop && foldLayout
+      ? retroDesktopViewport(
+          hardwareMedia,
+          foldSkin,
+          foldLayout.media,
+          lease && lease.display.height > 0
+            ? lease.display.width / lease.display.height
+            : undefined,
+        )
+      : null;
+  const fullScreenFoldBackground = Boolean(foldLayout);
   const foldControls = foldLayout?.controls ?? controlRegion(geometry);
   const heldKeys = useRef(new Map<string, string[]>());
   const [keyPage, setKeyPage] = useState(0);
@@ -517,7 +610,8 @@ export function RemoteDesktopSession({
     const command = message as Record<string, unknown>;
     // Every control handoff retires the parent batch together with the viewer
     // queue. A late native fallback, failure or ACK cannot own the next batch.
-    if (command.type === "control" || command.type === "stop") inputBusy.current = null;
+    if (command.type === "control" || command.type === "stop")
+      inputBusy.current = null;
     const owner = active.current;
     const attempt = command.attemptId ?? mediaAttempt.current;
     webview.current?.postMessage(JSON.stringify(message));
@@ -1052,13 +1146,15 @@ export function RemoteDesktopSession({
       .finally(() => {
         if (active.current !== current) return;
         controlInFlight.current = false;
-        if (foregroundRestorePending.current) restoreInlinePresentationRef.current();
+        if (foregroundRestorePending.current)
+          restoreInlinePresentationRef.current();
       });
     // PiP must wait for both recovery grants and overflow releases before it
     // authorizes background viewing; an older operation cannot clear a new one.
     controlRestoration.current = operation;
     void operation.finally(() => {
-      if (controlRestoration.current === operation) controlRestoration.current = null;
+      if (controlRestoration.current === operation)
+        controlRestoration.current = null;
     });
     return operation;
   };
@@ -1264,7 +1360,8 @@ export function RemoteDesktopSession({
         });
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
-        if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
+        if (next.controlling)
+          send({ type: "control", enabled: inputAllowed(true) });
         else if (result.canControl) {
           try {
             const control = await viewerSession.current!.control(true);
@@ -1272,7 +1369,10 @@ export function RemoteDesktopSession({
             // Control changes keep the same session identity for in-flight replies.
             next.controlling = control.controlling;
             setLease({ ...next });
-            send({ type: "control", enabled: inputAllowed(control.controlling) });
+            send({
+              type: "control",
+              enabled: inputAllowed(control.controlling),
+            });
           } catch (cause) {
             if (current === generation.current) resolveControlFailure(cause);
           }
@@ -1284,7 +1384,8 @@ export function RemoteDesktopSession({
       } finally {
         if (current === generation.current) {
           connecting.current = false;
-          if (foregroundRestorePending.current) restoreInlinePresentationRef.current();
+          if (foregroundRestorePending.current)
+            restoreInlinePresentationRef.current();
         }
       }
     },
@@ -1434,6 +1535,15 @@ export function RemoteDesktopSession({
   useEffect(() => {
     send({ type: "viewport", fillHeight: landscape });
   }, [landscape, send, viewerReadyRevision]);
+
+  useEffect(() => {
+    if (!retroDesktop || !focused) return;
+    return () => {
+      heldKeys.current.clear();
+      setModifiers([]);
+      send({ type: "releaseInput" });
+    };
+  }, [retroDesktop, foldSkin, focused, send]);
 
   useEffect(() => {
     alive.current = true;
@@ -1681,10 +1791,10 @@ export function RemoteDesktopSession({
   useEffect(() => {
     send({
       type: "theme",
-      surface: colors.surface,
-      foreground: colors.textPrimary,
+      surface: viewerColors.surface,
+      foreground: viewerColors.textPrimary,
     });
-  }, [colors.surface, colors.textPrimary, send]);
+  }, [viewerColors.surface, viewerColors.textPrimary, send]);
   useEffect(() => {
     send({ type: "mode", mode });
   }, [mode, send]);
@@ -1693,14 +1803,27 @@ export function RemoteDesktopSession({
       type: "mouseButtons",
       native: Platform.OS === "ios",
       fitToInsets: fullScreenFoldBackground,
-      topInset: fullScreenFoldBackground ? foldLayout!.media.y : tableRegion ? 0 : edgePadding.paddingTop,
-      bottomInset: fullScreenFoldBackground
-        ? Math.max(0, geometry.height - foldLayout!.media.y - foldLayout!.media.height) : tableRegion ? 0 :
-        keyboard && landscapeKeyboardOverlay
-          ? keyboardPanelHeight + keyboardBottom
-          : !keyboard && !landscape
-            ? toolbarSize.height
-            : 0,
+      topInset: retroDesktop
+        ? 0
+        : fullScreenFoldBackground
+          ? foldLayout!.media.y
+          : tableRegion
+            ? 0
+            : edgePadding.paddingTop,
+      bottomInset: retroDesktop
+        ? 0
+        : fullScreenFoldBackground
+          ? Math.max(
+              0,
+              geometry.height - foldLayout!.media.y - foldLayout!.media.height,
+            )
+          : tableRegion
+            ? 0
+            : keyboard && landscapeKeyboardOverlay
+              ? keyboardPanelHeight + keyboardBottom
+              : !keyboard && !landscape
+                ? toolbarSize.height
+                : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
         keyboard && !landscape && !tableRegion
@@ -1711,11 +1834,7 @@ export function RemoteDesktopSession({
       rightInset: 0,
       leftInset: 0,
       enabled:
-        showMouseButtons &&
-        focused &&
-        !operations &&
-        !keyboard &&
-        canInput,
+        showMouseButtons && focused && !operations && !keyboard && canInput,
       labels: {
         left: t("remoteDesktop.leftClick"),
         right: t("remoteDesktop.rightClick"),
@@ -1723,8 +1842,13 @@ export function RemoteDesktopSession({
       },
     });
   }, [
-    tableRegion?.first.height, tableRegion?.first.width,
-    fullScreenFoldBackground, foldLayout?.media.y, foldLayout?.media.height, geometry.height,
+    tableRegion?.first.height,
+    tableRegion?.first.width,
+    fullScreenFoldBackground,
+    foldLayout?.media.y,
+    foldLayout?.media.height,
+    geometry.height,
+    retroDesktop,
     viewerReadyRevision,
     showMouseButtons,
     edgePadding.paddingTop,
@@ -1782,7 +1906,7 @@ export function RemoteDesktopSession({
     }
     if (message.type === "ready") {
       ready.current = true;
-      setViewerReadyRevision(revision => revision + 1);
+      setViewerReadyRevision((revision) => revision + 1);
       void connectRef.current();
       return;
     }
@@ -3043,19 +3167,23 @@ export function RemoteDesktopSession({
     if (code === "Backspace" && caps?.platform !== "darwin") return "Backspace";
     return LABELS[code] ?? code.replace(/^Key|^Digit/, "");
   };
-  const heldKey = (code: string) => (
+  const heldKey = (code: string, retro = false) => (
     <Pressable
       key={code}
+      testID={retro ? `remoteDesktop.retroKey.${code}` : undefined}
+      disabled={retro && !canInput}
       accessibilityRole="button"
       accessibilityLabel={keyLabel(code)}
       style={({ pressed }) => [
         styles.computerKey,
+        retro && styles.retroKey,
+        retro && code === "Space" && { flex: 4 },
         pressed && styles.keyPressed,
       ]}
       onPressIn={() => {
         if (!inputAllowed(Boolean(active.current?.controlling))) return;
         const alreadyHeld = new Set([...heldKeys.current.values()].flat());
-        const keys = comboMode ? [...modifiers, code] : [code];
+        const keys = !retro && comboMode ? [...modifiers, code] : [code];
         heldKeys.current.set(code, keys);
         send({
           type: "events",
@@ -3082,16 +3210,30 @@ export function RemoteDesktopSession({
         if (!comboMode) setModifiers([]);
       }}
     >
+      {retro && <FoldDesktopKeycap skin={foldSkin} wide={code === "Space"} />}
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
         style={[
-          /^Key|^Digit|^Arrow/.test(code)
+          /^Key|^Digit|^Arrow/.test(code) || (retro && code === "Space")
             ? styles.keyText
             : styles.specialKeyText,
+          retro && {
+            color: foldDesktopSkinColors(foldSkin).textPrimary,
+            fontWeight: fontWeight.medium,
+            maxWidth: "100%",
+            flexShrink: 1,
+            textAlign: "center",
+          },
         ]}
       >
-        {keyLabel(code)}
+        {retro && code === "MetaLeft" && caps?.platform === "darwin"
+          ? "⌘"
+          : retro && code === "ControlLeft"
+            ? "Ctrl"
+            : retro && code === "Backspace"
+              ? "⌫"
+              : keyLabel(code)}
       </Text>
     </Pressable>
   );
@@ -3121,15 +3263,55 @@ export function RemoteDesktopSession({
         <View
           style={[
             styles.canvas,
-            { marginLeft: landscape ? 0 : edgePadding.paddingLeft, marginRight: landscape ? 0 : edgePadding.paddingRight },
-            fullScreenFoldBackground ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, marginLeft: 0, marginRight: 0 } : foldLayout && { position: 'absolute', flex: 0, left: foldLayout.media.x, top: foldLayout.media.y,
-              width: foldLayout.media.width, height: foldLayout.media.height, marginLeft: 0, marginRight: 0 },
+            {
+              marginLeft: landscape ? 0 : edgePadding.paddingLeft,
+              marginRight: landscape ? 0 : edgePadding.paddingRight,
+            },
+            fullScreenFoldBackground
+              ? {
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  marginLeft: 0,
+                  marginRight: 0,
+                }
+              : foldLayout && {
+                  position: "absolute",
+                  flex: 0,
+                  left: foldLayout.media.x,
+                  top: foldLayout.media.y,
+                  width: foldLayout.media.width,
+                  height: foldLayout.media.height,
+                  marginLeft: 0,
+                  marginRight: 0,
+                },
           ]}
         >
+          {retroDesktop && focused && foldLayout ? (
+            <FoldDesktopBezel
+              region={hardwareMedia}
+              skin={foldSkin}
+              viewport={retroViewport}
+            />
+          ) : null}
           <Animated.View
             testID="remoteDesktop.media"
             pointerEvents={frameReady ? "auto" : "none"}
-            style={[StyleSheet.absoluteFill, mediaReveal]}
+            style={[
+              StyleSheet.absoluteFill,
+              mediaReveal,
+              retroViewport && {
+                left: retroViewport.x,
+                right: geometry.width - retroViewport.x - retroViewport.width,
+                top: retroViewport.y,
+                bottom:
+                  geometry.height - retroViewport.y - retroViewport.height,
+                borderRadius: radius.control,
+                overflow: "hidden",
+              },
+            ]}
           >
             {NativeRemoteDesktopView && (
               <NativeRemoteDesktopView
@@ -3139,7 +3321,11 @@ export function RemoteDesktopSession({
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFill,
-                  { backgroundColor: colors.surface },
+                  {
+                    backgroundColor: retroDesktop
+                      ? darkColors.surface
+                      : colors.surface,
+                  },
                 ]}
               />
             )}
@@ -3328,6 +3514,7 @@ export function RemoteDesktopSession({
             )}
           {lease && !showConnectionStatus && !operations && !landscape && (
             <RemoteDesktopNetworkStatus
+              foreground={viewerColors.textPrimary}
               send={send}
               stats={network}
               video={status === "live"}
@@ -3367,10 +3554,22 @@ export function RemoteDesktopSession({
               ]}
             >
               <RemoteDesktopPanel
-                railAnchor={systemSideRail ? {
-                  right: (sideRailWidth - navigationChrome.target) / 2,
-                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) / 2,
-                } : undefined}
+                railAnchor={
+                  systemSideRail
+                    ? {
+                        right: (sideRailWidth - navigationChrome.target) / 2,
+                        top:
+                          (sideRailTop +
+                            navigationChrome.target +
+                            spacing.lg +
+                            windowSize.height -
+                            insets.bottom -
+                            navigationChrome.target *
+                              (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) /
+                          2,
+                      }
+                    : undefined
+                }
                 toolbarOnLeft={toolbarOnLeft}
                 toolbarActionCount={handoff ? 2 : caps?.omarchyMenu ? 5 : 4}
                 visible={operations && focused}
@@ -3416,7 +3615,15 @@ export function RemoteDesktopSession({
                   }
                   presentation={{
                     enabled: pipEnabled,
-                    canRotate: typeof remotePresentation?.rotate === "function" && !(geometry.reservedRegionsSupported && Platform.OS === "ios" && !Platform.isPad && geometry.regularWidth && geometry.regularHeight),
+                    canRotate:
+                      typeof remotePresentation?.rotate === "function" &&
+                      !(
+                        geometry.reservedRegionsSupported &&
+                        Platform.OS === "ios" &&
+                        !Platform.isPad &&
+                        geometry.regularWidth &&
+                        geometry.regularHeight
+                      ),
                     canPip: Boolean(
                       remotePresentation &&
                       caps?.backgroundViewing &&
@@ -3473,13 +3680,71 @@ export function RemoteDesktopSession({
           )}
         </View>
         {tableRegion && frameReady && focused && !keyboard && !operations ? (
-          <View testID="remoteDesktop.foldControls" style={{ position: 'absolute', left: foldControls.x,
-            top: foldControls.y, width: foldControls.width, height: foldControls.height,
-            paddingBottom: toolbarSize.height + (showMouseButtons ? 80 : 0) }}>
-            <FoldTouchpad send={send} enabled={canInput} />
-            {showMouseButtons && canInput ? <RemoteDesktopMouseControls send={send}
-              bottom={toolbarSize.height} right={0} compact labels={{ left: t("remoteDesktop.leftClick"),
-                right: t("remoteDesktop.rightClick"), wheel: t("remoteDesktop.mouseWheel") }} /> : null}
+          <View
+            testID="remoteDesktop.foldControls"
+            style={{
+              position: "absolute",
+              left: retroDesktop ? hardwareControls.x : foldControls.x,
+              top: retroDesktop ? hardwareControls.y : foldControls.y,
+              width: retroDesktop ? hardwareControls.width : foldControls.width,
+              height: retroDesktop
+                ? hardwareControls.height
+                : foldControls.height,
+              paddingBottom: retroDesktop
+                ? 0
+                : toolbarSize.height + (showMouseButtons ? 80 : 0),
+            }}
+          >
+            {retroDesktop ? (
+              <FoldDesktopDeck
+                renderKey={(code) => heldKey(code, true)}
+                send={send}
+                enabled={canInput}
+                skin={foldSkin}
+                onChange={setFoldSkin}
+                safeInsets={{
+                  top: Math.max(0, foldControls.y - hardwareControls.y),
+                  bottom: Math.max(
+                    0,
+                    geometry.height - foldControls.y - foldControls.height,
+                  ),
+                  left: foldControls.x,
+                  right: Math.max(
+                    0,
+                    geometry.width - foldControls.x - foldControls.width,
+                  ),
+                }}
+                bottomReserve={toolbarSize.height + (showMouseButtons ? 80 : 0)}
+              />
+            ) : (
+              <>
+                {foldSkinAvailable ? (
+                  <FoldDesktopSkinSwitch
+                    skin={foldSkin}
+                    onChange={(value) => {
+                      heldKeys.current.clear();
+                      setModifiers([]);
+                      send({ type: "releaseInput" });
+                      setFoldSkin(value);
+                    }}
+                  />
+                ) : null}
+                <FoldTouchpad send={send} enabled={canInput} />
+              </>
+            )}
+            {showMouseButtons && canInput ? (
+              <RemoteDesktopMouseControls
+                send={send}
+                bottom={toolbarSize.height}
+                right={0}
+                compact
+                labels={{
+                  left: t("remoteDesktop.leftClick"),
+                  right: t("remoteDesktop.rightClick"),
+                  wheel: t("remoteDesktop.mouseWheel"),
+                }}
+              />
+            ) : null}
           </View>
         ) : null}
         {!keyboard && (
@@ -3533,8 +3798,13 @@ export function RemoteDesktopSession({
                       paddingBottom: Math.max(spacing.sm, insets.bottom),
                     }),
               },
-              tableRegion && { left: foldControls.x, right: undefined, width: foldControls.width,
-                bottom: geometry.height - foldControls.y - foldControls.height, paddingBottom: spacing.sm },
+              tableRegion && {
+                left: foldControls.x,
+                right: undefined,
+                width: foldControls.width,
+                bottom: geometry.height - foldControls.y - foldControls.height,
+                paddingBottom: spacing.sm,
+              },
               systemSideRail && {
                 left: toolbarOnLeft ? 0 : undefined,
                 right: toolbarOnLeft ? undefined : 0,
@@ -3545,8 +3815,8 @@ export function RemoteDesktopSession({
                 paddingLeft: 0,
                 paddingRight: 0,
                 paddingBottom: 0,
-                alignItems: 'center',
-                justifyContent: 'center',
+                alignItems: "center",
+                justifyContent: "center",
               },
             ]}
           >
@@ -3632,21 +3902,28 @@ export function RemoteDesktopSession({
           {
             top: landscape
               ? insets.top + spacing.lg
-              : edgePadding.paddingTop + spacing.xs,
+              : sharedStatusRow
+                ? sharedBackTop
+                : edgePadding.paddingTop + spacing.xs,
             // iOS landscape: Island/notch sits mid-edge, so the top-left
             // corner stays clear even when insets.left is large. Skip that
             // inset unless the top edge is also unsafe — a physical cutout
             // occupying the corner, not a centered island. Android left
             // insets are an unsafe strip (cutout/curve), not an island.
             left: landscape
-              ? (Platform.OS === "ios" && !geometry.reservedRegionsSupported && insets.top === 0 ? 0 : insets.left) +
+              ? (Platform.OS === "ios" &&
+                !geometry.reservedRegionsSupported &&
+                insets.top === 0
+                  ? 0
+                  : insets.left) +
                 spacing.lg +
                 (Platform.OS === "ios" ? spacing.xs : 0)
-              : edgePadding.paddingLeft + spacing.lg,
+              : portraitBackLeft,
           },
           systemSideRail && {
             top: sideRailTop,
-            left: windowSize.width - (sideRailWidth + navigationChrome.target) / 2,
+            left:
+              windowSize.width - (sideRailWidth + navigationChrome.target) / 2,
             width: navigationChrome.target,
           },
         ]}
@@ -3675,9 +3952,16 @@ export function RemoteDesktopSession({
                 ? Math.max(spacing.sm, insets.bottom)
                 : spacing.xs,
             },
-            foldLayout && { position: 'absolute', left: foldControls.x, width: foldControls.width,
+            foldLayout && {
+              position: "absolute",
+              left: foldControls.x,
+              width: foldControls.width,
               bottom: geometry.height - foldControls.y - foldControls.height,
-              maxHeight: foldControls.height, paddingLeft: spacing.xs, paddingRight: spacing.sm, paddingBottom: 0 },
+              maxHeight: foldControls.height,
+              paddingLeft: spacing.xs,
+              paddingRight: spacing.sm,
+              paddingBottom: 0,
+            },
           ]}
         >
           <View style={styles.keyboardHeader}>
@@ -3801,7 +4085,10 @@ export function RemoteDesktopSession({
                       });
                     }}
                     onPress={() => {
-                      if (!comboMode || !inputAllowed(Boolean(active.current?.controlling)))
+                      if (
+                        !comboMode ||
+                        !inputAllowed(Boolean(active.current?.controlling))
+                      )
                         return;
                       setModifiers((previous) =>
                         previous.includes(code)
@@ -4016,7 +4303,11 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.textPrimary,
     },
     disabled: { opacity: 0.4 },
-    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+    buttonText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
     keyboardOverlay: { position: "absolute", left: 0, right: 0 },
     keyboard: {
       backgroundColor: colors.surfaceTranslucent,
@@ -4099,7 +4390,11 @@ const makeStyles = (colors: ThemeColors) =>
       lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+    specialKeyText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
     pageNavigation: {
       flexDirection: "row",
       justifyContent: "center",
@@ -4137,5 +4432,12 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.control,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
+    },
+    retroKey: {
+      backgroundColor: "transparent",
+      borderBottomWidth: 0,
+      paddingHorizontal: spacing.sm,
+      paddingBottom: spacing.xs,
+      overflow: "hidden",
     },
   });

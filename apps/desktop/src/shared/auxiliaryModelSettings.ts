@@ -31,10 +31,10 @@ export interface AuxiliaryModelOption {
   label: string;
   group: string;
   providerId: string;
-  agentKind: 'codex' | 'claude-code';
+  agentKind: 'codex' | 'claude-code' | 'pi';
   modelId: string;
   modelName: string;
-  /** Follow the same default visibility as the regular model selector. */
+  /** Auxiliary default; direct HTTP models do not inherit harness compatibility defaults. */
   defaultEnabled?: boolean;
   icon?: string;
   budget: boolean;
@@ -115,7 +115,7 @@ export function isCustomAuxiliaryModelList(models: readonly string[]): boolean {
 
 export function describeAuxiliaryModelRef(ref: string): {
   providerId: string;
-  agentKind: 'codex' | 'claude-code';
+  agentKind: 'codex' | 'claude-code' | 'pi';
   model: string;
 } | null {
   const parsed = parseAuxiliaryModelRef(ref);

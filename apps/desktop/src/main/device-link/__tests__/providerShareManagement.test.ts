@@ -16,6 +16,13 @@ const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberHistory: vi.f
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
+const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
+const localBroadcast = vi.hoisted(() => vi.fn());
+vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
+vi.mock('../../maker-host/provider-fast-policy-store.js', () => ({ providerFastPolicy: fastPolicy }));
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: fastPolicy.changed }));
+vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: modelAccess }));
 vi.mock('../providerShareVisibility.js', () => ({ providerShareVisibility: visibility }));
 vi.mock('../providerShareMemberNotes.js', () => ({ providerShareMemberNotes: memberNotes }));
 
@@ -50,8 +57,9 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
 }));
 vi.mock('../dispatch.js', () => ({
+  notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
-  revokeProviderShareControllers: vi.fn(), setProviderShareAccess: vi.fn(),
+  revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(), setProviderShareAccess: vi.fn(),
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
@@ -109,6 +117,11 @@ beforeEach(() => {
   host.refresh.mockResolvedValue(undefined);
   memberNotes.read.mockReturnValue({});
   memberNotes.set.mockResolvedValue(undefined);
+  modelAccess.read.mockReturnValue({ models: null, providerModels: null });
+  modelAccess.set.mockImplementation(async (_provider, _models, _member, assertCurrent) => { assertCurrent(); });
+  fastPolicy.allows.mockReturnValue(true);
+  fastPolicy.set.mockImplementation(async (_provider, allowed, assertCurrent) => { assertCurrent(); fastPolicy.allows.mockReturnValue(allowed); });
+  fastPolicy.changed.mockResolvedValue(undefined);
   host.snapshot.mockReturnValue([{ requests: [{ requestId: 'r1' }], members: [{ memberId: 'm1' }] }]);
   usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [] }, relays: [] });
   usageStores.memberHistory.mockReturnValue([]);
@@ -175,10 +188,14 @@ describe('provider share usage history wire budget', () => {
 });
 
 describe('remote task limit management payloads', () => {
-  it.each([{ perDevice: 24 }, { total: 80 }, { perDevice: 16, total: 64 }])('preserves only supplied fields in %j', limits => {
+  // idleMinutes：提供方的闲置收回时长，0 = 不收回(provider-sharing.md §3)。
+  it.each([{ perDevice: 24 }, { total: 80 }, { perDevice: 16, total: 64 }, { idleMinutes: 0 }, { idleMinutes: 1440 }])('preserves only supplied fields in %j', limits => {
     expect(parseProviderShareCommand({ action: 'set-run-limits', limits })).toEqual({ action: 'set-run-limits', limits });
   });
-  it.each([{}, { unknown: 1 }, { perDevice: '16' }, { perDevice: 0 }, { total: 1001 }, { total: 1.5 }])('rejects malformed patches %j', limits => {
+  it.each([
+    {}, { unknown: 1 }, { perDevice: '16' }, { perDevice: 0 }, { total: 1001 }, { total: 1.5 },
+    { idleMinutes: -1 }, { idleMinutes: 1441 }, { idleMinutes: '30' },
+  ])('rejects malformed patches %j', limits => {
     expect(() => parseProviderShareCommand({ action: 'set-run-limits', limits })).toThrow('INVALID_PARAMS');
   });
 });
@@ -229,16 +246,6 @@ describe('member note management', () => {
     await expect(executeProviderShareManagementCommand({ action: 'set-member-note', memberId: 'm1', note: 'Alice' }))
       .rejects.toThrow('PRECONDITION_FAILED');
     expect(memberNotes.set).not.toHaveBeenCalled();
-  });
-});
-
-describe('idle release setting payloads', () => {
-  it.each([0, 1, 10, 120])('accepts %i minutes', idleMinutes => {
-    expect(parseProviderShareCommand({ action: 'set-idle-release', value: { idleMinutes } }))
-      .toEqual({ action: 'set-idle-release', value: { idleMinutes } });
-  });
-  it.each([undefined, {}, { idleMinutes: -1 }, { idleMinutes: 121 }, { idleMinutes: 1.5 }, { idleMinutes: '10' }])('rejects %j', value => {
-    expect(() => parseProviderShareCommand({ action: 'set-idle-release', value })).toThrow('INVALID_PARAMS');
   });
 });
 
@@ -348,6 +355,56 @@ describe('same-account share management during account transitions', () => {
   });
 });
 
+/* 用户要求的型号权限：生产命令入口验证成员归属和切号；原来的备注、分享开关不覆盖型号范围。
+ * 最小输入为另一供应商的同名成员以及读目录期间切号。unit，复用本文件进程内 fixture。 */
+describe('remote model access management', () => {
+  beforeEach(() => {
+    listProviders.mockResolvedValue([{ id: 'anthropic', models: { 'claude-code': [
+      { id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }, { id: 'stopped', disabled: true },
+    ] } }]);
+    host.snapshot.mockReturnValue([{ providerId: 'anthropic', requests: [], members: [{ memberId: 'm1' }] }]);
+  });
+  it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
+    const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
+    const result = await executeProviderShareManagementCommand(command);
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function));
+    expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
+    expect(api.setMember).not.toHaveBeenCalled();
+  });
+  // Unit regression for review 4326867264: the management command must offer every
+  // enabled media model; the old fixture only covered chat models. Media-only providers
+  // and duplicated ids must yield a usable, deduplicated authorization selection too.
+  it.each([false, true])('offers media models alongside chat models or on their own: mediaOnly=%s', async (mediaOnly) => {
+    listProviders.mockResolvedValue([{
+      id: 'anthropic',
+      models: mediaOnly ? {} : { codex: [{ id: 'chat', name: 'Chat' }], pi: [{ id: 'chat', name: 'Chat' }] },
+      imageModels: [{ id: 'image', name: 'Image' }, { id: 'disabled-image', disabled: true }],
+      videoModels: [{ id: 'video', name: 'Video' }],
+      audioModels: [{ id: 'audio', name: 'Audio' }],
+      embeddingModels: [{ id: 'embedding' }, { id: 'image', name: 'Image' }],
+    }]);
+    const result = await executeProviderShareManagementCommand({ action: 'get-model-access', providerId: 'anthropic', memberId: 'm1' });
+    expect(result).toMatchObject({ availableModels: [
+      ...(mediaOnly ? [] : [{ id: 'chat', name: 'Chat' }]),
+      { id: 'image', name: 'Image' }, { id: 'video', name: 'Video' },
+      { id: 'audio', name: 'Audio' }, { id: 'embedding', name: 'embedding' },
+    ] });
+  });
+  it('refuses to modify a person who belongs to a different provider', async () => {
+    host.snapshot.mockReturnValue([{ providerId: 'other', members: [{ memberId: 'm1' }] }]);
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: [] })).rejects.toThrow('NOT_FOUND');
+    expect(modelAccess.set).not.toHaveBeenCalled();
+  });
+  it('does not save a delayed model selection into a newly signed-in account', async () => {
+    listProviders.mockImplementationOnce(async () => { state.owner = 'owner-b'; return [{ id: 'anthropic', models: {} }]; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', models: [] })).rejects.toThrow('PRECONDITION_FAILED');
+    expect(modelAccess.set).not.toHaveBeenCalled();
+  });
+  it.each([['small', 'small'], [false], {}, undefined])('rejects invalid selection payload %#', (models) => {
+    expect(() => parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', models })).toThrow('INVALID_PARAMS');
+  });
+});
+
 /* 分享可见性：生产管理/IPC入口补足远程设置与受邀者在途撤权、旧端返回差异。tier: unit。 */
 describe('share visibility management and guest query', () => {
   it('saves only the requested switch via the same-account management entry', async () => {
@@ -375,5 +432,44 @@ describe('share visibility management and guest query', () => {
       change.startsWith('old-') ? 'UNSUPPORTED_CAPABILITY' : change === 'owner' ? 'PRECONDITION_FAILED' : 'PERMISSION_DENIED');
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('share:s', 'provider-share:insights:v1', [{ version: 1, includeUsage: false }], expect.any(Object));
+  });
+});
+
+describe('subscription Fast management through the owner command', () => {
+  const command = { action: 'set-fast-policy', providerId: 'openai', allowFast: false } as const;
+  const subscription = { id: 'openai', auth: { method: 'oauth', native: 'codex' } };
+
+  it('refreshes local catalogs even when the user has not started device-link sharing', async () => {
+    stopProviderShareRuntime();
+    listProviders.mockResolvedValue([subscription]);
+    await expect(executeProviderShareManagementCommand(command)).resolves.toEqual({ supported: true, allowFast: false });
+    expect(localBroadcast).toHaveBeenCalledWith('maker:provider:changed', {});
+  });
+
+  it('persists a subscription restriction and publishes the catalog before awaiting the native update', async () => {
+    listProviders.mockResolvedValue([subscription]);
+    fastPolicy.changed.mockImplementation(async () => {
+      expect(fastPolicy.allows('openai')).toBe(false);
+      expect(fastPolicy.publish).toHaveBeenCalledWith('openai');
+      throw Error('native still busy');
+    });
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('native still busy');
+    expect(fastPolicy.set).toHaveBeenCalledWith('openai', false, expect.any(Function));
+    fastPolicy.changed.mockResolvedValue(undefined);
+    await expect(executeProviderShareManagementCommand(command)).resolves.toEqual({ supported: true, allowFast: false });
+  });
+
+  it('rejects a custom API named openai and requires a real boolean', async () => {
+    listProviders.mockResolvedValue([{ ...subscription, auth: { method: 'apiKey' } }]);
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('INVALID_PARAMS');
+    expect(fastPolicy.set).not.toHaveBeenCalled();
+    expect(() => parseProviderShareCommand({ ...command, allowFast: 'false' })).toThrow('INVALID_PARAMS');
+  });
+
+  it('does not persist after the owner changes during catalog lookup', async () => {
+    listProviders.mockImplementation(async () => { state.owner = 'owner-b'; return [subscription]; });
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('PRECONDITION_FAILED');
+    expect(fastPolicy.set).not.toHaveBeenCalled();
+    expect(fastPolicy.publish).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
+import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../../shared/selectionContextMenu';
+import '../../preload/sidebarWindowPreload';
+
+const preloadMocks = vi.hoisted(() => ({
+  expose: vi.fn(),
+  listeners: new Map<string, Set<(event: unknown, ...payload: unknown[]) => void>>(),
+}));
+vi.mock('electron', () => ({
+  contextBridge: { exposeInMainWorld: preloadMocks.expose },
+  ipcRenderer: {
+    sendSync: vi.fn(() => null),
+    on: (channel: string, listener: (event: unknown, ...payload: unknown[]) => void) => {
+      if (!preloadMocks.listeners.has(channel)) preloadMocks.listeners.set(channel, new Set());
+      preloadMocks.listeners.get(channel)!.add(listener);
+    },
+    removeListener: (channel: string, listener: (event: unknown, ...payload: unknown[]) => void) =>
+      preloadMocks.listeners.get(channel)?.delete(listener),
+  },
+}));
+
+function emitAddToChat() {
+  for (const listener of preloadMocks.listeners.get(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL) ?? []) {
+    listener({ sender: 'must stay in preload' }, 'unexpected payload');
+  }
+}
 
 vi.mock('react-i18next', () => {
   const t = (key: string) => key;
@@ -34,9 +59,8 @@ const rangeDescriptors = {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
-  vi.stubGlobal('electronAPI', {
-    onSelectionContextMenuAddToChat: () => () => {},
-  });
+  // Use the real detached-window bridge: a hand-written stub hid Issue #6655.
+  vi.stubGlobal('electronAPI', preloadMocks.expose.mock.calls.find(([name]) => name === 'electronAPI')![1]);
   // jsdom has real ranges/selections but no layout. Supply geometry only;
   // neither CodeMirror's selection state nor DOM selection text is mocked.
   Object.defineProperty(Range.prototype, 'getClientRects', {
@@ -67,10 +91,14 @@ afterEach(() => {
 // from those helper tests. Minimal input: one rendered Markdown table whose DOM
 // text differs from its selected source, followed by one Add to chat click.
 describe('FileBodyView selection quotes', () => {
-  it('adds the CodeMirror source slice, path and line range instead of rendered widget text', () => {
+  // Issue #6655: the sidebar preload lacked the subscription required at mount.
+  // Unit tier, no Electron process: exercise its exposed bridge and FileBodyView
+  // together. Existing button-only coverage supplied the missing API in a mock.
+  // Minimal failure: mount one text document with the actual sidebar bridge.
+  it.each(['button', 'native menu'])('adds the source slice, path and lines through the %s', (action) => {
     const tableSource = '| Name | Value |\n| --- | --- |\n| Ada | 1 |';
     const source = '# Notes\n\n' + tableSource + '\n\nAfter';
-    const { container } = render(createElement(FileBodyView, {
+    const { container, unmount } = render(createElement(FileBodyView, {
       workdir,
       sessionId,
       relPath: 'notes.md',
@@ -106,9 +134,13 @@ describe('FileBodyView selection quotes', () => {
     expect(view.hasFocus).toBe(true);
     expect(view.state.selection.main.empty).toBe(false);
     expect(selection.toString()).not.toBe(tableSource);
-    const quoteButton = screen.getByRole('button', { name: 'chat.quote.addToChat' });
-    fireEvent.mouseDown(quoteButton);
-    fireEvent.click(quoteButton);
+    if (action === 'button') {
+      const quoteButton = screen.getByRole('button', { name: 'chat.quote.addToChat' });
+      fireEvent.mouseDown(quoteButton);
+      fireEvent.click(quoteButton);
+    } else {
+      act(emitAddToChat);
+    }
 
     expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
       {
@@ -118,5 +150,24 @@ describe('FileBodyView selection quotes', () => {
     ]);
     expect(selection.isCollapsed).toBe(true);
     expect(screen.queryByRole('button', { name: 'chat.quote.addToChat' })).toBeNull();
+    unmount();
+    expect(preloadMocks.listeners.get(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL)?.size).toBe(0);
+  });
+
+  it('keeps native-menu subscribers independent, strips IPC arguments and stops after unsubscribe', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = window.electronAPI.onSelectionContextMenuAddToChat(first);
+    const offSecond = window.electronAPI.onSelectionContextMenuAddToChat(second);
+    emitAddToChat();
+    expect(first.mock.calls).toEqual([[]]);
+    expect(second.mock.calls).toEqual([[]]);
+    offFirst();
+    emitAddToChat();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+    offSecond();
+    emitAddToChat();
+    expect(second).toHaveBeenCalledTimes(2);
   });
 });

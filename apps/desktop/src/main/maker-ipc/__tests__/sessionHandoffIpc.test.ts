@@ -1,3 +1,4 @@
+import { captureAgentRequest } from '../forwardedRequest.js';
 import { createRemoteSessionHandoff } from '../../mcp-integrations/sessionHandoffRemote.js';
 import { validateRemoteTaskActionReceipt } from '../remoteTaskActionReceipt.js';
 import { bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
@@ -94,12 +95,12 @@ describe('maker:session:handoff (receiving computer)', () => {
       clientId: 'remote-task-action:receipt-one', forceQueue: true, taskActionDeliveryGuard: expect.any(Function),
       targetSessionId: 'local-task',
       autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
-      message: formatForwardedRequest({ userText: null }, 'hello'),
+      message: 'hello',
       origin: {
         kind: 'session',
         senderSessionId: 'device-A::sender-1',
         senderSessionTitle: 'PR 跟进',
-        displayText: formatForwardedRequest({ userText: null }, 'hello'),
+        displayText: 'hello',
       },
       // 另一台电脑的来信不能借恢复把任务提到 bypass。
       resumeWithStoredPermissionMode: true,
@@ -209,7 +210,8 @@ describe('maker:session:handoff (receiving computer)', () => {
 
 // Review regression, unit/protocol: successful queued deliveries used to exhaust
 // the pending-receipt limit. Exercise both real transport ends, body binding and cleanup.
-it('releases consumed receipts without allowing replay, including formatted owner requests', async () => {
+it('releases consumed receipts without allowing replay for quoted owner requests and plain automation', async () => {
+  let includeOriginal = true;
   let lastWire: unknown;
   let pending: AgentInputQueuedMessage | undefined;
   const handle = createSessionHandoffHandler({
@@ -223,8 +225,9 @@ it('releases consumed receipts without allowing replay, including formatted owne
   });
   const send = createRemoteSessionHandoff({
     captureAccess: () => () => {},
-    captureRequest: async () => ({ message: formatForwardedRequest({ userText: 'Owner request', sessionId: 'sender', clientId: 'owner-input' }, 'Agent supplement'),
-      autoReviewUserText: { kind: 'agent-request', request: { userText: 'Owner request', sessionId: 'sender', clientId: 'owner-input' } } }),
+    captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
+      { clientId: 'owner-input', authoredText: 'Owner request', originKind: includeOriginal ? 'desktop' : 'scheduler' },
+      async () => [], true),
     invoke: async (_device, _channel, args) => {
       if ((args[0] as { action?: string }).action === 'task-action-capability')
         return { ok: true, result: { taskActionVersion: 1 } };
@@ -233,8 +236,13 @@ it('releases consumed receipts without allowing replay, including formatted owne
     },
   });
   for (let i = 0; i < 260; i++) {
+    includeOriginal = i % 2 === 0;
     expect(await send({ deviceId: 'target-device', sessionId: 'target' },
       { message: 'Agent supplement', sender: async () => ({ sessionId: 'sender' }) })).toMatchObject({ ok: true });
+    if (!includeOriginal) {
+      expect(lastWire).not.toHaveProperty('requestSource');
+      expect(pending!.text).toBe('Agent supplement');
+    }
     if (i === 0) expect(await handle('target-device', lastWire)).toMatchObject({ ok: false });
     await taskActionInputGuard('target', pending!)!(); // pre-persist after sender returned queued
     await taskActionInputGuard('target', pending!)!(); // pre-vendor

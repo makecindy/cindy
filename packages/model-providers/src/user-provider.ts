@@ -14,6 +14,7 @@ import {
   applyModelMetadata,
   mergeModelMetadata,
   pickModelMetadata,
+  catalogModelMetadata,
   runtimeUserModelMetadata,
   findBaseModel,
   type ModelMetadata,
@@ -340,7 +341,7 @@ function toCatalogModel(
   const user = runtimeUserModelMetadata(m);
   const resolved =
     (modelRegistry?.schemaVersion ?? 0) >= 4 ||
-    m.discoveredMetadata ||
+    m.discoveredMetadata || m.selectedInterface ||
     providerDefaults || (generationDefaults && Object.keys(generationDefaults).length > 0)
       ? resolveModelMetadata(
           modelRegistry ?? undefined,
@@ -352,6 +353,7 @@ function toCatalogModel(
           providerDefaults,
           undefined,
           generationDefaults,
+          m.selectedInterface?.defaults,
         )
       : pickModelMetadata(user);
   // 「未声明」与「明确无档位」要分开（#5535）：用户/运行时 reasoning、目录继承、发现或用户
@@ -501,7 +503,7 @@ export function buildUserProvider(
     models[agent] = rt.models.map((storedModel) => {
       // Old ID-only imports must pick up newly known per-model interfaces too.
       // An explicit model API/path remains a user choice, not a preset default.
-      const interfaceDefault = followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
+      const interfaceDefault = (options.modelRegistry?.schemaVersion ?? 0) < 6 && followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
         ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
       const configuredModel = interfaceDefault ? { ...storedModel,
         ...(interfaceDefault.api ? { api: interfaceDefault.api } : {}),
@@ -516,7 +518,7 @@ export function buildUserProvider(
         } }
         : configuredModel;
       const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl),
+        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry),
         resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
@@ -555,7 +557,7 @@ export function buildUserProvider(
         ? providerModelRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl,
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
-          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl)
+          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
             ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
             ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
@@ -620,9 +622,9 @@ export function buildUserProvider(
       };
       const projected = toCatalogModel(
         m,
-        followsPreset && sameRoute ? preset!.id : config.id,
+        m.selectedInterface?.providerId ?? (followsPreset && sameRoute ? preset!.id : config.id),
         agent,
-        options.modelRegistry,
+        options.modelRegistry ?? (m.selectedInterface ? BUNDLED_CATALOG.modelRegistry : undefined),
         defaults,
         nativeCodex ? 'openai' : undefined,
         generationDefaults,
@@ -640,6 +642,13 @@ export function buildUserProvider(
       return {
         ...(imported?.cost ? { cost: imported.cost } : {}),
         ...projected,
+        ...(m.interfaceUnavailable ? { interfaceUnavailable: true, availableInterfaces: m.availableInterfaces } : {}),
+        ...(m.selectedInterface ? { selectedInterface: { ...m.selectedInterface, defaults: catalogModelMetadata(projected) }, availableInterfaces: m.availableInterfaces,
+          ...(m.selectedInterface.nativeApis !== undefined ? { nativeApis: m.selectedInterface.nativeApis } : {}) } : {}),
+        // Only this native account's latest discovery grants Ultrafast. Public
+        // defaults, same-name API connections and other engines cannot inherit it.
+        ...(nativeCodex && agent === 'codex'
+          ? { supportsUltrafastMode: storedModel.supportsUltrafastMode === true } : {}),
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
@@ -733,6 +742,7 @@ export function buildUserProvider(
           id: model.id,
           name: model.name,
           mode: model.mode,
+          defaultEnabled: model.defaultEnabled,
           discoveredMetadata: model.discoveredMetadata,
           sourceAgent: agent as AgentKind,
           ...(model.modalities ? { modalities: model.modalities } : {}),

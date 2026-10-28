@@ -33,6 +33,7 @@ describe('tunnel link activity', () => {
       execResponses: 0,
       execMaxInFlight: 0,
       httpInFlight: 0,
+      wsConnectionsOpen: 0,
     });
 
     activity.connection('c1', false);
@@ -61,10 +62,12 @@ describe('tunnel link activity', () => {
       execRoundTripAvgMs: 500,
       execRoundTripMaxMs: 500,
       httpInFlight: 0,
+      wsConnectionsOpen: 1,
     });
 
-    // 连接关掉后，它上面没等到的回复不会再来。
+    // 连接关掉后，它上面没等到的回复不会再来；Codex 据「没有开着的连接」判断执行环境要不要重新登记。
     activity.connection('c1', true);
+    expect(activity.snapshot()).toMatchObject({ wsConnectionsOpen: 0 });
     expect(activity.snapshot().execOldestPending).toBeUndefined();
 
     activity.httpStarted();

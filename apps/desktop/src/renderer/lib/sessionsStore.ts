@@ -1,3 +1,4 @@
+import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
@@ -1126,12 +1127,9 @@ export const sessionsStore = {
    */
   prependCreated(session: Session): void {
     if (!session?.id) return;
-    // Bot canonical sessions have their own sidebar/history projection. They must
-    // never leak into the regular desktop Session cache through the optimistic
-    // prepend path (the IPC list already excludes source='bot').
-    if (session.source === 'bot') return;
-    // /review 审查任务同样不进普通任务列表,只从来源任务的审查卡片打开。
-    if (session.source === 'review') return;
+    // Canonical/private companion chats keep their own entry; linked routine and
+    // channel tasks share the ordinary list, matching the host projection.
+    if (!isOrdinaryTaskListSession(session)) return;
     // 已转入后台的任务不经本地插入回到列表。
     if (hiddenSessionIds.has(session.id)) return;
     // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览
@@ -1142,6 +1140,25 @@ export const sessionsStore = {
       if (k === 'archived') continue;
       if (list.some((s) => s.id === session.id)) continue;
       cache.set(k, [withPreview, ...list]);
+      touched = true;
+    }
+    if (touched) notify();
+  },
+
+  /**
+   * 新建页的未发送任务被真正删掉：直接移出缓存，不登记「已删除」状态——同一个 id 之后
+   * 还可能重新建出来(继续输入)，登记过的删除状态会把重建的任务挡在列表外。
+   */
+  removeLocal(id: string): void {
+    autoTitlePreviews.delete(id);
+    sessionTitleOverrides.delete(id);
+    sessionSpendOverrides.delete(id);
+    sessionStatusOverrides.delete(id);
+    let touched = false;
+    for (const [filter, list] of cache) {
+      const next = list.filter((item) => item.id !== id);
+      if (next.length === list.length) continue;
+      cache.set(filter, next);
       touched = true;
     }
     if (touched) notify();
@@ -1193,8 +1210,15 @@ if (typeof window !== 'undefined') {
   // 那个串与这里预览的是同一个(共用 normalizeAutoTitle),所以回流时不跳变。
   onAutoTitlePreview((sessionId, title) => {
     const current = sessionsStore.findById(sessionId);
-    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。
-    if (current && !isDefaultDraftSessionTitle(current.title)) return;
+    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。仍显示着上一次预览时
+    // 可以换成新的预览(新建页的未发送任务随输入实时更新标题)。
+    if (
+      current &&
+      !isDefaultDraftSessionTitle(current.title) &&
+      current.title !== autoTitlePreviews.get(sessionId)
+    ) {
+      return;
+    }
     // 乐观写入走专门的门:不登记权威 override、不回收叠加层,顺序无所谓。
     autoTitlePreviews.set(sessionId, title);
     if (current) applyOptimisticTitle(sessionId, title);

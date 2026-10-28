@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, resolveAgentCapability, type CatalogModel } from '@cindy/model-providers';
 import {
   clearDiscoveredProviderModels, getActiveCatalog, setActiveCatalog, setCustomProviders,
   setDiscoveredCodexModels, setDiscoveredProviderModels,
@@ -47,6 +47,26 @@ afterEach(() => {
 });
 
 describe('OpenAI account catalog identity', () => {
+  it('keeps saved Ultrafast scoped through active catalog and desktop/mobile capability projection', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    seedBuiltinAccount('gpt-6.1-sol');
+    for (const supportsUltrafastMode of [true, false]) {
+      setCustomProviderConfigs([{ id: accountId, name: 'Account',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+          baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode,
+            discoveredMetadata: { supportsFastMode: true } }],
+        } } }]);
+      const providers = getActiveCatalog().providers.map(p => ({ ...p, connected: true }));
+      expect(resolveAgentCapability(providers, accountId, 'gpt-6.1-sol', 'codex'))
+        .toMatchObject({ supportsFastMode: true, supportsUltrafastMode });
+      for (const agent of ['claude-code', 'pi'] as const) {
+        expect(resolveAgentCapability(providers, accountId, 'gpt-6.1-sol', agent)?.supportsUltrafastMode).not.toBe(true);
+      }
+      expect(resolveAgentCapability(providers, 'openai', 'gpt-6.1-sol', 'codex')?.supportsUltrafastMode).not.toBe(true);
+    }
+  });
+
   it.each(['before', 'after', 'configs'] as const)('keeps one subscription image capability across public catalog revisions (account: %s)', (order) => {
     const config = {
       id: accountId, name: 'OpenAI', auth: { method: 'oauth' as const, native: 'codex' as const },

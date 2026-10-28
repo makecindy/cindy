@@ -43,7 +43,7 @@ import { MAKER_INVOKE } from './channels.js';
 const log = createLogger('maker-ipc/auxiliary-model-settings');
 
 function toWireOption(option: TextOneshotPinOption, available: boolean): AuxiliaryModelOption {
-  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code') {
+  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code' && option.agentKind !== 'pi') {
     throw new Error(`unsupported auxiliary model agent: ${option.agentKind}`);
   }
   return {
@@ -100,11 +100,12 @@ export function buildAuxiliaryModelOptions(args: {
     args.overrides,
     args.providerOrder,
     args.hasCredential,
+    'auxiliary',
   );
   const availableIds = new Set(available.map((option) => option.id));
   const result = available.map((option) => toWireOption(option, true));
 
-  const allRoutable = buildTextOneshotPinOptions(args.catalog, args.overrides, args.providerOrder);
+  const allRoutable = buildTextOneshotPinOptions(args.catalog, args.overrides, args.providerOrder, undefined, 'auxiliary');
   const allById = new Map(allRoutable.map((option) => [option.id, option]));
   for (const pin of args.settings.models) {
     if (availableIds.has(pin)) continue;
@@ -124,7 +125,7 @@ export function buildAuxiliaryModelOptions(args: {
     if (!decoded) continue;
     result.push({
       id: pin,
-      label: `${decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
+      label: `${decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
       group: decoded.providerId,
       providerId: decoded.providerId,
       agentKind: decoded.agentKind,
@@ -132,7 +133,7 @@ export function buildAuxiliaryModelOptions(args: {
       modelName: decoded.model,
       budget: false,
       subscription: false,
-      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code',
+      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code',
       available: false,
     });
   }
@@ -204,6 +205,8 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           getActiveCatalog(),
           readModelDisableOverrides(),
           readProviderOrder(),
+          undefined,
+          'auxiliary',
         ).map((option) => option.id),
       );
       const patch = parseAuxiliaryModelSettingsPatch(

@@ -339,7 +339,7 @@ export function WallpaperSection() {
                 {t('settings.appearance.wallpaper.customRemove')}
               </Button>
             )}
-            <p className="text-12 text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 text-[var(--text-secondary)]">
               {t('settings.appearance.wallpaper.customHint')}
             </p>
           </div>
@@ -360,7 +360,7 @@ export function WallpaperSection() {
                 <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                   {t('settings.appearance.wallpaper.motionLabel')}
                 </p>
-                <p className="mt-1 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+                <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.appearance.wallpaper.motionHint')}
                 </p>
               </div>
@@ -396,7 +396,7 @@ export function WallpaperSection() {
           </div>
           <p
             id="wallpaper-visibility-hint"
-            className="text-12 text-[var(--settings-section-sublabel)] opacity-70"
+            className="text-12 text-[var(--text-secondary)]"
           >
             {t('settings.appearance.wallpaper.visibilityHint')}
           </p>
@@ -427,7 +427,7 @@ export function WallpaperSection() {
           </div>
           <p
             id="wallpaper-blur-hint"
-            className="text-12 text-[var(--settings-section-sublabel)] opacity-70"
+            className="text-12 text-[var(--text-secondary)]"
           >
             {t('settings.appearance.wallpaper.blurHint')}
           </p>

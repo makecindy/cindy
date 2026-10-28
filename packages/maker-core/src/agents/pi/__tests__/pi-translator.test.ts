@@ -487,7 +487,12 @@ describe('pi translator', () => {
     }));
   });
 
-  it('classifies a prompt_cache_retention rejection for provider compat self-heal', () => {
+  it.each([
+    ['English', '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}'],
+    ['Chinese (#6649)', '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention",'
+      + '"data":{"field":"prompt_cache_retention"}}'],
+  ])('classifies a %s prompt_cache_retention rejection for provider compat self-heal', (_label, errorMessage) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
@@ -498,9 +503,7 @@ describe('pi translator', () => {
           role: 'assistant',
           content: [],
           stopReason: 'error',
-          errorMessage:
-            '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
-            + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}',
+          errorMessage,
           usage: { input: 0, output: 0 },
         },
       }),

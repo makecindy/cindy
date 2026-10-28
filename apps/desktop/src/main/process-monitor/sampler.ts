@@ -52,6 +52,11 @@ export interface ProcessMonitorSamplerDeps {
   classify(cmdLineLower: string): MonitoredAgentKind | null;
   /** 本地根进程的 spawn-generation 登记；未知时返回 null，并按不可终止处理。 */
   resolveAgentProcessRegistration?(pid: number): AgentProcessRegistration | null;
+  /**
+   * 登记 session id → 用户可见任务标题；解析失败或任务已删返回 null。采样不
+   * 等待它：查询在后台进行，结果进本采样器的 TTL 缓存，下一帧才可见。
+   */
+  resolveSessionLabel?(sessionId: string): Promise<string | null> | string | null;
   selfPid: number;
   log: SamplerLogger;
   /** OS 扫描的最小间隔;快 tick 之间复用缓存。 */
@@ -60,6 +65,8 @@ export interface ProcessMonitorSamplerDeps {
   deferOsScan?: boolean;
   /** 注入时钟(测试用;生产缺省 Date.now)。 */
   now?: () => number;
+  /** 标题缓存刷新周期(测试用;缺省 30s)。 */
+  sessionLabelTtlMs?: number;
 }
 
 /** OS 扫描缓存周期。5s 在「agent 树数据新鲜度」与「powershell 开销」间取平衡。 */
@@ -95,6 +102,33 @@ export function createProcessMonitorSampler(
    * tick 周期(2s)的墙钟窗口,百分比被高估 2.5 倍。
    */
   const computedCpuPercentByPid = new Map<number, number>();
+
+  /** 任务标题缓存周期。标题极少变化（自动命名/改名），30s 内的陈旧可接受。 */
+  const sessionLabelTtlMs = deps.sessionLabelTtlMs ?? 30_000;
+  /** sessionId → 最近一次解析结果与发起时刻；解析永不阻塞采样，晚一帧生效。 */
+  const sessionLabels = new Map<string, { label: string | null; atMs: number }>();
+
+  /** 后台刷新标题缓存；过期才发起，失败/空结果记 null，下一 TTL 周期重试。 */
+  function refreshSessionLabel(sessionId: string): void {
+    const cached = sessionLabels.get(sessionId);
+    if (cached && now() - cached.atMs < sessionLabelTtlMs) return;
+    sessionLabels.set(sessionId, { label: cached?.label ?? null, atMs: now() });
+    void (async () => {
+      try {
+        const label = (await deps.resolveSessionLabel?.(sessionId)) ?? null;
+        const entry = sessionLabels.get(sessionId);
+        if (entry) sessionLabels.set(sessionId, { label, atMs: entry.atMs });
+      } catch {
+        const entry = sessionLabels.get(sessionId);
+        if (entry) sessionLabels.set(sessionId, { label: null, atMs: entry.atMs });
+      }
+    })();
+  }
+
+  function cachedSessionLabel(sessionId: string): string | null {
+    refreshSessionLabel(sessionId);
+    return sessionLabels.get(sessionId)?.label ?? null;
+  }
 
   function onSnapshotRefreshed(snapshot: OsProcessSnapshot, atMs: number): void {
     cachedSnapshot = snapshot;
@@ -169,6 +203,7 @@ export function createProcessMonitorSampler(
     const { rows, childrenByParent } = cachedSnapshot;
     const rowByPid = new Map(rows.map((r) => [r.pid, r]));
     const entries: ProcessUsageEntry[] = [];
+    const liveSessions = new Set<string>();
     for (const row of rows) {
       if (row.ppid !== deps.selfPid) continue;
       const kind = deps.classify(row.cmdLineLower);
@@ -189,6 +224,12 @@ export function createProcessMonitorSampler(
       }
       const terminable =
         row.startIdentity != null && registrationMatchesKind && registeredRole === 'task-host';
+      const liveSessionId =
+        registrationMatchesKind ? registration?.sessionId ?? null : null;
+      // 标题解析在后台进行（不阻塞采样帧）：首帧可能还没有，下一帧生效；
+      // 解析失败或任务已删只丢标题，不影响 CPU / 内存与终止授权。
+      const sessionLabel = liveSessionId ? cachedSessionLabel(liveSessionId) : null;
+      if (liveSessionId) liveSessions.add(liveSessionId);
       entries.push({
         pid: row.pid,
         kind: AGENT_KIND_TO_USAGE_KIND[kind],
@@ -200,7 +241,12 @@ export function createProcessMonitorSampler(
         terminable,
         ...(terminable && registration ? { processInstanceId: registration.instanceId } : {}),
         ...(agentRole ? { agentRole } : {}),
+        ...(sessionLabel ? { sessionLabel } : {}),
       });
+    }
+    // 剪枝:本帧仍存活的任务以外,标题缓存逐条清除,长驻应用不积累旧任务。
+    for (const sessionId of [...sessionLabels.keys()]) {
+      if (!liveSessions.has(sessionId)) sessionLabels.delete(sessionId);
     }
     return entries;
   }

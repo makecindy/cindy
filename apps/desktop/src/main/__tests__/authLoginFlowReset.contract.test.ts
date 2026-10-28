@@ -5,6 +5,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import {
+  ColdStartAuthFallbackRegistry,
+  commitColdStartRefreshIfCurrent,
+} from '../authStartupGate';
+
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
@@ -887,6 +892,56 @@ describe('auth login-flow reset', () => {
     expect(waitForOwnerChange).toBeLessThan(captureLoginEpoch);
     expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
     expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
+  });
+
+  it('does not wait on an unbounded owner transition before signed-out recovery', () => {
+    const initializeStart = source.indexOf('export async function initialize(');
+    const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
+    const initializeBody = source.slice(initializeStart, initializeEnd);
+    const timeoutRecovery = initializeBody.indexOf(
+      "recoverAccountFreeOwnerAtStartup('signed-out', 'cold-start-timeout-recovery'",
+    );
+    expect(timeoutRecovery).toBeGreaterThan(-1);
+    // The timeout boundary must go through the guarded helper so a still-pending
+    // owner transition is not awaited (its teardown awaits are unbounded) and no
+    // competing signed-out cleanup starts underneath it.
+    const guardedRecovery = initializeBody.lastIndexOf('resolveColdStartTimeoutRecovery({', timeoutRecovery);
+    expect(guardedRecovery).toBeGreaterThan(-1);
+    expect(guardedRecovery).toBeLessThan(timeoutRecovery);
+    expect(initializeBody).toContain('pendingState: snapshotLoggedOutAuthState(true)');
+    expect(initializeBody).toContain('timeoutStartEpoch: startupTimeoutEpoch');
+    expect(initializeBody).toContain('currentEpoch: authStateEpoch');
+    expect(initializeBody).toContain('currentState: snapshotAuthState()');
+    expect(initializeBody).not.toContain('await ownerChangeShellGate.waitForSettled();\n        return snapshotAuthState();');
+    // The fallback must tell the recovery it is the startup-gate fallback, so the
+    // epoch it raises is recorded at the moment it is raised (see below).
+    expect(initializeBody.indexOf('coldStartTimeoutRecovery: true', timeoutRecovery))
+      .toBeGreaterThan(timeoutRecovery);
+  });
+
+  it('accepts a late refresh when the fallback edge was recorded at bump time', () => {
+    // Behavior equivalent of "record where the epoch is bumped": an edge that is
+    // recorded before the refresh settles lets the late success commit; a chain
+    // with a missing edge (bump recorded too late / by a real auth action) does not.
+    const registry = new ColdStartAuthFallbackRegistry();
+    registry.record(3, 4);
+    const committed = commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch: 3,
+      currentEpoch: 4,
+      commit: () => 'owner',
+    });
+    expect(committed).toEqual({ superseded: false, flowEpoch: 4, value: 'owner' });
+
+    const unrecorded = new ColdStartAuthFallbackRegistry();
+    expect(
+      commitColdStartRefreshIfCurrent({
+        registry: unrecorded,
+        flowEpoch: 3,
+        currentEpoch: 4,
+        commit: () => 'owner',
+      }),
+    ).toEqual({ superseded: true });
   });
 
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {

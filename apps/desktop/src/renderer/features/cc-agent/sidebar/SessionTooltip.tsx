@@ -16,7 +16,7 @@
 
 import { GitPullRequest, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -25,11 +25,7 @@ import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
-import {
-  findLatestSidebarIndexRunForSession,
-  loadScheduleSidebarIndexRuns,
-  type ScheduleSidebarIndexRun,
-} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import { useAutomationScheduleSessionInfo } from '../hooks/useAutomationScheduleSessionIndex';
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
@@ -147,9 +143,13 @@ function PrTooltip({
 
 /**
  * 单独 automation-generated 会话行的 hover 浮层 —— 显示下次运行剩余时间或停止状态。
- * 数据源和 Timer chip 点击复用同一套 loadScheduleSidebarIndexRuns；tooltip 打开时才发起一次拉取
- * (与 PrTooltip 的 fetchStatusesForSession 同风格,不在密集渲染路径上常驻拉数据);
- * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
+ * 数据源 = 已发布的实时 schedule 索引(useAutomationScheduleSessionInfo,随 scheduler
+ * 事件刷新)。旧实现是「tooltip 首次打开时拉一次 listSidebarIndexRuns 就把
+ * 快照留在组件 state 里」,此后永不刷新:用户停用(暂停)自动化后,气泡仍拿停用前的
+ * scheduleStatus=active + nextFireAt 继续显示倒计时,直到该行重新挂载。
+ * 走实时索引后停用/恢复立刻反映,也不用在密集渲染路径上自己发 IPC。
+ * 索引未就绪 / 为空时与组头同源降级(不显示气泡),本浮层不再单独兜底拉取。
+ * nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
  */
 function AutomationTooltip({
@@ -162,36 +162,19 @@ function AutomationTooltip({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const effectiveOpen = controlledOpen ?? open;
-  const [runs, setRuns] = useState<ScheduleSidebarIndexRun[] | null>(null);
-  useEffect(() => {
-    if (!effectiveOpen || runs !== null) return;
-    let cancelled = false;
-    loadScheduleSidebarIndexRuns()
-      .then((next) => {
-        if (!cancelled) setRuns(next);
-      })
-      .catch(() => {
-        if (!cancelled) setRuns([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveOpen, runs]);
-
-  const hit = runs ? (findLatestSidebarIndexRunForSession(runs, sessionId) ?? null) : null;
+  const scheduleInfo = useAutomationScheduleSessionInfo(sessionId);
   const countdownText =
-    hit && hit.scheduleStatus === 'active' && typeof hit.nextFireAt === 'number'
-      ? formatSidebarFutureTime(hit.nextFireAt, t)
+    scheduleInfo?.scheduleStatus === 'active' && typeof scheduleInfo.nextFireAt === 'number'
+      ? formatSidebarFutureTime(scheduleInfo.nextFireAt, t)
       : '';
-  const isStopped = hit?.scheduleStatus === 'paused' || hit?.scheduleStatus === 'expired';
+  const isStopped =
+    scheduleInfo?.scheduleStatus === 'paused' || scheduleInfo?.scheduleStatus === 'expired';
   const stoppedText = isStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
   const hasContent = countdownText || stoppedText;
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen} onOpenChange={setOpen}>
+      <Tooltip.Root open={controlledOpen}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>

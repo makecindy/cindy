@@ -587,7 +587,7 @@ describe('metadata layers through the active catalog', () => {
 
 
 it('keeps complex quotes with their provider snapshot and clears them on successful replacement', () => {
-  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'] };
+  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'], summary: { output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P' }] } };
   const video = { id: 'example-video', name: 'Video', mode: 'video_generation', agents: [] as const,
     currency: 'USD' as const, costDiscount: 0.2, displayPricing,
     modalities: { input: ['text'], output: ['video'] } };
@@ -600,4 +600,9 @@ it('keeps complex quotes with their provider snapshot and clears them on success
   expect(provider().videoModels?.[0]).not.toHaveProperty('displayPricing');
   setXdGatewayModels([], { authoritative: true });
   expect(provider().videoModels).toEqual([]);
+  // Unit/integration contract: gatewayDisplayPricing must also retain summaries on the chat projection.
+  // Previously only the media table was covered; one chat summary is the minimum dropped-field input.
+  setXdGatewayModels([{ ...video, id: 'chat', mode: 'chat', agents: ['codex'], contextWindow: 100000,
+    perAgent: { codex: { wireProtocol: 'openai-responses' } } }], { authoritative: true });
+  expect(provider().models.codex?.find(m => m.id === 'chat')).toMatchObject({ displayPricing, currency: 'USD', costDiscount: 0.2 });
 });

@@ -10,6 +10,7 @@
  * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
+import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
@@ -45,6 +46,7 @@ export interface RemoteStartedInfo {
   shadowDir: string;
   /** Agent 主机上的虚拟镜像根。 */
   mirrorRoot?: string;
+  previousMirrorRoots?: string[];
   extraDirs?: string[];
   writableDirs?: string[];
   virtualWorkspace?: boolean;
@@ -69,6 +71,7 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
     shadowDir: str(value.shadowDir) ?? '',
     virtualWorkspace: value.virtualWorkspace === true,
     ...(str(value.mirrorRoot) ? { mirrorRoot: str(value.mirrorRoot) } : {}),
+    previousMirrorRoots: Array.isArray(value.previousMirrorRoots) ? value.previousMirrorRoots.filter((item): item is string => typeof item === 'string') : [],
     extraDirs: Array.isArray(value.extraDirs) ? value.extraDirs.filter((item): item is string => typeof item === 'string') : [],
     writableDirs: Array.isArray(value.writableDirs) ? value.writableDirs.filter((item): item is string => typeof item === 'string') : [],
     methods: Array.isArray(value.methods) ? value.methods.filter((m): m is string => typeof m === 'string') : [],
@@ -226,12 +229,13 @@ export interface RemoteHandleDeps {
   /** 模型 / 推理强度 / 快速模式 / 思考开关变化(连回对方时按最新值打开)。 */
   onModel?: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => void;
   onEffort?: (effort: Effort) => void;
-  onFastMode?: (enabled: boolean) => void;
+  onFastMode?: (enabled: boolean | 'ultrafast') => void;
   onThinkingEnabled?: (enabled: boolean) => void;
   /** 改用 Cindy 自动审查兜底(对方进程里的状态，连回来时要再告诉一次)。 */
   onAutoReviewFallback?: () => void;
   /** 句柄关闭后释放本机资源(执行器、MCP 身份等)。 */
   dispose(): Promise<void>;
+  log?: { warn(message: string, meta?: Record<string, unknown>): void };
   /** 供应商组(分享的人)：这次发送要不要告诉对方开始新的一轮(用户亲自接手过)。 */
   takeGroupNewRound?(): boolean;
 }
@@ -271,6 +275,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let state: Record<string, unknown> = { ...started.state };
   let resolver: InteractionResolver | null = null;
   let disposed = false;
+  let disposal: Promise<void> | null = null;
   const sendCallbacks = new Map<string, {
     onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
     onInteractionStateChange?: (state: 'waiting' | 'resolved' | 'cancelled') => void;
@@ -281,13 +286,45 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let carriedUsage: unknown;
   /** 回到某条消息后、下一轮跑完前(Claude Code 要到下一次发送才在对方截断)：不能让出名额。 */
   let rewindPending = false;
+  // The provider terminal owns this turn's failure, including its quota reset.
+  // A later transport teardown must close the handle without replacing that error.
+  let terminalErrorDelivered = false;
 
-  const dispose = async () => {
-    if (disposed) return;
+  const dispose = (): Promise<void> => {
+    if (disposal) return disposal;
     disposed = true;
     for (const projected of projection.flush()) queue.push(projected);
     queue.end();
-    await deps.dispose().catch(() => undefined);
+    // onClosed can start cleanup before close/detach reaches it. Every caller
+    // must await the same result, including a failure, before releasing the owner.
+    disposal = Promise.resolve().then(() => deps.dispose());
+    return disposal;
+  };
+
+  const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
+    deps.cancelPendingConfirmations?.();
+    const reason = opts?.reason ?? 'navigation';
+    if (reason === 'account-boundary') {
+      // The Agent uses the other computer's credentials. A failed notification
+      // is not evidence of a surviving local Pi process (#6921). Release local
+      // resources independently, even while the remote request is still pending.
+      const [remote, local] = await Promise.allSettled([
+        Promise.resolve().then(() => link.close(mode, reason)),
+        dispose(),
+      ]);
+      if (remote.status === 'rejected') {
+        deps.log?.warn('remote agent: account-boundary close notification failed', {
+          error: String(remote.reason),
+        });
+      }
+      if (local.status === 'rejected') throw local.reason;
+      return;
+    }
+    try {
+      await link.close(mode, reason);
+    } finally {
+      await dispose();
+    }
   };
 
   /** 要对方 Agent 参与的调用：已让出名额就先连回来。 */
@@ -341,6 +378,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     // 连回之后才转换路径：让出期间改过的目录要等连回补发后才有虚拟路径。
     projectMessage(wireMessage);
     if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
+    if (method === 'send') terminalErrorDelivered = false;
     await client.callWithId(callId, method, [wireMessage, encoded.wire]);
   }
 
@@ -390,22 +428,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       deps.cancelPendingConfirmations?.();
       await callIfLive('abort');
     },
-    close: async (opts?: AgentSessionTeardownOptions) => {
-      deps.cancelPendingConfirmations?.();
-      try {
-        await link.close('close', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
-    },
-    detach: async (opts?: AgentSessionTeardownOptions) => {
-      deps.cancelPendingConfirmations?.();
-      try {
-        await link.close('detach', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
-    },
+    close: (opts?: AgentSessionTeardownOptions) => teardown('close', opts),
+    detach: (opts?: AgentSessionTeardownOptions) => teardown('detach', opts),
     events: () => queue,
     getUsageSnapshot: () => (state.usage && typeof state.usage === 'object'
       ? state.usage as UsageSnapshot
@@ -418,7 +442,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
     getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
-    getFastMode: () => state.fastMode === true,
+    getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
     countPendingWakeContinuations: () => (typeof state.pendingWake === 'number' ? state.pendingWake : 0),
@@ -451,7 +475,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
       deps.onEffort?.(effort);
     }),
-    ...optional('setFastMode', async (enabled: boolean) => {
+    ...optional('setFastMode', async (enabled: boolean | 'ultrafast') => {
       if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
       deps.onFastMode?.(enabled);
     }),
@@ -533,6 +557,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onEvent(event) {
       if (!event || typeof event !== 'object' || typeof (event as AgentEvent).type !== 'string') return;
       let typed = event as AgentEvent;
+      if (isTerminalAgentErrorEvent(typed) && typed.turnScope !== 'background') terminalErrorDelivered = true;
       if (typed.type === 'image' && typed.source === 'codex'
         && (typed.data as { kind?: unknown } | null)?.kind === 'generation') {
         typed = { ...typed, data: { ...(typed.data as object), pathOrigin: 'remote-agent' } };
@@ -611,7 +636,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onClosed(reason, message) {
       for (const projected of projection.flush()) queue.push(projected);
       // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
-      if (reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
+      if (!terminalErrorDelivered && reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
         queue.push({
           type: 'error',
           data: {
@@ -624,7 +649,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           source: started.agentKind,
         });
       }
-      void dispose();
+      void dispose().catch((error) => {
+        deps.log?.warn('remote agent: local resource cleanup failed', { error: String(error) });
+      });
     },
   };
 }

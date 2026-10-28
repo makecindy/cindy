@@ -749,6 +749,7 @@ function PartyTable({
                             onTogglePause={() => memberActions.onTogglePause(member)}
                             onRemove={() => memberActions.onRemove(member)}
                             onEditNote={(trigger) => memberActions.onEditNote(member, trigger)}
+                            onModelAccess={memberActions.onModelAccess ? (trigger) => memberActions.onModelAccess!(member, trigger) : undefined}
                           />
                         )}
                       </td>

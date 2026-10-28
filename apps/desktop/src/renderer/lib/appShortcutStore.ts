@@ -1,5 +1,6 @@
 import {
   getEffectiveAppShortcuts,
+  isAppShortcutId,
   normalizeAppShortcutOverrides,
   type AppShortcutCombo,
   type AppShortcutId,
@@ -27,8 +28,13 @@ let platform = 'darwin';
 let effective = new Map<AppShortcutId, AppShortcutCombo[]>();
 let overridesSnapshot: AppShortcutOverrides = {};
 let voiceYieldCombos: AppShortcutCombo[] = [];
+let globalFailures: AppShortcutId[] = [];
 const listeners = new Set<() => void>();
 let initialized = false;
+
+function readGlobalFailures(raw: unknown): AppShortcutId[] {
+  return Array.isArray(raw) ? raw.filter(isAppShortcutId) : [];
+}
 
 function recomputeEffective(): void {
   effective = getEffectiveAppShortcuts(overridesSnapshot, platform, voiceYieldCombos);
@@ -54,11 +60,13 @@ function ensureInitialized(): void {
       const state = api.getState();
       platform = state.platform;
       overridesSnapshot = normalizeAppShortcutOverrides(state.overrides, platform);
+      globalFailures = readGlobalFailures(state.globalFailures);
     } catch {
       overridesSnapshot = {};
     }
     api.onChanged((payload) => {
       overridesSnapshot = normalizeAppShortcutOverrides(payload?.overrides, platform);
+      globalFailures = readGlobalFailures(payload?.globalFailures);
       recomputeEffective();
       listeners.forEach((cb) => cb());
     });
@@ -87,6 +95,12 @@ export function getAppShortcutCombos(id: AppShortcutId): AppShortcutCombo[] {
 export function getAppShortcutOverrides(): AppShortcutOverrides {
   ensureInitialized();
   return { ...overridesSnapshot };
+}
+
+/** 当前生效组合未能注册到系统 (多为被其它应用占用) 的全局快捷键。 */
+export function getAppShortcutGlobalFailures(): AppShortcutId[] {
+  ensureInitialized();
+  return [...globalFailures];
 }
 
 export function getAppShortcutPlatform(): string {

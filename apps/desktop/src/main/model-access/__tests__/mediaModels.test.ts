@@ -97,6 +97,15 @@ describe('listAvailableMediaModels', () => {
     isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
   });
 
+  // Unit contract: listAvailableMediaModels preserves the parsed summary and provider discount.
+  // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
+  it('preserves the optional summary through media parsing and provider projection', async () => {
+    const displayPricing = { items: [{ label: 'Output', price: 0.3, unit: 'image', quantity: 1 }],
+      summary: { input: [{ price: 0.02, unit: 'image', quantity: 1 }], output: [{ price: 0.3, unit: 'image', quantity: 1 }] } };
+    serverApiFetchMock.mockResolvedValue({ ...payload, models: [{ ...payload.models[0], displayPricing, costDiscount: 0.2 }] });
+    await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
+  });
+
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
     await expect(listAvailableMediaModels()).resolves.toMatchObject([
       { id: 'image-without-guide' },

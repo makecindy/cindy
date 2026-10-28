@@ -81,7 +81,12 @@ it.each(['http', 'websocket'] as const)('finishes a greeting with metadata over 
 });
 
 describe('Codex text-only request policy', () => {
-  it.each([false, true, undefined])('keeps Lite welcome requests serial and restores ordinary tools (parallel=%s)', async parallel => {
+  // #5828: the real HTTP proxy must keep Lite welcomes serial on custom Responses
+  // upstreams too. Existing coverage only enabled serial by upstream identity.
+  // Minimal failure: Lite header + non-ChatGPT route + text-only turn (unit, loopback).
+  it.each(['chatgpt', 'custom-gateway'].flatMap(route =>
+    [false, true, undefined].map(parallel => ({ route, parallel })),
+  ))('keeps Lite welcome requests serial and restores ordinary tools ($route, parallel=$parallel)', async ({ route, parallel }) => {
     let disabled = true;
     const dispose = registerCodexTextOnlyPolicy('t', () => disabled); closers.push(dispose);
     const received: unknown[] = [];
@@ -99,12 +104,17 @@ describe('Codex text-only request policy', () => {
       // Existing Gateway/xAI adapters can add hosted search after ingress.
       transformRequest: [body => Array.isArray((body as { tools?: unknown[] }).tools) && (body as { tools: unknown[] }).tools.length === 0
         ? { ...body as Record<string, unknown>, tools: [{ type: 'web_search' }], tool_choice: 'auto' } : null],
-      requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly('t'), ctx, base => base === upstream),
+      requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly('t'), ctx, base => route === 'chatgpt' && base === upstream),
     });
     const body = { ...(parallel === undefined ? {} : { parallel_tool_calls: parallel }), model: 'test', tools: [{ type: 'web_search' }, { type: 'function', name: 'exec_command' }], tool_choice: 'auto', input: [{ role: 'user', content: 'Hi' }] };
-    await expect((await fetch(`${handle.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).text()).resolves.toContain('Hello');
+    const headers = { 'content-type': 'application/json',
+      ...(route === 'custom-gateway' ? { 'x-openai-internal-codex-responses-lite': 'true' } : {}),
+    };
+    const response = await fetch(`${handle.url}/responses`, { method: 'POST', headers, body: JSON.stringify(body) });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('Hello');
     disabled = false;
-    await (await fetch(`${handle.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).text();
+    await (await fetch(`${handle.url}/responses`, { method: 'POST', headers, body: JSON.stringify(body) })).text();
     expect(received).toEqual([{ ...body, tools: [], tool_choice: 'none', parallel_tool_calls: false }, body]);
   });
 
@@ -271,12 +281,16 @@ it('keeps valid local-adapter text output and JSON responses intact', async () =
   for (const stream of [true, false]) {
     const handle = await proxy({ upstream: null, transformRequest: [],
       requestGuard: ctx => codexTextOnlyRequestGuard(true, ctx),
-      routingTransform: () => ({ localHandler: async ({ res }) => {
+      routingTransform: () => ({ localHandler: async ({ parsedBody, res }) => {
+        // A Lite ingress header must not enable serial controls before a local bridge.
+        expect(parsedBody).toEqual({ tools: [], tool_choice: 'none' });
         res.writeHead(200, { 'content-type': stream ? 'text/event-stream' : 'application/json' });
         res.end(stream ? frame(completed([text])) : JSON.stringify({ object: 'response', output: [text] }));
       } }),
     });
-    const response = await fetch(`${handle.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const response = await fetch(`${handle.url}/responses`, { method: 'POST', headers: {
+      'content-type': 'application/json', 'x-openai-internal-codex-responses-lite': 'true',
+    }, body: '{}' });
     expect(await response.text()).toContain('Hello');
   }
 });

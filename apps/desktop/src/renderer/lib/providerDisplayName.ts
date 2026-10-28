@@ -16,7 +16,7 @@ export const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 type TFunc = (key: string) => string;
 
-export function providerDisplayName(provider: ProviderView, t: TFunc): string {
+export function providerDisplayName(provider: Pick<ProviderView, 'id' | 'name'>, t: TFunc): string {
   const key = PROVIDER_TITLE_KEY[provider.id];
   return provider.id === 'xd' && key ? t(key) : provider.name || (key ? t(key) : provider.id);
 }

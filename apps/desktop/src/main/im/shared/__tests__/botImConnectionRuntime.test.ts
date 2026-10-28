@@ -12,6 +12,7 @@ import type { BotImConnectionRecord } from '../../../../shared/botImConnection';
 
 const h = vi.hoisted(() => ({
   root: '',
+  ipcHandlers: new Map<string, (event: unknown, payload: unknown) => unknown>(),
   secrets: new Map<string, string>(),
   botStatus: 'active' as string | null,
   archived: [] as string[],
@@ -25,7 +26,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { getPath: () => h.root },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn((name: string, handler: (event: unknown, payload: unknown) => unknown) => h.ipcHandlers.set(name, handler)) },
   BrowserWindow: {
     getAllWindows: () => [
       { isDestroyed: () => false, webContents: { send: (channel: string, payload: unknown) => h.sent.push({ channel, payload }) } },
@@ -82,7 +83,9 @@ vi.mock('../../../security/trustedAppRenderer', () => ({ assertTrustedAppRendere
 
 import {
   addBotImConnection,
+  buildBotImConnectionListPayload,
   configureBotImConnectionRuntime,
+  registerBotImConnectionIpc,
   setWechatCompanionBinding,
   getBotFeishuTransport,
   listBotImConnectionGroups,
@@ -94,6 +97,8 @@ import {
   __testing,
 } from '../botImConnectionRuntime';
 import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
+import * as connectionStore from '../botImConnectionStore';
+import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
 import {
@@ -283,6 +288,73 @@ let connectOutcome = true;
 let telegramConflictAfterConnect = false;
 
 describe('bot im connection runtime', () => {
+  // Electron IPC 安全规则 §5：新增归档入口不能绕过 sender/payload 校验；旧测试只覆盖连接生命周期。
+  // unit：注册真实 handler，以非法 sessionId 作为最小输入，拒绝后无归档写入。
+  it('validates archive IPC payload before entering the lane runtime', async () => {
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    expect(handler).toBeTypeOf('function');
+    expect(() => handler({}, { id: 'a1b2c3d4e5f6', sessionId: '../outside' })).toThrow(/INVALID_PARAMS/);
+    expect(() => handler({}, { id: 'invalid', sessionId: 'session' })).toThrow(/INVALID_PARAMS/);
+    expect(h.archiveCalls).toEqual([]);
+  });
+
+  // PR #6959: the real IPC handler must encode storage failures without leaking
+  // filesystem paths, while retaining domain/owner errors. Existing coverage
+  // only rejects synchronous invalid inputs. Unit: inject failure at archive
+  // persistence after real connection/link ownership checks, without Electron.
+  it.each([
+    { failure: new Error('ARCHIVE_CAPACITY_REACHED'), code: 'PRECONDITION_FAILED', message: 'ARCHIVE_CAPACITY_REACHED' },
+    { failure: new Error('OWNER_CHANGED'), code: 'PRECONDITION_FAILED', message: 'OWNER_CHANGED' },
+    { failure: new Error("EACCES: permission denied, open '/private/owners/secret/bot-im-connections.json'"), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+    { failure: new Error('EPERM: operation not permitted, rename C:\\Users\\private-owner\\bot-im-connections.json'), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+  ])('normalizes archive persistence failure to $code ($message)', async ({ failure, code, message }) => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => [{ sessionId: 'session-1', role: 'canonical', routeKey: null }],
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow').mockRejectedValueOnce(failure);
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code, message: `[${code}] ${message}`,
+    });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
+  it('preserves the archive IPC not-found error', async () => {
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: 'a1b2c3d4e5f6', sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND', message: '[NOT_FOUND] CONNECTION_NOT_FOUND',
+    });
+  });
+
+  it('preserves the archive IPC owner-change rejection before persistence', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => {
+        h.ownerKey = 'owner-b';
+        return [{ sessionId: 'session-1', role: 'canonical', routeKey: null }];
+      },
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow');
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] OWNER_CHANGED',
+    });
+    expect(archive).not.toHaveBeenCalled();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
   beforeEach(() => {
     h.root = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-im-runtime-'));
     h.secrets.clear();
@@ -392,6 +464,8 @@ describe('bot im connection runtime', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    laneTesting.setStore(null);
     await stopBotImConnections();
     fs.rmSync(h.root, { recursive: true, force: true });
   });
@@ -542,6 +616,17 @@ describe('bot im connection runtime', () => {
     expect(readWechatChannelSettings()).toEqual({ version: 1, workingDir: before.workingDir, workingDirAvailable: true });
     expect(h.secrets).toEqual(secrets);
     expect(h.sent).toEqual([{ channel: 'wechatBot:channel-settings-changed', payload: readWechatChannelSettings() }]);
+  });
+
+  // Owner recall must discover only the selected teammate's persisted connections,
+  // including disconnected ones, without changing the settings page's all-bot view.
+  it('projects only the requested teammate connections after transports stop', async () => {
+    const a = await addBotImConnection({ botId: 'bot-mia', channel: 'telegram', token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    await addBotImConnection({ botId: 'bot-other', channel: 'telegram', token: '2:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    await stopBotImConnections();
+    expect(buildBotImConnectionListPayload('bot-mia').connections.map(r => r.id)).toEqual([a.connection.id]);
+    expect(buildBotImConnectionListPayload('absent').connections).toEqual([]);
+    expect(buildBotImConnectionListPayload().connections).toHaveLength(2);
   });
 
   it('starts recorded connections on login, keeps records across stop, and drops them with the teammate', async () => {

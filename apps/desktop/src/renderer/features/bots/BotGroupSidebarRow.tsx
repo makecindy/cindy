@@ -213,7 +213,10 @@ export function BotGroupSidebarRow({
         )}
       >
         {timestamp}
-        <NavigationCountBadge count={unread} label={t('sidebar.teammateUnreadCount', { count: unread })} className="ml-auto mt-1 w-fit" />
+        <span className="mt-1 flex items-center justify-end gap-1">
+          {unread > 0 && group.serverUnread?.mentioned && <span className="text-[var(--text-primary)]" title={t('bots.groupChat.server.thread.hintMentioned')}>@</span>}
+          <NavigationCountBadge count={unread} label={t('sidebar.teammateUnreadCount', { count: unread })} className="w-fit" />
+        </span>
       </span>
     </button>
     {children}

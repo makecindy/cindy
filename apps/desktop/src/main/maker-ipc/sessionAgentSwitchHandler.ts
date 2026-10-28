@@ -7,7 +7,7 @@
  *   校验 → 查目标引擎停泊绑定(Phase 2)→ 构造交接文本(纯代码,
  *   agentHandoff.buildHandoffText:有停泊绑定 = 增量模式,否则全量)
  *   → 关旧 live session → DB 提交(agent_kind + model + provider_id + effort/fast;
- *   sdk_session_id 落停泊 id 或 null)→ 插 agent_switch 边界行(交接全文持久化
+ *   sdk_session_id 落迁移／停泊 id 或 null)→ 插 agent_switch 边界行(交接全文持久化
  *   于此,UI 可展开)→ 登记 pending 注入 →(resume 时)立即重建新引擎 session。
  *
  * Phase 2(双会话停泊/切回续接):每家引擎的原生会话在离场时"停泊"——离场
@@ -29,13 +29,14 @@
  * turn 进行中登记 pending 推迟到下一条消息发送时刻执行。
  *
  * 远程 Agent 换电脑(agentDeviceId 变化,null = 任务所在电脑):原生会话记录在原来运行 Agent
- * 的那台电脑上，换位置无法续接，即使引擎相同也按跨引擎同一流程走(全量交接 + 全新原生会话)；
+ * 的那台电脑上；同引擎优先迁移原生历史并恢复，不可用时回落到有界交接；
  * 目标是另一台电脑时，登记与落地前都按那台的目录校验，不留一个发送时必然失败的意图。
  */
 
 import type { AgentKind } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
 import { MAKER_INVOKE } from './channels.js';
@@ -145,6 +146,24 @@ export interface AgentSwitchBoundaryContent {
   toAgentDeviceId?: string | null;
   fromAgentDeviceName?: string | null;
   toAgentDeviceName?: string | null;
+  /**
+   * 只在供应商组换电脑、且原因要告诉用户时出现：`quota-rebalance` = 用户确认为了先用那台的配额换过去
+   * (原电脑没出问题，provider-groups.md §6.2「任务进行中换号」)。旧端忽略，照常显示「Agent 已改到 X 上运行」。
+   */
+  switchReason?: 'quota-rebalance';
+  /** Distinguishes native relocation from a lossy fallback; absent on old boundaries. */
+  nativeHistory?: 'restored' | 'fallback';
+}
+
+const NATIVE_RELOCATION_NOTE = '[Session location changed] Your native conversation history was restored on another computer. '
+  + 'Continue the current task. Use the current environment and tools for file paths and running processes; '
+  + 'historical machine-local paths and process handles may no longer apply.';
+
+function nativeRelocationHandoff(pending: string | null | undefined): string {
+  if (!pending) return NATIVE_RELOCATION_NOTE;
+  // A previous switch may have opened a native session without sending its pending context yet.
+  // Repeated relocations reuse the same location note instead of growing a chain of notes.
+  return pending.startsWith(NATIVE_RELOCATION_NOTE) ? pending : `${NATIVE_RELOCATION_NOTE}\n\n${pending}`;
 }
 
 export interface AgentSwitchSessionRow {
@@ -158,6 +177,7 @@ export interface AgentSwitchSessionRow {
   /** Execution-device Worker binding; these tasks have no local orcaRole. */
   orcaRemoteLead?: string | null;
   sdkSessionId: string | null;
+  workingDir?: string | null;
   source?: string | null;
   /** Agent 在哪台电脑运行(null / 缺省 = 任务所在电脑)。 */
   agentDeviceId?: string | null;
@@ -232,7 +252,13 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** 分隔条展示用的电脑名(null = 任务所在电脑)。缺省 = 不记名称。 */
   describeAgentDevice?(deviceId: string | null): string | null;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; sdkSessionId?: string } | null | undefined;
+  readOwnerGeneration?(): number;
+  confirmNativeHistoryFallback?(sessionId: string, targetDeviceId: string | null): Promise<boolean>;
+  relocateNativeHistory?(input: {
+    sessionId: string; kind: 'claude-code' | 'codex' | 'pi'; nativeId: string; workingDir: string;
+    fromDevice: string | null; toDevice: string | null; assertCurrent(): void;
+  }): Promise<string | null>;
   closeSession(sessionId: string): Promise<void>;
   /** after = 停泊水位线(Phase 2 增量交接):只取严格晚于该边界行的消息。 */
   listMessagesForHandoff(
@@ -263,7 +289,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       sdkSessionId?: string | null;
       /** 目标引擎下的 effort / fastMode(意图登记时由 renderer 解析,apply 时一并落库)。 */
       effort?: string;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
       /** Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
       agentDeviceId?: string | null;
     },
@@ -297,8 +323,16 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
   /** 读交接注册表的当前代次(在读历史之前取一次)。 */
   readPendingHandoffGeneration?(sessionId: string): number;
+  peekPendingHandoff?(sessionId: string): Promise<string | null>;
   /** 从 DB 行(切换已提交后的新值)重建 live session;抛错 = 引擎未就绪。 */
-  bootstrapSwitchedSession(sessionId: string): Promise<void>;
+  /** 记录用户对目标模型的思考开关选择（跨引擎切换提交后落本机偏好镜像）。 */
+  rememberThinkingIntent?(input: {
+    agentKind: AgentKind;
+    providerId: string | null;
+    model: string;
+    thinking: boolean;
+  }): void;
+  bootstrapSwitchedSession(sessionId: string, opts?: { thinkingEnabled?: boolean; nativeHistoryResume?: boolean }): Promise<void>;
   /**
    * close→bootstrap 窗口的 onClose 重副作用抑制(desktop 注入
    * withRehydrateCloseSuppressed)——切换的瞬态 close 绝不能触发 worktree
@@ -373,7 +407,7 @@ export interface PendingAgentSwitchIntent {
   model: string;
   providerId: string | null | undefined;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /**
    * Agent 在另一台电脑运行的任务：点选时按那台的目录确认过的目标上下文窗口。本机目录里没有
    * 那台的模型，发送时据此做「换小窗口前先交接」。本机 Orca 也保留选择时核对的窗口，
@@ -382,6 +416,12 @@ export interface PendingAgentSwitchIntent {
   confirmedContextWindow?: number;
   /** 选择同时换 Agent 所在电脑(null = 任务所在电脑)；缺省 = 位置不变。 */
   targetAgentDeviceId?: string | null;
+  /**
+   * Pi-only：目标模型的思考开关意图（renderer 记忆，缺省开）。发送时刻回放暂存
+   * 选择时必须一并应用，否则上一模型的 off 会残留——Pi 的 set_model 不重置
+   * thinking level。
+   */
+  thinking?: boolean;
   /** resume 回落事务失败后的内部恢复载荷；下一次 send 先重试这笔原子事务。 */
   resumeFallbackRecovery?: {
     boundaryClientId: string | null;
@@ -409,7 +449,7 @@ export interface PublicAgentSwitchIntent {
   model: string;
   providerId: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 只在换 Agent 所在电脑时出现(null = 任务所在电脑)；旧控制端忽略。 */
   agentDeviceId?: string | null;
 }
@@ -439,7 +479,7 @@ export function projectPendingAgentSwitchIntent(
     model: intent.model,
     providerId: intent.providerId ?? null,
     ...(intent.effort ? { effort: intent.effort } : {}),
-    ...(typeof intent.fastMode === 'boolean' ? { fastMode: intent.fastMode } : {}),
+    ...((typeof intent.fastMode === 'boolean' || intent.fastMode === 'ultrafast') ? { fastMode: intent.fastMode } : {}),
     ...(intent.targetAgentDeviceId !== undefined ? { agentDeviceId: intent.targetAgentDeviceId } : {}),
   };
 }
@@ -486,7 +526,7 @@ export async function applySetModelThenCancelAgentSwitchIntent<T>(
 
 /**
  * 打开任务时 Agent 没能启动、要换到另一个位置重新打开(供应商组启动阶段换电脑，docs/product-rules/provider-groups.md §6)：
- * 原生会话在原来那个位置上，换过去不能续接，与换电脑同一套交接——全量交接 + 全新原生会话 + 分隔条。没有开着的会话
+ * 同 Harness 优先迁移原生记录；源端不可用或目标端不支持时回落有界交接。没有开着的会话
  * (这次就是要打开它)，也不在这里启动：调用方正在启动 Agent，按返回后的任务记录接着打开，这次发送带上交接。
  * `sharedRelocation`：位置仍是同一个分享、由分享者的组换一台(分隔条不写电脑名称)。
  */
@@ -501,6 +541,10 @@ export async function relocateForFreshStart(
     | 'insertBoundaryMessage'
     | 'setPendingHandoff'
     | 'readPendingHandoffGeneration'
+    | 'peekPendingHandoff'
+    | 'relocateNativeHistory'
+    | 'readOwnerGeneration'
+    | 'applyResumeFallbackAtomically'
     | 'describeAgentDevice'
     | 'log'
   >,
@@ -511,8 +555,10 @@ export async function relocateForFreshStart(
     /** 原来那个位置(调用方可能已把任务记录改到了目标位置)；不给 = 按任务记录。 */
     from?: { agentDeviceId: string | null; providerId: string | null };
     sharedRelocation?: boolean;
+    assertCurrent?: () => void;
   },
-): Promise<void> {
+): Promise<{ nativeId: string | null; fallback?: () => Promise<void> }> {
+  const ownerGeneration = deps.readOwnerGeneration?.();
   const { sessionId, agentDeviceId, providerId } = params;
   const row = await deps.getSessionRow(sessionId);
   if (!row || row.status === 'deleted') throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
@@ -520,7 +566,7 @@ export async function relocateForFreshStart(
   const model = row.model;
   const dbKind = normalizeDbAgentKind(row.agentKind);
   const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-  const handoff = buildHandoffText(await deps.listMessagesForHandoff(sessionId), {
+  const fullHandoff = buildHandoffText(await deps.listMessagesForHandoff(sessionId), {
     fromLabel: `${agentEngineLabel(dbKind)} (on a different computer)`,
     toLabel: agentEngineLabel(dbKind),
     sessionId,
@@ -528,11 +574,31 @@ export async function relocateForFreshStart(
   });
   const fromAgentDeviceId = params.from ? params.from.agentDeviceId : row.agentDeviceId ?? null;
   const fromProviderId = params.from ? params.from.providerId : row.providerId;
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (deps.readOwnerGeneration?.() !== ownerGeneration) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
+    if (handoffGeneration !== undefined && deps.readPendingHandoffGeneration?.(sessionId) !== handoffGeneration) {
+      throw new Error('Session history changed during agent relocation');
+    }
+  };
+  let nativeId: string | null = null;
+  if (!params.sharedRelocation && fromAgentDeviceId !== agentDeviceId && row.sdkSessionId && row.workingDir && deps.relocateNativeHistory) {
+    try {
+      nativeId = await deps.relocateNativeHistory({ sessionId, kind: dbToMakerAgentKind(dbKind),
+        nativeId: row.sdkSessionId, workingDir: row.workingDir, fromDevice: fromAgentDeviceId, toDevice: agentDeviceId, assertCurrent });
+    } catch (error) {
+      assertCurrent();
+      deps.log.warn('agent-switch: native history unavailable on startup relocation', { sessionId, error: String(error) });
+    }
+  }
+  assertCurrent();
+  const handoff = nativeId ? nativeRelocationHandoff(await deps.peekPendingHandoff?.(sessionId)) : fullHandoff;
+  assertCurrent();
   await deps.applyAgentSwitchToDb(sessionId, {
     agentKind: dbKind,
     model,
     providerId,
-    sdkSessionId: null,
+    sdkSessionId: nativeId,
     agentDeviceId,
   });
   deps.setSessionProvider(sessionId, providerId);
@@ -545,16 +611,30 @@ export async function relocateForFreshStart(
     toProviderId: providerId,
     fromSdkSessionId: row.sdkSessionId,
     handoff,
-    resumed: false,
+    resumed: !!nativeId,
+    nativeHistory: nativeId ? 'restored' : 'fallback',
     consumed: false,
     fromAgentDeviceId,
     toAgentDeviceId: agentDeviceId,
     fromAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(fromAgentDeviceId) ?? null,
     toAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(agentDeviceId) ?? null,
   };
+  let boundaryId: string | null = null;
   try {
-    await deps.insertBoundaryMessage(sessionId, boundaryContent);
+    boundaryId = await deps.insertBoundaryMessage(sessionId, boundaryContent);
   } catch (err) {
+    if (nativeId) {
+      // A native copy cannot be published without the boundary needed for an
+      // atomic fallback. Abort before opening it and retain the source identity.
+      assertCurrent();
+      await deps.applyAgentSwitchToDb(sessionId, {
+        agentKind: dbKind, model, providerId: fromProviderId,
+        sdkSessionId: row.sdkSessionId, agentDeviceId: fromAgentDeviceId,
+      });
+      assertCurrent();
+      deps.setSessionProvider(sessionId, fromProviderId);
+      throw err;
+    }
     deps.log.warn('agent-switch: boundary message insert failed on fresh-start relocation (degraded)', {
       sessionId,
       err: err instanceof Error ? err.message : String(err),
@@ -566,6 +646,27 @@ export async function relocateForFreshStart(
     handoffChars: handoff.length,
     agentDeviceChange: params.sharedRelocation ? 'reassigned-by-provider-group' : agentDeviceId ? 'other-device' : 'task-device',
   });
+  return { nativeId, ...(nativeId ? { fallback: async () => {
+    assertCurrent();
+    if (!boundaryId) throw new Error('Cannot replace native relocation without its boundary record');
+    await deps.applyResumeFallbackAtomically(sessionId, boundaryId, {
+      ...boundaryContent, resumed: false, nativeHistory: 'fallback', handoff: fullHandoff,
+    });
+    deps.setPendingHandoff(sessionId, fullHandoff, handoffGeneration);
+  } } : {}) };
+}
+
+/** 带思考意图重建？不传时保持单参调用形状（既有调用方/断言都不受影响）。 */
+function bootstrapSwitchedSessionWithThinking(
+  deps: MakerSessionAgentSwitchHandlerDeps,
+  sessionId: string,
+  thinkingEnabled: boolean | undefined,
+  nativeHistoryResume = false,
+): Promise<void> {
+  if (nativeHistoryResume) return deps.bootstrapSwitchedSession(sessionId, { thinkingEnabled, nativeHistoryResume: true });
+  return thinkingEnabled === undefined
+    ? deps.bootstrapSwitchedSession(sessionId)
+    : deps.bootstrapSwitchedSession(sessionId, { thinkingEnabled });
 }
 
 /** 业务体(纯依赖注入,单测直接调):校验 → 交接 → 提交 → 重建。 */
@@ -586,6 +687,11 @@ export async function performSessionAgentSwitch(
      * 旧控制端都走这里，不做推断)，null = 任务所在电脑，字符串 = 同账号另一台电脑。
      */
     agentDeviceId?: unknown;
+    /**
+     * Pi-only：目标模型的思考开关意图。重登记(意图期内改档位 / 改选 / 切思考
+     * 开关)时必须带上；缺省时由同引擎分支继承既有 intent，不能静默丢字段。
+     */
+    thinking?: unknown;
     /**
      * pending-apply 路径(send 事务派发前执行):跳过新引擎立即重建——send 随后
      * 的 lazy-create 会按 DB 新值 spawn(reconcileCreateOptsWithDb 校正兜底),
@@ -619,9 +725,18 @@ export async function performSessionAgentSwitch(
      * 只在 applyNow 时生效。
      */
     providerGroupRelocation?: boolean;
+    /**
+     * 仅限 main 内部：供应商组换电脑的原因写进分隔条。`quota-rebalance` = 用户确认为了先用那台的配额换过去
+     * (provider-groups.md §6.2「任务进行中换号」)。只在真正换了电脑时写。
+     */
+    providerGroupSwitchReason?: 'quota-rebalance';
   },
 ): Promise<SessionAgentSwitchResult> {
+  const ownerGeneration = deps.readOwnerGeneration?.();
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
+  // Pi 跨引擎重建时同样要带上思考开关意图：不传就容易落到被控端镜像/默认值，
+  // 与用户在意图期内刚改的开关不一致（device-link 远程场景最明显）。
+  const thinkingEnabled = typeof params.thinking === 'boolean' ? params.thinking : undefined;
   throwIfAgentSwitchAborted(signal);
   const confirmedContextWindow = params.confirmedContextWindow;
   if (confirmedContextWindow !== undefined &&
@@ -682,8 +797,8 @@ export async function performSessionAgentSwitch(
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
   }
   if (row.remoteHostId) {
-    // SSH 远程会话:agent 进程在远端机器,cc-manager 链路仅覆盖 Claude,v1 不支持切换。
-    throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for remote sessions');
+    // SSH can run all three Harnesses, but cannot hand off an existing task between them.
+    throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'agent switch is not supported for remote sessions');
   }
   // Orca Lead / Worker tasks live on this computer, so moving their Agent works like
   // a normal task (2026-10-16). An execution-device Worker's task lives on that device;
@@ -705,7 +820,7 @@ export async function performSessionAgentSwitch(
   const currentAgentDeviceId = row.agentDeviceId ?? null;
   let targetAgentDeviceId =
     requestedAgentDeviceId === undefined ? currentAgentDeviceId : requestedAgentDeviceId;
-  // 换到供应商组那一项、要换电脑：交接反正要做，由组按它此刻的状态选一台能用的电脑，不直接落到组所在电脑本身
+  // 换到供应商组那一项、要换电脑：由组按它此刻的状态选一台能用的电脑，不直接落到组所在电脑本身
   // (docs/product-rules/provider-groups.md §6，2026-10-11 用户反馈)。登记意图时不选，真正提交时按那一刻的状态选。
   let groupResolvedToCurrentPosition = false;
   let commitProviderGroupBinding: (() => Promise<void>) | undefined;
@@ -773,16 +888,29 @@ export async function performSessionAgentSwitch(
   if (fromDbKind === toDbKind && !relocating && !orcaGroupReturnRebuild) {
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
-    // 组把换电脑的意图选回了当前位置(groupResolvedToCurrentPosition)：这次 applyNow 提交
-    // 本身就是模型 / effort / fastMode 要落地的时刻，必须走真正的同引擎模型应用路径，
-    // 不能当成已经应用过的 no-op 直接丢弹(greptile-apps P1, PR #5792 review)。
     if (deps.selectSameAgentModel && (!params.applyNow || groupResolvedToCurrentPosition)) {
+      // 重登记可能不带思考意图(旧调用方 / 只改 effort·Fast)：仍指向同一个目标时
+      // 继承既有 intent，否则登记时的快照被覆盖成 undefined，结算回放会丢掉思考
+      // 档位收敛；目标已换（改选到别的模型）时不继承——旧模型的开关不适用，
+      // 宁可当未提供，让运行时按目标模型自己的能力处理。
+      const existingIntent = deps.pendingSwitches?.get?.(sessionId);
+      const sameTarget =
+        existingIntent !== undefined &&
+        existingIntent.model === model &&
+        (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
+      const thinking =
+        typeof params.thinking === 'boolean'
+          ? params.thinking
+          : sameTarget
+            ? existingIntent?.thinking
+            : undefined;
       const result = await deps.selectSameAgentModel(sessionId, {
         targetAgentKind,
         model,
         providerId: normalizedProviderId,
         ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
-        ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+        ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+        ...(typeof thinking === 'boolean' ? { thinking } : {}),
         sameAgentSelection: true,
         ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
@@ -840,8 +968,22 @@ export async function performSessionAgentSwitch(
 
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
   // 用户反复改选零成本;renderer 乐观显示意图,真切换在下一条消息发送时刻执行。
-  // 重复登记 = 覆盖(同一意图的最新表达)。
+  // 重复登记 = 覆盖(同一意图的最新表达);但只改档位/Fast 的重登记(旧调用方不带
+  // 思考意图)仍指向同一目标时继承旧值——登记快照被覆盖成 undefined 后,发送回放
+  // 会丢掉思考开关。目标已换则不继承:旧目标的开关不适用于新目标。
   if (!params.applyNow && deps.pendingSwitches) {
+    const existingIntent = deps.pendingSwitches.get?.(sessionId);
+    const sameTarget =
+      existingIntent !== undefined &&
+      existingIntent.targetAgentKind === targetAgentKind &&
+      existingIntent.model === model &&
+      (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
+    const thinking =
+      typeof params.thinking === 'boolean'
+        ? params.thinking
+        : sameTarget
+          ? existingIntent?.thinking
+          : undefined;
     const intent: PendingAgentSwitchIntent = {
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
@@ -849,7 +991,8 @@ export async function performSessionAgentSwitch(
       model,
       providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-      ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+      ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+      ...(typeof thinking === 'boolean' ? { thinking } : {}),
       ...(agentDeviceChanges ? { targetAgentDeviceId } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
@@ -875,7 +1018,7 @@ export async function performSessionAgentSwitch(
   // 交接素材与停泊绑定先于任何状态变更取得(失败不留半切换状态)。
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
-  // 换电脑时停泊的原生会话在原来那台电脑上，目标电脑接不上，一律全量交接。
+  // 换电脑不复用目标电脑旧的停泊记录；关闭当前会话后迁移最新原生历史。
   const parked = deps.findParkedEngineSession && !relocating && !orcaGroupReturnRebuild
     ? await deps.findParkedEngineSession(sessionId, toDbKind)
     : null;
@@ -929,37 +1072,158 @@ export async function performSessionAgentSwitch(
       }
     }
 
-    // 停用轴:提交点重裁决(PR #744 review 第十五轮)—— parked 数据加载、handoff
-    // 构建、closeSession 都是长 await,入口裁决可能已过期。此刻拒绝仍安全:DB 未写,
-    // 旧会话即使已关也只是下一次发送按旧路由懒重建,不产生新的停用路由请求。
-    if (deps.assertModelRouteUsable) {
+    let relocatedNativeId: string | null = null;
+    let sourceNativeId = row.sdkSessionId;
+    let nativeBootstrapReady = false;
+    const confirmSummary = params.providerGroupSwitchReason === 'quota-rebalance'
+      && relocating && fromDbKind === toDbKind && !forcedRelocation
+      && !isProviderShareAgentDeviceId(currentAgentDeviceId)
+      && !isProviderShareAgentDeviceId(targetAgentDeviceId);
+    const assertTransferCurrent = () => {
+      if (deps.readOwnerGeneration?.() !== ownerGeneration) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
+      throwIfAgentSwitchAborted(signal);
+      params.assertSelectionCurrent?.();
+      if (handoffGeneration !== undefined && deps.readPendingHandoffGeneration?.(sessionId) !== handoffGeneration) {
+        throw new Error('Session history changed during agent relocation');
+      }
+    };
+    const closeFailedNativeSession = async () => {
+      if (!deps.getLiveSession(sessionId)) return;
+      try {
+        await deps.closeSession(sessionId);
+      } catch (error) {
+        // The failed target is only cleanup. Its link cannot veto source rollback
+        // or the atomic removal of an unusable native ID and restored boundary.
+        deps.log.warn('agent-switch: failed native session cleanup failed; continuing fallback', {
+          sessionId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const restoreNativeProbeSource = async (error: unknown) => {
+      // Cancel/selection changes still restore the source, but never restore old
+      // history after clear or write the previous owner's route into a new account.
+      const assertProbeOwner = () => {
+        if (deps.readOwnerGeneration?.() !== ownerGeneration
+          || (handoffGeneration !== undefined && deps.readPendingHandoffGeneration?.(sessionId) !== handoffGeneration)) {
+          throw error;
+        }
+      };
+      assertProbeOwner();
+      await closeFailedNativeSession();
+      assertProbeOwner();
+      await deps.applyAgentSwitchToDb(sessionId, {
+        agentKind: fromDbKind, model: row.model ?? model, providerId: row.providerId,
+        sdkSessionId: sourceNativeId, agentDeviceId: currentAgentDeviceId,
+      });
+      assertProbeOwner();
+      deps.setSessionProvider(sessionId, row.providerId);
+      assertTransferCurrent();
+    };
+    if (relocating && !forcedRelocation && fromDbKind === toDbKind && deps.relocateNativeHistory) {
+      // Close flushes the last native ID. Never snapshot the pre-close ID after a native fork/compact.
+      const fresh = await deps.getSessionRow(sessionId);
+      assertTransferCurrent();
+      if (!fresh) throw new Error('Session no longer exists');
+      sourceNativeId = fresh.sdkSessionId;
+      if (fresh.sdkSessionId && fresh.workingDir) {
+        try {
+          relocatedNativeId = await deps.relocateNativeHistory({
+            sessionId, kind: targetAgentKind, nativeId: fresh.sdkSessionId, workingDir: fresh.workingDir,
+            fromDevice: currentAgentDeviceId, toDevice: targetAgentDeviceId, assertCurrent: assertTransferCurrent,
+          });
+        } catch (error) {
+          assertTransferCurrent();
+          deps.log.warn('agent-switch: native history unavailable; using bounded handoff', {
+            sessionId, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (relocatedNativeId) {
+        // History is already in the native session. Only explain the changed execution environment.
+        handoff = nativeRelocationHandoff(await deps.peekPendingHandoff?.(sessionId));
+      }
+    }
+    if (relocating) assertTransferCurrent();
+
+    // Revalidate before probing and after any user confirmation, which may take time.
+    const revalidateRoute = async () => {
+      if (!deps.assertModelRouteUsable) return;
       const rerouteAtCommit = await deps.assertModelRouteUsable(
-        targetAgentKind,
-        model,
-        typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
-        sessionId,
-        requestedAgentDeviceId,
+        targetAgentKind, model, typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+        sessionId, requestedAgentDeviceId,
       );
-      if (rerouteAtCommit && typeof normalizedProviderId !== 'string') {
-        normalizedProviderId = rerouteAtCommit;
+      if (rerouteAtCommit && typeof normalizedProviderId !== 'string') normalizedProviderId = rerouteAtCommit;
+    };
+    await revalidateRoute();
+    if (relocating) assertTransferCurrent();
+
+    if (confirmSummary) {
+      // Probe native resume before publishing a switch boundary or replacing pending
+      // context. A failed probe restores the source route before asking the user.
+      if (relocatedNativeId) {
+        await deps.applyAgentSwitchToDb(sessionId, {
+          agentKind: toDbKind, model, providerId: normalizedProviderId,
+          sdkSessionId: relocatedNativeId, agentDeviceId: targetAgentDeviceId,
+        });
+        if (normalizedProviderId !== undefined) deps.setSessionProvider(sessionId, normalizedProviderId);
+        try {
+          assertTransferCurrent();
+          await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled, true);
+          assertTransferCurrent();
+          if (deps.getLiveSession(sessionId)?.sdkSessionId !== relocatedNativeId) {
+            throw new Error('Native history resume did not restore the transferred session');
+          }
+          nativeBootstrapReady = true;
+        } catch (error) {
+          await restoreNativeProbeSource(error);
+          relocatedNativeId = null;
+          handoff = buildFullHandoff();
+          deps.log.warn('agent-switch: native quota relocation failed; restored source before summary confirmation', {
+            sessionId, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!relocatedNativeId) {
+        const confirmed = await deps.confirmNativeHistoryFallback?.(sessionId, targetAgentDeviceId);
+        assertTransferCurrent();
+        if (!confirmed) throw new Error('NATIVE_HISTORY_FALLBACK_DECLINED');
+        await revalidateRoute();
       }
     }
 
+    if (relocating) assertTransferCurrent();
     // ---- commit point:此后切换生效 ----
-    await deps.applyAgentSwitchToDb(sessionId, {
-      agentKind: toDbKind,
-      model,
-      providerId: normalizedProviderId,
-      sdkSessionId: parked?.sdkSessionId ?? null,
-      ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-      ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
-      // 组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
-      ...(agentDeviceChanges || (orcaGroupReturnRebuild && targetAgentDeviceId)
-        ? { agentDeviceId: targetAgentDeviceId }
-        : {}),
-    });
+    try {
+      await deps.applyAgentSwitchToDb(sessionId, {
+        agentKind: toDbKind,
+        model,
+        providerId: normalizedProviderId,
+        sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
+        ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
+        ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+        // 组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
+        ...(agentDeviceChanges || (orcaGroupReturnRebuild && targetAgentDeviceId)
+          ? { agentDeviceId: targetAgentDeviceId }
+          : {}),
+      });
+    } catch (error) {
+      // A successful probe already persisted and opened the target. If the final
+      // settings write fails, the caller must see the original route, not a half switch.
+      if (nativeBootstrapReady) await restoreNativeProbeSource(error);
+      throw error;
+    }
     if (normalizedProviderId !== undefined) {
       deps.setSessionProvider(sessionId, normalizedProviderId);
+    }
+    if (typeof thinkingEnabled === 'boolean') {
+      // 跨引擎切换提交后把用户的思考选择落到本机偏好镜像：普通 send 的 lazy-create
+      // 只读镜像（不经过 bootstrap），否则远端推送未回流时会用旧值建会话。
+      deps.rememberThinkingIntent?.({
+        agentKind: targetAgentKind,
+        providerId: normalizedProviderId ?? row.providerId ?? null,
+        model,
+        thinking: thinkingEnabled,
+      });
     }
     // DB 已过 commit point，切换生效：此刻再持久化组内绑定，前面的目录校验 /
     // closeSession / assertModelRouteUsable 任何一步抛错都不会让新绑定抔先持久化
@@ -978,7 +1242,8 @@ export async function performSessionAgentSwitch(
         normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
       fromSdkSessionId: row.sdkSessionId,
       handoff,
-      resumed: !!parked,
+      resumed: !!(relocatedNativeId || parked),
+      ...(relocating && fromDbKind === toDbKind ? { nativeHistory: relocatedNativeId ? 'restored' as const : 'fallback' as const } : {}),
       consumed: false,
       ...(relocating
         ? {
@@ -987,6 +1252,7 @@ export async function performSessionAgentSwitch(
             // 强制换电脑时实际运行的电脑由对方选，本机不知道是哪台(也不该显示)：分隔条写「另一台电脑」。
             fromAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,
             toAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(targetAgentDeviceId) ?? null,
+            ...(params.providerGroupSwitchReason ? { switchReason: params.providerGroupSwitchReason } : {}),
           }
         : {}),
     };
@@ -1004,23 +1270,32 @@ export async function performSessionAgentSwitch(
 
     let engineReady = true;
     let bootstrapError: string | undefined;
-    let resumed = !!parked;
+    let resumed = !!(relocatedNativeId || parked);
     let retryPending = false;
     // resume 模式无视 skipBootstrap:只有 eager spawn 才能确定性观测 resume 失败
     // 并在同一事务内回落全量交接;交给 lazy-create 的话,失效的停泊 id 会让之后
     // 每次发送反复失败且无人回落。
-    if (parked || !params.skipBootstrap) {
+    if (!nativeBootstrapReady && (relocatedNativeId || parked || !params.skipBootstrap)) {
       try {
-        await deps.bootstrapSwitchedSession(sessionId);
+        await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled, !!relocatedNativeId);
+        if (relocating) assertTransferCurrent();
+        if (relocatedNativeId && deps.getLiveSession(sessionId)?.sdkSessionId !== relocatedNativeId) {
+          throw new Error('Native history resume did not restore the transferred session');
+        }
       } catch (err) {
-        if (parked) {
+        if (relocating) assertTransferCurrent();
+        if (relocatedNativeId || parked) {
+          if (relocatedNativeId) {
+            await closeFailedNativeSession();
+            assertTransferCurrent();
+          }
           // ---- resume 回落:清停泊 id → 换全量交接 → 全新原生会话重试 ----
           // 停泊原生会话可能已失效(transcript 被清理、CLI 升级不兼容等),这些
           // 只有 spawn 时才暴露。回落是确定性代码路径,不留半 resume 状态。
           deps.log.warn('agent-switch: resume parked session failed; fallback to fresh + full handoff', {
             sessionId,
             targetAgentKind,
-            parkedSdkSessionId: parked.sdkSessionId,
+            parkedSdkSessionId: relocatedNativeId ?? parked?.sdkSessionId,
             err: err instanceof Error ? err.message : String(err),
           });
           resumed = false;
@@ -1029,6 +1304,7 @@ export async function performSessionAgentSwitch(
             ...boundaryContent,
             handoff: fullHandoff,
             resumed: false,
+            ...(relocatedNativeId ? { nativeHistory: 'fallback' as const } : {}),
           };
           let fallbackCommitted = false;
           if (boundaryClientId) {
@@ -1049,7 +1325,7 @@ export async function performSessionAgentSwitch(
                 model,
                 providerId: normalizedProviderId,
                 ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-                ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+                ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
                 resumeFallbackRecovery: {
                   boundaryClientId,
                   boundaryContent: fallbackBoundaryContent,
@@ -1074,7 +1350,7 @@ export async function performSessionAgentSwitch(
               model,
               providerId: normalizedProviderId,
               ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-              ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+              ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
               resumeFallbackRecovery: {
                 boundaryClientId: null,
                 boundaryContent: fallbackBoundaryContent,
@@ -1095,7 +1371,7 @@ export async function performSessionAgentSwitch(
           deps.setPendingHandoff(sessionId, fullHandoff, handoffGeneration);
           if (fallbackCommitted) {
             try {
-              await deps.bootstrapSwitchedSession(sessionId);
+              await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled);
             } catch (err2) {
               engineReady = false;
               bootstrapError = err2 instanceof Error ? err2.message : String(err2);
@@ -1250,7 +1526,7 @@ export function applyPendingAgentSwitchIfIdle(
         }
         throwIfAgentSwitchAborted(opts?.signal);
         if (opts?.bootstrapAfterSwitch && !deps.getLiveSession(sessionId)) {
-          await deps.bootstrapSwitchedSession(sessionId);
+          await bootstrapSwitchedSessionWithThinking(deps, sessionId, intent.thinking);
         }
         return;
       }
@@ -1290,6 +1566,7 @@ export function applyPendingAgentSwitchIfIdle(
         providerId: intent.providerId,
         effort: intent.effort,
         fastMode: intent.fastMode,
+        thinking: intent.thinking,
         agentDeviceId: intent.targetAgentDeviceId,
         // 普通 maker send 随后会按 DB 真源 lazy-create,无需在 apply 内多 spawn 一次;
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
@@ -1299,7 +1576,7 @@ export function applyPendingAgentSwitchIfIdle(
         signal: opts?.signal,
       });
       if (result.retryPending && intent.runtimeSource === 'agent') {
-        throw new Error('Harness switch recovery is pending; retry the send after recovery');
+        throwIpcError('HARNESS_SWITCH_NOT_READY', 'Harness switch recovery is pending; retry the send after recovery');
       }
       // CAS 语义:执行期间用户可能又选了另一个目标,不能把新意图一起清掉。
       if (!result.retryPending) {
@@ -1363,6 +1640,7 @@ export function registerMakerSessionAgentSwitchHandler(
       // 第 7 参(可选):{ agentDeviceId } —— 同时换 Agent 所在电脑。旧被控端忽略多余参数,
       // 位置保持不变(与今天一致)。
       options?: unknown,
+      thinking?: unknown,
     ) => {
       const context = getDeviceLinkInvokeContext();
       const confirmedContextWindow = options && typeof options === 'object' && !Array.isArray(options)
@@ -1390,6 +1668,7 @@ export function registerMakerSessionAgentSwitchHandler(
         fastMode,
         ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
         ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+        thinking,
         assertSelectionCurrent: guard.admit,
       });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock

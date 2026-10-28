@@ -80,6 +80,7 @@ async function rebuild(options: {
     statSync: (path: string) => ({ isDirectory: () => true, mtimeMs: now - (path.endsWith('/old') ? 3_600_000 : cacheEntries.indexOf(posix.basename(path)) * 1000) }),
     resolveAndroidSdkTools, ensureWindowsAndroidEmulator, resolveJavaRuntimeEnv,
     probeMetroOwnership: () => ({ cwd: mobileDir, source: 'same', region: 'global', envFingerprint: 'same-env' }),
+    applySimMockArg: (args: string[]) => args,
     readSimEnvironment: () => ({ envFingerprint: 'same-env' }), gitSourceIdentity: () => 'same',
     classifySimMetroListener: (input: object) => input, validateSimMetroIdentity,
   });

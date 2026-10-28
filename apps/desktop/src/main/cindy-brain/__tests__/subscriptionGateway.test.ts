@@ -404,6 +404,34 @@ describe('did- 旁听扇出', () => {
     ]);
   });
 
+  it('补投首次唤醒 flush 期间新入队的终止事件', async () => {
+    const delivered: GhostPipeEventPush[] = [];
+    let gateway!: GhostSubscriptionGateway;
+    const created = makeGateway({
+      sendToGhost: (_ghostId, payload) => {
+        delivered.push(payload);
+        if ((payload as { name?: string }).name === 'did-turn-start') {
+          queueMicrotask(() => {
+            gateway.publish('turn', 'did-turn-end', {
+              ...TURN_DATA,
+              durationMs: 5,
+              endReason: 'completed',
+            });
+          });
+        }
+      },
+    });
+    gateway = created.gw;
+
+    gateway.publish('turn', 'did-turn-start', TURN_DATA);
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered.map((payload) => (payload as { name: string }).name)).toEqual([
+      'did-turn-start',
+      'did-turn-end',
+    ]);
+  });
+
   it('缓冲溢出丢最旧,dropped 计数随补投首条带出', async () => {
     const running = new Set<string>();
     const wake = vi.fn(async () => {}); // 先唤不醒(不置 running):纯堆缓冲

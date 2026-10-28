@@ -63,6 +63,7 @@ function setup(options: {
   let states = { ...(options.states ?? {}) };
   const responses: unknown[] = [];
   const cleanups: Record<string, string> = {};
+  const availability = new Map<string, 'unknown' | 'online' | 'offline' | 'paused' | 'removed'>();
   let cleanupSeq = 0;
   const invoke = vi.fn(async (_agentDeviceId: string, request: unknown) => {
     const input = request as { entries: Array<{ key: string }>; batch?: { id: string; index: number; count: number } };
@@ -75,7 +76,7 @@ function setup(options: {
     responses.push(response);
     return response;
   });
-  const readCaps = vi.fn(async () => options.caps ?? CAPS);
+  const readCaps = vi.fn<(agentDeviceId: string) => Promise<RemoteAgentCaps>>(async () => options.caps ?? CAPS);
   const changed = vi.fn();
   const completeCleanup = vi.fn(async (device: string, token: string) => {
     if (cleanups[device] === token) delete cleanups[device];
@@ -84,12 +85,13 @@ function setup(options: {
     listGroups: () => groups,
     ownedShares: () => shares,
     pendingCleanups: () => cleanups,
+    shareAvailability: (device: string) => availability.get(device) ?? 'unknown',
     completeCleanup,
     readCaps,
     invoke,
     changed,
     now: () => now,
-    log: { warn: vi.fn() },
+    log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
   };
   let reshare = createProviderGroupReshare(deps);
   instances.push(reshare);
@@ -101,6 +103,8 @@ function setup(options: {
     changed,
     completeCleanup,
     cleanups,
+    availability,
+    log: deps.log,
     setGroups: (next: Record<string, ProviderGroupConfig>) => {
       // 生产中由 writeProviderGroup 与移出组同一事务持久记下(真实落盘回归在 stores.test.ts)。
       const shared = (configs: Record<string, ProviderGroupConfig>) => new Set(Object.values(configs)
@@ -126,6 +130,149 @@ afterEach(() => {
 });
 
 describe('provider group reshare (group computer side)', () => {
+  // #6961 / unit: exercise the real scheduler with an unreachable peer and fake time.
+  // Existing tests cover only one failure, not repeated refreshes, backoff, recovery or log volume.
+  // Observable results: outgoing caps/reshare requests, retained cleanup barriers and diagnostic logs.
+  // Standalone vitest run on Windows: under 5s; see the verification report for the final timing.
+  it.each(['report', 'cleanup'] as const)('backs off repeated %s failures and resets after success', async (kind) => {
+    vi.useFakeTimers();
+    const env = setup();
+    if (kind === 'cleanup') env.setGroups({});
+    env.readCaps.mockRejectedValue(new Error('offline'));
+    await env.reshare.sync('startup');
+    // First two failures wait a minute; then 5, 10, 20 and at most 30 minutes.
+    for (const minutes of [1, 1, 5, 10, 20, 30, 30]) {
+      const before = env.readCaps.mock.calls.length;
+      env.advance(minutes * 60_000 - 1);
+      await vi.advanceTimersByTimeAsync(minutes * 60_000 - 1);
+      await env.reshare.sync('received');
+      expect(env.readCaps).toHaveBeenCalledTimes(before);
+      env.advance(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(env.readCaps).toHaveBeenCalledTimes(before + 1);
+    }
+    expect(env.log.info).toHaveBeenCalledTimes(1);
+    expect(env.log.debug).toHaveBeenCalledTimes(7);
+    env.readCaps.mockResolvedValue(CAPS);
+    env.advance(30 * 60_000);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(env.log.info).toHaveBeenLastCalledWith('provider group: reshare sync recovered', expect.any(Object));
+    if (kind === 'cleanup') {
+      expect(env.cleanups).toEqual({});
+      expect(vi.getTimerCount()).toBe(0);
+    } else {
+      env.readCaps.mockRejectedValue(new Error('offline'));
+      await env.reshare.sync('manual', { force: true });
+      const before = env.readCaps.mock.calls.length;
+      env.advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(env.readCaps).toHaveBeenCalledTimes(before + 1);
+    }
+  });
+
+  it('does not let failure-triggered refreshes or view reads bypass backoff, but sends a changed list once', async () => {
+    vi.useFakeTimers();
+    const env = setup();
+    env.readCaps.mockImplementation(async () => {
+      // remoteBackgroundInvoke refreshes received shares after a link-open failure.
+      env.reshare.kick('received');
+      throw new Error('offline');
+    });
+    await env.reshare.sync('startup');
+    env.advance(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(env.readCaps).toHaveBeenCalledTimes(1);
+    env.advance(15_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    env.reshare.refreshIfStale();
+    await env.reshare.sync('settled');
+    expect(env.readCaps).toHaveBeenCalledTimes(1);
+    env.setShares([owned([{ memberId: 'carol', displayName: 'Carol' }])]);
+    env.reshare.kick('owned');
+    env.advance(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(env.readCaps).toHaveBeenCalledTimes(2);
+    env.advance(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(env.readCaps).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['offline', 'paused'] as const)('wakes only the recovered peer after %s and retains cleanup across restart', async (status) => {
+    vi.useFakeTimers();
+    const env = setup({ groups: { anthropic: { strategy: 'least', autoSwitch: true,
+      members: [FRIEND, member('share:a2:anthropic', 'share', 'share:a2')] } } });
+    env.availability.set('share:a1', status);
+    env.availability.set('share:a2', 'offline');
+    env.readCaps.mockRejectedValue(new Error('offline'));
+    await env.reshare.sync('startup');
+    env.setGroups({});
+    await env.reshare.sync('removed');
+    env.restart();
+    await env.reshare.sync('restart');
+    expect(Object.keys(env.cleanups).sort()).toEqual(['share:a1', 'share:a2']);
+    const before = env.readCaps.mock.calls.length;
+    env.availability.set('share:a1', 'online');
+    env.readCaps.mockResolvedValue(CAPS);
+    await env.reshare.sync('received');
+    expect(env.readCaps.mock.calls.slice(before)).toEqual([['share:a1']]);
+    expect(env.invoke).toHaveBeenLastCalledWith('share:a1', { op: 'reshare', entries: [] });
+    expect(Object.keys(env.cleanups)).toEqual(['share:a2']);
+  });
+
+  it('stops network polling for a confirmed removed share without acknowledging its pending cleanup', async () => {
+    vi.useFakeTimers();
+    const env = setup({ states: { [CAROL]: 'approved' } });
+    await env.reshare.sync('startup');
+    env.setGroups({});
+    env.availability.set('share:a1', 'removed');
+    await env.reshare.sync('received');
+    env.restart();
+    await env.reshare.sync('restart');
+    env.advance(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(env.readCaps).toHaveBeenCalledTimes(1);
+    expect(env.cleanups['share:a1']).toBeDefined();
+    expect(env.completeCleanup).not.toHaveBeenCalled();
+    expect(env.reshare.allows('share:a1', CAROL)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('logs a changed failure reason once and does not treat ACCESS_REVOKED as permanent removal', async () => {
+    const env = setup();
+    env.readCaps.mockRejectedValue(Object.assign(new Error('unavailable'), { code: 'DEVICE_OFFLINE' }));
+    await env.reshare.sync('startup');
+    env.readCaps.mockRejectedValue(Object.assign(new Error('unavailable'), { code: 'ACCESS_REVOKED' }));
+    await env.reshare.sync('manual', { force: true });
+    await env.reshare.sync('manual', { force: true });
+    expect(env.log.info).toHaveBeenCalledTimes(2);
+    expect(env.log.debug).toHaveBeenCalledTimes(1);
+    env.readCaps.mockResolvedValue(CAPS);
+    env.advance(5 * 60_000);
+    await env.reshare.sync('poll');
+    expect(env.reshare.summary('anthropic', 'share:a1')?.support).toBe('supported');
+  });
+
+  it('rechecks a denied peer and stale healthy views without waking another failing peer', async () => {
+    const env = setup({ states: { [CAROL]: 'approved' },
+      groups: { anthropic: { strategy: 'least', autoSwitch: true,
+        members: [FRIEND, member('share:a2:anthropic', 'share', 'share:a2')] } } });
+    env.readCaps.mockImplementation(async (device) => {
+      if (device === 'share:a2') throw new Error('offline');
+      return CAPS;
+    });
+    await env.reshare.sync('startup');
+    env.setStates({ [CAROL]: 'rejected' });
+    env.reshare.noteDenied('share:a1', CAROL);
+    expect(env.reshare.allows('share:a1', CAROL)).toBe(false);
+    await env.reshare.sync('settled');
+    expect(env.readCaps.mock.calls.slice(2)).toEqual([['share:a1']]);
+    expect(env.reshare.summary('anthropic', 'share:a1')?.guests[0]?.state).toBe('rejected');
+    env.advance(15_000);
+    env.reshare.refreshIfStale();
+    await env.reshare.sync('settled');
+    expect(env.readCaps.mock.calls.slice(3)).toEqual([['share:a1']]);
+  });
+
   it('reports the people this computer shares the group with only to shared-in computers, and follows their answers', async () => {
     const env = setup({ states: { [CAROL]: 'approved', [DAVE]: 'pending' } });
     // 没问到之前一律当作没同意。

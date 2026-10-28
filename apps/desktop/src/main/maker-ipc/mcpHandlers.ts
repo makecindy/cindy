@@ -65,7 +65,7 @@ const listContextSchema = z.object({
     model: z.string().trim().min(1),
     providerId: z.string().nullable(),
     effort: z.string(),
-    fastMode: z.boolean(),
+    fastMode: z.union([z.boolean(), z.literal('ultrafast')]),
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 

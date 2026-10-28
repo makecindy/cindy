@@ -1,19 +1,25 @@
 // @vitest-environment jsdom
+import { PluginNativeNotice, PluginNotice as PluginNoticeHost } from "@/plugins/PluginNotice.ios";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginDirectoryView } from "@/plugins/PluginDirectoryView.ios";
 import { PluginDetailView } from "@/plugins/PluginDetailView.ios";
+import { PluginDetailView as AndroidDetailView } from "@/plugins/PluginDetailView";
 import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
 import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginTaskPickerView";
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
+import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 
 const bridge = vi.hoisted(() => ({
   props: new Map<string, any>(),
   ownerCurrent: true,
+  keyboardVisible: false,
   mode: "light" as "light" | "dark",
 }));
+vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
+vi.mock("@/session/useMobileKeyboardState", () => ({ useMobileKeyboardState: () => ({ visible: bridge.keyboardVisible }) }));
 vi.mock("@expo/ui/swift-ui", async () => {
   const React = await import("react");
   const TextField = Object.assign(
@@ -27,8 +33,19 @@ vi.mock("@expo/ui/swift-ui", async () => {
     },
     { Placeholder: (p: any) => p.children },
   );
+  const DisclosureLabel = (p: any) => p.children;
+  const DisclosureGroup = Object.assign((p: any) => {
+    if (p.testID) bridge.props.set(p.testID, p);
+    const children = React.Children.toArray(p.children);
+    return React.createElement("div", {
+      "data-native": "DisclosureGroup", "data-testid": p.testID,
+    }, p.label, children.filter((child: any) =>
+      child.type === DisclosureLabel || p.isExpanded !== false));
+  }, { Label: DisclosureLabel });
   return {
     TextField,
+    DisclosureGroup,
+    Background: Object.assign((p: any) => createElement("div", null, p.children), { Content: (p: any) => p.children }),
     useNativeState: (initial: string) =>
       React.useRef({
         value: initial,
@@ -49,8 +66,11 @@ vi.mock("@expo/ui/swift-ui", async () => {
     ...Object.fromEntries(
       [
         "Button",
+        "Label",
+        "ContentUnavailableView",
         "Circle",
-        "DisclosureGroup",
+        "Rectangle",
+        "ZStack",
         "Divider",
         "HStack",
         "Image",
@@ -74,9 +94,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
             p.title,
             p.label,
             p.header ? React.createElement("header", null, p.header) : null,
-            name === "DisclosureGroup" && p.isExpanded === false
-              ? null
-              : p.children,
+            p.modifiers?.some((modifier: any) => modifier.accessibilityHidden === true) ? null : p.children,
           );
         },
       ]),
@@ -84,6 +102,8 @@ vi.mock("@expo/ui/swift-ui", async () => {
   };
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  Animation: { easeInOut: vi.fn(() => ({})) },
+  animation: vi.fn(() => ({})),
   shapes: {
     capsule: () => "capsule",
     rectangle: () => "rectangle",
@@ -92,6 +112,11 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   ...Object.fromEntries(
     [
       "accessibilityLabel",
+      "accessibilityHidden",
+      "clipped",
+      "clipShape",
+      "onGeometryChange",
+      "rotationEffect",
       "autocorrectionDisabled",
       "textInputAutocapitalization",
       "textFieldStyle",
@@ -100,6 +125,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
       "background",
       "buttonStyle",
       "contentShape",
+      "controlSize",
       "disabled",
       "font",
       "fixedSize",
@@ -126,6 +152,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 }));
 vi.mock("react-native", () => ({
   PlatformColor: (name: string) => name,
+  Keyboard: { addListener: () => ({ remove() {} }) },
   useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }),
   Image: () => null,
   View: (p: any) => {
@@ -138,22 +165,64 @@ vi.mock("react-native", () => ({
   },
   Text: (p: any) => p.children,
   TextInput: () => null,
-  Pressable: (p: any) => p.children,
+  ScrollView: (p: any) => createElement("div", { "data-testid": p.testID }, p.children),
+  Pressable: (p: any) => { if (p.testID) bridge.props.set(p.testID, p); return createElement("div", { "data-testid": p.testID }, p.children); },
   ActivityIndicator: () => null,
-  AccessibilityInfo: { isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove() {} }) },
+  AccessibilityInfo: {
+    isReduceMotionEnabled: async () => false,
+    addEventListener: () => ({ remove() {} }),
+  },
   StyleSheet: { create: (s: any) => s },
 }));
-vi.mock("lucide-react-native", () => ({
-  CircleAlert: () => null,
-  Puzzle: () => null,
-  Wrench: () => null,
-}));
-vi.mock('@/components/AppText', async () => {
-  const native = await import('react-native');
-  return { Text: native.Text, TextInput: native.TextInput, MAX_FONT_SIZE_MULTIPLIER: 1.2 };
+vi.mock("lucide-react-native", () =>
+  Object.fromEntries(
+    [
+      "CircleAlert",
+      "Info",
+      "WifiOff",
+      "Puzzle",
+      "AppWindow",
+      "Bot",
+      "Cpu",
+      "FileCode2",
+      "FilePen",
+      "FolderOpen",
+      "FolderPlus",
+      "Globe",
+      "GraduationCap",
+      "KeyRound",
+      "LayoutTemplate",
+      "Library",
+      "MapPin",
+      "Megaphone",
+      "MessageCircleQuestion",
+      "PanelLeft",
+      "PanelRight",
+      "Radio",
+      "ShieldCheck",
+      "Shield",
+      "Sparkles",
+      "Terminal",
+      "Wrench",
+    ].map((name) => [name, () => createElement("i", { "data-permission-icon": name })]),
+  ),
+);
+vi.mock("@/platform/chrome/NativeSwitch", () => ({ NativeSwitch: () => null }));
+vi.mock("@/components/AppText", async () => {
+  const native = await import("react-native");
+  return {
+    Text: native.Text,
+    TextInput: native.TextInput,
+    MAX_FONT_SIZE_MULTIPLIER: 1.2,
+  };
 });
-vi.mock('@/components/MobilePrimitives', () => ({
-  MainWindowActionButton: ({ action }: any) => createElement('button', { onClick: action.onPress, disabled: action.disabled || action.busy }, action.label),
+vi.mock("@/components/MobilePrimitives", () => ({
+  MainWindowActionButton: ({ action }: any) =>
+    createElement(
+      "button",
+      { onClick: action.onPress, disabled: action.disabled || action.busy },
+      action.label,
+    ),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: "en" } }),
@@ -178,12 +247,13 @@ vi.mock("@/session/ComposerNativeRow", () => ({
 }));
 vi.mock("@/session/ComposerSheet", () => ({
   ComposerSheet: (p: any) => {
-    bridge.props.set("plugins.taskPicker", p);
+    bridge.props.set(p.testID ?? "plugins.taskPicker", p);
     return createElement(
       "div",
       { "data-native": "sheet", "data-testid": p.testID },
       p.nativeHeader,
       p.children,
+      p.footer,
     );
   },
 }));
@@ -209,6 +279,7 @@ afterEach(() => {
   bridge.props.clear();
   bridge.mode = "light";
   bridge.ownerCurrent = true;
+  bridge.keyboardVisible = false;
 });
 function mount(component: any, props: any) {
   const container = document.createElement("div");
@@ -321,7 +392,7 @@ it.each(["light", "dark"] as const)(
         false,
       ),
       settingsOpen: false,
-      onSettings: vi.fn(),
+
       onResolveStatus: vi.fn(),
 
       onEnabledChange: change,
@@ -344,7 +415,7 @@ it.each(["light", "dark"] as const)(
     });
   },
 );
-it("groups use buttons under a heading, puts the switch beside the title and guides configuration to PC", () => {
+it("keeps task actions outside the scrolling detail, preserves the switch and old Host configuration guidance", () => {
   const p = {
     row,
     enabled: true,
@@ -366,7 +437,7 @@ it("groups use buttons under a heading, puts the switch beside the title and gui
     onOpen: vi.fn(),
     onNewTask: vi.fn(),
     onChooseTask: vi.fn(),
-    onSettings: vi.fn(),
+
     onResolveStatus: vi.fn(),
   };
   const { container, rerender } = mount(PluginDetailView, p);
@@ -378,7 +449,7 @@ it("groups use buttons under a heading, puts the switch beside the title and gui
   ).toBe("Button");
   for (const id of ["plugins.newTask", "plugins.chooseTask"]) {
     expect(bridge.props.get(id).modifiers).toContainEqual({
-      nativeButton: "secondary",
+      nativeButton: id === "plugins.newTask" ? "primary" : "secondary",
     });
   }
   expect(container.querySelector('[data-testid="plugins.tools"]')).toBeNull();
@@ -388,19 +459,33 @@ it("groups use buttons under a heading, puts the switch beside the title and gui
     ),
   ).not.toBeNull();
   expect(
-    container.querySelector('[data-testid="plugins.useHeading"]')?.textContent,
-  ).toBe("plugins.detail.useItIn");
+    container.querySelector(
+      '[data-testid="plugins.detail"] [data-testid="plugins.newTask"]',
+    ),
+  ).toBeNull();
+  expect(
+    container.querySelector(
+      '[data-testid="plugins.use"] [data-testid="plugins.newTask"]',
+    ),
+  ).not.toBeNull();
   expect(
     container.querySelector('[data-testid="plugins.computerSettings"]'),
-  ).not.toBeNull();
+  ).toBeNull();
   expect(
     container.querySelector('[data-testid="plugins.permissions"]'),
   ).toBeNull();
   expect(
     container.querySelector('[data-testid="plugins.metadata"]'),
-  ).not.toBeNull();
+  ).toBeNull();
   act(() => bridge.props.get("plugins.chooseTask").onPress());
   expect(p.onChooseTask).toHaveBeenCalledOnce();
+  bridge.keyboardVisible = true;
+  rerender(p);
+  expect(container.querySelector('[data-testid="plugins.newTask"]')).toBeNull();
+  bridge.keyboardVisible = false;
+  rerender({ ...p, settingsContent: createElement("div", null, "Original settings form") });
+  expect(container.querySelector('[data-testid="plugins.settingsCard"]')?.textContent).toContain("Original settings form");
+  expect(container.querySelector('[data-testid="plugins.computerSettings"]')).toBeNull();
   rerender({ ...p, settingsOpen: true });
   expect(container.textContent).not.toContain("Task preferences content");
   expect(container.querySelector('[data-testid="plugins.newTask"]')).toBeNull();
@@ -422,7 +507,7 @@ it("uses the title switch to recover a disabled plugin without a duplicate enabl
     onOpen: vi.fn(),
     onNewTask: vi.fn(),
     onChooseTask: vi.fn(),
-    onSettings: vi.fn(),
+
     onResolveStatus: vi.fn(),
   };
   const { container } = mount(PluginDetailView, p);
@@ -509,6 +594,28 @@ it("keeps the offline indicator ahead of long preview text so it stays visible",
   );
 });
 
+it("keeps the avatar's measured native root when its remote image arrives", () => {
+  const p = {
+    row, enabled: true, online: true, busy: false, settingsOpen: false,
+    model: pluginDetailModel(row as any, undefined, true, false, false),
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(),
+    onChooseTask: vi.fn(), onResolveStatus: vi.fn(),
+  };
+  const { container, rerender } = mount(PluginDetailView, p);
+  const measuredRoot = () => container.querySelector(
+    '[data-testid="plugins.identity"] [data-native="RNHostView"]',
+  )?.firstElementChild;
+  const originalRoot = measuredRoot();
+  expect(originalRoot).toBeTruthy();
+  rerender({ ...p, row: { ...row, item: { ...row.item, display: {
+    ...row.item.display, avatar: { value: "data:image/png;base64,aGVsbG8=" },
+  } } }, settingsContent: createElement("div", null, "Loaded original settings") });
+  // RNHostView's native size observer stays attached to its first UIView.
+  expect(measuredRoot()).toBe(originalRoot);
+  rerender(p);
+  expect(measuredRoot()).toBe(originalRoot);
+});
+
 it("renders real Host facts and hides unavailable information", () => {
   const p = {
     row,
@@ -539,7 +646,7 @@ it("renders real Host facts and hides unavailable information", () => {
     onOpen: vi.fn(),
     onNewTask: vi.fn(),
     onChooseTask: vi.fn(),
-    onSettings: vi.fn(),
+
     onResolveStatus: vi.fn(),
   };
   const { container, rerender } = mount(PluginDetailView, p);
@@ -562,10 +669,8 @@ it("renders real Host facts and hides unavailable information", () => {
     ),
   ).toBeNull();
   expect(
-    container.querySelectorAll(
-      '[data-testid="plugins.metadata"] [data-native="Divider"]',
-    ),
-  ).toHaveLength(1);
+    container.querySelector('[data-testid="plugins.fact.version"]')?.textContent,
+  ).toContain("2.3.0");
   expect(bridge.props.get("plugins.identity").modifiers).toContainEqual({
     listRowInsets: { leading: 20, trailing: 20, top: 8, bottom: 16 },
   });
@@ -578,9 +683,7 @@ it("renders real Host facts and hides unavailable information", () => {
   expect(
     container.querySelector('[data-testid="plugins.identity"]')?.textContent,
   ).toContain("Full plugin introduction");
-  expect(
-    container.querySelector('[data-testid="plugins.metadata"]')?.textContent,
-  ).toContain("2.3.0");
+  expect(container.textContent).not.toContain("plugins.detail.identifier");
   expect(
     container.querySelector('[data-testid="plugins.permissions"]'),
   ).toBeNull();
@@ -648,12 +751,14 @@ it("renders real Host facts and hides unavailable information", () => {
     container.querySelector('[data-testid="plugins.toolsDisclosure"]'),
   ).toBeNull();
   for (const empty of [undefined, []]) {
-    rerender({ ...p, model: { ...p.model, tools: empty, permissions: empty } });
+    rerender({ ...p, model: { ...p.model, version: undefined, tools: empty, permissions: empty } });
     expect(container.querySelector('[data-testid="plugins.tools"]')).toBeNull();
     expect(
       container.querySelector('[data-testid="plugins.permissions"]'),
     ).toBeNull();
-    expect(container.textContent).toContain("v2.3.0");
+    expect(
+      container.querySelector('[data-testid="plugins.metadata"]'),
+    ).toBeNull();
   }
   rerender({
     ...p,
@@ -663,21 +768,19 @@ it("renders real Host facts and hides unavailable information", () => {
         { key: "author", title: "Author", value: " " },
         { key: "version", title: "Version", value: "v2.3.0" },
       ],
-      permissions: [{ title: "Network", description: "" }],
+      permissions: [{ title: "Network", description: "Permission detail belongs only in the full PC view" }],
     },
   });
   expect(
     container.querySelector('[data-testid="plugins.fact.author"]'),
   ).toBeNull();
-  expect(
-    container.querySelector('[data-testid="plugins.fact.version"]')
-      ?.textContent,
-  ).toContain("v2.3.0");
+  expect(container.querySelector('[data-testid="plugins.fact.version"]')?.textContent).toContain("v2.3.0");
   expect(
     container.querySelector('[data-testid="plugins.permissions"]')?.textContent,
   ).toContain("Network");
+  expect(container.textContent).not.toContain("Permission detail belongs only in the full PC view");
   expect(container.textContent).not.toContain("plugins.detail.noDescription");
-  rerender({ ...p, model: { ...p.model, details: [], hasSettings: false } });
+  rerender({ ...p, model: { ...p.model, version: undefined, details: [], hasSettings: false } });
   expect(
     container.querySelector('[data-testid="plugins.metadata"]'),
   ).toBeNull();
@@ -766,6 +869,7 @@ it("drops a pending task selection if the owner or plugin changes during dismiss
   act(() => bridge.props.get("plugins.taskPicker").onClosed());
   expect(p.onSelect).not.toHaveBeenCalled();
   bridge.ownerCurrent = true;
+  bridge.keyboardVisible = false;
   act(() => bridge.props.get("plugins.task.calendar-task").onPress());
   rerender({ ...p, deviceId: "other-computer" });
   act(() => bridge.props.get("plugins.taskPicker").onClosed());
@@ -785,4 +889,265 @@ it("shows Android task search empty results and restores the matching tasks", ()
   expect(container.textContent).not.toContain("plugins.noMatchingTasks");
   rerender({ ...p, rows: [] });
   expect(container.textContent).toContain("plugins.noTasks");
+});
+
+
+it("expands full Host information on demand and resets when switching plugins", () => {
+  const fullPath = "/Users/example/Library/Application Support/Cindy/owners/owner/plugins/taptap-maker";
+  const contents = "Custom settings UI · Executable code · Local Node program · Tools";
+  const p = {
+    row, enabled: true, online: true, busy: false, settingsOpen: false,
+    model: { ...pluginDetailModel(row as any, undefined, true, false, false),
+      details: [
+        { key: "version", title: "Version", value: "v2.1.22" },
+        { key: "contents", title: "Contains", value: contents },
+        { key: "location", title: "Install location", value: fullPath },
+      ],
+    },
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(),
+    onChooseTask: vi.fn(), onResolveStatus: vi.fn(),
+  };
+  const { container, rerender } = mount(PluginDetailView, p);
+  const fact = (key: string) => container.querySelector(`[data-testid="plugins.fact.${key}"]`)!;
+  expect(fact("location").textContent).toContain("Install location");
+  expect(fact("location").textContent).toContain("taptap-maker");
+  expect(fact("location").textContent).not.toContain(fullPath);
+  expect(fact("contents").textContent).toContain("Custom settings UI…");
+  expect(fact("contents").textContent).not.toContain(contents);
+  for (const key of ["contents", "location"]) {
+    act(() => bridge.props.get(`plugins.fact.${key}.toggle`).onPress());
+    const geometry = bridge.props.get(`plugins.fact.${key}.value`).modifiers.find((modifier: any) => modifier.onGeometryChange);
+    act(() => geometry.onGeometryChange({ width: 350, height: 84 }));
+    expect(bridge.props.get(`plugins.fact.${key}.content`).modifiers).toContainEqual({ frame: { height: 84, alignment: "topLeading" } });
+    if (key === "contents") expect(fact("location").textContent).not.toContain(fullPath);
+  }
+  expect(fact("contents").textContent).toContain(contents);
+  expect(fact("location").textContent).toContain(fullPath);
+  act(() => bridge.props.get("plugins.fact.location.toggle").onPress());
+  expect(bridge.props.get("plugins.fact.location.content").modifiers).toContainEqual({ frame: { height: 0, alignment: "topLeading" } });
+  expect(fact("contents").textContent).toContain(contents);
+  expect(fact("location").textContent).not.toContain(fullPath);
+  rerender({ ...p, row: { ...row, key: "another-host:another-plugin" } });
+  expect(fact("contents").textContent).not.toContain(contents);
+  expect(fact("location").textContent).not.toContain(fullPath);
+});
+
+// 用户要求提示按阻断范围并存；生产原生详情入口验证，避免离线缓存被描述为当前配置事实。
+it.each(["offline", "loadFailed", "loading"] as const)("does not show stale setup or runtime facts while %s", (status) => {
+  const p = {
+    row, enabled: true, online: status !== "offline", busy: false, settingsOpen: false,
+    model: { ...pluginDetailModel(row as any, undefined, true, false, false), status,
+      missing: ["token"], expired: ["account"], runtimeIssue: "fused" as const },
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn(),
+  };
+  const { container } = mount(PluginDetailView, p);
+  expect(container.querySelector('[data-testid="plugins.configurationStatus"]')).toBeNull();
+  expect(container.textContent).not.toContain("plugins.detail.runtimeFused");
+  expect(Boolean(container.querySelector('[data-testid="plugins.loading"]'))).toBe(status === "loading");
+  expect(container.textContent).not.toContain("plugins.detail.status.loading");
+});
+it("leaves unknown configuration to the original form without a second status or action", () => {
+  const p = {
+    row, enabled: false, online: true, busy: false, settingsOpen: false,
+    model: { ...pluginDetailModel(row as any, undefined, true, false, false), status: "disabled" as const, statusAction: "enable" as const,
+      configuration: { items: [{ id: "account", kind: "oauth" as const, label: "Account", state: "unknown" as const }], alternatives: [] } },
+    settingsContent: createElement("span", null, "Original configuration"),
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn(),
+  };
+  const { container } = mount(PluginDetailView, p);
+  expect(container.querySelector('[data-testid="plugins.status"]')).toBeNull();
+  expect(container.querySelector('[data-testid="plugins.configurationStatus"]')).toBeNull();
+  expect(container.textContent).toContain("Original configuration");
+  expect(p.onResolveStatus).not.toHaveBeenCalled();
+  expect(p.onEnabledChange).not.toHaveBeenCalled();
+});
+it("shows full consent facts in a separate sheet and rejects stale owner or request callbacks", () => {
+  const state = { outcome: "confirmation", operationId: "operation", online: true, busy: false, receipt: { consent: {
+    requestId: "request", origin: "custom-market", originLabel: "Verified source", initiator: "user",
+    facts: { kind: "update", ghostId: "plugin-id", name: "Plugin", version: "2", previousVersion: "1", unchangedCount: 2, builtinOauthClientChanged: true,
+      added: [{ key: "node", kind: "node", labelKey: "nodeRuntime", detailKey: "nodeRuntimeDetail", detail: "Full local access risk" }],
+      removed: [{ key: "network", kind: "network", labelKey: "networkHost", detail: "Removed host access" }] },
+  } } } as any;
+  const controller = { getState: () => state, answer: vi.fn() } as any;
+  const props = { state, controller, active: true, deviceName: "Mac" };
+  const { container, rerender } = mount(PluginManagementConfirmation, props);
+  expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
+  for (const fact of ["Plugin · 2", "plugin-id", "Verified source", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
+  const allow = bridge.props.get("plugins.management.allow").onPress;
+  state.online = false;
+  rerender({ ...props, active: false });
+  expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(false);
+  act(() => allow());
+  expect(controller.answer).not.toHaveBeenCalled();
+  state.online = true;
+  rerender(props);
+  expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
+  expect(controller.answer).not.toHaveBeenCalled();
+  bridge.ownerCurrent = false;
+  act(() => allow());
+  expect(controller.answer).not.toHaveBeenCalled();
+  bridge.ownerCurrent = true;
+  state.receipt.consent.requestId = "new-request";
+  act(() => allow());
+  expect(controller.answer).not.toHaveBeenCalled();
+  state.receipt.consent.requestId = "request";
+  act(() => bridge.props.get("plugins.management.reject").onPress());
+  expect(controller.answer).toHaveBeenCalledWith(false);
+  act(() => roots.pop()!.unmount());
+  act(() => allow());
+  expect(controller.answer).toHaveBeenCalledTimes(1);
+});
+
+it("constrains RN notice Hosts to the measured width and measures only their height", () => {
+  const { container } = mount(PluginNoticeHost, { testID: "noticeSizing", title: "Read failed", detail: "A long settings read failure that must wrap", actions: [{ label: "Reload", onPress() {} }] });
+  act(() => bridge.props.get("noticeSizing.layout").onLayout({ nativeEvent: { layout: { width: 350 } } }));
+  expect(bridge.props.get("host").matchContents).toEqual({ vertical: true });
+  expect(bridge.props.get("host").style.width).toBe(350);
+  expect(container.textContent).toContain("Reload");
+});
+
+
+it.each([PluginDetailView, AndroidDetailView])("keeps task actions for pending setup without a redundant prompt beside the original form (%#)", (DetailView) => {
+  const resource = { ...row.item, blocks: [{ id: "capabilities", primitive: "plugin-capabilities", fallbackMarkdown: "", data: { usage: {
+    taskUsable: true, hasSettings: true, builtin: false, retired: false, approvalRequired: false,
+    setup: { state: "required", missing: ["Account"], expired: [] },
+  } } }] };
+  const model = pluginDetailModel(row as any, resource as any, true, false, false);
+  const p = { row, model, enabled: true, online: true, busy: false, settingsOpen: false,
+    settingsContent: createElement("span", null, "Original account form"),
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn() };
+  const { container, rerender } = mount(DetailView, p);
+  expect(model.status).toBe("setupRequired");
+  expect(model.missing).toEqual(["Account"]);
+  expect(container.querySelector('[data-testid="plugins.configurationStatus"]')).toBeNull();
+  expect(container.textContent).toContain("Original account form");
+  for (const action of ["newTask", "chooseTask"]) expect(container.querySelector(`[data-testid="plugins.${action}"]`)).not.toBeNull();
+  act(() => bridge.props.get("plugins.newTask").onPress());
+  act(() => bridge.props.get("plugins.chooseTask").onPress());
+  expect(p.onNewTask).toHaveBeenCalledOnce(); expect(p.onChooseTask).toHaveBeenCalledOnce();
+  bridge.keyboardVisible = true; rerender(p);
+  expect(container.querySelector('[data-testid="plugins.newTask"]')).toBeNull();
+  bridge.keyboardVisible = false;
+  rerender({ ...p, model: { ...model, missing: [], expired: ["Account"] } });
+  expect(container.querySelector('[data-testid="plugins.configurationStatus"]')).toBeNull();
+});
+
+it.each([PluginDetailView, AndroidDetailView])("separates read/navigation recovery from pending write and task gates (%#)", (DetailView) => {
+  const p = { row, enabled: true, online: false, busy: true, statusRecoveryBusy: false, settingsOpen: false,
+    model: pluginDetailModel(row as any, undefined, false, false, false),
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn() };
+  const { rerender } = mount(DetailView, p);
+  const disabled = (id: string) => {
+    const value = bridge.props.get(id);
+    return value.disabled ?? value.modifiers?.find((m: any) => 'disabled' in m)?.disabled;
+  };
+  for (const online of [false, true]) {
+    const model = pluginDetailModel(row as any, undefined, online, false, online);
+    rerender({ ...p, online, model });
+    expect(disabled("plugins.resolveStatus")).toBe(false);
+    act(() => bridge.props.get("plugins.resolveStatus").onPress());
+    rerender({ ...p, online, model, statusRecoveryBusy: true });
+    expect(disabled("plugins.resolveStatus")).toBe(true);
+  }
+  expect(p.onResolveStatus).toHaveBeenCalledTimes(2);
+  rerender({ ...p, online: true, model: { ...p.model, status: undefined, canUseTasks: true } });
+  for (const id of ["plugins.newTask", "plugins.chooseTask"]) expect(disabled(id)).toBe(true);
+});
+
+
+it.each(["light", "dark"] as const)("pairs confirmation Allow background and custom label contrast in %s", (mode) => {
+  bridge.mode = mode;
+  const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+    requestId: "request", origin: "local-file", initiator: "user", facts: { kind: "install", ghostId: "qa", name: "QA", version: "1", permissions: [] },
+  } } } as any;
+  mount(PluginManagementConfirmation, { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "QA Mac" });
+  const allow = bridge.props.get("plugins.management.allow");
+  expect(allow.modifiers).toContainEqual({ tint: palettes[mode].cta });
+  expect(allow.modifiers).toContainEqual({ foregroundStyle: palettes[mode].ctaText });
+  expect(allow.children.props.modifiers).toContainEqual({ foregroundStyle: palettes[mode].ctaText });
+  expect(palettes[mode].cta).not.toBe(palettes[mode].ctaText);
+});
+
+
+it("uses an identifiable native bordered recovery action without a second card", () => {
+  const { container } = mount(PluginNativeNotice, { compact: true, testID: "compact", title: "Long recovery message", actions: [{ label: "Reload", testID: "reload", onPress: vi.fn() }] });
+  expect(bridge.props.get("reload").modifiers).toContainEqual({ buttonStyle: "bordered" });
+  expect(bridge.props.get("reload").modifiers).toContainEqual({ controlSize: "small" });
+  const title = Array.from(container.querySelectorAll('[data-native="Text"]')).find((node) => node.textContent === "Long recovery message")!;
+  expect(title).toBeTruthy();
+});
+
+
+it("keeps settings load failure compact with its semantic icon and standard reload action", () => {
+  const onPress = vi.fn();
+  const { container } = mount(PluginNativeNotice, { unavailable: true, testID: "loadFailure", title: "Could not load settings", detail: "Should not repeat", actions: [{ label: "Reload settings", testID: "reload", onPress }] });
+  expect(container.querySelector('[data-native="ContentUnavailableView"]')).toBeNull();
+  expect(container.textContent).toContain("Could not load settings");
+  expect(bridge.props.get("loadFailure").modifiers).not.toContainEqual({ frame: { height: 180, maxWidth: Infinity } });
+  expect(container.textContent).not.toContain("Should not repeat");
+  expect(bridge.props.get("reload").label).toBe("Reload settings");
+  expect(bridge.props.get("reload").children).toBeUndefined();
+  act(() => bridge.props.get("reload").onPress());
+  expect(onPress).toHaveBeenCalledOnce();
+});
+
+
+it.each(["light", "dark"] as const)("renders the actual top notice as a low-contrast status strip in %s and moves narrow actions below", (mode) => {
+  bridge.mode = mode;
+  const { container } = mount(PluginNativeNotice, { testID: "strip", title: "Computer offline", icon: "offline", actions: [{ label: "Connect computer", testID: "connect", onPress: vi.fn() }] });
+  const modifiers = bridge.props.get("strip").modifiers;
+  expect(modifiers).toContainEqual({ background: palettes[mode].surfaceChip });
+  expect(modifiers).toContainEqual({ frame: { minHeight: 48, maxWidth: Infinity, alignment: "leading" } });
+  const root = container.querySelector('[data-testid="strip"]')!;
+  expect(root.querySelector('[data-testid="connect"]')?.parentElement?.getAttribute("data-native")).toBe("HStack");
+  act(() => modifiers.find((modifier: any) => modifier.onGeometryChange).onGeometryChange({ width: 280, height: 52 }));
+  expect(root.querySelector('[data-testid="connect"]')?.parentElement?.getAttribute("data-native")).toBe("VStack");
+});
+
+
+it.each([PluginDetailView, AndroidDetailView])("limits permission summaries to four, keeps icons, and resets expansion only for another target (%#)", (DetailView) => {
+  const permissions = Array.from({ length: 5 }, (_, index) => ({ title: `Full permission title ${index + 1}`, kind: "network", labelKey: "networkHost", description: "Not part of summary" }));
+  const p = { row, enabled: true, online: true, busy: false, settingsOpen: false,
+    model: { ...pluginDetailModel(row as any, undefined, true, false, false), permissions: permissions.slice(0, 4) },
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn() };
+  const { container, rerender } = mount(DetailView, p);
+  const card = () => container.querySelector('[data-testid="plugins.permissions"]')!;
+  expect(container.querySelector('[data-testid="plugins.permissionsDisclosure"]')).toBeNull();
+  expect(card().querySelectorAll('[data-permission-icon="Globe"]')).toHaveLength(4);
+  rerender({ ...p, model: { ...p.model, permissions } });
+  expect(card().textContent).not.toContain("Full permission title 5");
+  act(() => bridge.props.get("plugins.permissionsDisclosure").onPress());
+  expect(card().textContent).toContain("Full permission title 5");
+  expect(card().querySelectorAll('[data-permission-icon="Globe"]')).toHaveLength(5);
+  expect(card().querySelector('[data-permission-icon="Shield"]')).toBeNull();
+  expect(card().textContent).not.toContain("Not part of summary");
+  rerender({ ...p, model: { ...p.model, permissions: permissions.map(item => ({ ...item })) } });
+  expect(card().textContent).toContain("Full permission title 5");
+  act(() => bridge.props.get("plugins.permissionsDisclosure").onPress());
+  expect(card().textContent).not.toContain("Full permission title 5");
+  act(() => bridge.props.get("plugins.permissionsDisclosure").onPress());
+  rerender({ ...p, row: { ...row, key: "other-device:other-plugin" }, model: { ...p.model, permissions } });
+  expect(card().textContent).not.toContain("Full permission title 5");
+});
+
+// The normal phone detail must expose recovery independently of its mutation gate
+// on both native renderers; controller identity/replay behavior is covered by pluginsScreen.
+it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery reachable while detail mutations are blocked (%#)", (DetailView) => {
+  const onPress = vi.fn();
+  const managementNotice = { title: "Result unconfirmed", actions: [{ label: "Check result", testID: "check-result", disabled: false, onPress }] };
+  const p = { row, enabled: true, online: true, busy: true, settingsOpen: false,
+    model: { ...pluginDetailModel(row as any, row.item as any, true, false, false), canUseTasks: true }, managementNotice,
+    onEnabledChange: vi.fn(), onOpen: vi.fn(), onNewTask: vi.fn(), onChooseTask: vi.fn(), onResolveStatus: vi.fn() };
+  const { container, rerender } = mount(DetailView, p);
+  expect(container.textContent).toContain("Result unconfirmed");
+  const disabled = (id: string) => {
+    const value = bridge.props.get(id);
+    return value.disabled ?? value.modifiers?.find((m: any) => 'disabled' in m)?.disabled;
+  };
+  expect(disabled("plugins.newTask")).toBe(true);
+  expect(disabled("check-result")).toBe(false);
+  act(() => bridge.props.get("check-result").onPress());
+  expect(onPress).toHaveBeenCalledTimes(1);
+  rerender({ ...p, managementNotice: undefined });
+  expect(container.textContent).not.toContain("Result unconfirmed");
 });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // 单例的默认依赖(仅 singleton 用例经 install 使用;工厂用例全部显式注入)。
 const defaults = vi.hoisted(() => ({
+  providerDisabled: false,
   canUseCindyGateway: true,
   boundaryPending: false,
   source: 'server' as 'server' | 'manual' | null,
@@ -26,6 +27,9 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 }));
 vi.mock('../credentialsStore.js', () => ({
   getModelAccessCredentialsStore: () => ({ getSource: () => defaults.source }),
+}));
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: () => ({ disabledProviders: { xd: defaults.providerDisabled } }),
 }));
 
 import {
@@ -294,7 +298,29 @@ describe('reportCurrentKey (agent turns that do not reveal the key they used)', 
 });
 
 describe('reportCindyGatewayKeyRejected singleton', () => {
-  afterEach(() => installCindyGatewayKeyRejectionReporter(null));
+  afterEach(() => {
+    defaults.providerDisabled = false;
+    installCindyGatewayKeyRejectionReporter(null);
+  });
+
+  // Unit regression: late 401s must not restart provisioning for a provider the
+  // owner has suspended; both terminal errors and exact-key reports use this gate.
+  it('ignores both 401 report entries while disabled and recovers after re-enabling', () => {
+    Object.assign(defaults, {
+      canUseCindyGateway: true, boundaryPending: false, source: 'server',
+      currentKey: KEY_A, providerDisabled: true,
+    });
+    const requestSync = vi.fn(async () => undefined);
+    installCindyGatewayKeyRejectionReporter(requestSync);
+
+    reportCindyGatewayKeyRejected(KEY_A);
+    reportCindyGatewayKeyRejectedForCurrentKey();
+    expect(requestSync).not.toHaveBeenCalled();
+
+    defaults.providerDisabled = false;
+    reportCindyGatewayKeyRejected(KEY_A);
+    expect(requestSync).toHaveBeenCalledTimes(1);
+  });
 
   it('is a no-op before model-access installs a reporter', () => {
     expect(() => reportCindyGatewayKeyRejected(KEY_A)).not.toThrow();

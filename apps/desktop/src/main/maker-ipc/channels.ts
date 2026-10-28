@@ -33,6 +33,17 @@ export const MAKER_INVOKE = {
   SESSION_DISABLE_ORCA: 'maker:session:disable-orca',
   /** renderer 回填「该会话是否真的在 turn 中」的权威运行态(#4513 中断横幅假阳性)。 */
   SESSION_TURN_ACTIVE: 'maker:session:turn-active',
+  /**
+   * 输入框开始打字时提前启动该任务的 Agent（尽力而为，无返回约定之外的副作用）。
+   * 本机 renderer 与 device-link 控制端共用；旧被控端没有该 channel 时控制端静默忽略。
+   */
+  SESSION_PREWARM: 'maker:session:prewarm',
+  /**
+   * 新建页的未发送任务（本机 renderer 专用，不进 device-link）：清空输入时删除，
+   * 第一次发送前转为普通任务。见 localDb/provisionalSessions.ts。
+   */
+  SESSION_DISCARD_PROVISIONAL: 'maker:session:discard-provisional',
+  SESSION_COMMIT_PROVISIONAL: 'maker:session:commit-provisional',
   CLOSE_SESSION: 'maker:close-session',
   /**
    * 单条 user / assistant 消息本地内容删除。保留后续可见消息，但清当前原生
@@ -227,6 +238,22 @@ export const MAKER_INVOKE = {
   SET_THINKING_ENABLED: 'maker:set-thinking-enabled',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /**
+   * 任务级工作上下文窗口档位（tokens；null = 跟随模型默认）。
+   *
+   * 被控端落库并应用到活实例（空闲关 handle 冷重建 / 回合中登记 pending）。
+   * 与 SET_PLAN_MODE 同类：会话级设置、无本机 shell/UI 副作用。控制端用
+   * `deviceLink.invoke(deviceId, …)` 调；老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端提示「该设备版本不支持」。
+   */
+  SET_CONTEXT_WINDOW_BUDGET: 'maker:set-context-window-budget',
+  /**
+   * 会话级窗口边界的**只读**查询（路由默认 / 路由物理上限 / 该路由的模型级上限）。
+   * 控制端在远程任务上打开档位菜单时按需拉取：只有被控端本地目录 + 本地上限 store 才知道
+   * 该路由能放到多大，控制端据此才敢提供「更大」的档位。老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」并如实说明。
+   */
+  GET_CONTEXT_WINDOW_BOUNDS: 'maker:get-context-window-bounds',
   /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
   EXPORT_SESSION_HTML: 'maker:export-session-html',
   /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
@@ -282,6 +309,7 @@ export const MAKER_INVOKE = {
    * (远程改被控端全局设置越权)。
    */
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_COMPACTION_SET: 'maker:model-compaction:set',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
@@ -595,12 +623,21 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_TEST_CONNECTION: 'maker:provider:test-connection',
   /**
+   * 供应商账户余额查询（API Key 计费连接的余额卡,见 maker-host/provider-account-usage）。
+   * 入参 ProviderAccountUsageRequest（{providerId, forceRefresh?}）,端点在 main 硬编码
+   * 官方清单里,renderer 不传 URL;返回查询型结构化结果 ProviderAccountUsageResult（规则 13
+   * 例外条款:renderer 需要 error 渲染分类文案与重试入口）。快照不含密钥材料;虽只读,
+   * 但会把该供应商已存 key 发往其官方端点,不进 device-link 白名单（口径同 test-connection）。
+   */
+  PROVIDER_ACCOUNT_USAGE: 'maker:provider:account-usage',
+  /**
    * 供应商「获取模型列表」—— 用表单值（baseUrl / modelsUrl / key / headers 内存透传）GET
    * 该供应商的列模型端点（见 maker-host/provider-model-fetch）。返回查询型结构化结果
    * ProviderModelsFetchResult（{ok, models?, code?, status?}，规则 13 例外条款：renderer
    * 需要 code 渲染分类文案）。带密钥材料，不进 device-link 白名单（口径同 test-connection）。
    */
   PROVIDER_MODELS_FETCH: 'maker:provider:models-fetch',
+  PROVIDER_DETECT: 'maker:provider:detect',
   /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非 bespoke 四家）的登录 / 登出 / 取消。
    * 入参 = providerId；login 走 generic-oauth Runner（PKCE 浏览器流），成功后拉动态模型
@@ -680,6 +717,8 @@ export const MAKER_INVOKE = {
   /** New wire contract for automatic done acknowledgements; old peers reject it safely. */
   WORKER_ACKNOWLEDGE_DONE: 'maker:worker:acknowledge-done',
   WORKER_ARCHIVE: 'maker:worker:archive',
+  /** 修改已创建 Worker 的展示角色名(role)与 team 内唯一标识(label)。 */
+  WORKER_UPDATE: 'maker:worker:update',
   TEAM_END: 'maker:team:end',
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
@@ -756,6 +795,7 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_CLOSE: 'maker:rsb-window:close',
   RSB_WINDOW_SET_DETACHED: 'maker:rsb-window:set-detached',
   RSB_WINDOW_GET_CONTEXT: 'maker:rsb-window:get-context',
+  RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION: 'maker:rsb-window:allow-bot-workbench-permission',
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
@@ -804,6 +844,7 @@ export const MAKER_INVOKE = {
   CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
   CHAT_SERVER_STATUS: 'maker:chat-server:status',
   CHAT_SERVER_THREAD: 'maker:chat-server:thread',
+  CHAT_SERVER_FOLLOWTHREAD: 'maker:chat-server:followThread',
   CHAT_SERVER_REPLY: 'maker:chat-server:reply',
   CHAT_SERVER_SHARETOMAIN: 'maker:chat-server:shareToMain',
   CHAT_SERVER_REACT: 'maker:chat-server:react',
@@ -819,6 +860,8 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
   BOT_GROUP_DELETE: 'maker:bot-group:delete',
   BOT_GROUP_SEND: 'maker:bot-group:send',
+  CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
+  BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
@@ -843,6 +886,7 @@ export const MAKER_INVOKE = {
   COMPANION_CLOUD_MERGE_CINDY: 'maker:companion-cloud:merge-cindy',
   /** A file of the companion's room, brought to this computer (works while its home is offline). */
   COMPANION_CLOUD_ATTACHMENT: 'maker:companion-cloud:attachment',
+  COMPANION_CLOUD_DISMISS_NOTICES: 'maker:companion-cloud:dismiss-notices',
   /** Local copy of an avatar from another computer or the cloud (looked up first, optionally fetched). */
   COMPANION_AVATAR_RESOLVE: 'maker:companion-avatar:resolve',
 } as const;

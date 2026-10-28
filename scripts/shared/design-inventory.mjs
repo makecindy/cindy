@@ -575,6 +575,7 @@ export function catalogSurfaces() {
         '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
         '/bots/remote/:deviceId/:botId/history/:sessionId',
+        '/bots/remote/:deviceId/:botId/session/:sessionId',
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
@@ -588,6 +589,7 @@ export function catalogSurfaces() {
         '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
         '/bots/remote/:deviceId/:botId/history/:sessionId': 'BotHistorySessionView',
+        '/bots/remote/:deviceId/:botId/session/:sessionId': 'RemoteBotSessionView',
       },
     },
     {
@@ -790,6 +792,82 @@ export function catalogSurfaces() {
       ],
       routerPaths: [],
       rendererEntryModules: { resourceUsageWindow: './resource-usage-entry' },
+    },
+    {
+      id: 'desktop.window.region-screenshot',
+      platform: 'desktop',
+      title: '全局截图浮层',
+      productionEntry:
+        '`?regionScreenshot=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RegionScreenshotOverlay', 'ScreenshotToolbar', 'ScreenshotStyleBar', 'Magnifier', 'Button', 'Tip'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/renderer/components/ui/tooltip.tsx',
+        'apps/desktop/src/main/region-screenshot',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshot: './region-screenshot-entry' },
+    },
+    {
+      id: 'desktop.window.region-screenshot-editor',
+      platform: 'desktop',
+      title: '截图独立编辑窗口',
+      productionEntry:
+        '`?regionScreenshotEditor=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RegionScreenshotOverlay', 'ScreenshotToolbar', 'ScreenshotStyleBar', 'Button', 'Tip'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/renderer/components/ui/tooltip.tsx',
+        'apps/desktop/src/main/region-screenshot/editor.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshotEditor: './region-screenshot-entry' },
+    },
+    {
+      id: 'desktop.window.recording-preview',
+      platform: 'desktop',
+      title: '录屏独立回放窗口',
+      productionEntry:
+        '`?recordingPreview=1` → renderer/recording-preview-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RecordingPreview', 'Button'],
+      styleRoots: [
+        'apps/desktop/src/renderer/recording-preview-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot/RecordingPreview.tsx',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/main/region-screenshot/recordingPreview.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { recordingPreview: './recording-preview-entry' },
+    },
+    {
+      id: 'desktop.window.region-screenshot-pin',
+      platform: 'desktop',
+      title: '截图贴图窗口',
+      productionEntry:
+        '`?regionScreenshotPin=1` → renderer/region-screenshot-pin-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['PinView'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-pin-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot/PinView.tsx',
+        'apps/desktop/src/main/region-screenshot/pins.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshotPin: './region-screenshot-pin-entry' },
     },
     {
       id: 'desktop.window.remote-desktop',
@@ -1409,6 +1487,7 @@ export function mobileCatalogSurfaces() {
     ['companions.cloud', '云端伙伴：主力电脑离线时的对话与换电脑', ['companions/cloud/[actorId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
     ['chat.sharing', '共享任务邀请与成员；供应商分享链接提示', ['shared-session.tsx', 'provider-share.tsx']],
+    ['chat.incoming-share', '外部分享内容预览与任务、伙伴目标选择', ['incoming-share.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
@@ -1438,6 +1517,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['+native-intent.ts', 'native intent routing; no screen'],
     ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
+    ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1448,6 +1528,9 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
       if (route === 'splash-preview.tsx' && !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
+      if (route === 'plugin-management-preview.tsx' &&
+        (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||
+          !source.includes('__DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"'))) missing.push(file);
       if (route === 'listperf.tsx' && !source.includes('if (!__DEV__)')) missing.push(file);
       exclusions.push({ path: file, reason: excluded.get(route) });
       continue;

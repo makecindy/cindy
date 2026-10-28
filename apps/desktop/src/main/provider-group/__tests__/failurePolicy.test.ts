@@ -12,6 +12,7 @@ import {
   PROVIDER_GROUP_SUPERSEDED_ERROR,
   PROVIDER_GROUP_UNAVAILABLE_ERROR,
   providerGroupFailureSignals,
+  providerGroupUnavailableError,
   type ProviderGroupFailurePhase,
 } from '../failurePolicy';
 import type { InterruptedTurnErrorSignals } from '../../maker-ipc/interruptedTurnAutoResume';
@@ -135,6 +136,10 @@ describe('decideProviderGroupFailure — not that computer’s problem (stay)', 
 
   it('the whole group is unavailable', () => {
     expect(decideProviderGroupFailure({ message: PROVIDER_GROUP_UNAVAILABLE_ERROR }, 'run')).toEqual(stay('group-unavailable'));
+    const error = providerGroupUnavailableError({ usageLimit: { resetAtMs: 5_000_000 } });
+    for (const phase of PHASES) {
+      expect(decideProviderGroupFailure({ message: error.message }, phase)).toEqual(stay('group-unavailable'));
+    }
   });
 
   it('the task itself cannot be switched right now (start / target only)', () => {

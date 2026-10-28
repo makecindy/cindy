@@ -1,3 +1,4 @@
+import { readUtilityTextStream, streamTextResult } from './streamText.js';
 import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import { randomUUID } from 'node:crypto';
 
@@ -55,6 +56,7 @@ import {
   type UtilityReasoningMode,
   type UtilityRequestStep,
 } from './utilityReasoningPlan.js';
+import { resolveDirectTextRoute, usesDirectTextRoute } from './directTextRoute.js';
 import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
@@ -138,6 +140,7 @@ export type UtilityTextRequestOptions = {
   signal?: AbortSignal;
   /** Provider-native system/instructions text, kept separate from reference data. */
   systemPrompt?: string;
+  onText?: (text: string) => void;
   /** Additional output-shape instruction (mainly for Responses-compatible routes). */
   responseInstructions?: string;
   /** Reject unusable output before selecting a winner, so the configured chain can continue. */
@@ -417,12 +420,15 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
     reasoningEffort: undefined,
   },
   {
-    id: 'chatgpt-nano',
+    // Codex's own Auto-review model. ChatGPT accounts can call it although it is not a
+    // selectable catalog model (gpt-5.4-nano is listed but rejected for ChatGPT accounts).
+    id: 'chatgpt-auto-review',
     providerId: 'openai',
     agentKind: 'codex',
-    model: 'gpt-5.4-nano',
+    model: 'codex-auto-review',
     transport: 'codex-responses',
     reasoningEffort: 'low',
+    catalogExempt: true,
   },
   {
     id: 'chatgpt-luna',
@@ -439,6 +445,8 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
   model: string;
   transport: UtilityModelTransport;
   reasoningEffort: 'low' | undefined;
+  /** Review-only model that is reachable without being a selectable catalog entry. */
+  catalogExempt?: boolean;
 }>);
 
 export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDATES)[number];
@@ -622,7 +630,7 @@ export async function requestDedicatedAutoReviewCandidateText(
   ) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
   }
-  if (!configured.some((model) => model.id === candidate.model)) {
+  if (!('catalogExempt' in candidate && candidate.catalogExempt) && !configured.some((model) => model.id === candidate.model)) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
   if (isProviderModelRouteDisabled(candidate.providerId, candidate.model)) {
@@ -896,12 +904,18 @@ async function requestExplicitProviderText(
   // which would silently turn a Claude request into a Codex request.
   const model = requestedModel || configuredModels.find((item) =>
     isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
+  const catalogModel = configuredModels.find((item) => item.id === model);
   // 预设身份随模型投影带出：从 OpenCode Go 预设创建后再改地址/复制连接时，运行时 id 与
   // URL 都可能对不上，补会话头仍要认得出来（见 opencode-go-session.ts 的三路识别）。
-  const catalogPresetId = configuredModels.find((item) => item.id === model)?.catalogPresetId;
-  const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
+  const catalogPresetId = catalogModel?.catalogPresetId;
+  const selectedRouting = provider && agentKind
+    ? usesDirectTextRoute(provider)
+      ? resolveDirectTextRoute(provider, agentKind, catalogModel)
+      : provider.routing[agentKind]
+    : undefined;
   const transport: UtilityModelTransport =
-    agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
+    selectedRouting?.wireProtocol === 'openai-responses'
+      || (agentKind === 'codex' && selectedRouting?.wireProtocol === undefined)
       ? 'codex-responses'
       : 'litellm-chat-completions';
 
@@ -964,6 +978,9 @@ async function requestExplicitProviderText(
   // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
   const routeSnapshot = stableSnapshot({
     routing: selectedRouting,
+    configuredRouting: provider.routing[agentKind],
+    modelRoute: catalogModel?.route,
+    modelApi: catalogModel?.api ?? catalogModel?.piApi,
     auth: provider.auth,
     source: provider.source,
   });
@@ -979,13 +996,17 @@ async function requestExplicitProviderText(
       !isModelSelectableForNewRoute(currentModel, { userProvider: currentProvider.source === 'user' })
     ) return false;
     return stableSnapshot({
-      routing: currentProvider.routing[agentKind],
+      routing: usesDirectTextRoute(currentProvider)
+        ? resolveDirectTextRoute(currentProvider, agentKind, currentModel)
+        : currentProvider.routing[agentKind],
+      configuredRouting: currentProvider.routing[agentKind],
+      modelRoute: currentModel.route,
+      modelApi: currentModel.api ?? currentModel.piApi,
       auth: currentProvider.auth,
       source: currentProvider.source,
     }) === routeSnapshot;
   };
 
-  const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
   if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
     opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
   }
@@ -1002,6 +1023,7 @@ async function requestExplicitProviderText(
       disableReasoning: opts.disableReasoning,
       signal: opts.signal,
       systemPrompt: opts.systemPrompt,
+      onText: opts.onText,
       responseInstructions: opts.responseInstructions,
       validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
@@ -1009,8 +1031,8 @@ async function requestExplicitProviderText(
     });
   }
 
-  const routing = provider.routing[agentKind];
-  if (routing?.disabled) {
+  const routing = selectedRouting;
+  if (!routing || routing.disabled) {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -1117,6 +1139,7 @@ async function requestExplicitProviderText(
         disableReasoning: requestOpts?.disableReasoning,
         signal: requestOpts?.signal,
         systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
         beforeDispatch: requestOpts?.beforeDispatch
           ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
@@ -1144,6 +1167,7 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   if (!provider) return undefined;
   if (provider.agents.includes('codex')) return 'codex';
   if (provider.agents.includes('claude-code')) return 'claude-code';
+  if (provider.agents.includes('pi')) return 'pi';
   return undefined;
 }
 
@@ -1191,6 +1215,7 @@ async function requestBuiltinProviderText(
     disableReasoning?: boolean;
     signal?: AbortSignal;
     systemPrompt?: string;
+    onText?: (text: string) => void;
     responseInstructions?: string;
     validateResponse?: (text: string) => boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
@@ -1286,6 +1311,7 @@ async function requestBuiltinProviderText(
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         signal: requestOpts?.signal ?? input.signal,
         systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
         beforeDispatch: requestOpts?.beforeDispatch
           ? () => requestOpts.beforeDispatch!({
@@ -1370,6 +1396,7 @@ async function requestBuiltinProviderText(
         supportsMaxOutputTokens: false,
         signal: requestOpts?.signal ?? input.signal,
         systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
         beforeDispatch: requestOpts?.beforeDispatch
           ? () => requestOpts.beforeDispatch!({
@@ -1423,6 +1450,7 @@ async function requestBuiltinProviderText(
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         signal: requestOpts?.signal ?? input.signal,
         systemPrompt: requestOpts?.systemPrompt,
+        onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
         beforeDispatch: requestOpts?.beforeDispatch
           ? () => requestOpts.beforeDispatch!({
@@ -1575,6 +1603,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         disableReasoning: opts?.disableReasoning,
         signal: opts?.signal,
         systemPrompt: opts?.systemPrompt,
+        onText: opts?.onText,
         responseInstructions: opts?.responseInstructions,
         beforeDispatch: opts?.beforeDispatch
           ? () => opts.beforeDispatch!({
@@ -1600,6 +1629,7 @@ async function requestLiteLlmText(input: {
   disableReasoning?: boolean;
   signal?: AbortSignal;
   systemPrompt?: string;
+  onText?: (text: string) => void;
   responseInstructions?: string;
   /** Async final dispatch fence, including owner/settings checks. */
   beforeDispatch?: () => Promise<boolean>;
@@ -1799,6 +1829,7 @@ async function requestProviderHttpText(input: {
   signal?: AbortSignal;
   /** Provider-native system text, never concatenated with untrusted reference data. */
   systemPrompt?: string;
+  onText?: (text: string) => void;
   /** Additional output-shape instructions. */
   responseInstructions?: string;
   /** Session/owner/config guard, evaluated immediately before each HTTP dispatch. */
@@ -1845,6 +1876,7 @@ async function requestProviderHttpText(input: {
           ...(instructions ? { system: instructions } : {}),
           ...(rung.kind === 'off' ? { thinking: { type: 'disabled' } } : {}),
           ...(effort ? { output_config: { effort } } : {}),
+          ...(input.onText ? { stream: true } : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
       }
@@ -1877,6 +1909,7 @@ async function requestProviderHttpText(input: {
               : { thinking: { type: 'disabled' }, reasoning_effort: 'minimal' }
             : {}),
           ...(effort ? { reasoning_effort: effort } : {}),
+          ...(input.onText ? { stream: true } : {}),
           messages: [
             ...(instructions ? [{ role: 'system', content: instructions }] : []),
             { role: 'user', content: input.prompt },
@@ -1996,7 +2029,7 @@ async function requestProviderHttpText(input: {
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
-    let raw = await response.text();
+    let raw = await readUtilityTextStream(response, input.onText);
     const parsed = responseStructure(step.wire, raw);
     let text = wireResponseText(step.wire, raw);
     // thinking:disabled 只是请求侧建议,BYOM 网关可以无视;max_tokens 是含思考的
@@ -2019,7 +2052,7 @@ async function requestProviderHttpText(input: {
       // 的可选字段不重新加回去(原样重来只会再被拒一次)。
       const budgeted = await send(step, buildBody(step, retryBudget));
       if (budgeted.ok) {
-        raw = await budgeted.text();
+        raw = await readUtilityTextStream(budgeted, input.onText);
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
@@ -2179,6 +2212,10 @@ function responseStructure(wire: ProviderWire, raw: string): unknown {
 }
 
 function wireResponseText(wire: ProviderWire, raw: string): string {
+  if (raw.trimStart().startsWith('data:') || raw.trimStart().startsWith('event:')) {
+    const streamed = streamTextResult(raw);
+    if (streamed) return streamed.trim();
+  }
   return wire === 'responses'
     ? parseCodexResponseText(raw)
     : wire === 'anthropic-messages'
@@ -2294,6 +2331,7 @@ async function requestCustomProviderText(input: {
   disableReasoning?: boolean;
   signal?: AbortSignal;
   systemPrompt?: string;
+  onText?: (text: string) => void;
   responseInstructions?: string;
   beforeDispatch?: () => Promise<boolean>;
   credentialStillCurrent?: () => boolean | Promise<boolean>;
@@ -2304,7 +2342,8 @@ async function requestCustomProviderText(input: {
     'Content-Type': 'application/json',
   };
   const wire: ProviderWire =
-    input.agentKind === 'claude-code' || input.wireProtocol === 'anthropic-messages'
+    input.wireProtocol === 'anthropic-messages'
+      || (input.wireProtocol === undefined && input.agentKind === 'claude-code')
       ? 'anthropic-messages'
       : input.wireProtocol === 'openai-chat'
         ? 'chat-completions'
@@ -2360,6 +2399,7 @@ async function requestCustomProviderText(input: {
     isOllama: input.isOllama,
     signal: input.signal,
     systemPrompt: input.systemPrompt,
+    onText: input.onText,
     responseInstructions: input.responseInstructions,
     beforeDispatch: input.beforeDispatch,
     credentialStillCurrent: input.credentialStillCurrent,
@@ -2413,6 +2453,7 @@ function parseCodexResponseText(raw: string): string {
 }
 
 function parseAnthropicResponseText(raw: string): string {
+  if (raw.trimStart().startsWith('data:') || raw.includes('\nevent:')) return streamTextResult(raw).trim();
   try {
     const json = JSON.parse(raw) as { content?: Array<{ type?: string; text?: unknown }> };
     return (json.content ?? [])

@@ -63,3 +63,15 @@ it('drops invalid history without losing the selected message or accepting dupli
     expect(parsed?.conversationUnavailable).toBe(true);
   }
 });
+// Provider photo metadata is optional: invalid images must not lose the mail or
+// introduce file/script/custom-protocol access in the reader (including peers).
+it('keeps only bounded, normalized email photos with credential-free HTTPS URLs', () => {
+  const mail = { accountId: 'a', messageId: 'm', from: '', to: '', cc: '', bcc: '', subject: '', date: '', bodyText: 'selected', bodyHtml: '', attachments: [] };
+  const photo = { email: 'person@example.test', url: 'https://photos.example.test/photo.png' };
+  const invalid = ['file:///secret.png', 'javascript:alert(1)', 'http://photos.example.test/a', 'https://user:pass@photos.example.test/a', 'https://photos.example.test:123/a'];
+  const parsed = parseMailMessage({ ...mail, participantPhotos: [photo, ...invalid.map(url => ({ ...photo, url })), { ...photo, email: 'Not an email' }] });
+  expect(parsed?.participantPhotos).toEqual([photo]);
+  expect(parsed?.bodyText).toBe('selected');
+  expect(parseMailMessage(mail)?.participantPhotos).toBeUndefined();
+  expect(parseMailMessage({ ...mail, participantPhotos: Array(100).fill(photo) })?.participantPhotos).toHaveLength(64);
+});

@@ -29,6 +29,7 @@ import {
 } from '@/features/cc-agent/embeddedSessionNavigation';
 import { createLogger } from '@/lib/logger';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
+import { remoteAgentErrorCode } from '@cindy/device-link';
 
 const log = createLogger('useForkAtMessage');
 
@@ -124,8 +125,11 @@ export function useForkAtMessage({
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'UNKNOWN';
       const detail = err instanceof Error ? err.message : String(err);
+      const remoteCode = remoteAgentErrorCode(detail);
       const msg =
-        code === 'FORK_UNSUPPORTED_HISTORY'
+        remoteCode
+          ? t(`chat.remoteError.${remoteCode}`, { defaultValue: t('chat.userMessage.forkErrors.generic') })
+          : code === 'FORK_UNSUPPORTED_HISTORY'
           ? t('chat.userMessage.forkErrors.unsupportedHistory')
           : code === 'NO_PRIOR_ASSISTANT'
             ? t('chat.userMessage.forkErrors.noPriorAssistant')

@@ -493,3 +493,20 @@ it.each([401, 403, 429, 503])('does not disguise manifest authorization or avail
   expect(result.ok).toBe(false);
   expect(fetcher).toHaveBeenCalledOnce();
 });
+
+describe('ElevenLabs catalog authentication', () => {
+  it('uses xi-api-key on the official endpoint even when stored in an Anthropic runtime', () => {
+    const result = buildModelsFetchRequest(spec({
+      baseUrl: 'https://api.elevenlabs.io/v1', apiKey: 'fake-eleven-key', authMethod: 'apiKey',
+      headers: { Authorization: 'stale', 'X-Api-Key': 'stale', 'Xi-Api-Key': 'stale', 'anthropic-version': 'stale' },
+    }));
+    expect(result.url).toBe('https://api.elevenlabs.io/v1/models');
+    expect(result.init.headers).toEqual({ 'xi-api-key': 'fake-eleven-key' });
+  });
+  it('does not guess ElevenLabs authentication for a custom host or leak a stale key in no-auth mode', () => {
+    const custom = buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://elevenlabs.example/v1', apiKey: 'fake-key' }));
+    expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
+    const noAuth = buildModelsFetchRequest(spec({ baseUrl: 'https://api.elevenlabs.io/v1', apiKey: undefined, authMethod: 'none', headers: { 'Xi-Api-Key': 'stale' } }));
+    expect(noAuth.init.headers).toEqual({});
+  });
+});

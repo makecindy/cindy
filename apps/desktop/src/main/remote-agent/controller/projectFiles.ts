@@ -29,12 +29,14 @@ import type { RemoteAgentKind } from '@cindy/device-link';
 import { isShareCredentialPath } from '../credentials';
 import {
   ANCESTOR_INSTRUCTION_FILES,
+  ANCESTOR_MARKER_NAMES,
   MAX_ANCESTOR_LEVELS,
   PROJECT_INSTRUCTION_DIRECTORIES as DIRECTORIES,
   PROJECT_INSTRUCTION_FILES as TOP_LEVEL_FILES,
   PROJECT_SETTINGS_FILES as SETTINGS_FILES,
   isSafeProjectFilePath,
   type RemoteAgentWireAncestorFile,
+  type RemoteAgentWireAncestorMarkers,
   type RemoteAgentWireFile,
   type RemoteAgentWireImportFile,
   type RemoteAgentWirePersonal,
@@ -227,6 +229,31 @@ export async function collectAncestorInstructionFiles(
     }
   }
   return out;
+}
+
+/**
+ * 项目各级上级目录(一直到根目录，与对方逐级映射的范围一致)里，Codex 要找的那几个名字有没有。只看名字在不在，
+ * 不读内容；查不准(没有权限等)的按「有」报，对方照常来问，不会把存在的答成不存在。
+ */
+export async function collectAncestorMarkers(workingDir: string): Promise<RemoteAgentWireAncestorMarkers> {
+  const levels: RemoteAgentWireAncestorMarkers['levels'] = [];
+  let dir = path.resolve(workingDir);
+  for (let up = 1; up <= MAX_ANCESTOR_LEVELS; up += 1) {
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+    const present = await Promise.all(ANCESTOR_MARKER_NAMES.map(async (name) => {
+      try {
+        await fs.lstat(path.join(dir, name));
+        return name;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code === 'ENOENT' || code === 'ENOTDIR' ? null : name;
+      }
+    }));
+    levels.push({ up, present: present.filter((name) => name !== null) });
+  }
+  return { names: [...ANCESTOR_MARKER_NAMES], levels };
 }
 
 /** 本机 Claude Code 的配置目录(与 Cindy 启动本机 Claude Code 时一致：默认 ~/.claude)。 */

@@ -65,14 +65,17 @@ it('settles failed credit loading, retries, and ignores the previous account’s
   expect(view.result.current.usage?.available).toBe('2');
 });
 
-it('uses the enterprise quota API and never returns personal credit for an organization', async () => {
-  state.owner = 'quota-org';
+// Unit: the real quota hook must preserve the optional switch through IPC reads;
+// previous coverage had only snapshots without the switch.
+it.each([true, false, undefined])('preserves enterprise dailyLimitEnabled=%s without personal credit', async (dailyLimitEnabled) => {
+  state.owner = `quota-org-${dailyLimitEnabled}`;
   state.membership = 'org';
   state.quota.mockResolvedValue({
     spend: 12,
     maxBudget: 100,
     currency: 'USD',
     todaySpend: 1,
+    ...(dailyLimitEnabled === undefined ? {} : { dailyLimitEnabled }),
     fetchedAt: 1,
   });
   const view = renderHook(() => ({
@@ -80,6 +83,7 @@ it('uses the enterprise quota API and never returns personal credit for an organ
     credit: useModelAccessCreditUsageResult(true),
   }));
   await waitFor(() => expect(view.result.current.quota.usage?.currency).toBe('USD'));
+  expect(view.result.current.quota.usage?.dailyLimitEnabled).toBe(dailyLimitEnabled);
   expect(view.result.current.credit.usage).toBeNull();
   expect(state.credit).not.toHaveBeenCalled();
   act(() => view.result.current.quota.refresh());

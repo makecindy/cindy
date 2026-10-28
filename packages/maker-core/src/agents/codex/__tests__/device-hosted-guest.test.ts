@@ -256,6 +256,8 @@ async function startHosted(fixture: Fixture) {
         };
       case Method.ThreadResume:
         return { thread: { id: 'resume-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir };
+      case Method.ThreadFork:
+        return { thread: { id: 'fork-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai' };
       case Method.TurnStart:
         return { turn: { id: 'turn-1' } };
       default:
@@ -327,7 +329,7 @@ async function startHosted(fixture: Fixture) {
   return {
     started, request, getHost, getGhostRosterPrompt, getContactsPromptState, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
-    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome,
+    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome, agent, workingDir,
   };
 }
 
@@ -349,6 +351,90 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // Provider sharing §9.5: even a history-only native fork initializes MCP and
+  // connectors. Existing fork tests covered proxy/history ownership only.
+  // Minimal input: one guest source and a native turn anchor; tier: unit.
+  it.each([false, true])('isolates history-only guest forks before allocating a child (feature inspection fails: %s)', async (inspectionFails) => {
+    const fixture = await startHosted({ guest: true });
+    const handle = await fixture.started;
+    await handle.close();
+    fixture.request.mockClear();
+    if (inspectionFails) {
+      const baseRequest = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method, params) => {
+        if (method === Method.ExperimentalFeatureList) throw new Error('feature inspection failed');
+        return baseRequest(method, params);
+      });
+    }
+    const forked = fixture.agent.forkSdkSession({
+      sourceSdkSessionId: 'guest-source', upToMessageId: undefined,
+      lastTurnId: 'kept-turn', workingDir: fixture.workingDir,
+      hostedGuestHome: fixture.guestHome, providerId: SHARED_PROVIDER.providerId,
+    });
+    if (inspectionFails) {
+      await expect(forked).rejects.toThrow('feature inspection failed');
+      expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadFork)).toBe(false);
+    } else {
+      await expect(forked).resolves.toMatchObject({ newSdkSessionId: 'fork-thread-id' });
+      expect(threadParams(fixture.request, Method.ThreadFork)).toMatchObject({
+        config: {
+          'mcp_servers.local_docs.enabled': false,
+          'mcp_servers.cindy_contacts.enabled': false,
+          'plugins."configured@personal".enabled': false,
+          'features.apps': false,
+          'features.hooks': false,
+          'features.future_local_tool': false,
+          'memories.use_memories': false,
+        },
+      });
+    }
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    expect(fixture.getHost).toHaveBeenLastCalledWith(undefined, expect.anything(), expect.objectContaining({
+      nativeStorageOnly: true,
+    }));
+  });
+
+  // Provider sharing §9.5: rewind must retain the consumer's MCP transport and
+  // guest isolation. Startup-only coverage missed that native fork reloads host
+  // defaults. Minimal input: a hosted session rewound at a persisted turn anchor;
+  // tier: unit, through startSession -> commitRewindFiles -> send.
+  it.each([false, true])('keeps the task tool route and capability scope after rewind (guest: %s)', async (guest) => {
+    const fixture = await startHosted({ guest });
+    const handle = await fixture.started;
+    const initial = threadParams(fixture.request, Method.ThreadStart);
+
+    await expect(handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1, lastTurnId: 'kept-turn' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+
+    const fork = threadParams(fixture.request, Method.ThreadFork);
+    expect(fork).toMatchObject({
+      threadId: 'start-thread-id',
+      lastTurnId: 'kept-turn',
+      approvalPolicy: initial.approvalPolicy,
+      sandbox: initial.sandbox,
+      environments: initial.environments,
+      config: {
+        'mcp_servers.local_docs.enabled': false,
+        'mcp_servers.cindy_contacts.enabled': true,
+        'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
+      },
+    });
+    expect(fork.config).toEqual(initial.config);
+    if (guest) expect(fork.config).toMatchObject({
+      'features.apps': false,
+      'features.hooks': false,
+      'features.plugins': false,
+      'features.future_local_tool': false,
+      'memories.use_memories': false,
+    });
+
+    await handle.send({ type: 'user', content: 'continue after rewind' });
+    expect(threadParams(fixture.request, Method.TurnStart)).toMatchObject({
+      threadId: 'fork-thread-id', environments: initial.environments,
+    });
+    await handle.close();
+  });
+
   it.each([false, true])('isolates this computer\'s capabilities from a shared user (resume: %s)', async (resume) => {
     const fixture = await startHosted({ guest: true, resume });
     const handle = await fixture.started;
@@ -479,6 +565,8 @@ describe('Codex device-hosted guest sessions', () => {
     expect(String(options?.keyOverride)).toMatch(/^local-guest:hosted-session/);
     // 独占的 app-server 带上分享的供应商：host 据此只留这个供应商的路由，不开智能子代理调配。
     expect(options?.deviceHostedGuestProviderId).toBe('xd');
+    expect(options?.deviceHostedGuestSessionId).toBe('hosted-session');
+    expect(options?.deviceHostedGuestModelIds).toEqual(SHARED_PROVIDER.modelIds);
     // 不按 id 到本机用户的 Codex 历史里查找，不把本机托管技能投影进来，也不登记线程位置。
     expect(fixture.prepareCodexResumeSession).not.toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).not.toHaveBeenCalled();
@@ -492,6 +580,7 @@ describe('Codex device-hosted guest sessions', () => {
     const handle = await fixture.started;
     expect(fixture.getHost.mock.calls.some(([, , opts]) => opts?.historyHome)).toBe(false);
     expect(fixture.getHost.mock.calls.some(([, , opts]) => opts && 'deviceHostedGuestProviderId' in opts)).toBe(false);
+    expect(fixture.getHost.mock.calls.some(([, , opts]) => opts && 'deviceHostedGuestSessionId' in opts)).toBe(false);
     expect(fixture.prepareCodexResumeSession).toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).toHaveBeenCalled();
     expect(fixture.prepareCodexSkills).toHaveBeenCalled();
@@ -673,6 +762,45 @@ describe('Codex device-hosted guest sessions', () => {
     const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
     expect(replacement).toMatchObject({ timeoutMs: 360_000 });
     expect(replacement).not.toHaveProperty('extendWhileProgress');
+    await handle.close();
+  });
+
+  // 2026-10-22 远程供应商调查：执行环境首次握手超时后，Codex 之后每一轮都跳过它(模型能回答，却没有 Shell 与
+  // 文件工具)，链路恢复也不会自己重连。隧道上已没有执行环境连接时，下一轮开始前按同一个 id 重新登记；
+  // 连接还开着时不发任何查询(正常发送不多一次往返)。
+  it.each([
+    ['re-registers a disconnected execution environment', 0, 'disconnected', 2],
+    ['leaves an execution environment that is still connecting', 0, 'pending', 1],
+    ['does not query a connected execution environment', 1, 'ready', 1],
+  ] as const)('%s before the next turn of a hosted session', async (_label, open, status, registered) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 0,
+      execResponses: 0,
+      execMaxInFlight: 0,
+      httpInFlight: 0,
+      wsConnectionsOpen: open,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    const base = fixture.request.getMockImplementation()!;
+    fixture.request.mockImplementation(async (method: string, params: unknown) => (
+      method === Method.EnvironmentStatus
+        ? { status, error: 'timed out waiting for exec-server initialize handshake after 10s' }
+        : base(method, params)
+    ));
+    await handle.send({ type: 'user', content: 'hello' });
+    const methods = fixture.request.mock.calls.map(([method]) => method);
+    expect(methods.filter((method) => method === Method.EnvironmentAdd)).toHaveLength(registered);
+    expect(methods.includes(Method.EnvironmentStatus)).toBe(open === 0);
+    // 重新登记排在这一轮 turn/start 之前，turn/start 选的仍是同一个环境 id。
+    expect(methods.lastIndexOf(Method.EnvironmentAdd)).toBeLessThan(methods.indexOf(Method.TurnStart));
+    const environmentIds = fixture.request.mock.calls
+      .filter(([method]) => method === Method.EnvironmentAdd)
+      .map(([, params]) => (params as { environmentId: string }).environmentId);
+    expect(new Set(environmentIds).size).toBe(1);
+    const turnEnvironments = threadParams(fixture.request, Method.TurnStart).environments as Array<{ environmentId: string }>;
+    expect(turnEnvironments.map((environment) => environment.environmentId)).toEqual([environmentIds[0]]);
     await handle.close();
   });
 

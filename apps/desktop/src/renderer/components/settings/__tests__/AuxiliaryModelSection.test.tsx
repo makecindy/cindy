@@ -8,6 +8,7 @@ import type {
   AuxiliaryModelSettingsState,
 } from '../../../../shared/auxiliaryModelSettings';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../../shared/auxiliaryModelChain';
+import * as visibility from '@/state/modelVisibilityPrefs';
 
 const PREFERRED_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
@@ -65,7 +66,7 @@ vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
           {`${Boolean(groupByProvider)}:${options.map((option) => option.group).join(',')}`}
         </span>
         {options.map((option) => (
-          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} />
+          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} data-available={option.available} />
         ))}
         <button
           type="button"
@@ -208,6 +209,21 @@ describe('AuxiliaryModelSection', () => {
     expect(screen.getByText(/settings.auxiliaryModels.chain.cindyDeepseekV4Flash/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'settings.auxiliaryModels.customize' })).toBeNull();
     expect(screen.queryByText('settings.auxiliaryModels.preferred.label')).toBeNull();
+  });
+
+  it.each([true, false])('keeps user visibility authoritative for a Pi HTTP choice (%s)', async (visible) => {
+    const option: AuxiliaryModelOption = { ...SUPPLIER_OPTIONS[0], id: 'cat:go:pi:deepseek-v4.1-flash',
+      providerId: 'go', agentKind: 'pi', modelId: 'deepseek-v4.1-flash', defaultEnabled: true };
+    const override = vi.spyOn(visibility, 'isModelEnabled').mockReturnValue(visible);
+    try {
+      h.get.mockResolvedValue(state({ models: [option.id], options: [option] }));
+      render(<AuxiliaryModelSection />);
+      const row = await screen.findByTestId(`settings.auxiliaryModels.preferred.ariaLabel:option:${option.id}`);
+      expect(row.getAttribute('data-available')).toBe(String(visible));
+      expect(override).toHaveBeenCalledWith('pi', 'go', { id: 'deepseek-v4.1-flash', defaultEnabled: true });
+    } finally {
+      override.mockRestore();
+    }
   });
 
   it('treats a GET payload without models as automatic instead of crashing', async () => {

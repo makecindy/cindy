@@ -67,6 +67,26 @@ describe('collectPiProjectResourceCliPaths', () => {
     expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([realpathSync(skillDir)]);
   });
 
+  it('collects nested namespace skills and prunes generated trees', () => {
+    const repo = makeRepo();
+    const piNested = path.join(repo, '.pi', 'skills', '@scope', 'pi-nested');
+    const agentsNested = path.join(repo, '.agents', 'skills', '@scope', 'agents-nested');
+    const tooDeep = path.join(repo, '.pi', 'skills', '@scope', 'group', 'too-deep');
+    const pruned = path.join(repo, '.pi', 'skills', 'dist', 'hidden');
+    for (const skillDir of [piNested, agentsNested, tooDeep, pruned]) {
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(path.join(skillDir, 'SKILL.md'), '# nested\n');
+    }
+
+    const collected = collectPiProjectResourceCliPaths(repo);
+
+    expect(collected.skills).toEqual([
+      realpathSync(agentsNested),
+      realpathSync(piNested),
+    ].sort((a, b) => a.localeCompare(b)));
+    expect(collected.skills).not.toContain(realpathSync(tooDeep));
+  });
+
   it('skips escaped symlinks and settings files', () => {
     const repo = makeRepo();
     const outside = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'pi-project-cli-out-')));
@@ -85,6 +105,35 @@ describe('collectPiProjectResourceCliPaths', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it('keeps a direct Skill whose folder name matches a pruned directory', () => {
+    const repo = makeRepo();
+    const directDist = path.join(repo, '.pi', 'skills', 'dist');
+    const nested = path.join(repo, '.pi', 'skills', 'node_modules', 'ignored');
+    for (const skillDir of [directDist, nested]) {
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(path.join(skillDir, 'SKILL.md'), '# direct\n');
+    }
+
+    expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([realpathSync(directDist)]);
+  });
+
+  it('does not walk a symlinked namespace inside the repo', () => {
+    const repo = makeRepo();
+    const externalNamespace = path.join(repo, 'external-ns');
+    const nestedSkill = path.join(externalNamespace, 'nested');
+    mkdirSync(nestedSkill, { recursive: true });
+    writeFileSync(path.join(nestedSkill, 'SKILL.md'), '# linked\n');
+    const link = path.join(repo, '.pi', 'skills', 'linked-ns');
+    mkdirSync(path.dirname(link), { recursive: true });
+    try {
+      symlinkSync(externalNamespace, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch {
+      return;
+    }
+
+    expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([]);
   });
 
   it('does not walk .agents/skills past the nearest git root', () => {

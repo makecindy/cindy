@@ -104,10 +104,16 @@
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "任务完成通知",
-    "taskDoneHint": "电脑上的任务完成、出错或等你回复时推送通知，并附上最新回复。",
-    "permissionDenied": "通知权限未开启，请在 iOS「设置 → 通知 → {{appName}}」中允许。",
-    "unregisterQueued": "已关闭，联网后自动完成注销。"
+    "taskDone": "消息与任务通知",
+    "taskDoneHint": "收到新消息，或任务完成、出错、等你回复时通知你。",
+    "permissionDenied": "通知权限未开启，请在系统设置中允许 Cindy 发送通知。",
+    "unregisterQueued": "已关闭，联网后自动完成注销。",
+    "preview": "显示消息内容预览",
+    "background": "在后台保持消息连接",
+    "backgroundActive": "正在后台接收消息",
+    "backgroundStop": "停止接收",
+    "backgroundHint": "后台连接不依赖 Google，会显示常驻通知；可随时在通知栏停止。",
+    "googleUnavailable": "Google 推送暂不可用。可开启后台消息连接接收消息。"
   },
   "about": {
     "sectionTitle": "关于这台手机",

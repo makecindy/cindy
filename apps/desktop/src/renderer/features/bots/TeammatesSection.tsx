@@ -43,7 +43,6 @@ import { CindyDeviceRow } from './CindyDeviceRow';
 import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
-import { useBotMarketEntryHint } from './botMarketEntryHint';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { BotGroupSidebarRow } from './BotGroupSidebarRow';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
@@ -125,7 +124,6 @@ export function TeammatesSection() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { dataOwnerId } = useAuth();
-  const marketHint = useBotMarketEntryHint(dataOwnerId);
   // The sidebar lives in the shell, outside the child route's params context.
   const remoteRoute = matchPath('/bots/remote/:deviceId/:botId', pathname);
   const localRoute = [
@@ -503,10 +501,9 @@ export function TeammatesSection() {
             </Tip>
           </div>
         </div>
-        {/* 发现伙伴入口没看过时「+」常驻可见(带蓝点),其余动作仍只在悬停时浮现。 */}
-        <div className={cn('flex items-center gap-0.5', !marketHint.unseen && HEADER_HOVER_ACTION_CLASS)}>
+        <div className={cn('flex items-center gap-0.5', HEADER_HOVER_ACTION_CLASS)}>
           {roster.showHiddenSection && !collapsed ? (
-            <span className={cn('flex', marketHint.unseen && HEADER_HOVER_ACTION_CLASS)}>
+            <span className="flex">
               <button
                 type="button"
                 onClick={() => setShowHidden((value) => !value)}
@@ -517,7 +514,7 @@ export function TeammatesSection() {
               </button>
             </span>
           ) : null}
-          <BotCreateMenu variant="header" entryHint={marketHint} />
+          <BotCreateMenu variant="header" />
         </div>
       </div>
 

@@ -55,6 +55,8 @@ vi.mock('@/lib/logger', () => ({
 
 import { AuthProvider, useAuth } from '../AuthContext';
 import { useLogin } from '@/hooks/useLogin';
+import { prefetchDeviceProviders, useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { prefetchDeviceCapabilities, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 
 function AuthProbe() {
   const { isInitializing, isAuthenticated, user, loginState } = useAuth();
@@ -88,6 +90,35 @@ afterEach(() => {
 });
 
 describe('login recovery ignores abandoned IPC results', () => {
+  // 2026-10-20 黑盒验收：同一分享在换账号后残留上一成员的模型。
+  // 缓存测试未覆盖真实 AuthProvider 边界及已挂载的选择器；tier: unit。
+  it('clears mounted remote model lists at the logout boundary', async () => {
+    mocks.service.initialize.mockResolvedValue({
+      isAuthenticated: true, isCanary: false, dataOwnerId: 'member-a', ownerGeneration: 1,
+      deviceId: 'device', user: { id: 'member-a', name: 'Member A' },
+    });
+    const auth = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(auth.result.current.isInitializing).toBe(false));
+    Object.assign(window.electronAPI, { deviceLink: { invoke: vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list'
+        ? { providers: [{ id: 'openai', name: 'OpenAI', agents: ['codex'], connected: true,
+            models: { codex: [{ id: 'member-a', name: 'Member A', contextWindow: 200000, efforts: [] }] } }] }
+        : { availableModels: [{ id: 'member-a', displayName: 'Member A', contextWindow: 200000,
+            efforts: [], defaultEffort: null }], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    )) } });
+    await Promise.all([prefetchDeviceProviders('share:common'), prefetchDeviceCapabilities('share:common')]);
+    const catalog = renderHook(() => ({
+      providers: useDeviceProviders('share:common'),
+      capabilities: useAgentCapabilities('codex', 'share:common'),
+    }));
+    expect(catalog.result.current.providers.providers).toHaveLength(1);
+    expect(catalog.result.current.capabilities.capabilities?.availableModels[0].id).toBe('member-a');
+    await act(async () => { await auth.result.current.logout(); });
+    expect(mocks.service.logout).toHaveBeenCalledOnce();
+    expect(catalog.result.current.providers.providers).toEqual([]);
+    expect(catalog.result.current.capabilities.capabilities).toBeNull();
+  });
+
   it.each(['resolve', 'reject'] as const)(
     'recovers a failed skip while the abandoned provider request later %ss',
     async (settlement) => {

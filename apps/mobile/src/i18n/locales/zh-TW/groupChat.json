@@ -1,8 +1,8 @@
 {
   "title": "群聊",
   "memberSeparator": "、",
-  "memberCount_one": "{{count}} 位夥伴",
-  "memberCount_other": "{{count}} 位夥伴",
+  "memberCount_one": "{{count}} 位成員",
+  "memberCount_other": "{{count}} 位成員",
   "organizer": "負責人",
   "waitingConfirm": "{{name}}在等你確認",
   "loadFailedTitle": "無法載入這個群聊",
@@ -60,6 +60,8 @@
     "send": "傳送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 則新訊息",
+    "newMessages_other": "{{count}} 則新訊息",
     "emptyTitle": "群聊裡還沒有訊息",
     "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
     "roundEnded": "夥伴們說完了",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
     "deleted": "原訊息已刪除",
-    "attachments": "{{name}} 等 {{total}} 個附件"
+    "attachments": "{{name}} 等 {{total}} 個附件",
+    "unavailable": "無法找到這則訊息。"
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
@@ -94,6 +97,8 @@
     "stepTimeout": "{{name}}太久沒做完，這一步先停下",
     "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
     "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。\n請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
+      "REMOTE_TOTAL_LIMIT": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。\n請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
       "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
       "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
       "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
@@ -113,6 +118,7 @@
     "start": "開始",
     "dismiss": "不用了",
     "editHint": "想換人或改步驟，直接說",
+    "autoNote": "做完一步會自動交給下一位。",
     "pauseNote": "每做完一步會停下來，等你點「繼續」。",
     "superseded": "已更新",
     "dismissed": "不用了",
@@ -137,6 +143,7 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
   },
@@ -171,6 +178,7 @@
     "replyModeAll": "大家都可以接話",
     "replyModeMentioned": "只有被 @ 的回答",
     "replyModeNote": "沒什麼可補充的夥伴不會說話。每輪最多聊 3 圈、10 則，之後等你點「繼續討論」。",
+    "replyModeNoteQueue": "夥伴們排隊依序回答，前 5 位自動接著說。引用夥伴的訊息或回覆它的話題，也會叫到它。",
     "replyModeSaveFailed": "回覆方式沒能儲存，請再試一次",
     "delete": "刪除群聊",
     "deleteNote": "只刪除這個群聊和其中的訊息，夥伴本身、它們的記憶和私聊都不受影響。",
@@ -192,20 +200,25 @@
     "add": "新增夥伴",
     "projectDirOnComputer": "在電腦上選擇或更換",
     "memberActions": "{{name}} 的操作",
-    "managementComputer": "管理電腦",
     "retry": "重試",
-    "reconnect": "重連",
     "conflict": "群設定已更新，請核對後再儲存。輸入已保留。",
     "archive": "封存群聊",
     "archiveConfirmTitle": "封存「{{name}}」？",
     "archiveNote": "僅群主可封存。封存後無法繼續傳送訊息，歷史訊息會保留。",
-    "managementStatus": {
-      "ready": "已連線",
-      "loading": "連線中…",
-      "noHost": "已中斷",
-      "permission": "無管理權限",
-      "upgrade": "需更新電腦端",
-      "unavailable": "設定讀取失敗"
+    "description": "群組簡介",
+    "descriptionSaveFailed": "群組簡介未儲存",
+    "makeAdmin": "設為管理員",
+    "removeAdmin": "取消管理員",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理員",
+      "member": "成員",
+      "guest": "訪客"
+    },
+    "cloudStatus": {
+      "loading": "正在讀取群組設定…",
+      "permission": "只有群主和管理員可以修改這些設定",
+      "unavailable": "群組設定讀取失敗，請重試"
     }
   },
   "errors": {
@@ -241,6 +254,15 @@
     "loadFailed": "暫時無法讀取群聊，請重試。",
     "loadOlder": "載入更早的訊息",
     "attachmentFailed": "附件開啟失敗，請重試。",
+    "attachmentPreviewLoading": "正在讀取附件…",
+    "attachmentPreviewFailed": "無法預覽此附件，請重試。",
+    "attachmentPreviewTooLarge": "附件超過 10 MB，手機上無法預覽。",
+    "attachmentPreviewBinary": "此附件不是可閱讀的文字，無法預覽。",
+    "attachmentPreviewTruncated": "預覽最多顯示 10,000 行、100,000 個字元。",
+    "attachmentPreviewEmpty": "此檔案為空。",
+    "attachmentPreviewRetry": "重試",
+    "attachmentPreviewOpenOutside": "在瀏覽器中開啟",
+    "attachmentPreviewClose": "關閉附件預覽",
     "previewUnavailable": "暫時無法讀取訊息預覽",
     "endpointUnavailable": "群聊服務設定暫時無法使用，請重試。"
   },

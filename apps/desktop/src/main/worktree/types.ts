@@ -99,6 +99,8 @@ export interface ListBranchesReq {
 }
 
 export interface ListBranchesResp {
+  /** Full ref, never a local branch named origin/main. */
+  remoteDefaultBranch?: string;
   branches: string[];
   current: string;
 }

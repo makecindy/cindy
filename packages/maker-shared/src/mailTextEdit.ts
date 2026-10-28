@@ -68,9 +68,28 @@ const attrs = new Set('class id href src alt title width height colspan rowspan 
 const cleanCss = (value: string) => /expression|\\/i.test(value) ? '' : value.replace(/@import[^;]*;?/gi, '').replace(/url\s*\([^)]*\)/gi, 'none');
 export type MailInlineImage = { cid: string; url: string };
 
+/** External mail images are opt-in; relative URLs have no trustworthy base. */
+export function externalMailImageUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value.startsWith('//') ? `https:${value}` : value);
+    if ((url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password) return url.href;
+  } catch { /* Invalid image sources stay blocked. */ }
+}
+
+export function hasMailExternalImages(source: string): boolean {
+  const visit = (node: DefaultTreeAdapterTypes.Node): boolean => {
+    if ('tagName' in node) {
+      if (!tags.has(node.tagName) || node.namespaceURI !== htmlNames.NS.HTML) return false;
+      if (node.tagName === 'img' && externalMailImageUrl(node.attrs.find(a => a.name === 'src')?.value || '')) return true;
+    }
+    return 'childNodes' in node && node.childNodes.some(visit);
+  };
+  return visit(parse(source));
+}
+
 /** Sanitize before creating our markers. Mail-provided editing attributes,
  * scripts, nested contexts and event handlers can never become editor controls. */
-export function safeMailDocument(source: string, inline = false, images: MailInlineImage[] = []): string {
+export function safeMailDocument(source: string, inline = false, images: MailInlineImage[] = [], allowExternalImages = false): string {
   const doc = parse(source, { sourceCodeLocationInfo: true });
   const runs = inline ? mailInlineRuns(source) : [];
   const byStart = new Map(runs.map((run, id) => [run.start, { ...run, id }]));
@@ -86,9 +105,14 @@ export function safeMailDocument(source: string, inline = false, images: MailInl
     for (const node of parent.childNodes) {
       if ('tagName' in node) {
         if (!tags.has(node.tagName) || node.namespaceURI !== htmlNames.NS.HTML) continue;
+        const externalImage = allowExternalImages && node.tagName === 'img'
+          ? externalMailImageUrl(node.attrs.find(a => a.name === 'src')?.value || '') : undefined;
         node.attrs = node.attrs.filter(a => a.name === 'style' || (attrs.has(a.name) &&
           (a.name !== 'href' || /^(https?:|mailto:)/i.test(a.value)) &&
           (a.name !== 'src' || /^(cid:|data:image\/(png|jpeg|gif|webp);base64,)/i.test(a.value))));
+        // Inline hosts start opted-in requests after the document is ready, so
+        // a slow image server cannot hold the entire mail body invisible.
+        if (externalImage) node.attrs.push({ name: inline ? 'data-cindy-mail-external-src' : 'src', value: externalImage }, { name: 'referrerpolicy', value: 'no-referrer' });
         for (const attr of node.attrs) if (attr.name === 'style') attr.value = cleanCss(attr.value);
         if (node.tagName === 'style') {
           node.childNodes = node.childNodes.filter(n => 'value' in n);
@@ -130,8 +154,8 @@ export const validMailImageUrl = (url: string) => /^cindy-media:\/\/blobs\/[a-f0
 // without the app theme's warm-white tint. Authored body colors still win.
 export const MAIL_PAPER_COLOR = 'white';
 export const MAIL_INLINE_STYLE = `html{color-scheme:light}body{margin:4px;background:${MAIL_PAPER_COLOR};color:#111;font:16px/1.6 Arial,Helvetica,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}[data-cindy-mail-run]{white-space:pre-wrap;outline:none}[data-cindy-mail-run]:empty{display:inline-block;min-width:1ch;min-height:1em}`;
-export function mailInlineDocument(source: string, images: MailInlineImage[] = []): string {
-  return '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'none\'; img-src data: cindy-media:; style-src \'unsafe-inline\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + MAIL_INLINE_STYLE + '</style>' + safeMailDocument(source, true, images);
+export function mailInlineDocument(source: string, images: MailInlineImage[] = [], allowExternalImages = false): string {
+  return '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'none\'; img-src data: cindy-media:' + (allowExternalImages ? ' https: http:' : '') + '; style-src \'unsafe-inline\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + MAIL_INLINE_STYLE + '</style>' + safeMailDocument(source, true, images, allowExternalImages);
 }
 
 /** Executed only by the native WebView injection API. The document CSP allows

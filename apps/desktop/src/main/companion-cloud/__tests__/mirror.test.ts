@@ -83,7 +83,8 @@ describe('splitMirrorText', () => {
   });
 });
 
-function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolean, uploadMedia?: Parameters<typeof createCompanionMirror>[0]['uploadMedia']) {
+function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolean, uploadMedia?: Parameters<typeof createCompanionMirror>[0]['uploadMedia'],
+  replyAttachments?: Parameters<typeof createCompanionMirror>[0]['replyAttachments']) {
   let imports = 0;
   const { api, calls } = fakeApi((route, method) => {
     if (route === '/conversations' && method === 'POST') return { id: ROOM };
@@ -104,6 +105,7 @@ function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolea
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).slice(0, limit),
     latestRows: async (_sessionId, limit) => [...rows].reverse().slice(0, limit),
     ...(uploadMedia ? { uploadMedia } : {}),
+    ...(replyAttachments ? { replyAttachments } : {}),
   });
   const imported = () => calls.filter(call => call.route.endsWith('/import'))
     .map(call => (call.data as { messages: Array<{ sourceId: string; authorId: string; content: Array<{ type?: string; text: string; mediaId?: string }> }> }).messages);
@@ -181,6 +183,56 @@ describe('companion conversation mirror', () => {
     online = true;
     await t.mirror.syncBot('bot', 'actor', 'Mia');
     expect(t.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'look' }, { type: 'media', mediaId: 'm-2', caption: 'a.pdf' }]);
+  });
+
+  describe('files a reply refers to', () => {
+    const report = { id: '', name: 'report.docx', category: 'file' as const, mimeType: 'application/octet-stream', size: 10, url: null, path: '/work/documents/report.docx' };
+    const upload = () => vi.fn(async (_room: string, _source: string, files: Array<{ name: string }>) =>
+      [{ type: 'media', mediaId: 'm-r', caption: files[0]!.name }]);
+
+    it('sends them with the reply: the text stays, the files ride as media blocks', async () => {
+      const answer = reply('做好了 documents/report.docx');
+      const find = vi.fn(async (_bot: string, _session: string, found: CompanionMirrorRow, text: string) => {
+        expect(text).toBe('做好了 documents/report.docx');
+        return [{ ...report, id: `${found.id}:reply:0` }];
+      });
+      const send = upload();
+      const t = setup([user('做个报告'), answer], undefined, send, find);
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(ROOM, expect.stringContaining(answer.id), [expect.objectContaining({ path: '/work/documents/report.docx' })], 'actor');
+      expect(t.imported()[0]![1]!.content).toEqual([{ type: 'text', text: '做好了 documents/report.docx' }, { type: 'media', mediaId: 'm-r', caption: 'report.docx' }]);
+    });
+
+    it('does not look at replies that are not visible, or when files cannot be uploaded', async () => {
+      const find = vi.fn(async () => [report]);
+      const hidden = reply('internal documents/report.docx', { agentMeta: JSON.stringify({ botPrivateReply: true }) });
+      const t = setup([user('hi'), hidden], undefined, upload(), find);
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).not.toHaveBeenCalled();
+      const noUpload = setup([reply('documents/report.docx')], undefined, undefined, find);
+      await noUpload.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).not.toHaveBeenCalled();
+      expect(noUpload.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'documents/report.docx' }]);
+    });
+
+    it('keeps the reply text only for a file that never uploads, and retries one that may still go up', async () => {
+      const answer = reply('see documents/report.docx');
+      const find = async () => [{ ...report, id: `${answer.id}:reply:0` }];
+      const gone = setup([answer], undefined, vi.fn(async () => { throw new Error('ATTACHMENT_UNAVAILABLE'); }), find);
+      await gone.mirror.syncBot('bot', 'actor', 'Mia');
+      // No placeholder is invented for a reply: the text is exactly what the companion said.
+      expect(gone.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'see documents/report.docx' }]);
+      const offline = setup([answer], undefined, vi.fn(async () => { throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: 503 }); }), find);
+      await expect(offline.mirror.syncBot('bot', 'actor', 'Mia')).rejects.toThrow('MEDIA_UPLOAD_FAILED');
+      expect(offline.imported()).toEqual([]);
+    });
+
+    it('does not stop mirroring when the files cannot be listed', async () => {
+      const t = setup([reply('hello')], undefined, upload(), vi.fn(async () => { throw new Error('EACCES'); }));
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(t.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'hello' }]);
+    });
   });
 
   it('uploads the older history on later passes, oldest first, without re-sending', async () => {

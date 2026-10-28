@@ -20,7 +20,7 @@ export interface AgentIslandCompanionIdentity {
 }
 
 /** Links that speak as the companion; delegated executions stay ordinary tasks. */
-const COMPANION_SPEAKING_ROLES = ['canonical', 'history', 'group', 'channel'] as const;
+const COMPANION_SPEAKING_ROLES = ['canonical', 'history', 'thread', 'group', 'channel'] as const;
 
 /**
  * Bundled preset artwork, relative to the packaged resources directory. The Cindy portrait is a

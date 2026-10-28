@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access, realpath } from 'node:fs/promises';
+import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,6 +28,22 @@ function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ co
       resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stdout: String(stdout) });
     });
   });
+}
+
+// Apple Git resolves its transport helpers relative to argv[0]. A PATH symlink
+// outside the install tree otherwise fails before contacting the synthetic server.
+// Keep the same POSIX PATH selection, resolving only that executable's symlinks.
+async function nativeGitPath(): Promise<string> {
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
+    const candidate = path.resolve(directory || '.', 'git');
+    try {
+      await access(candidate, constants.X_OK);
+      return await realpath(candidate);
+    } catch {
+      // Match executable lookup: an absent or inaccessible PATH entry is skipped.
+    }
+  }
+  throw new Error('git executable was not found on PATH');
 }
 
 async function setup(answers: Record<string, string>) {
@@ -58,7 +77,7 @@ describe.runIf(runnable)('代输入 askpass with real programs', () => {
     const { port } = server.address() as AddressInfo;
     const { prompts, env } = await setup({ Username: 'someone', Password: 'synthetic-pass' });
 
-    const result = await run('git', ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
+    const result = await run(await nativeGitPath(), ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       GIT_CONFIG_NOSYSTEM: '1',

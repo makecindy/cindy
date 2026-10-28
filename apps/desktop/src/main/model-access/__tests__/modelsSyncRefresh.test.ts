@@ -34,9 +34,14 @@ describe('parseModelsSyncPayload', () => {
       id: 'example-video', name: 'Example Video', mode: 'video_generation',
       currency: 'USD', agents: [], availability: 'available',
     };
-    const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }] };
+    // Unit contract: refresh must preserve an optional summary, not only the existing table.
+    const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }], summary: {
+      output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P' }],
+    } };
     const response = { schemaVersion: 5, accountTier: 'paid', models: [{ ...model, displayPricing: quote }] };
     expect(parseModelsSyncPayload(response)).toMatchObject({ ok: true, models: [{ displayPricing: quote }] });
+    expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing: { ...quote, summary: { output: [] } } }] }))
+      .toMatchObject({ ok: true, models: [{ displayPricing: { items: quote.items } }] });
     for (const displayPricing of [undefined, null, { items: [] }, { items: [{ ...quote.items[0], priceType: 'future' }] }]) {
       expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing }] }))
         .toEqual({ ok: true, accountTier: 'paid', models: [model] });

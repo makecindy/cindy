@@ -642,6 +642,7 @@ describe('resolveAgentCapability', () => {
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
       supportsFastMode: true,
+      supportsUltrafastMode: false,
       contextWindow: 200_000,
       contextWindowVerified: false,
     });

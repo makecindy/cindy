@@ -24,13 +24,13 @@ const AGENTS: readonly OrcaWorkerAgentKind[] = ['codex', 'claude-code', 'pi'];
 export interface OrcaWorkerAgentPrefs {
   model: string;
   effort: string;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
 }
 
 export interface OrcaWorkerModelSelection {
   agent: OrcaWorkerAgentKind;
   agentDeviceId: string | null;
-  model: { id: string; providerId: string | null; effort: string | null; fast: boolean };
+  model: { id: string; providerId: string | null; effort: string | null; fast: boolean | 'ultrafast' };
 }
 
 export interface OrcaWorkerCreationPrefs {
@@ -68,7 +68,7 @@ export function sanitizeOrcaWorkerCreationPrefs(value: unknown): OrcaWorkerCreat
     return {
       model: typeof item?.model === 'string' && item.model.trim() ? item.model.trim() : fallback.model,
       effort: typeof item?.effort === 'string' && item.effort.trim() ? item.effort.trim() : fallback.effort,
-      fast: item?.fast === true,
+      fast: (item?.fast === 'ultrafast' ? 'ultrafast' : item?.fast === true),
     };
   };
   const selections = record(raw.modelSelectionByHost);
@@ -81,7 +81,7 @@ export function sanitizeOrcaWorkerCreationPrefs(value: unknown): OrcaWorkerCreat
       || (model.providerId !== null && (typeof model.providerId !== 'string' || !model.providerId.trim()))
       || (model.effort !== null && typeof model.effort !== 'string')) return [];
     return [[host, { agent: item.agent as OrcaWorkerAgentKind, agentDeviceId: item.agentDeviceId,
-      model: { id: model.id, providerId: model.providerId, effort: model.effort, fast: model.fast === true } }]];
+      model: { id: model.id, providerId: model.providerId, effort: model.effort, fast: (model.fast === 'ultrafast' ? 'ultrafast' : model.fast === true) } }]];
   })) as Record<string, OrcaWorkerModelSelection>;
   return {
     ...(selections ? { modelSelectionByHost } : {}),
@@ -143,7 +143,7 @@ export interface OrcaWorkerSubmittedChoice {
   taskHostDeviceId?: string;
   /** null = 本次提交改用逐 Agent 默认，删除该 host 的旧完整路线；缺省 = 不改。 */
   selection?: OrcaWorkerModelSelection | null;
-  model: { id: string; effort: string | null; fast: boolean } | null;
+  model: { id: string; effort: string | null; fast: boolean | 'ultrafast' } | null;
 }
 
 /** 把一次提交合并进已有记忆(纯函数)。 */

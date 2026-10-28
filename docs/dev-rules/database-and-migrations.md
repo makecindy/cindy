@@ -111,6 +111,37 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 
 ## 运行期数据库访问
 
+### Schema 租约的发布与故障恢复（#7135）
+
+`localDb/schemaMigrationLease.ts` 保留既有 writer 文件与多 reader 目录契约；完整记录先在
+目录外的独占候选文件写入并刷盘，再用不覆盖目标的 hard link 发布。reader 候选、恢复记录
+和隔离备份不进入 reader 目录，旧客户端仍能识别正式租约。文件系统不支持该发布方式时
+明确阻断，不回退到直接写半成品锁。租约获取为异步，退出／切账号必须取消在途 reader。
+
+同一数据库的新版租约获取与回收通过原子发布的非空目录串行化：候选目录先包含唯一
+PID＋UUID 文件名及可信内核启动代次的摘要，再 rename 到正式 gate。不同启动代次的
+残留 gate 可回收，即使旧 PID 已被其他进程复用；同一代次、旧格式 marker 或无法取得
+当前启动代次时，继续保守检查 PID。释放／回收只删该 owner 的精确 marker，
+再非递归 rmdir；暂停的清理者不能删除后继 owner 的非空目录。中断释放留下的空目录可
+重试回收，不引入会被原地写坏的辅助 JSON 锁。未证实跨启动的存活 PID 不回收，不可读文件
+不当作损坏记录移走。
+损坏且未知 owner 的记录可能是暂停中的旧版发布者，因此不得按文件年龄或解析失败抢锁。
+首次观察时持久化文件身份／内容指纹和内核 boot generation；只有之后确认系统已跨过一次
+启动、且原锁指纹未变，才备份隔离它。应用重启、时间跳变、文件被替换都不授予恢复权限。
+Windows 用内核 boot GUID，macOS 用 `kern.bootsessionuuid`，Linux 用 `boot_id`；无法取得
+启动标识时保留锁，显示支持指引，不推算启动时间。旧版首次遇到的新损坏记录需要在新版
+记录证据后重启电脑一次；不能承诺安装更新后的第一次启动就自动恢复。
+
+保留原 reader/writer 双向检查与旧版记录格式。隔离后再次校验文件身份与内容；若发现被
+替换则拒绝新租约，并尝试不覆盖地恢复原路径。但旧版自身的「读死 owner → unlink」
+不参与新版 gate，旧进程持有过期检查结果时仍可能删掉后继锁；无法在新版单侧消除该既有
+竞态。恢复时应退出共用此数据目录的旧客户端；混合版本不能承诺任意并发恢复安全。
+
+开库前租约故障返回 `DB_SCHEMA_LOCKED`，按真实原因显示重试或重启电脑指引，不归为
+schema 版本不兼容，也不触发安装更新。恢复只操作当前账号的租约及其备份，不修改 DB、
+WAL 或聊天数据。生产入口、发布中断与竞争回归见 `schemaMigrationLease.test.ts`，界面
+重新打开当前账号的回归见 `LocalDbGate.retry.test.tsx`。
+
 - Main 运行期业务代码使用 `DbClient`／`getDbClient()` 的异步 API，并 `await` Drizzle query
   或使用 `query`、`queryOne`、`exec`、`tx`。
 - 不把异步 Drizzle proxy 当成同步 `better-sqlite3` 使用，也不在 Main 业务路径新增直接

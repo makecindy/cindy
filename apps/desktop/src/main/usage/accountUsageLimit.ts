@@ -142,3 +142,22 @@ export async function readAccountUsageLimit(
       return undefined;
   }
 }
+
+/** Query the actual execution computer; never substitute this computer's account. */
+export async function readRemoteAccountUsageLimit(
+  route: { deviceId: string; providerId: string; family: NativeSubscriptionAuth; agentKind: string; modelId?: string | null },
+  invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<{ ok: boolean; result?: unknown }>,
+): Promise<AccountUsageLimit | null> {
+  const channel = route.family === 'claude' ? 'maker:usage:claude-subscription'
+    : route.family === 'codex' ? 'maker:usage:account' : 'maker:usage:xai-subscription';
+  const reply = await invoke(route.deviceId, channel,
+    route.family === 'codex' ? ['codex', route.providerId] : [route.providerId, true]);
+  if (!reply.ok || !reply.result || typeof reply.result !== 'object') return null;
+  const data = reply.result as { providerId?: unknown };
+  const defaultId = NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS[route.family];
+  // Old hosts may ignore named-account arguments. Accept an omitted echo only for defaults.
+  if (data.providerId !== undefined ? data.providerId !== route.providerId : route.providerId !== defaultId) return null;
+  if (route.family === 'claude') return claudeAccountUsageLimit(data as import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot, route.modelId);
+  if (route.family === 'codex') return codexAccountUsageLimit(data as CodexAccountUsagePayload, route);
+  return xaiAccountUsageLimit(data as XaiSubscriptionUsageSnapshot);
+}

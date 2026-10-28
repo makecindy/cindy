@@ -29,7 +29,7 @@ export interface ChannelSessionRoute {
   /** 缺席 = 渠道没有显式指定(准入后的默认值不回写给调用方, 保持渠道原有省略语义)。 */
   effort?: Effort;
   /** 缺席同上。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode: PermissionMode;
   workingDir: string;
   workspaceKind?: 'project' | 'dialogue';
@@ -41,7 +41,7 @@ export interface AdmittedChannelRoute {
   model: string;
   providerId: string | null;
   effort?: Effort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /**

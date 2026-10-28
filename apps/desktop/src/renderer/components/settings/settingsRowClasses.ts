@@ -12,7 +12,7 @@ export const SETTINGS_CARD_CLASS = cn(
 export const SETTINGS_ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
 export const SETTINGS_ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
 export const SETTINGS_ROW_HINT_CLASS =
-  'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
+  'text-12 leading-[1.4] text-[var(--text-secondary)]';
 /** 行间分割线:左右缩进与行内边距对齐。 */
 export const SETTINGS_ROW_DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
 export const SETTINGS_SECTION_TITLE_CLASS =

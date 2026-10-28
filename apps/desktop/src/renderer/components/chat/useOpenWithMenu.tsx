@@ -79,7 +79,7 @@ export async function openUrlByPreference(
 
 /** Identical activation for user URLs, assistant Markdown and keyboard/middle clicks. */
 export async function activateMessageUrl(
-  event: MouseEvent<HTMLElement>,
+  event: Pick<MouseEvent<HTMLElement>, 'preventDefault' | 'stopPropagation' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'button'>,
   sessionId: string | undefined,
   url: string,
   t: TFunction,

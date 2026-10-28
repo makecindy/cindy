@@ -45,7 +45,7 @@ export interface RemoteSession {
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** Temporary host runtime route; optional for older controlled Desktop versions. */
   runtimeGeneration?: number;
   runtimeBaseline?: RemoteSessionRuntimeProfile;
@@ -83,6 +83,8 @@ export interface RemoteSession {
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
+  companion?: import("./teammateTaskSource").TaskCompanion;
+  taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -97,6 +99,7 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   createdAt: string;
   updatedAt: string;
   deviceLinkDeviceId?: string;
@@ -122,7 +125,7 @@ export interface RemoteSessionRuntimeProfile {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface RemoteSessionRuntimePending {
@@ -245,7 +248,7 @@ export interface QueuedRemoteMessage {
     model: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     displayReasoning?: string;
     resumeSessionId?: string;
     makerMemoryEnabled?: boolean;
@@ -292,6 +295,8 @@ export interface InputProjection {
   toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
+  /** Explicit failed-turn continuation eligibility; absent on older hosts. */
+  errorCanContinue?: boolean;
   autoResumePending?: Record<string, unknown> | null;
   /** Current vendor-turn owner for an auto-resume continuation, when supported by the host. */
   continuationTurnClientId?: string | null;

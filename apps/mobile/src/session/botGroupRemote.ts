@@ -152,6 +152,11 @@ function parseMember(value: unknown): BotGroupMemberView | null {
   const botId = id(record?.botId);
   const name = text(record?.name, MAX_NAME);
   if (!record || !botId || name === null) return null;
+  let avatarUrl: string | null = null;
+  try {
+    const url = new URL(text(record.avatarUrl, 4_096) ?? '');
+    if (url.protocol === 'https:' && !url.username && !url.password) avatarUrl = url.href;
+  } catch { /* Invalid public images leave the existing avatar fallback intact. */ }
   return {
     botId,
     name,
@@ -163,6 +168,7 @@ function parseMember(value: unknown): BotGroupMemberView | null {
     ...(typeof record.isSelf === 'boolean' ? { isSelf: record.isSelf } : {}),
     ...(record.role === 'owner' || record.role === 'admin' || record.role === 'member' || record.role === 'guest' ? { role: record.role } : {}),
     avatar: text(record.avatar, 4_096) ?? '',
+    ...(avatarUrl ? { avatarUrl } : {}),
     avatarColor: text(record.avatarColor, 64) ?? '',
     status: enumOf(record.status, MEMBER_STATUSES) ?? 'missing',
   };
@@ -218,8 +224,11 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
   return {
     id: messageId,
     sequence,
+    ...(typeof record.serverSequence === 'string' && /^\d{1,30}$/.test(record.serverSequence) ? { serverSequence: record.serverSequence } : {}),
     kind,
     authorKind,
+    ...(typeof record.isSelf === 'boolean' ? { isSelf: record.isSelf } : {}),
+    ...(optionalId(record.threadRootId) ? { threadRootId: optionalId(record.threadRootId) } : {}),
     authorBotId: optionalId(record.authorBotId),
     authorName: text(record.authorName, MAX_NAME) ?? '',
     content,
@@ -265,6 +274,10 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
   return {
     id: planId,
     status,
+    kind: record.kind === 'talk' || record.kind === 'work' ? record.kind : undefined,
+    canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
+    // The computer's 自动交接 for a 分工 it started; changed only there.
+    autoContinue: typeof record.autoContinue === 'boolean' ? record.autoContinue : undefined,
     organizerBotId: id(record.organizerBotId) ?? '',
     organizerName: text(record.organizerName, MAX_NAME) ?? '',
     steps: steps as BotGroupPlanStepView[],
@@ -303,6 +316,11 @@ function parseRound(value: unknown): BotGroupRoundView {
         botId,
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
+        ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),
+        ...(typeof speaker.startedAt === 'number' && Number.isFinite(speaker.startedAt) ? { startedAt: speaker.startedAt } : {}),
+        ...(speaker.stopping === true ? { stopping: true } : {}),
+        ...(['queued', 'running', 'needs_input', 'stopping'].includes(String(speaker.executionStatus))
+          ? { executionStatus: speaker.executionStatus as BotGroupSpeaker['executionStatus'] } : {}),
       }];
     })
     : [];
@@ -356,6 +374,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     id: groupId,
     name,
     serverBacked: record.serverBacked === true,
+    singleSpeaker: record.singleSpeaker === true,
+    supportsDivision: record.supportsDivision === true,
     archived: record.archived === true,
     dissolvedAt: text(record.dissolvedAt, 64),
     supportsDissolve: record.supportsDissolve === true,
@@ -364,6 +384,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     ...(Number.isSafeInteger(record.revision) && Number(record.revision) > 0 ? { revision: Number(record.revision) } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    supportsReadReceipts: record.supportsReadReceipts === true,
     replyMode: record.replyMode === 'mentioned' ? 'mentioned' : 'all',
     speakingMode: record.speakingMode === 'sequential' ? 'sequential' : 'auto',
     members,
@@ -461,6 +482,7 @@ export interface BotGroupSendAttempt {
   attachmentIds: readonly string[];
   /** Explicit target identity, independent of the displayed names. */
   mentionSignature?: string;
+  quoteMessageId?: string;
   clientId: string;
 }
 
@@ -475,13 +497,16 @@ export function nextBotGroupSendAttempt(
   newClientId: () => string,
   attachmentIds: readonly string[] = [],
   mentions?: BotGroupMention,
+  quoteMessageId?: string,
 ): BotGroupSendAttempt {
   const mentionSignature = mentions === undefined ? undefined : JSON.stringify([mentions.all, mentions.botIds]);
   return previous && previous.text === text && previous.division === division
+    && previous.quoteMessageId === quoteMessageId
     && previous.mentionSignature === mentionSignature
     && previous.attachmentIds.length === attachmentIds.length
     && previous.attachmentIds.every((attachmentId, index) => attachmentId === attachmentIds[index])
     ? previous
     : { text, division, attachmentIds: [...attachmentIds], clientId: newClientId(),
-      ...(mentionSignature === undefined ? {} : { mentionSignature }) };
+      ...(mentionSignature === undefined ? {} : { mentionSignature }),
+      ...(quoteMessageId ? { quoteMessageId } : {}) };
 }

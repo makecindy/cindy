@@ -1,4 +1,8 @@
 {
+  "paneResize": {
+    "label": "列の幅",
+    "hint": "左右にドラッグして列の幅を調整します"
+  },
   "sideChat": {
     "collapse": "サイドチャットを閉じる",
     "resume": "サイドチャットを続ける",
@@ -257,6 +261,7 @@
     "voiceSenderNotReady": "メッセージを送信できません。一度戻ってから、セッションを開き直してください。",
     "voiceStopAndSend": "音声入力を終了して送信",
     "sendMessage": "リモートメッセージを送信",
+    "inputSyncFailed": "入力内容をすべて読み取れませんでした。内容は保持されています。もう一度お試しください。",
     "voiceStartInput": "音声入力を開始",
     "stopSession": "リモートセッションを停止",
     "sessionNotFoundResync": "現在のリモートセッションが見つかりません。再同期してから送信してください。",
@@ -438,6 +443,13 @@
     "copyFailed": "コピーに失敗しました",
     "deleteConfirmTitle": "セッションを削除しますか？",
     "deleteConfirmBody": "削除すると元に戻せません。",
+    "archiveScheduleConfirmTitle": "セッションをアーカイブしますか？",
+    "archiveScheduleConfirmBody_one": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
+    "archiveScheduleConfirmBody_other": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
+    "archiveScheduleName": "「{{name}}」",
+    "archiveScheduleNameSeparator": "、",
+    "archiveScheduleBulkNotice_one": "{{count}} 件のセッションに自動化が紐づいており、次回実行時にセッションが復元されます。",
+    "archiveScheduleBulkNotice_other": "{{count}} 件のセッションに自動化が紐づいており、次回実行時にセッションが復元されます。",
     "dirAlreadyAdded": "このディレクトリはすでにリストにあります。",
     "resetCodexTitle": "Codex の使用量をリセットしますか？",
     "resetCodexBody": "{{account}} のリセットを 1 回消費します。クォータウィンドウはすぐに再開され、この操作は取り消せません。",
@@ -557,6 +569,7 @@
     "encryptedContentInvalid": "プロバイダーの変更により暗号化が利用できなくなったため、このセッションは元のプロバイダーでのみ使用できます。パソコン側で対応してください（「ここから新しいセッションを始める」でプロトコルの暗号化コンテンツを破棄すれば、新しいセッションで続行できます）。"
   },
   "row": {
+    "markRead": "既読にする",
     "moreOptions": "その他のオプション",
     "archiveConversation": "セッションをアーカイブ",
     "closeActionMenu": "セッション操作メニューを閉じる",
@@ -578,6 +591,10 @@
     "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
   },
   "remoteError": {
+    "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
+    "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
+    "REMOTE_AGENT_GROUP_USAGE_LIMIT": "このモデルを利用できるアカウントの使用量が上限に達しました。別のモデルに切り替えるか、上限のリセット後に続行できます。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。パソコンでこのプロバイダーの「リモートと共有」ページを確認してください。",
     "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
@@ -590,6 +607,7 @@
     "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy が元の添付ファイルを読み取れないため、メッセージは送信されていません。「ダウンロード」などアクセス可能なフォルダーにコピーを保存し、元の添付ファイルを削除してから、添付ボタンでコピーを追加し、再送信してください。",
     "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動承認でブロックされました。手動で拒否された記録はありません。",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
@@ -612,6 +630,7 @@
     "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
     "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
+    "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
     "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
     "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
@@ -727,5 +746,20 @@
     "hint": "いずれかの条件で、期限が近いカードから使用します。全配分が満量の場合は使用しません。このパソコンで Cindy の起動中に実行します。",
     "failed": "保存できませんでした。再試行してください。",
     "restore": "既定に戻す"
+  },
+  "followUp": {
+    "title": "セッションのフォローを始めましょうか？",
+    "start": "フォローを開始",
+    "notNow": "今はしない",
+    "saveFailed": "保存できませんでした。もう一度お試しください"
+  },
+  "providerGroupRebalance": {
+    "title": "{{label}} に切り替えて続けますか？",
+    "body": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
+    "quota": "残り {{left}}%",
+    "quotaReset": "残り {{left}}%・{{reset}}後にリセット",
+    "confirm": "切り替える",
+    "remember": "切り替えて、今後は自動にする（このタスクのみ）",
+    "cancel": "キャンセル"
   }
 }

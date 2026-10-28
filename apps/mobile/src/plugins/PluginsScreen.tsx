@@ -67,6 +67,16 @@ import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
+import { PluginOriginalSettings } from "./PluginOriginalSettings";
+import { usePluginManagement } from "./usePluginManagement";
+import { PluginManagementMenu } from "./PluginManagementMenu";
+import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
+import { PluginNotice } from "./PluginNotice";
+import { createPluginManagementClient } from "./pluginManagementClient";
+import {
+  marketItemMatchesPlugin,
+  pluginApprovalToken,
+} from "./pluginManagementTypes";
 import { pluginDetailModel } from "./pluginDetailModel";
 import { PluginDirectoryView } from "./PluginDirectoryView";
 import { PluginDetailView } from "./PluginDetailView";
@@ -86,7 +96,7 @@ function PluginDirectory() {
   const { t, i18n } = useTranslation();
   const { preview } = useLocalSearchParams<{ preview?: string }>();
   const previewSelection = useRef<string | undefined>(undefined);
-  const { invoke } = useDeviceLink();
+  const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -111,10 +121,23 @@ function PluginDirectory() {
   const directoryLoading = Boolean(devices.loading || list.loading);
   const [deviceId, setDeviceId] = useState("");
   const [query, setQuery] = useState("");
+  const [settingsNotice, setSettingsNotice] = useState("");
+  const transientScope = useRef("");
   const [selected, setSelected] = useState<{
     row: HostedRemoteCollectionItem;
     surface?: PluginPageSurface;
   }>();
+  const noticeScope = JSON.stringify([
+    selected?.row.key,
+    selected?.surface,
+    auth.accountGeneration,
+    connectionEpoch,
+    focused,
+  ]);
+  const showSettingsNotice = (notice: string) => {
+    transientScope.current = noticeScope;
+    setSettingsNotice(notice);
+  };
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<RemoteResource>();
   const [detailLoading, setDetailLoading] = useState(false);
@@ -125,6 +148,53 @@ function PluginDirectory() {
   const enableLock = useRef(false);
   const [taskPicker, setTaskPicker] = useState(false);
   const [pageTitle, setPageTitle] = useState("");
+  const liveSelection = useRef({
+    epoch: connectionEpoch,
+    key: selected?.row.key,
+    focused,
+    online: selected ? list.isOnline(selected.row.host) : false,
+  });
+  liveSelection.current = {
+    epoch: connectionEpoch,
+    key: selected?.row.key,
+    focused,
+    online: selected
+      ? targets.some((host) => host.deviceId === selected.row.host.deviceId) &&
+        list.isOnline(selected.row.host)
+      : false,
+  };
+  const managementHost = selected?.row.host;
+  const management = usePluginManagement(
+    managementHost?.deviceId,
+    !!managementHost &&
+      targets.some((host) => host.deviceId === managementHost.deviceId) &&
+      list.isOnline(managementHost),
+    focused,
+    selected?.row.key,
+  );
+  const liveManagement = useRef(management.controller);
+  liveManagement.current = management.controller;
+  const managed = management.state?.snapshot?.ghosts.find(
+    (plugin) => plugin.instanceKey === selected?.row.item.ref.id,
+  );
+  const marketItem = managed
+    ? management.state?.snapshot?.market.items.find((item) =>
+        marketItemMatchesPlugin(item, managed),
+      )
+    : undefined;
+  const managementPending =
+    !!management.state &&
+    (management.state.busy ||
+      ["running", "confirmation", "unknown"].includes(
+        management.state.outcome,
+      ));
+  const managementAvailable =
+    management.state?.capability === "supported" &&
+    !management.state.errorCode &&
+    !!management.state.snapshot &&
+    management.state.online &&
+    !managementPending;
+
   const searchVisible = Platform.OS === "ios" && (!selected || wide);
   const latestQuery = useRef(query);
   latestQuery.current = query;
@@ -166,7 +236,19 @@ function PluginDirectory() {
   );
   useEffect(() => {
     setPageTitle("");
-  }, [selected?.row.key, selected?.surface]);
+    setSettingsNotice("");
+  }, [
+    selected?.row.key,
+    selected?.surface,
+    auth.accountGeneration,
+    connectionEpoch,
+    focused,
+  ]);
+  useEffect(() => {
+    if (!settingsNotice) return;
+    const timer = setTimeout(() => setSettingsNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [settingsNotice]);
   const pageBack = useRef<(() => void) | null>(null);
   const registerBack = useCallback((handler: (() => void) | null) => {
     pageBack.current = handler;
@@ -246,6 +328,11 @@ function PluginDirectory() {
     ),
     recent,
   );
+  const refreshDirectory = async () => {
+    devices.refresh();
+    await management.controller?.reconcile();
+    await list.refresh();
+  };
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
@@ -372,15 +459,39 @@ function PluginDirectory() {
     },
     [router, selected],
   );
-  const selectDevice = () =>
+  const selectDirectoryDevice = (id: string) => {
+    if (
+      selected &&
+      id !== deviceId &&
+      id && id !== selected.row.host.deviceId
+    ) {
+      detailGeneration.current += 1;
+      setSelected(undefined);
+      setDetail(undefined);
+      setSettingsOpen(false);
+    }
+    setDeviceId(id);
+  };
+  const selectDevice = () => {
+    const generation = detailGeneration.current;
+    const select = (id: string) => {
+      if (
+        generation !== detailGeneration.current ||
+        !liveSelection.current.focused ||
+        !isMobileAuthOwnerCurrent(recentOwner)
+      )
+        return;
+      selectDirectoryDevice(id);
+    };
     Alert.alert(t("plugins.computer"), undefined, [
-      { text: t("plugins.allComputers"), onPress: () => setDeviceId("") },
+      { text: t("plugins.allComputers"), onPress: () => select("") },
       ...targets.map((host) => ({
         text: host.deviceName,
-        onPress: () => setDeviceId(host.deviceId),
+        onPress: () => select(host.deviceId),
       })),
       { text: t("plugins.cancel"), style: "cancel" },
     ]);
+  };
   const icon = (row: HostedRemoteCollectionItem) => {
     const uri = row.item.display.avatar?.value;
     return uri &&
@@ -455,17 +566,14 @@ function PluginDirectory() {
         <PluginDirectoryView
           targets={targets}
           deviceId={deviceId}
-          onDeviceChange={setDeviceId}
+          onDeviceChange={selectDirectoryDevice}
           query={query}
           items={items}
           selectedKey={wide ? selected?.row.key : undefined}
           loading={directoryLoading}
           error={listFailed}
           isOnline={(row) => list.isOnline(row.host)}
-          onRefresh={async () => {
-            devices.refresh();
-            await list.refresh();
-          }}
+          onRefresh={refreshDirectory}
           onOpen={open}
           onDetail={(row) => {
             void showDetail(row);
@@ -483,8 +591,7 @@ function PluginDirectory() {
             <RefreshControl
               refreshing={list.refreshing}
               onRefresh={() => {
-                devices.refresh();
-                void list.refresh();
+                void refreshDirectory();
               }}
               tintColor={colors.textSecondary}
             />
@@ -631,6 +738,169 @@ function PluginDirectory() {
         detailFailed || demoScenario?.state === "loadFailed",
       )
     : undefined;
+  // One bounded read per target/connection resolves uncertain facts without replacing the author page.
+  const uncertainFactsRead = useRef<string | undefined>(undefined);
+  const uncertainConfiguration = model?.status === "setupUnknown" || model?.configuration?.items.some((item) => item.state === "unknown");
+  useEffect(() => {
+    if (!uncertainConfiguration || !selected || !focused || !online || detailLoading || detailFailed) return;
+    const row = selected.row, generation = detailGeneration.current, owner = getMobileAuthOwner(), epoch = connectionEpoch;
+    const key = JSON.stringify([row.key, auth.accountGeneration, connectionEpoch]);
+    if (uncertainFactsRead.current === key) return;
+    uncertainFactsRead.current = key;
+    void getRemoteResource(invoke, row.host, row.item.ref, i18n.language, ["plugin-capabilities"]).then((resource) => {
+      if (generation === detailGeneration.current && liveSelection.current.epoch === epoch && isMobileAuthOwnerCurrent(owner) && liveSelection.current.key === row.key && liveSelection.current.focused && liveSelection.current.online) setDetail(resource);
+    }).catch(() => { /* Existing author page stays usable; an uncertain background read needs no second notice. */ });
+  }, [uncertainConfiguration, selected?.row.key, focused, online, detailLoading, detailFailed, connectionEpoch, auth.accountGeneration]);
+  const renderedGeneration = detailGeneration.current;
+  const manageAction = async (action: string) => {
+    if (
+      !managementAvailable ||
+      !selected ||
+      !management.controller ||
+      liveManagement.current !== management.controller ||
+      renderedGeneration !== detailGeneration.current ||
+      liveSelection.current.key !== selected.row.key ||
+      !liveSelection.current.focused ||
+      !liveSelection.current.online
+    )
+      return;
+    const controller = management.controller,
+      row = selected.row,
+      expectedGeneration = detailGeneration.current,
+      owner = getMobileAuthOwner();
+    const current = () =>
+      expectedGeneration === detailGeneration.current &&
+      liveManagement.current === controller &&
+      isMobileAuthOwnerCurrent(owner) &&
+      liveSelection.current.key === row.key &&
+      liveSelection.current.focused &&
+      liveSelection.current.online;
+    const reportPreflightFailure = () => {
+      const state = controller.getState();
+      if (current() && state.outcome === "failed" && !state.operationId)
+        Alert.alert(t("plugins.notice.title.managementFailed"));
+    };
+    if (action === "uninstall" && managed) {
+      const plugin = managed;
+      Alert.alert(
+        t("plugins.management.uninstallTitle", { name: plugin.manifest.name }),
+        t("plugins.management.uninstallBody", { device: row.host.deviceName }),
+        [
+          { text: t("plugins.cancel"), style: "cancel" },
+          {
+            text: t("plugins.management.uninstall"),
+            style: "destructive",
+            onPress: async () => {
+              if (!current()) return;
+              await controller.uninstall(plugin);
+              reportPreflightFailure();
+            },
+          },
+        ],
+      );
+    } else if (action === "update" && marketItem && managed) {
+      const displayed = marketItem;
+      try {
+        const client = createPluginManagementClient({
+          invoke,
+          deviceId: row.host.deviceId,
+          isCurrent: current,
+        });
+        const next = await client.detail(displayed.pluginId);
+        if (!current()) return;
+        if (next.releaseId !== displayed.releaseId) {
+          await controller.refresh();
+          if (current()) Alert.alert(t("plugins.management.releaseChanged"));
+          return;
+        }
+        await controller.install(next, managed);
+        reportPreflightFailure();
+      } catch {
+        if (current()) Alert.alert(t("plugins.management.state.readFailed"));
+      }
+    }
+  };
+  const managementActions = [
+    ...(marketItem?.installState === "update-available" && managed
+      ? [
+          {
+            id: "update",
+            title: t("plugins.management.update") + " · " + marketItem.version,
+            disabled: !managementAvailable,
+          },
+        ]
+      : []),
+    ...(managed && !managed.builtin
+      ? [
+          {
+            id: "uninstall",
+            title: t("plugins.management.uninstall"),
+            destructive: true,
+            disabled: !managementAvailable,
+          },
+        ]
+      : []),
+  ];
+  const completedOperation = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const state = management.state;
+    if (
+      !state ||
+      state.outcome !== "succeeded" ||
+      !state.operationId ||
+      completedOperation.current === state.operationId
+    )
+      return;
+    completedOperation.current = state.operationId;
+    const row = selected?.row,
+      generation = detailGeneration.current,
+      owner = getMobileAuthOwner();
+    void list.refresh();
+    const controller = management.controller;
+    void controller?.refresh().then(() => {
+      if (
+        !row ||
+        liveManagement.current !== controller ||
+        generation !== detailGeneration.current ||
+        !isMobileAuthOwnerCurrent(owner)
+      )
+        return;
+      const refreshed = controller.getState();
+      if (!refreshed || refreshed.errorCode || !refreshed.online) return;
+      const snapshot = refreshed.snapshot;
+      const plugin = snapshot?.ghosts.find(
+        (item) => item.instanceKey === row.item.ref.id,
+      );
+      if (plugin)
+        void showDetail({
+          ...row,
+          key: JSON.stringify([
+            row.host.deviceId,
+            "plugins",
+            "plugin",
+            plugin.instanceKey,
+          ]),
+          item: {
+            ...row.item,
+            ref: { ...row.item.ref, id: plugin.instanceKey },
+          },
+        });
+      else if (snapshot) {
+        detailGeneration.current += 1;
+        setSelected(undefined);
+        setDetail(undefined);
+      }
+    });
+  }, [management.state?.outcome, management.state?.operationId]);
+  const failedOperationNotice = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const state = management.state;
+    if (!focused || !selected || state?.outcome !== "failed" || !state.operationId) return;
+    const key = JSON.stringify([selected.row.key, auth.accountGeneration, connectionEpoch, state.operationId]);
+    if (failedOperationNotice.current === key) return;
+    failedOperationNotice.current = key;
+    Alert.alert(t("plugins.notice.title.managementFailed"));
+  }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
   const newTask = () => {
     if (!selected || !model || busy || !online || !detail || !enabled) return;
     if (!model.canUseTasks) return;
@@ -646,6 +916,10 @@ function PluginDirectory() {
       },
     });
   };
+  const originalSettings =
+    !!managed &&
+    !!model?.hasSettings &&
+    management.state?.snapshot?.settingsPage === true;
   const resolveStatus = () => {
     if (!selected || !model || busy) return;
     switch (model.statusAction) {
@@ -653,6 +927,7 @@ function PluginDirectory() {
         router.push("/devices/manage");
         break;
       case "retry":
+        void management.controller?.reconcile();
         void showDetail(selected.row);
         break;
       case "enable":
@@ -660,22 +935,63 @@ function PluginDirectory() {
         break;
       case "reconnect":
       case "settings":
-        Alert.alert(t("plugins.detail.computerSettings"));
+        if (originalSettings) setSettingsOpen(true);
+        else Alert.alert(t("plugins.detail.computerSettings"));
         break;
     }
   };
+  const noticeOwner = getMobileAuthOwner();
   const detailView =
     selected && model ? (
       <PluginDetailView
         row={selected.row}
         enabled={enabled}
-        busy={busy || detailLoading}
+        busy={busy || detailLoading || managementPending}
+        statusRecoveryBusy={busy || detailLoading}
+        managementNotice={management.state?.outcome === "unknown" ? {
+          testID: "plugins.managementUnknown",
+          title: t("plugins.notice.title.resultUnknown"),
+          icon: "warning",
+          actions: [{
+            label: t("plugins.management.checkResult"),
+            testID: "plugins.checkManagementResult",
+            disabled: !online || management.state.busy,
+            onPress: () => { void management.controller?.reconcile(); },
+          }],
+        } : undefined}
         online={online}
         model={model}
         previewLabel={
           demoScenario
             ? t("plugins.demo.hint") + " · " + demoScenario.label
             : undefined
+        }
+        settingsContent={
+          originalSettings && managed ? (
+            <PluginOriginalSettings
+              key={JSON.stringify([
+                selected.row.host.deviceId,
+                managed.instanceKey,
+                pluginApprovalToken(managed),
+                connectionEpoch,
+              ])}
+              identity={{
+                deviceId: selected.row.host.deviceId,
+                instanceId: managed.instanceKey,
+                expectedInstalledApproval: pluginApprovalToken(managed),
+              }}
+              active={focused && online && detailOpen && !managementPending}
+              onNotice={(notice) => {
+                if (
+                  renderedGeneration === detailGeneration.current &&
+                  liveSelection.current.key === selected.row.key &&
+                  liveSelection.current.focused &&
+                  isMobileAuthOwnerCurrent(noticeOwner)
+                )
+                  showSettingsNotice(notice);
+              }}
+            />
+          ) : undefined
         }
         settingsOpen={settingsOpen}
         onEnabledChange={(value) => {
@@ -686,7 +1002,6 @@ function PluginDirectory() {
         onChooseTask={() => {
           if (model.canUseTasks && !busy) setTaskPicker(true);
         }}
-        onSettings={() => setSettingsOpen(true)}
         onResolveStatus={resolveStatus}
       />
     ) : (
@@ -706,6 +1021,17 @@ function PluginDirectory() {
             : t("plugins.title")
         }
         onBack={goBack}
+        rightToolbar={
+          Platform.OS === "ios" &&
+          selected &&
+          !(selected.surface && !detailOpen) ? (
+            <PluginManagementMenu
+              nativeToolbar
+              actions={managementActions}
+              onAction={(action) => void manageAction(action)}
+            />
+          ) : undefined
+        }
         right={
           selected?.surface && !detailOpen ? (
             <Pressable
@@ -717,6 +1043,13 @@ function PluginDirectory() {
             >
               <Info size={iconSize.md} color={colors.textPrimary} />
             </Pressable>
+          ) : selected ? (
+            Platform.OS === "ios" ? undefined : (
+              <PluginManagementMenu
+                actions={managementActions}
+                onAction={(action) => void manageAction(action)}
+              />
+            )
           ) : undefined
         }
       />
@@ -745,6 +1078,19 @@ function PluginDirectory() {
           }}
         />
       ) : null}
+      {selected && management.state && management.controller ? (
+        <PluginManagementConfirmation
+          key={JSON.stringify([
+            selected.row.key,
+            auth.accountGeneration,
+            connectionEpoch,
+          ])}
+          state={management.state}
+          controller={management.controller}
+          deviceName={selected.row.host.deviceName}
+          active={focused && online && detailOpen}
+        />
+      ) : null}
       <View style={styles.layout}>
         {wide || !selected ? directory : null}
         {wide || selected ? (
@@ -765,6 +1111,14 @@ function PluginDirectory() {
               </View>
             ) : null}
             {!selected?.surface || detailOpen ? detailView : null}
+            {settingsNotice && transientScope.current === noticeScope ? (
+              <View pointerEvents="none" style={styles.toast}>
+                <PluginNotice
+                  testID="plugins.transientNotice"
+                  title={settingsNotice}
+                />
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -773,6 +1127,12 @@ function PluginDirectory() {
 }
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    toast: {
+      position: "absolute",
+      top: spacing.md,
+      left: spacing.lg + spacing.xs,
+      right: spacing.lg + spacing.xs,
+    },
     hidden: { display: "none" },
     root: { flex: 1, backgroundColor: c.surface },
     layout: { flex: 1, flexDirection: "row" },

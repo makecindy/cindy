@@ -131,6 +131,8 @@ export interface AgentRuntimeConfig {
 
   /**
    * Host-managed executable directories to prepend to agent subprocess PATH.
+   * On macOS/Linux, Codex restores the login shell environment, moving these after
+   * the user's PATH; only the Codex package's own codex-path stays at the front.
    *
    * Only agents whose executable lookup is safe for PATH-based discovery should consume this.
    * PI intentionally does not: Windows may resolve an executable from cwd before PATH.

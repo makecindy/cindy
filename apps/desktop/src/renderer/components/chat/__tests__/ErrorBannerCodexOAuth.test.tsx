@@ -73,7 +73,10 @@ function deferred<T>() {
 }
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+  }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -1174,6 +1177,20 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
     },
   );
+
+  // Unit regression: a pending switch still has the previous local route in its projection.
+  // Group quota exhaustion must not offer spending a reset card on that unrelated account.
+  it('keeps group quota waits without reading the previous local account reset credits', async () => {
+    render(<ErrorBanner error="[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached"
+      retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" providerId="openai"
+      usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
+      usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }} onCancelUsageLimitWait={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+    expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'codexResets.limitAction' })).toBeNull();
+  });
 
   it('explains an organization Codex limit and keeps the raw 429 response available', () => {
     const rawError =

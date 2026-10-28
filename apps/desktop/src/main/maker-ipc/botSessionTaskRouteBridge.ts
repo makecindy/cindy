@@ -13,7 +13,7 @@ interface TaskRouteBridgeDeps {
       model: string;
       providerId: string | null;
       effort: SessionRuntimeProfile['effort'];
-      fastMode: boolean;
+      fastMode: boolean | 'ultrafast';
     };
   }): Promise<SessionRuntimeSetResult>;
   readConfiguredCandidate(

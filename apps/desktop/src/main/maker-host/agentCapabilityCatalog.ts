@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { getHarnessMcpCatalog } from './harnessMcpCatalog.js';
 import type {
   AgentMcpServerToolsReport,
   AgentMcpServerToolsState,
@@ -10,7 +11,7 @@ import type {
 
 export const RUNTIME_MCP_NAMES_KEY = 'cindyRuntimeMcpServerNames';
 
-export interface AgentCapabilityQuery { server?: string; category?: string; }
+export interface AgentCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; }
 
 /** The caller session's engine view of one MCP server; null = engine has no such entry. */
 export type HarnessMcpToolsReader = (server: string) => Promise<AgentMcpServerToolsReport | null>;
@@ -30,12 +31,13 @@ const HARNESS_STATE_MESSAGES: Record<Exclude<AgentMcpServerToolsState, 'connecte
 /** Read the actual provider registrations. This catalog never grants permissions or starts tools. */
 export async function readAgentCapabilityCatalog(
   providers: readonly McpProvider[],
-  context: McpProviderContext,
+  context: McpProviderContext & { remoteHostId?: string | null },
   query: AgentCapabilityQuery,
   availability: (provider: McpProvider) => string | null = () => null,
   readHarnessTools?: HarnessMcpToolsReader,
 ) {
-  const declarations = providers.map((provider) => {
+  const harness = getHarnessMcpCatalog(context);
+  const declarations = [...providers.filter((provider) => !harness.some((entry) => entry.name === provider.name)).map((provider) => {
     let reason: string | null = null;
     try {
       const mounted = context.vendorOptions?.[RUNTIME_MCP_NAMES_KEY];
@@ -52,24 +54,29 @@ export async function readAgentCapabilityCatalog(
       ...(reason ? { reason } : {}),
       ...(provider.capability?.discovery ? { discovery: provider.capability.discovery } : {}),
     };
-  });
+  }), ...harness
+    .map((entry) => ({
+      server: entry.name, title: entry.title, description: entry.description, source: entry.source,
+      status: entry.available ? 'engine-managed' : 'unavailable',
+      ...(!entry.available ? { reason: 'transport-unavailable-for-current-runtime' } : {}),
+    }))];
   if (!query.server) return {
     ok: true, agent: context.agentKind, capabilities: declarations,
-    hint: 'registered 表示已注册且入口条件满足，连接、设备与具体操作仍以发现和执行回执为准。指定 server 查询实际工具；插件沿其 discovery 入口展开。原生文件、命令行与子 Agent 工具由当前引擎提供，不属于 MCP 工具计数。',
+    hint: 'registered 表示已注册且入口条件满足；engine-managed 表示由引擎管理，不代表已连接或已授权。连接、设备与具体操作仍以发现和执行回执为准。指定 server 查询实际工具；插件沿其 discovery 入口展开。原生文件、命令行与子 Agent 工具由当前引擎提供，不属于 MCP 工具计数。',
   };
   const declaration = declarations.find((item) => item.server === query.server);
   if (!declaration) return { ok: false, errorCode: 'UNKNOWN_CAPABILITY', available: declarations.map((item) => item.server) };
   if (declaration.status === 'unavailable') return { ok: false, capability: declaration };
-  const provider = providers.find((item) => item.name === query.server)!;
   // External connections are owned by the harness; never start another process,
   // inspect its credentials or execute a custom server's business operations.
-  if (declaration.source !== 'builtin') return readHarnessCapability(declaration, readHarnessTools);
+  if (declaration.source !== 'builtin') return readHarnessCapability(declaration, readHarnessTools, query);
+  const provider = providers.find((item) => item.name === query.server)!;
   let instance: McpServer | undefined;
   let client: Client | undefined;
   try {
     const config = provider.toClaudeSdkConfig?.({ ...context, getSessionContext: () => context });
     const candidate = config && typeof config === 'object' && 'instance' in config ? config.instance : undefined;
-    if (!(candidate instanceof McpServer)) return await readHarnessCapability(declaration, readHarnessTools);
+    if (!(candidate instanceof McpServer)) return await readHarnessCapability(declaration, readHarnessTools, query);
     instance = candidate;
     client = new Client({ name: 'cindy-capability-catalog', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -106,6 +113,7 @@ export async function readAgentCapabilityCatalog(
 async function readHarnessCapability<T extends { server: string }>(
   declaration: T,
   readHarnessTools: HarnessMcpToolsReader | undefined,
+  query: AgentCapabilityQuery,
 ) {
   const base = { capability: declaration, discovery: 'harness-mcp' as const };
   if (!readHarnessTools) return {
@@ -121,9 +129,11 @@ async function readHarnessCapability<T extends { server: string }>(
         timer = setTimeout(() => reject(new Error('timeout')), HARNESS_READ_TIMEOUT_MS);
       }),
     ]);
-  } catch {
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === 'AppServerRequestTimeoutError' || error.message === 'timeout');
     return {
       ok: false, ...base, errorCode: 'HARNESS_DISCOVERY_FAILED',
+      reason: timedOut ? 'timeout' : 'engine-read-failed',
       message: '读取当前引擎的 MCP 工具目录失败，暂时无法确认此服务的工具；稍后重试。',
     };
   } finally {
@@ -137,13 +147,19 @@ async function readHarnessCapability<T extends { server: string }>(
     ok: false, ...base, errorCode: 'HARNESS_MCP_NOT_READY', engineState: report.state,
     message: HARNESS_STATE_MESSAGES[report.state],
   };
+  const term = query.toolQuery?.trim().toLocaleLowerCase();
+  const matching = term ? report.tools.filter((tool) => `${tool.name}\n${tool.description ?? ''}`.toLocaleLowerCase().includes(term)) : report.tools;
+  const offset = Math.max(0, Math.floor(query.offset ?? 0));
+  const page = matching.slice(offset, offset + 50);
   return {
     ok: true, ...base, engineState: report.state,
-    tools: report.tools.map((tool) => tool.description && tool.description.length > TOOL_DESCRIPTION_MAX_CHARS
+    totalTools: report.tools.length, matchedTools: matching.length,
+    nextOffset: offset + page.length < matching.length ? offset + page.length : null,
+    tools: page.map((tool) => tool.description && tool.description.length > TOOL_DESCRIPTION_MAX_CHARS
       ? { ...tool, description: `${tool.description.slice(0, TOOL_DESCRIPTION_MAX_CHARS)}…` }
       : tool),
     hint: report.tools.length > 0
-      ? '以上是当前引擎在本任务中为此服务实际持有的工具（服务端原始名称），引擎会按自身规则命名后提供（通常带服务名前缀）。'
+      ? '以上是当前引擎在本任务中实际持有的工具（服务端原始名称）。可用 toolQuery 缩小范围；有 nextOffset 时沿用同一 server 和 toolQuery 查询下一页。引擎会按自身规则命名后提供工具（通常带服务名前缀）。'
       : '此服务已连接，但没有提供任何工具。',
   };
 }

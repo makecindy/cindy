@@ -1531,6 +1531,7 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
       isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
       isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
+      canPrependToAnswer: (item) => item.type !== 'message' || item.message.source.agentMeta?.assistantPhase !== 'commentary',
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,
       isActivity: isWorkActivityItem,

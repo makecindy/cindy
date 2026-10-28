@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupComposerPlanState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -47,6 +47,32 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  // The remote resource must preserve the queue semantics before choosing composer copy.
+  it.each([
+    ['all', 'talk', true, { kind: 'running', botName: '咪咪', talk: true }],
+    ['mentioned', 'talk', true, null],
+    ['all', 'talk', false, null],
+    ['mentioned', 'future', 'true', { kind: 'running', botName: '' }],
+  ] as const)('keeps the host queue reply policy through parsing (%s, %s, %s)', (replyMode, kind, canAdd, expected) => {
+    const data = chatData({ replyMode, plans: [{ ...chatData().plans[0], status: 'running', kind, canAdd }] });
+    const parsed = parseBotGroupChatData(data)!;
+    expect(botGroupComposerPlanState(openBotGroupPlan(parsed), parsed.replyMode)).toEqual(expected);
+    expect(parsed.plans[0].kind).toBe(kind === 'talk' ? 'talk' : undefined);
+    expect(parsed.plans[0].canAdd).toBe(typeof canAdd === 'boolean' ? canAdd : undefined);
+  });
+
+  // The new public group image field must not turn a host path, credentialed URL
+  // or malformed input into a phone image source; keep the legacy fallback (unit).
+  it.each([null, 7, 'http://example.invalid/avatar.png', 'file:///avatar.png',
+    'https://user:pass@example.invalid/avatar.png', 'https://', `https://example.invalid/${'x'.repeat(4_096)}`,
+  ])('drops an invalid member image URL without dropping its fallback: %s', avatarUrl => {
+    const member = parseBotGroupChatData(chatData({ members: [
+      { botId: 'person', name: 'Person', avatar: '🙂', avatarUrl, status: 'active' },
+    ] }))!.members[0];
+    expect(member.avatarUrl).toBeUndefined();
+    expect(member.avatar).toBe('🙂');
+  });
+
   it('retains validated management roles, revisions and capability without granting them to old hosts', () => {
     const parsed = parseBotGroupChatData(chatData({ revision: 3, supportsSettingsManagement: true,
       members: [{ botId: 'mimi', name: 'Mimi', role: 'admin', isOwned: true }] }));
@@ -284,5 +310,9 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['new'] }).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['other', 'picked'] }).clientId).toBe('c3');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: true, botIds: ['picked', 'other'] }).clientId).toBe('c4');
+    const quoted = nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original');
+    expect(quoted.clientId).toBe('c5');
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original')).toBe(quoted);
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
 });

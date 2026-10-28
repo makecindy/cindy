@@ -104,10 +104,16 @@
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "タスク完了通知",
-    "taskDoneHint": "パソコンのタスクが完了・失敗・返信待ちになると、最新の返信とともに通知します。",
-    "permissionDenied": "通知がオフです。iOS の「設定 → 通知 → {{appName}}」で許可してください。",
-    "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。"
+    "taskDone": "メッセージとタスクの通知",
+    "taskDoneHint": "チャットの新着や、タスクの完了・エラー・返信待ちを通知します。",
+    "permissionDenied": "システム設定で Cindy の通知を許可してください。",
+    "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。",
+    "preview": "チャット内容をプレビュー",
+    "background": "バックグラウンドで接続を維持",
+    "backgroundActive": "バックグラウンドでメッセージを受信中",
+    "backgroundStop": "受信を停止",
+    "backgroundHint": "Google を使わずに接続し、常駐通知を表示します。通知からいつでも停止できます。",
+    "googleUnavailable": "Google プッシュ通知を利用できません。バックグラウンド接続で受信できます。"
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",

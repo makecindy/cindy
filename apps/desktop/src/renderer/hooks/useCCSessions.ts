@@ -53,7 +53,7 @@ interface UseCCSessionsReturn {
     workingDir?: string;
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
     agentKind?: AgentKind;
@@ -156,7 +156,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       workingDir?: string;
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;
       agentKind?: AgentKind;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
@@ -170,6 +170,8 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create → mapper 落盘。 */
       providerId?: string | null;
       source?: 'cindy-make';
+      /** 新建页的未发送任务(见 sessionService.create)。 */
+      provisional?: boolean;
     }): Promise<Session | null> => {
       try {
         const newSession = await sessionService.create({

@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider } from '../provider-identity.js';
+import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, supportsSubscriptionFastPolicy } from '../provider-identity.js';
 import type { Provider } from '../types.js';
 
 describe('connection identity vs public catalog identity', () => {
+  it('offers Fast controls only for actual OpenAI and Claude subscription connections', () => {
+    for (const [id, native] of [['openai', undefined], ['account-1', 'codex'], ['anthropic', undefined], ['claude-login', 'claude']] as const) {
+      expect(supportsSubscriptionFastPolicy({ id, auth: { method: 'oauth', native } })).toBe(true);
+      expect(supportsSubscriptionFastPolicy({ id, auth: { method: 'apiKey', native } })).toBe(false);
+    }
+    expect(supportsSubscriptionFastPolicy({ id: 'xai', auth: { method: 'oauth', native: 'xai' } })).toBe(false);
+    expect(supportsSubscriptionFastPolicy(null)).toBe(false);
+  });
   it.each([
     ['openai', 'codex', [false, true, true]],
     ['openai-account', 'codex', [true, true, true]],

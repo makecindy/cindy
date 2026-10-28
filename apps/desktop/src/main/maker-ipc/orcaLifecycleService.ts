@@ -1,9 +1,9 @@
 import type { AgentKind } from '@cindy/maker-core';
 
+import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort } from './orcaTeamService.js';
-import { normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
 import type {
   OrcaTeamSnapshot,
   OrcaWorkerCreateInTeamParams,
@@ -26,7 +26,7 @@ export interface OrcaEnableTeamParams {
   label?: string;
   model?: string;
   effort?: OrcaWorkerEffort;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
   providerId?: string | null;
   delegateTask?: string;
@@ -36,8 +36,9 @@ export interface OrcaEnableTeamParams {
   workerPermissionMode?: OrcaWorkerPermissionMode;
   /** 首个 Worker 放到同账号另一台电脑运行；语义见 OrcaWorkerCreateParams.executionDeviceId。 */
   executionDeviceId?: string;
-  /** 运行设备上的工作目录；只在指定运行设备时生效。 */
+  /** 显式工作目录；本机可选项目，指定运行设备时为那台电脑上的路径。 */
   workingDir?: string;
+  worktree?: OrcaWorkerCreateParams['worktree'];
   /** 首个 Worker 的 Agent 所在位置(远程供应商)；语义见 OrcaWorkerCreateParams.agentDeviceId。 */
   agentDeviceId?: string | null;
 }
@@ -104,6 +105,7 @@ export interface OrcaLifecycleDeps {
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -163,9 +165,10 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     ...(params.executionDeviceId
       ? {
           executionDeviceId: params.executionDeviceId,
-          ...(params.workingDir ? { workingDir: params.workingDir } : {}),
         }
       : {}),
+    ...(params.workingDir !== undefined ? { workingDir: params.workingDir } : {}),
+    ...(params.worktree ? { worktree: params.worktree } : {}),
     ...(params.agentDeviceId !== undefined ? { agentDeviceId: params.agentDeviceId } : {}),
   };
 }
@@ -217,6 +220,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function dispatchInitialTask(params: {
     workerSessionId: string;
     message: string | undefined;
+    imagePaths?: string[];
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult | undefined> {
     if (!params.message) return undefined;
@@ -236,6 +240,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       const result = await deps.dispatchWorkerTask({
         targetSessionId: params.workerSessionId,
         message: params.message,
+        ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
         dispatchMeta: {
           source: dispatchSource,
           context: params.context,
@@ -288,6 +293,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
           message: initialTask,
+          ...(params.initialTaskImages ? { imagePaths: params.initialTaskImages } : {}),
           context: `create_worker/${created.workerSessionId}/initial_task`,
         }, assertCreatedCurrent);
       } else {

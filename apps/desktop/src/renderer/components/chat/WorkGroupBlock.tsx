@@ -116,6 +116,8 @@ export interface WorkGroupBlockProps {
    *  the first activity — falling back to the first activity timestamp. */
   startedAtMs?: number;
   childItems: WorkGroupChild[];
+  /** The header hugs its text (teammate chats) instead of pinning the chevron to the far edge. */
+  fitHeader?: boolean;
 }
 
 function ToolActivityRow({ activity }: { activity: ProjectedToolActivity }) {
@@ -344,6 +346,7 @@ export function WorkGroupBlock({
   isStreaming = false,
   startedAtMs,
   childItems,
+  fitHeader = false,
 }: WorkGroupBlockProps) {
   const { t } = useTranslation();
   const { expanded: rememberedExpanded, setExpanded } = useExpandedBlockMemory(blockId);
@@ -480,7 +483,7 @@ export function WorkGroupBlock({
           data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
-            'flex w-full items-center gap-1.5 py-[2px]',
+            fitHeader ? 'flex w-fit max-w-full items-center gap-1.5 py-[2px]' : 'flex w-full items-center gap-1.5 py-[2px]',
             'select-none',
             compact && 'min-h-8 rounded-full px-2 focus-ring hover:bg-[var(--surface-hover)]',
             'text-left',
@@ -499,7 +502,7 @@ export function WorkGroupBlock({
           <span className="text-14 text-[var(--msg-tool-card-chevron)] truncate min-w-0 translate-y-[1px]">
             {summaryText}
           </span>
-          <div className="flex-1" />
+          {!fitHeader && <div className="flex-1" />}
           {!compact && isStreaming && startedAtMs !== undefined && (
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
               {formatDuration(elapsedMs, t)}

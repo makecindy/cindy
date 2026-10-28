@@ -182,7 +182,9 @@ export class RichAnswerStream {
         throw Error("sequence");
       const seq = Number(op.seq);
       if (seq <= this.seq) return;
-      if (seq !== this.seq + 1) throw Error("gap");
+      // A malformed or absent line leaves a numbering gap: committed content stays,
+      // the missing operations are reported, and later lines still apply.
+      this.issues += Math.min(seq - this.seq - 1, MAX_NODES);
       this.seq = seq;
       if (op.version !== undefined && op.version !== 1) throw Error("version");
       if (typeof op.id !== "string" || !ID.test(op.id)) throw Error("id");
@@ -555,6 +557,58 @@ export function richAction(
   return changes;
 }
 
+/** Optional message action. The host supplies the current conversation; generated
+ * content cannot select a recipient, tool or command. Nothing runs on value changes. */
+export function richSendText(node: RichNode, values: RichValues): string | undefined {
+  if (node.kind !== "button" && node.kind !== "form") return undefined;
+  const text = richEvaluate(node.props.send, values);
+  return typeof text === "string" && text.trim() && text.length <= 16_000
+    ? text.trim() : undefined;
+}
+
+export type RichMessageSender = (text: string) => Promise<boolean>;
+export type RichSubmissionStatus = "idle" | "sending" | "sent" | "failed";
+
+/** Click receipts live outside model-editable bindings. Pending submissions survive
+ * virtualization, and failed sends leave controls untouched for an explicit retry. */
+export class RichSubmissionController {
+  private pending = new Set<string>();
+  private failed = new Set<string>();
+  private listeners = new Set<() => void>();
+  constructor(private memory: RichInteractionMemory) {}
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    const unsubscribe = this.memory.subscribe(listener);
+    return () => { this.listeners.delete(listener); unsubscribe(); };
+  };
+  private notify() { this.listeners.forEach(listener => listener()); }
+  status(key: string, text: string | undefined): RichSubmissionStatus {
+    if (this.pending.has(key)) return "sending";
+    if (text !== undefined && this.memory.get(key).text === text) return "sent";
+    return this.failed.has(key) ? "failed" : "idle";
+  }
+  async submit(key: string, text: string, send: RichMessageSender): Promise<void> {
+    if (["sending", "sent"].includes(this.status(key, text))) return;
+    this.pending.add(key);
+    this.failed.delete(key);
+    this.notify();
+    try {
+      await this.memory.load();
+      if (this.memory.get(key).text === text) return;
+      if (!await send(text)) throw new Error("message-not-accepted");
+      this.memory.set(key, { text });
+      this.memory.flushSync();
+      await this.memory.flush();
+    } catch {
+      this.failed.add(key);
+      if (this.failed.size > 256) this.failed.delete(this.failed.values().next().value!);
+    } finally {
+      this.pending.delete(key);
+      this.notify();
+    }
+  }
+}
+
 /** Route media and links through the existing Markdown trust and file-origin path. */
 export function richMarkdown(node: RichNode): string | null {
   const text = richString(node, "text");
@@ -901,13 +955,14 @@ export function compactRichAnswer(source: string): string {
 export function richMediaSource(node: RichNode): string | null {
   const src = richString(node, "src").trim();
   if (!src || /[\r\n]/.test(src)) return null;
+  const allowed = /^(https?|file|xdt-(?:file|image|video|audio)|cindy-(?:remote-)?media):\/\//i.exec(src);
   if (
     /^[a-zA-Z][\w+.-]*:/.test(src) &&
     !/^[a-zA-Z]:[\\/]/.test(src) &&
-    !/^(https?:\/\/|file:\/\/|xdt-(?:file|image|video|audio):\/\/|cindy-(?:remote-)?media:\/\/)/.test(
-      src,
-    )
+    !allowed
   )
     return null;
-  return src;
+  return allowed
+    ? allowed[1].toLowerCase() + src.slice(allowed[1].length)
+    : src;
 }

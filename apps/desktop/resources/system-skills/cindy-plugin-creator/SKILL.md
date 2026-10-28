@@ -15,7 +15,7 @@ Build a Cindy plugin from the user's request, or update an existing plugin. This
 2. Before writing code, read the [sandbox boundaries](references/plugin-sandbox.md) and [packaging workflow](references/plugin-packaging.md). Read the capability references below as needed; do not load the whole manual at once.
 3. For a new plugin, prefer ghost_forge_scaffold with the appropriate plain, agent-action, node-json-rpc or node-mcp template, then edit the generated files. For an existing plugin, preserve its identity, data and compatible behavior. Use schemaVersion: 3 for new manifests and declare the first stable Cindy version actually required.
 4. Implement and validate the requested behavior, including Light and Dark modes for any UI. Separate current Agent tool-call operations from autonomous plugin capabilities, as described in the manifest and Agent-call references. Use [tool discovery](references/plugin-tool-discovery.md) and [manuals](references/plugin-manual.md) for authoring the plugin's own discovery and workflow documentation.
-5. Call ghost_forge_pack to validate and produce the .cindy artifact. Report what was tested and what remains unverified. Packaging does not install or publish: use ghost_forge_install only when installation is requested, and follow [publishing](references/plugin-publishing.md) when publication is requested.
+5. Call ghost_forge_pack to validate and produce the .cindy artifact. Report what was tested and what remains unverified. Packaging does not install or publish: use ghost_forge_install only when installation is requested, and follow [public marketplace publication and attribution (§7.3–7.4)](references/plugin-packaging.md) for community publication, or [publishing signatures and review (§8)](references/plugin-publishing.md) as applicable. Read the releaseNotes contract in [manifest (§2)](references/plugin-manifest.md) before submitting a version.
 
 Cindy supplies the Forge tools. If they are unavailable in the current environment, explain the missing capability and continue any local source work that is possible; do not claim to have packaged, installed or published. The legacy ghost_forge_guide tool serves these same references by section number or title when needed. It is a compatibility entry point, not a second source of documentation.
 
@@ -55,6 +55,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
+- [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
 - [插件移动端页面接入与操作来源（§5.1）](references/plugin-mobile-pages.md)
 - [插件聊天卡片 card（§4.5）](references/plugin-chat-cards.md)
 - [插件设置页与自定义参数 settingsHtml / kv（§4.8）](references/plugin-settings.md)

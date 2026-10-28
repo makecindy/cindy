@@ -34,6 +34,14 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('allows Review start to run on the data-owning Desktop', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
   });
+
+  it('allows the read-only task context-window bounds query but no generic session write', () => {
+    // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-context-window-budget')).toBe(true);
+    // 通用写入口不因这条查询放开。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
+  });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
@@ -108,6 +116,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行会话未读已读回执(控制端看完会话,清被控端灵动岛 / 角标 / 侧栏未读)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('notification:clear-session-attention')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('agent-island:completion-action')).toBe(true);
     // mark 方向不放行:未读的产生真相只在被控端 main,远程不得凭空标未读。
     expect(REMOTE_INVOKE_ALLOWLIST.has('notification:mark-session-attention')).toBe(false);
   });
@@ -118,6 +127,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:schedule:get-runtime-state',
       'maker:worker:create',
       'maker:worker:dispatch-ui-assignment',
+      'maker:worker:update',
       'maker:session:enable-orca',
       'maker:rewind:commit',
       'maker:fork',
@@ -209,9 +219,21 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   });
 
   it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
+    // #6916: only the host display-name read is remotely callable; local preferences stay local.
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:set')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:delete')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
+  });
+
+  it('exposes host project aliases as a read-only snapshot and forwards invalidations', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-aliases')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:set')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:delete')).toBe(false);
+    expect(PUSH_FORWARD_ALLOWLIST.has('local-db:project-aliases:changed')).toBe(true);
   });
 
   it('放行 Git safety 只读查询(远程 Codex Rewind 按被控端 snapshot 设置 gate)', () => {
@@ -275,6 +297,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     for (const ch of [
       'worktree:detect-cwd',
       'worktree:list-branches',
+      'worktree:branch-sync-status',
+      'worktree:sync-branch',
       'worktree:suggest-name',
       'worktree:create',
       'worktree:discard-precreated',
@@ -431,6 +455,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'local-db:messages:deleted',
       'local-db:session:error-persisted',
       'sidebar-settings:project-order-changed',
+      'local-db:project-aliases:changed',
       SESSION_ACTIVITY_CHANNEL,
     ]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch)).toBe(true);

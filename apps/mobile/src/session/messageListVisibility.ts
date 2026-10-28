@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
 
 /** One store per LegendList lifetime; only rows whose visibility changes are notified. */
 export class MessageListVisibility {
@@ -45,4 +45,57 @@ export function useMessageListItemVisible(key: string): boolean {
   // without replaying the latest value. useSyncExternalStore closes that gap,
   // including the first layout notification arriving before this row subscribes.
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/** ScrollView rows report content coordinates; reuse the list's per-row subscriptions. */
+export class ScrollViewMessageVisibility extends MessageListVisibility {
+  private layouts = new Map<string, { y: number; height: number }>();
+  private offsetY = 0;
+  private height = 0;
+  private active = true;
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.refresh();
+  }
+
+  setViewport(offsetY: number, height: number): void {
+    this.offsetY = offsetY;
+    this.height = height;
+    this.refresh();
+  }
+
+  setHeight(height: number): void {
+    this.height = height;
+    this.refresh();
+  }
+
+  setLayout(key: string, layout: { y: number; height: number }): void {
+    this.layouts.set(key, layout);
+    this.refresh();
+  }
+
+  retain(keys: readonly string[]): void {
+    const retained = new Set(keys);
+    for (const key of this.layouts.keys()) if (!retained.has(key)) this.layouts.delete(key);
+    this.refresh();
+  }
+
+  private refresh(): void {
+    this.update([...this.layouts].map(([key, layout]) => ({
+      key,
+      isViewable: this.active && this.height > 0 && layout.height > 0
+        && layout.y < this.offsetY + this.height && layout.y + layout.height > this.offsetY,
+    })));
+  }
+}
+
+export function useScrollViewMessageVisibility(scope: string, keys: readonly string[], active = true): ScrollViewMessageVisibility {
+  const store = useMemo(() => new ScrollViewMessageVisibility(), [scope]);
+  useLayoutEffect(() => {
+    store.setActive(active);
+    return () => store.setActive(false);
+  }, [store, active]);
+  useEffect(() => store.retain(keys), [store, keys]);
+  return store;
 }

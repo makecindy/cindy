@@ -196,8 +196,8 @@ export async function readXaiSubscriptionUsageSnapshotForDeviceLink(providerId?:
   return await readSubscriptionAccountUsage(providerId) as XaiSubscriptionUsageSnapshot | null;
 }
 
-export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
-  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read();
+export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string, options?: { fresh?: boolean }): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
+  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read(options);
   if (subscriptionAccountKind(providerId) !== 'claude') return null;
   return await readSubscriptionAccountUsage(providerId) as import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null;
 }

@@ -43,7 +43,7 @@ export function LanguageSection() {
           >
             {t('settings.language.label')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.language.hint')}
           </p>
         </div>

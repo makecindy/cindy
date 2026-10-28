@@ -30,6 +30,27 @@ vi.mock('@/hooks/useDevicesProviders', () => ({
   },
 }));
 
+const usage = vi.hoisted(() => ({
+  localClaude: vi.fn(),
+  remoteClaude: vi.fn(),
+}));
+vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({ useClaudeSubscriptionUsage: usage.localClaude }));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({ useRemoteClaudeSubscriptionUsage: usage.remoteClaude }));
+vi.mock('@/hooks/useCodexRateLimits', () => ({ useCodexRateLimits: () => ({ snapshot: null }) }));
+vi.mock('@/hooks/useAccountUsage', () => ({ useAccountUsage: () => null }));
+vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
+  useXaiSubscriptionUsage: () => null,
+  requestXaiSubscriptionRefresh: vi.fn(),
+}));
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+  selectRemoteCodexAccountUsage: () => null,
+}));
+vi.mock('@/features/provider-group/RemoteProviderGroupMembers', () => ({
+  RemoteProviderGroupMembers: () => <div>Group members</div>,
+}));
+
 function provider(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
@@ -38,6 +59,7 @@ function provider(id: string, overrides: Record<string, unknown> = {}) {
     connected: true,
     remoteInvocationEnabled: true,
     routing: {},
+    auth: { method: 'api-key' },
     models: { 'claude-code': [{ id: 'opus', name: 'Opus 5.5' }, { id: 'hidden', name: 'Hidden' }] },
     ...overrides,
   };
@@ -47,6 +69,14 @@ beforeEach(() => {
   devices.value = [];
   catalogs.value = new Map();
   requestedIds.length = 0;
+  usage.localClaude.mockReset().mockImplementation((enabled: boolean) => enabled ? {
+    fiveHour: { utilization: 10, resetsAt: null },
+    updatedAt: Date.now(),
+  } : null);
+  usage.remoteClaude.mockReset().mockImplementation((deviceId: string | null) => deviceId === 'mini-a' ? {
+    fiveHour: { utilization: 37, resetsAt: null },
+    updatedAt: Date.now(),
+  } : null);
 });
 
 afterEach(() => cleanup());
@@ -178,5 +208,52 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     const list = screen.getByTestId('own-remote-provider-models');
     expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5']);
     expect(screen.queryByRole('switch')).toBeNull();
+  });
+
+  // 测试价值：通过真实详情、订阅 hook 与额度卡验证 provider-sharing.md §5.2 的只读远程额度。
+  // 现有测试只覆盖模型列表，hook 测试不能发现详情漏接额度；最小输入是一台电脑上的 OAuth 连接。
+  // tier: unit，隔离底层用量读取，不依赖网络；切换到无快照的电脑还应移除上一台的额度。
+  // 单独运行本文件：3.62s 墙钟（Vitest 2.43s，2026-10-22）。
+  it('shows the selected computer’s subscription quota without management actions and clears it on switching', () => {
+    const subscription = {
+      ...entry,
+      provider: { ...entry.provider, auth: { method: 'oauth' as const, native: 'claude' as const } },
+    };
+    const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('quotaCard.remainingPercent:{"percent":63}');
+    expect(usage.remoteClaude).toHaveBeenCalledWith('mini-a', 'anthropic');
+    expect(usage.localClaude.mock.calls.every(([enabled]) => !enabled)).toBe(true);
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+
+    rerender(<OwnRemoteProviderDetail entry={{ ...subscription, key: ownRemoteProviderKey('mini-b', 'anthropic'), deviceId: 'mini-b' }} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+    expect(usage.remoteClaude).toHaveBeenLastCalledWith('mini-b', 'anthropic');
+  });
+
+  it.each(['api-key', 'group'] as const)('does not read or show a top-level subscription quota for %s', (kind) => {
+    render(<OwnRemoteProviderDetail entry={kind === 'api-key' ? entry : {
+      ...entry,
+      provider: { ...entry.provider, auth: { method: 'oauth', native: 'claude' } },
+      group: {
+        strategy: 'least', autoSwitch: true,
+        members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
+      },
+    }} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+    expect(usage.remoteClaude.mock.calls.every(([deviceId]) => deviceId === null)).toBe(true);
+    if (kind === 'group') expect(screen.getByText('Group members')).toBeTruthy();
+  });
+
+  it('does not show an empty quota card when the remote account has no usage windows', () => {
+    usage.remoteClaude.mockReturnValue({ subscriptionType: 'max', updatedAt: Date.now() });
+    render(<OwnRemoteProviderDetail entry={{
+      ...entry,
+      provider: { ...entry.provider, auth: { method: 'oauth', native: 'claude' } },
+    }} />);
+    expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+    expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
   });
 });

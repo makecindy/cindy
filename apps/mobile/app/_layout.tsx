@@ -84,7 +84,7 @@ import {
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClipboardInvitationHistory';
-import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
+import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
 const holdSplash = () => undefined;
@@ -121,10 +121,9 @@ function NavigationGate() {
     [mode, colors],
   );
 
-  // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
-  // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
+  // 登录与本机首页偏好（伙伴段收起状态）就绪后再释放常驻 splash；深链同样在这里释放。
   // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
-  useHomeEntrySplashRelease(preferenceReady ? releaseSplash : holdSplash);
+  useHomeStartupSplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
@@ -184,11 +183,9 @@ function NavigationGate() {
             ...(Platform.OS === 'ios'
               ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
               : null),
-            // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
-            // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
-            // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;
-            // iOS < 26 默认就是边缘返回,本配置不改变其行为;Android 返回手势不走这条路径,不受影响。
-            gestureResponseDistance: { end: 44 },
+            // iOS 26 起返回手势与系统一致,内容区任意位置右滑即可返回;不要设 gestureResponseDistance,
+            // 否则会退回只认屏幕前缘起手。内容宽于视口的横向 ScrollView(表格/代码块)由
+            // react-native-screens 让滚动优先识别,不会被返回手势抢走。
           }}
         >
           <Stack.Screen name="sessions/[sessionId]" getId={({ params }) => recentTaskKey(params ?? {})} options={{
@@ -383,9 +380,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
-        <HomeEntryProvider>
-          <NavigationGate />
-        </HomeEntryProvider>
+        <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>
   );

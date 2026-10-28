@@ -1,3 +1,4 @@
+import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
 /** main / preload / renderer 共用的 IPC 错误类型。 */
@@ -70,6 +71,7 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
   | 'INVALID_PARAMS'
@@ -77,7 +79,12 @@ export type IpcErrorCode =
   | 'INTERNAL'
   | 'ALREADY_EXISTS'
   | 'PRECONDITION_FAILED'
+  | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
+  | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
   | 'PROVIDER_GROUP_CHANGED' // 编辑期间组设置已变化，拒绝覆盖，需重新读取
+  | 'SHARE_NOT_CONFIGURED'
+  | 'SHARE_UNAVAILABLE'
+  | 'SHARE_READ_FAILED'
   | 'HTML_PREVIEW_TOO_LARGE'
   | 'HTML_PREVIEW_UNSUPPORTED'
   // 本地模型切换窗口保护的可行动失败原因。device-link 继续降级为
@@ -99,6 +106,9 @@ export type IpcErrorCode =
   | 'SCHEDULER_NOT_READY'
   | 'PERMISSION_DENIED'
   | 'UNSUPPORTED_CAPABILITY'
+  | 'SSH_HARNESS_SWITCH_UNSUPPORTED'
+  | 'MODEL_SELECTION_UNAVAILABLE'
+  | 'HARNESS_SWITCH_NOT_READY'
   | 'SHARED_TASK_HOST_LIMIT'
   | 'SHARED_TASK_JOIN_LIMIT'
   | 'SHARED_TASK_GUEST_LIMIT'
@@ -236,6 +246,7 @@ export type IpcErrorCode =
   | 'DEVICE_LINK_DEVICE_UNRESPONSIVE' // 目标设备连续超时被熔断判定无响应(弱网 / 对端卡死),快速失败中
   | 'DEVICE_LINK_VERSION_MISMATCH' // 两端协议/版本不匹配
   | 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' // 远程媒体经 OSS 中转失败(出方向附件上传 / 入方向取媒体)
+  | 'DEVICE_LINK_MEDIA_ACCESS_DENIED' // 控制端源附件不可读，需重新添加可访问的副本
   | 'REMOTE_WORKDIR_INVALID' // 被控端工作目录路径非法
   | 'REMOTE_WORKDIR_NOT_FOUND' // 被控端工作目录不存在
   | 'REMOTE_WORKDIR_NOT_DIRECTORY' // 被控端工作路径存在但不是目录
@@ -332,13 +343,19 @@ export interface IpcError {
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
   'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
+  'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
+  'VOICE_SPEECH_TIMEOUT',
   'PROVIDER_GROUP_CHANGED',
+  'SHARE_NOT_CONFIGURED',
+  'SHARE_UNAVAILABLE',
+  'SHARE_READ_FAILED',
   'HTML_PREVIEW_TOO_LARGE',
   'HTML_PREVIEW_UNSUPPORTED',
   'MODEL_CONTEXT_USAGE_UNKNOWN',
@@ -356,6 +373,9 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SCHEDULER_NOT_READY',
   'PERMISSION_DENIED',
   'UNSUPPORTED_CAPABILITY',
+  'SSH_HARNESS_SWITCH_UNSUPPORTED',
+  'MODEL_SELECTION_UNAVAILABLE',
+  'HARNESS_SWITCH_NOT_READY',
   'SHARED_TASK_HOST_LIMIT',
   'SHARED_TASK_JOIN_LIMIT',
   'SHARED_TASK_GUEST_LIMIT',
@@ -454,6 +474,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   'DEVICE_LINK_VERSION_MISMATCH',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+  'DEVICE_LINK_MEDIA_ACCESS_DENIED',
   'REMOTE_WORKDIR_INVALID',
   'REMOTE_WORKDIR_NOT_FOUND',
   'REMOTE_WORKDIR_NOT_DIRECTORY',

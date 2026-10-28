@@ -387,18 +387,109 @@ describe('virtual workspace', () => {
     expect(workspace.mapOutputForAgent(Buffer.from(pathExpected))).toEqual(Buffer.from(pathValue));
   });
 
+  // 测试价值：生产入口 mapExecServerParams 必须给原生 exec-server 传递未经过 Shell
+  // 引用的 argv[0]。#6743 在 Windows 上因含空格的程序别名被加引号而报 os error 123；
+  // 现有覆盖只验证参数和命令文本映射。unit tier 的最小失败输入是一个含空格的程序目录别名。
+  it.each(['/home/agent/bin', 'C:\\Agent\\bin'])('maps executable aliases without shell quoting from %s', (virtual) => {
+    const programs = path.join(root, "Program Files 100% O'Brien");
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: virtual, to: programs }] });
+    const native = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const params = mapExecServerParams({
+      argv: [native.join(virtual, 'tool.exe'), '--version'],
+      cwd: pathToFileURL(root).href,
+    }, workspace, 'process/start');
+    expect(params).toEqual({
+      argv: [path.join(programs, 'tool.exe'), '--version'],
+      cwd: pathToFileURL(root).href,
+    });
+  });
+
+  it('preserves native executable paths, PATH names, relative names and literal quote characters', () => {
+    const workspace = new ExecutorWorkspace({
+      workingDir: root,
+      aliases: [{ from: '/agent/bin', to: path.join(root, 'Program Files') }],
+    });
+    for (const executable of ['pwsh', path.join(root, 'Program Files', 'pwsh.exe'), './tool', '"/agent/bin/pwsh.exe"']) {
+      expect(mapExecServerParams({ argv: [executable] }, workspace, 'process/start')).toEqual({ argv: [executable] });
+    }
+  });
+
   it('maps Codex request paths and commands before permission checks and projects text file bytes', async () => {
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     const params = mapExecServerParams({ path: 'file:///Users/agent/workspace/a.txt', dataBase64: Buffer.from(project).toString('base64') }, workspace);
     expect(params).toEqual({ path: pathToFileURL(path.join(project, 'a.txt')).href, dataBase64: Buffer.from(project).toString('base64') });
     expect(execServerActions('fs/writeFile', params, project)).toEqual([{ kind: 'write', path: path.join(project, 'a.txt') }]);
-    const result = mapExecServerResult({ result: { cwd: pathToFileURL(project).href } }, workspace);
+    const result = await mapExecServerResult({ result: { cwd: pathToFileURL(project).href } }, workspace);
     expect(JSON.stringify(result)).toContain('file:///Users/agent/workspace');
-    const output = mapExecServerResult({ method: 'process/output', params: { chunk: Buffer.from(project).toString('base64') } }, workspace) as any;
+    const output = await mapExecServerResult({ method: 'process/output', params: { chunk: Buffer.from(project).toString('base64') } }, workspace) as any;
     expect(Buffer.from(output.params.chunk, 'base64').toString()).toBe('/Users/agent/workspace');
     const fileData = { result: { dataBase64: Buffer.from(project).toString('base64') } };
-    expect(Buffer.from((mapExecServerResult(fileData, workspace) as any).result.dataBase64, 'base64').toString()).toBe(project);
+    expect(Buffer.from((await mapExecServerResult(fileData, workspace) as any).result.dataBase64, 'base64').toString()).toBe(project);
     await executor.close();
+  });
+
+  // 测试价值：2026-10-21 实测 exec-server 输出逐字段同步 realpath 拖住主进程；旧路径测试只检查文本。
+  // 生产入口 mapExecServerResult：最小多字段结果应异步解析、每条结果复用，下一条刷新；unit，无真实等待。
+  it('shares asynchronous canonical paths across one reply and refreshes them for the next reply', async () => {
+    vi.stubEnv('PATH', '');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: '/agent/workspace', to: project }] });
+    workspace.setVirtualRoot('/agent');
+    const native = vi.spyOn(fs.realpathSync, 'native');
+    const realpath = vi.spyOn(fs.promises, 'realpath');
+    try {
+      const first = await mapExecServerResult({ result: { path: project } }, workspace);
+      expect(first).toEqual({ result: { path: '/agent/workspace' } });
+      expect(native).not.toHaveBeenCalled();
+      const reads = realpath.mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      realpath.mockClear();
+      const fields = { a: project, b: project, nested: [project, project] };
+      expect(await mapExecServerResult({ result: fields }, workspace)).toEqual({
+        result: { a: '/agent/workspace', b: '/agent/workspace', nested: ['/agent/workspace', '/agent/workspace'] },
+      });
+      expect(realpath).toHaveBeenCalledTimes(reads);
+      expect(native).not.toHaveBeenCalled();
+    } finally {
+      native.mockRestore();
+      realpath.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refreshes a retargeted directory link and resolves newly announced environment directories asynchronously', async ({ skip }) => {
+    vi.stubEnv('PATH', '');
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    const link = path.join(root, 'link');
+    fs.mkdirSync(first);
+    fs.mkdirSync(second);
+    try {
+      try { fs.symlinkSync(first, link, process.platform === 'win32' ? 'junction' : 'dir'); }
+      catch { return skip(); }
+      const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: '/agent/workspace', to: link }] });
+      workspace.setVirtualRoot('/agent');
+      expect(await mapExecServerResult({ result: first }, workspace)).toEqual({ result: '/agent/workspace' });
+      fs.unlinkSync(link);
+      fs.symlinkSync(second, link, process.platform === 'win32' ? 'junction' : 'dir');
+      const native = vi.spyOn(fs.realpathSync, 'native');
+      try {
+        expect(await mapExecServerResult({ result: { text: second, path: pathToFileURL(second).href } }, workspace))
+          .toEqual({ result: { text: '/agent/workspace', path: 'file:///agent/workspace' } });
+        const temp = path.join(root, 'announced temp');
+        fs.mkdirSync(temp);
+        const value = await mapExecServerResult({ result: { environmentInfo: { tempDir: pathToFileURL(temp).href } } }, workspace) as {
+          result: { environmentInfo: { tempDir: string } };
+        };
+        expect(value.result.environmentInfo.tempDir).toMatch(/^file:\/\/\/agent\/additional\/runtime-/);
+        expect(native).not.toHaveBeenCalled();
+      } finally {
+        native.mockRestore();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.skipIf(process.platform === 'win32')('maps Codex sandbox permissions from a Windows agent and drops paths that only exist on the agent computer', () => {

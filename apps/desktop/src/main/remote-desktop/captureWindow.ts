@@ -24,12 +24,12 @@ export class DesktopCaptureWindow {
     const base = DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
       ? new URL('index.html', DESKTOP_CAPTURE_VITE_DEV_SERVER_URL).href
       : CAPTURE_URL;
-    return this.mode === 'files' ? `${base}?mode=files` : base;
+    return this.mode === 'desktop' ? base : `${base}?mode=${this.mode}`;
   }
 
   constructor(
     private readonly failed: () => void,
-    private readonly mode: 'desktop' | 'files' = 'desktop',
+    private readonly mode: 'desktop' | 'files' | 'direct' = 'desktop',
   ) {}
 
   get contents() {
@@ -62,7 +62,7 @@ export class DesktopCaptureWindow {
   private getSession(): Session {
     if (this.captureSession) return this.captureSession;
     const ses = session.fromPartition(
-      this.mode === 'files' ? 'cindy-file-peer' : 'cindy-desktop-capture',
+      this.mode === 'desktop' ? 'cindy-desktop-capture' : this.mode === 'files' ? 'cindy-file-peer' : 'cindy-direct-peer',
       { cache: false },
     );
     this.captureSession = ses;
@@ -103,8 +103,8 @@ export class DesktopCaptureWindow {
           url.host !== 'capture' ||
           (url.search !== '' &&
             !(
-              this.mode === 'files' &&
-              url.search === '?mode=files' &&
+              this.mode !== 'desktop' &&
+              url.search === `?mode=${this.mode}` &&
               url.pathname === '/index.html'
             )) ||
           !/^\/(?:index\.html|assets\/[A-Za-z0-9_-]+\.js)$/.test(url.pathname)

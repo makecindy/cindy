@@ -3,12 +3,12 @@
  * ---------------------------------------------------------------------------
  * In-process MCP server (`cindy_orca`) 暴露多 worker 协同(Orca team)控制工具。
  *
- * 暴露 17 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
+ * 暴露 18 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
  *   start_team / create_worker / create_workers / send_to_worker / interrupt_worker /
  *   get_worker_queue_status / update_queued_message / cancel_queued_message /
  *   merge_queued_messages / steer_queued_message / move_queued_message /
  *   list_workers / switch_focus / idle_worker / end_team / archive_worker /
- *   list_available_models
+ *   update_worker / list_available_models
  *
  * 为什么直接注册而非走入口:协同工具藏在 list_tools/call_tool 后面时, 模型在用户
  * 说"开协同 / 派 worker"时往往发现不了 start_team, 反而误抓直接可见的
@@ -39,7 +39,7 @@ import {
   type XdtHelperToolCategory,
   type XdtHelperToolHandler,
 } from '../lizi_xdtHelperToolRegistry.js';
-// 17 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
+// 18 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
 // 物理搬迁收益低)。本 server 通过 DirectToolSink 把它们直接注册到 McpServer。
 import {
   registerStartTeamTool,
@@ -57,6 +57,7 @@ import {
   registerIdleWorkerTool,
   registerEndTeamTool,
   registerArchiveWorkerTool,
+  registerUpdateWorkerTool,
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
   type OrcaMessageDelivery,
@@ -73,7 +74,7 @@ import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
 // ── Host deps ──────────────────────────────────────────────────────────────
 
 /**
- * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 17 个 team 工具
+ * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 18 个 team 工具
  * (per-session 闭包绑定 ctx)。
  *
  * 回调返 Result 而非抛 Promise<T>: 让 host 能用 `HOST_NOT_READY` errorCode 表达
@@ -104,16 +105,18 @@ export interface OrcaMcpDeps {
     model?: string;
     providerId?: string;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-    fast?: boolean;
+    fast?: boolean | 'ultrafast';
     label: string;
     workingDir?: string;
+    worktree?: { sourceBranch?: string };
     executionDeviceId?: string;
     /** Worker 的 Agent 所在位置：null = 任务所在电脑；省略 = 跟 Lead。 */
     agentDeviceId?: string | null;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<
     ControlResult<
-      { workerId: string; workerSessionId: string; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
+      { workerId: string; workerSessionId: string; workingDir?: string; worktree?: { path: string; branch: string }; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
       'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
     >
   >;
@@ -135,6 +138,8 @@ export interface OrcaMcpDeps {
     message: string;
     /** 仅模型显式选择时传入;缺省等价 'queue'。 */
     delivery?: OrcaMessageDelivery;
+    /** 可选, 随消息发给 worker 的本机图片绝对路径; 仅本机 worker 支持。 */
+    images?: string[];
   }) => Promise<
     ControlResult<
       {
@@ -261,6 +266,18 @@ export interface OrcaMcpDeps {
   archiveWorker: (params: { callerLeadSessionId: string; workerId: string }) => Promise<
     ControlResult<{ workerId: string }, 'WORKER_NOT_FOUND'>
   >;
+  /** 修改已创建 worker 的角色名 / 标识。 */
+  updateWorker: (params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }) => Promise<
+    ControlResult<
+      { workerId: string; role: string; label: string | null },
+      'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL' | 'WORKER_STATE_CHANGED'
+    >
+  >;
   /** 列出 agent 可用 model 清单。 */
   listAvailableModels: ListAvailableModelsDeps['listAvailableModels'];
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */
@@ -303,6 +320,8 @@ export interface OrcaWorkspaceInfo {
     effort: string | null;
     focused: boolean;
     working_dir: string;
+    owns_worktree?: boolean;
+    worktree?: { path: string; branch: string };
     /** 跑在另一台电脑上的 Worker 才有；working_dir 是那台电脑上的目录。 */
     execution_device?: {
       device_id: string;
@@ -411,7 +430,7 @@ function registerOrcaDiagnosticTools(
     name: 'get_workspace_info',
     category: 'control',
     description:
-      'List the current Orca workflow and worker sessions, including whether each worker queue is paused. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
+      'List the current Orca workflow and worker sessions, including whether each worker queue is paused. owns_worktree is true only for a Worker-owned checkout recycled on archive; worktree then includes its path and branch. Inheriting the Lead directory does not grant ownership. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
     inputShape: {},
     handler: async () => {
       const ctx = resolveLeadSessionContext(getSessionContext);
@@ -487,7 +506,7 @@ export function createOrcaMcpServer(
     version: '1.0.0',
   });
 
-  // 17 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
+  // 18 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
   // (sessionId / vendorOptions), 调用时把请求路由回 host。
   const sink = new DirectToolSink(server, deps.authorizeCall, () => resolveLiziMcpSessionContext(ctx).sessionId);
   const getSessionContext = () => resolveLiziMcpSessionContext(ctx);
@@ -559,6 +578,10 @@ export function createOrcaMcpServer(
   registerArchiveWorkerTool(sink, {
     getSessionContext,
     archiveWorker: deps.archiveWorker,
+  });
+  registerUpdateWorkerTool(sink, {
+    getSessionContext,
+    updateWorker: deps.updateWorker,
   });
   registerListAvailableModelsTool(sink, {
     getSessionContext,

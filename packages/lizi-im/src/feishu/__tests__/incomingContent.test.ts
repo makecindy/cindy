@@ -8,6 +8,9 @@ import { describe, it, expect } from 'vitest';
 import { parseIncoming } from '../incomingContent.js';
 
 describe('parseIncoming', () => {
+  it('keeps a literal merge envelope visible for asynchronous expansion', () => {
+    expect(parseIncoming('merge_forward', 'Merged and Forwarded Message').text).toBe('[合并转发消息]');
+  });
   it('text → text only', () => {
     const r = parseIncoming('text', JSON.stringify({ text: '  hello world  ' }));
     expect(r).toEqual({ text: 'hello world', attachments: [], unsupported: [] });

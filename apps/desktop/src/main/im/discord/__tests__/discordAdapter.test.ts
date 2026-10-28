@@ -84,7 +84,7 @@ describe('discord ImChannelAdapter characterization', () => {
   it('title, generated title prefix, and processing emoji match Discord contract', () => {
     expect(adapter.sessions.defaultTitle('9876543210')).toBe('Discord · 543210');
     expect(adapter.sessions.generatedTitlePrefix).toBe('Discord · ');
-    expect(adapter.processingEmoji).toBe('👨‍💻');
+    expect(adapter.processingEmoji).toBe('👩🏻‍💻');
     expect(adapter.queuedEmoji).toBe('👀');
   });
 

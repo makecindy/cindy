@@ -569,7 +569,7 @@ export function AtMentionPanel({
                           >
                             <FolderPlus
                               size={16}
-                              className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
+                              className="shrink-0 text-[var(--text-tertiary)]"
                             />
                             <Tip
                               text={isLibraryExtraDirSlot(p) ? extraDirDisplayLabel(p, libraryReadOnlyLabel) : p}

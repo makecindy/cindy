@@ -34,6 +34,30 @@ function makeDeps(fetchImpl: PublicUploadDeps['fetchImpl']): PublicUploadDeps {
 const BODY = new Uint8Array([1, 2, 3]);
 
 describe('uploadPublicAsset', () => {
+  it.each(['presign', 'put'] as const)('logs the original %s failure without leaking signed URLs', async (stage) => {
+    const onError = vi.fn();
+    const deps = makeDeps(async (url) => {
+      if (stage === 'put' && url.endsWith('/api/oss/presign-put')) return jsonResponse(200, PRESIGN_OK);
+      throw new Error(`socket closed: ${url}`);
+    });
+    const result = await uploadPublicAsset({ ...deps, onError }, { scene: 'avatar', contentType: 'image/png', body: BODY });
+    expect(result).toEqual({ ok: false, stage, status: 0 });
+    expect(onError).toHaveBeenCalledExactlyOnceWith(stage, expect.stringContaining('socket closed'));
+    const logged = JSON.stringify(onError.mock.calls);
+    expect(logged).toContain(stage === 'put' ? 'https://bucket.oss.example.invalid' : 'https://oss.example.invalid');
+    expect(logged).not.toContain('/cindy/public/avatar/u1/x.png');
+    expect(logged).not.toContain('?sig=1');
+  });
+
+  it('does not log response excerpts when presign returns malformed JSON', async () => {
+    const onError = vi.fn();
+    const result = await uploadPublicAsset({
+      ...makeDeps(async () => new Response('private display name')), onError,
+    }, { scene: 'avatar', contentType: 'image/png', body: BODY });
+    expect(result).toEqual({ ok: false, stage: 'presign', status: 0 });
+    expect(onError).toHaveBeenCalledExactlyOnceWith('presign', 'SyntaxError');
+  });
+
   it('成功链路:presign 带 Bearer/scene/size,PUT 原样携带返回 headers', async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {

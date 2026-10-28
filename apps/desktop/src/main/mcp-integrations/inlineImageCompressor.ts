@@ -51,6 +51,18 @@ const LADDER: ReadonlyArray<{ maxEdgePx: number; webpQuality: number }> = [
 
 const TIMEOUT_MS = 5_000;
 
+/** Decode untrusted plugin images even when their bytes already fit inline. */
+export async function isDecodableInlineImage(buffer: Buffer): Promise<boolean> {
+  const sharp = loadSharp();
+  if (!sharp) return false;
+  try {
+    await sharp(buffer, { failOn: 'warning' }).resize(1, 1).raw().toBuffer();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * CompressInlineImageFn 实现。返回压缩后的 { buffer, mime },或 null 表示
  * "按原样内联"(已达标 / 不可解码 / sharp 缺失 / 超时)。永不 throw。

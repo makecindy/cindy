@@ -69,6 +69,7 @@
     "copyStateCopied": "Copied",
     "copyStateFailed": "Copy failed",
     "copyStateCopy": "Copy",
+    "copyCode": "Copy Code",
     "thinkingHidden": "Thinking hidden",
     "thinkingDone": "Thought for {{duration}}",
     "thinkingActive": "Thinking {{elapsed}}",
@@ -103,6 +104,7 @@
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",
+    "sessionFallbackPill": "Continued from summary",
     "sessionResumedPill": "Resumed original session",
     "handoffContentDesc": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "handoffContentDescEnglishSource": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
@@ -171,7 +173,9 @@
     "diffEditCount": "{{n}} edits",
     "groupSentNamed": "Sent from group “{{name}}”",
     "groupSent": "Sent from a group",
-    "sourceGroupId": "Group ID: {{id}}"
+    "sourceGroupId": "Group ID: {{id}}",
+    "selectText": "Select Text",
+    "you": "You"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -232,6 +236,10 @@
     "cancel": "Cancel",
     "edit": "Edit",
     "steer": "Interject",
+    "steerQueued": "Not delivered yet. Your message is still queued.",
+    "moveUp": "Move earlier",
+    "moveDown": "Move later",
+    "cancelSend": "Cancel send",
     "collapseQueued": "Collapse queued messages",
     "expandRemainingQueued": "Expand {{n}} more queued messages",
     "collapse": "Collapse",
@@ -240,7 +248,15 @@
     "sendingMessage": "Sending message: {{text}}",
     "uploadingAttachments": "Uploading attachments {{uploaded}}/{{total}}",
     "delete": "Delete",
-    "retry": "Retry"
+    "retry": "Retry",
+    "notSent": "Not sent",
+    "imagesNotUploaded_one": "{{count}} image didn't upload",
+    "imagesNotUploaded_other": "{{count}} images didn't upload",
+    "waitingForComputer": "Sends when your computer is back",
+    "waitingForNetwork": "Sends when you’re back online",
+    "queued": "Queued",
+    "retryImage": "Upload this image again",
+    "waitingMessage": "Waiting to send: {{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -294,6 +310,7 @@
     "agentSwitchLocation": "Agent moved to {{device}}",
     "agentSwitchLocationThisComputer": "Agent moved back to this computer",
     "agentSwitchLocationOtherComputer": "Agent moved to another computer",
+    "agentSwitchLocationQuotaRebalance": "its quota should be used first",
     "learnStarted": "Skill learning started",
     "learnStartedBody": "Distillation runs in the background on desktop. When it's done, review the skill draft on desktop.",
     "learnFailed": "Skill learning couldn't start",
@@ -396,6 +413,10 @@
     "skillUpdated": "Updated skill: {{title}}"
   },
   "richAnswer": {
+    "send": "Send Message",
+    "sending": "Sending…",
+    "sent": "Submitted",
+    "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",

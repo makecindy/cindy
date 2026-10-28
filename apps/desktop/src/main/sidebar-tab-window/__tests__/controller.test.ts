@@ -225,6 +225,21 @@ describe('SidebarTabWindowsController', () => {
     expect(win.focus).toHaveBeenCalledTimes(2);
   });
 
+  // focus 的对外结果包括选中具体页签；后台插件请求不能抢原生窗口焦点。
+  it('sends the target tab selection to its host without native focus for background requests', () => {
+    const h = makeHarness();
+    h.controller.open(request('tab-a'));
+    const win = h.created[0];
+    h.controller.markRendererReady(h.wc(win));
+    h.controller.markPresentationReady(h.wc(win));
+    h.controller.open({ ...request('tab-b'), targetWindowId: h.controller.getState()['tab-a'].windowId });
+    win.focus.mockClear(); win.show.mockClear();
+    h.controller.focus('tab-a', { userInitiated: false });
+    expect(h.sends.at(-1)).toMatchObject({ channel: SIDEBAR_TAB_WINDOW_ASSIGNED_CHANNEL, payload: { revealTabId: 'tab-a' } });
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(win.show).not.toHaveBeenCalled();
+  });
+
   it('returns the tab to the sidebar with its snapshot on merge-back and destroys the window', () => {
     const h = makeHarness();
     h.controller.open(request('tab-a'));

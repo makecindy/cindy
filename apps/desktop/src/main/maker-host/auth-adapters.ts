@@ -57,6 +57,7 @@ import {
   resolveWindowsAclPrincipal,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
+import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
 
 export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import {
@@ -199,12 +200,7 @@ async function readCodexAccountId(authPath: string): Promise<string | null> {
 function codexAccountIdFromAuthJson(raw: string): string | null {
   try {
     const obj = JSON.parse(raw) as { tokens?: { account_id?: unknown; id_token?: unknown } };
-    if (typeof obj.tokens?.account_id === 'string' && obj.tokens.account_id.length > 0) {
-      return obj.tokens.account_id;
-    }
-    if (typeof obj.tokens?.id_token === 'string') {
-      return chatgptWorkspaceIdFromIdToken(obj.tokens.id_token);
-    }
+    return codexWorkspaceIdFromTokens(obj.tokens);
   } catch {
     /* 解析失败 → null */
   }
@@ -235,39 +231,13 @@ function readCodexRecoveryCredentialProof(
   }
 }
 
-interface ChatgptIdTokenClaims {
-  chatgpt_account_id?: unknown;
-  sub?: unknown;
-  'https://api.openai.com/auth'?: { chatgpt_account_id?: unknown };
-}
-
-function readChatgptIdTokenClaims(idToken: string): ChatgptIdTokenClaims | null {
-  try {
-    const part = idToken.split('.')[1];
-    if (!part) return null;
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(Buffer.from(b64, 'base64').toString('utf-8')) as ChatgptIdTokenClaims;
-  } catch {
-    return null;
-  }
-}
-
-/** Strict workspace identity; unlike header compatibility it never falls back to JWT sub. */
-function chatgptWorkspaceIdFromIdToken(idToken: string): string | null {
-  const claims = readChatgptIdTokenClaims(idToken);
-  const nested = claims?.['https://api.openai.com/auth']?.chatgpt_account_id;
-  if (typeof nested === 'string' && nested.length > 0) return nested;
-  const topLevel = claims?.chatgpt_account_id;
-  return typeof topLevel === 'string' && topLevel.length > 0 ? topLevel : null;
-}
-
 /**
  * 从 id_token JWT 提取 ChatGPT 账号 id（chatgpt-account-id 头用）。
  * 优先 `https://api.openai.com/auth`.chatgpt_account_id，回落顶层 chatgpt_account_id / sub。
  * export 供 anthropic-responses-bridge-host 复用(同一 auth.json、同一 claim 布局,单点维护)。
  */
 export function chatgptAccountIdFromIdToken(idToken: string): string | null {
-  const workspaceId = chatgptWorkspaceIdFromIdToken(idToken);
+  const workspaceId = codexWorkspaceIdFromTokens({ id_token: idToken });
   if (workspaceId) return workspaceId;
   const sub = readChatgptIdTokenClaims(idToken)?.sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;

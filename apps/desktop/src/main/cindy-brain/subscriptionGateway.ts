@@ -316,6 +316,11 @@ export class GhostSubscriptionGateway {
       })
       .finally(() => {
         e.waking = false;
+        // Events queued between flush's callback and this microtask must not wait
+        // for another event to wake them up (the queued event may be terminal).
+        const ghostId = installedGhostStoragePart(ghost);
+        if (this.entries.get(ghostId) === e && this.ownerScopeUsable(ownerScope)
+          && e.buffer.length > 0 && this.deps.isRunning(ghostId)) this.flush(ghostId, e, ownerScope);
       });
   }
 

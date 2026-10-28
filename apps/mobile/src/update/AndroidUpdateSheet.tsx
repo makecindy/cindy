@@ -47,7 +47,8 @@ export function AndroidUpdateSheet() {
   const state = useSyncExternalStore(androidInstaller.subscribe, androidInstaller.getSnapshot);
   // close() resets to idle at once; keep the last card on screen while the sheet animates away.
   const lastShown = useRef<AndroidInstallState | null>(null);
-  if (state.phase !== 'idle') lastShown.current = state;
+  const visible = state.phase !== 'idle' && !state.silent;
+  if (visible) lastShown.current = state;
   const shown = lastShown.current;
   return (
     <SheetModal
@@ -55,7 +56,7 @@ export function AndroidUpdateSheet() {
       backdropTestID="update.android.backdrop"
       onBackdropPress={androidInstaller.close}
       onRequestClose={androidInstaller.close}
-      visible={state.phase !== 'idle'}
+      visible={visible}
     >
       {shown ? <AndroidUpdateCard state={shown} /> : null}
     </SheetModal>

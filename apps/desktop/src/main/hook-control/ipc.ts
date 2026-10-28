@@ -28,8 +28,7 @@ import { t } from '../i18n.js';
 import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
 import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
 import { onChannelTurn } from '../maker-ipc/channelTurnSignal.js';
-import { getMaker, restartCodexAfterAuthModeChange } from '../maker-host/index.js';
-import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { getMaker } from '../maker-host/index.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { resolveFreshSourceBranch, WorktreeManager } from '../worktree/index.js';
@@ -125,17 +124,6 @@ let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
-let codexMcpRefreshPending = false;
-let codexMcpRefreshRunning = false;
-let codexMcpRefreshRetryTimer: NodeJS.Timeout | null = null;
-let latestSlackToolProviderEnabled = false;
-let codexMcpRefreshRetryDelayMs = 0;
-
-// busy 重试按指数退避:伙伴等本地 Codex 会话可能连续忙几十分钟,固定 2 秒重试会把日志刷满
-// (2026-10-19 实排:一次启动 987 条 deferred)。新的可用性变化会把退避归零。
-const CODEX_MCP_REFRESH_RETRY_MIN_MS = 2_000;
-const CODEX_MCP_REFRESH_RETRY_MAX_MS = 60_000;
-
 function hookControlAvailable(): boolean {
   return getAppCapabilities().canUseCindyAccountServices;
 }
@@ -180,64 +168,6 @@ function disabledHookView(): SlackHookView {
       defaultWorkspace: null,
     },
   };
-}
-
-/**
- * Slack 绑定态会改变 lizi_slack 是否出现在 Codex 的冻结 MCP 清单里。
- *
- * 先软关 Codex app-server(含 busy turn 的 fail-closed 检查)，成功后再关 HTTP
- * bridge / 清 spawn cache；反过来会让仍在运行的 session 指向已停 bridge。
- * busy 时保留 pending 并低频重试，避免「绑定发生在 Codex turn 中」后必须重启
- * 整个 App 才能看到工具。多次快速翻转合并到同一条串行 drain，不并发 dispose。
- */
-function requestCodexMcpRefreshForSlackAvailability(enabled: boolean): void {
-  latestSlackToolProviderEnabled = enabled;
-  codexMcpRefreshPending = true;
-  codexMcpRefreshRetryDelayMs = 0;
-  if (codexMcpRefreshRetryTimer !== null) {
-    clearTimeout(codexMcpRefreshRetryTimer);
-    codexMcpRefreshRetryTimer = null;
-  }
-  void drainCodexMcpRefreshForSlackAvailability();
-}
-
-async function drainCodexMcpRefreshForSlackAvailability(): Promise<void> {
-  if (codexMcpRefreshRunning) return;
-  codexMcpRefreshRunning = true;
-  try {
-    while (codexMcpRefreshPending) {
-      codexMcpRefreshPending = false;
-      try {
-        await restartCodexAfterAuthModeChange(shutdownCodexEnvironment);
-        codexMcpRefreshRetryDelayMs = 0;
-        log.info('Codex MCP environment refreshed after Slack provider availability changed', {
-          enabled: latestSlackToolProviderEnabled,
-        });
-      } catch (err) {
-        codexMcpRefreshPending = true;
-        codexMcpRefreshRetryDelayMs = codexMcpRefreshRetryDelayMs === 0
-          ? CODEX_MCP_REFRESH_RETRY_MIN_MS
-          : Math.min(codexMcpRefreshRetryDelayMs * 2, CODEX_MCP_REFRESH_RETRY_MAX_MS);
-        // 首次推迟 warn 一次;之后的退避重试只记 debug,避免同一原因刷屏。
-        const logDeferred = codexMcpRefreshRetryDelayMs === CODEX_MCP_REFRESH_RETRY_MIN_MS ? log.warn : log.debug;
-        logDeferred('Codex MCP refresh deferred after Slack provider availability changed', {
-          enabled: latestSlackToolProviderEnabled,
-          retryInMs: codexMcpRefreshRetryDelayMs,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        break;
-      }
-    }
-  } finally {
-    codexMcpRefreshRunning = false;
-  }
-  if (codexMcpRefreshPending && codexMcpRefreshRetryTimer === null) {
-    codexMcpRefreshRetryTimer = setTimeout(() => {
-      codexMcpRefreshRetryTimer = null;
-      void drainCodexMcpRefreshForSlackAvailability();
-    }, codexMcpRefreshRetryDelayMs || CODEX_MCP_REFRESH_RETRY_MIN_MS);
-    codexMcpRefreshRetryTimer.unref?.();
-  }
 }
 
 function broadcastStatus(view: SlackHookView): void {
@@ -648,7 +578,6 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // Pi is optional on unsupported/unprepared platforms.
       agents: getMaker().listAvailableAgents(),
       notifyStatus: broadcastStatus,
-      onSlackToolProviderEnabledChanged: requestCodexMcpRefreshForSlackAvailability,
       notifyPrefs: (view) => {
         persistUnsolicitedServerPrefs('slack', view.prefs);
         broadcastPrefs(slackLocalPrefsView());
@@ -771,6 +700,35 @@ function registerTrustedHookControlHandler(channel: string, handler: HookControl
     assertTrustedHookControlSender(event);
     return handler(event, ...args);
   });
+}
+
+/** Compare-and-set of the official X account's teammate (IPC and the teammate settings host share it). */
+export async function changeXCompanionBinding(botId: string | null, expectedBotId: string | null) {
+  requireHookControl();
+  const assertAccount = captureChannelAccount();
+  const { store: s, manager: m } = ensureInstances();
+  if (botId !== null) await requireXCompanion(botId);
+  assertAccount();
+  if ((s.get().xCompanionBotId ?? null) !== expectedBotId) {
+    throwIpcError('PRECONDITION_FAILED', 'X companion assignment changed');
+  }
+  translateValidation(() => s.setXCompanionBotId(botId));
+  const hook = m.snapshot();
+  broadcastStatus(hook);
+  return hook;
+}
+
+/** What a teammate's settings page may show of the official X account: no URLs, accounts or tokens. */
+export function readXCompanionSummary(): { available: boolean; visible: boolean; enabled: boolean; connected: boolean; companionBotId: string | null } {
+  const x = hookControlAvailable() ? ensureInstances().manager.snapshot().x : disabledHookView().x;
+  return {
+    available: x.available,
+    // The same rule that decides whether this computer's own settings list the X card.
+    visible: x.url.length > 0 || x.capabilityPending || x.available || x.enabled,
+    enabled: x.enabled,
+    connected: x.binding?.state === 'confirmed',
+    companionBotId: x.companionBotId ?? null,
+  };
 }
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
@@ -935,21 +893,13 @@ export function registerHookControlIpc(): void {
   );
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_COMPANION, async (_e, payload) => {
-    requireHookControl();
-    const assertAccount = captureChannelAccount();
-    const { store: s, manager: m } = ensureInstances();
     const p = requireObject(payload);
-    const botId = requireNullableString(p.botId, 'botId');
-    const expectedBotId = requireNullableString(p.expectedBotId, 'expectedBotId');
-    if (botId !== null) await requireXCompanion(botId);
-    assertAccount();
-    if ((s.get().xCompanionBotId ?? null) !== expectedBotId) {
-      throwIpcError('PRECONDITION_FAILED', 'X companion assignment changed');
-    }
-    translateValidation(() => s.setXCompanionBotId(botId));
-    const hook = m.snapshot();
-    broadcastStatus(hook);
-    return { hook };
+    return {
+      hook: await changeXCompanionBinding(
+        requireNullableString(p.botId, 'botId'),
+        requireNullableString(p.expectedBotId, 'expectedBotId'),
+      ),
+    };
   });
 
   // 发起 Slack 账号绑定(SIWS OIDC): 经已连接的 WS 发 bind.start(无参); server
@@ -1274,6 +1224,12 @@ export function registerHookControlIpc(): void {
   log.info('hook-control ipc registered');
 }
 
+/** Read the current owner's already-loaded assignment without starting a transport. */
+export function readXCompanionAssignment(): { botId: string; enabled: boolean } | null {
+  const config = store?.get();
+  return config?.xCompanionBotId ? { botId: config.xCompanionBotId, enabled: config.xEnabled } : null;
+}
+
 /** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
@@ -1298,11 +1254,6 @@ export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boole
   store = null;
 }
 export function disposeHookControl(): void {
-  codexMcpRefreshPending = false;
-  if (codexMcpRefreshRetryTimer !== null) {
-    clearTimeout(codexMcpRefreshRetryTimer);
-    codexMcpRefreshRetryTimer = null;
-  }
   disposeAuthListener?.();
   disposeAuthListener = null;
   observedAuthRealm = null;

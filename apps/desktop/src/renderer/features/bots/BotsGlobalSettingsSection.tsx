@@ -5,9 +5,13 @@ import { useBotTranslation } from './botPronounContext';
 import { cn } from '@/lib/utils';
 import {
   SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_CLASS,
   SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
   SETTINGS_SECTION_TITLE_CLASS,
 } from '@/components/settings/settingsRowClasses';
+import { Switch } from '@/components/ui/switch';
+import { useBotReplyTargetPreference } from './useBotReplyTargetPreference';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import {
@@ -31,6 +35,7 @@ export function BotsGlobalSettingsSection() {
   useEffect(() => subscribeBotGlobalModel(() => bumpModelSettings((value) => value + 1)), []);
   const modelChain = getEffectiveBotModelChain();
   const customized = isBotGlobalModelChainCustomized();
+  const replyTarget = useBotReplyTargetPreference();
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
 
@@ -74,6 +79,21 @@ export function BotsGlobalSettingsSection() {
             {notice}
           </p>
         ) : null}
+      </div>
+
+      <div className={SETTINGS_CARD_CLASS}>
+        <div className={SETTINGS_ROW_CLASS}>
+          <div className="min-w-0 flex-1">
+            <p className={SETTINGS_ROW_LABEL_CLASS}>{t('bots.globalSettings.showReplyTarget')}</p>
+            <p className={SETTINGS_ROW_HINT_CLASS}>{t('bots.globalSettings.showReplyTargetHint')}</p>
+          </div>
+          <Switch
+            aria-label={t('bots.globalSettings.showReplyTarget')}
+            className="shrink-0"
+            checked={replyTarget.enabled}
+            onCheckedChange={(value) => replyTarget.setEnabled(value === true)}
+          />
+        </div>
       </div>
     </div>
   );

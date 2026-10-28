@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ const CANONICAL_DOCS = [
 ];
 const CONTRIBUTING_DOCS = ["CONTRIBUTING.md", "CONTRIBUTING.en.md"];
 const CHECKED_DOCS = [...CONTRIBUTING_DOCS, ...CANONICAL_DOCS];
+const COMMAND_CHECKED_DOCS = [...CHECKED_DOCS, "apps/desktop/README.md"];
 const WORKSPACES = new Map([
 	["desktop", "apps/desktop/package.json"],
 	["mobile", "apps/mobile/package.json"],
@@ -111,14 +113,21 @@ function localMarkdownLinks(relativePath) {
 }
 
 /**
- * 需要做内链体检的全部文档:根目录规则文件 + `docs/` 下所有 markdown(递归)。
+ * 需要做内链体检的全部文档:根目录与模块 AGENTS + `docs/` 下所有 markdown(递归)。
  *
  * 覆盖面刻意做全 —— 悬空内链最容易出现在深层目录里:文档被删除时,引用它的索引
  * (如 `docs/legal/README.md`、`docs/README.md`)常常漏改。只体检 CHECKED_DOCS 那几篇
  * canonical 文档挡不住这类回归。
  */
 function listLinkCheckedDocs() {
-	const out = ["AGENTS.md", ...CONTRIBUTING_DOCS];
+	// Include newly added, unstaged module rules without traversing node_modules,
+	// runtime binaries or generated build trees. Git is already required by the runner.
+	const agentDocs = execFileSync("git", [
+		"ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
+		"AGENTS.md", ":(glob)apps/**/AGENTS.md", ":(glob)packages/**/AGENTS.md",
+	], { cwd: ROOT, encoding: "utf8" }).split("\0").filter((relativePath) =>
+		relativePath && fs.existsSync(path.join(ROOT, relativePath)));
+	const out = ["AGENTS.md", ...agentDocs, ...CONTRIBUTING_DOCS];
 	const walk = (relativeDir) => {
 		for (const entry of fs.readdirSync(path.join(ROOT, relativeDir), { withFileTypes: true })) {
 			const relativePath = path.join(relativeDir, entry.name);
@@ -132,7 +141,7 @@ function listLinkCheckedDocs() {
 
 test("developer docs only document pnpm commands that exist", () => {
 	const rootPackage = readJson("package.json");
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of COMMAND_CHECKED_DOCS) {
 		for (const line of shellLines(relativePath)) {
 			assertPnpmCommandExists(line, rootPackage);
 		}

@@ -66,10 +66,13 @@ import {
   runTitle,
 } from './subagentFormat';
 
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+
 export type SubagentControlIntent = 'steer' | 'follow_up' | 'resume';
 
 export interface SubagentDetailViewProps {
   detail: SubagentRunDetail | null;
+  onDiagnose?: (source: ErrorDiagnosisSource) => void;
   loading: boolean;
   workdir: string;
   allowPrivilegedLinks: boolean;
@@ -269,6 +272,7 @@ function PiDurableDetailView({
   onBack,
   onStop,
   onControl,
+  onDiagnose,
 }: SubagentDetailViewProps) {
   const { t } = useTranslation();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
@@ -592,7 +596,15 @@ function PiDurableDetailView({
             </div>
           ) : null}
 
-          {rawError ? <SubagentErrorNotice rawError={rawError} /> : null}
+          {rawError ? (
+            <SubagentErrorNotice
+              rawError={rawError}
+              onDiagnose={onDiagnose ? (source) => onDiagnose({
+                ...source,
+                details: `subagentRunId: ${detail.id}\n${selectedChild ? `childId: ${selectedChild.id}\n` : ''}${source.details}`,
+              }) : undefined}
+            />
+          ) : null}
 
           {selectedOutputTruncated ? (
             <p className="text-11 text-[var(--text-tertiary)]">

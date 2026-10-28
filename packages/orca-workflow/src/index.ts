@@ -3,6 +3,7 @@ export {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
   type OrcaBridgeMcpDeps,
+  type OrcaToolResult,
   type OrcaLeadHistoryCursor,
   type OrcaLeadHistoryMessage,
   type OrcaLeadHistoryPage,

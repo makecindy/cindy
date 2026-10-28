@@ -54,50 +54,64 @@ vi.mock('../botStore', () => ({
     fastMode: false,
   }),
 }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({
-    unifiedAgents,
-    onUnifiedSelect,
-    disabled,
-    vendorKey,
-    onNavigateToProviders,
-  }: {
-    onNavigateToProviders?: () => void;
-    disabled: boolean;
-    vendorKey: string;
-    unifiedAgents: string[];
-    onUnifiedSelect: (selection: unknown) => void;
-  }) => (
-    <>
-      {onNavigateToProviders && (
-        <button type="button" onClick={onNavigateToProviders}>
-          connect-source
-        </button>
-      )}
-      <span data-testid="selected-engine">{vendorKey}</span>
-      {(['pi', 'codex'] as const)
-        .filter((engine) => unifiedAgents.includes(engine))
-        .map((engine) => (
-          <button
-            key={engine}
-            disabled={disabled}
-            type="button"
-            onClick={() =>
-              onUnifiedSelect({
-                engine,
-                providerId: 'custom',
-                modelId: 'custom-model',
-                effort: 'high',
-                fast: false,
-              })
-            }
-          >
-            {engine === 'pi' ? 'choose-custom-model' : 'choose-custom-codex-model'}
+vi.mock('@/components/new-chat/ModelSelector', async () => {
+  const { Popover, PopoverContent, PopoverTrigger } = await import('@/components/ui/popover');
+  return {
+    ModelSelector: ({
+      unifiedAgents,
+      onUnifiedSelect,
+      disabled,
+      vendorKey,
+      onNavigateToProviders,
+    }: {
+      onNavigateToProviders?: () => void;
+      disabled: boolean;
+      vendorKey: string;
+      unifiedAgents: string[];
+      onUnifiedSelect: (selection: unknown) => void;
+    }) => (
+      <>
+        {onNavigateToProviders && (
+          <button type="button" onClick={onNavigateToProviders}>
+            connect-source
           </button>
-        ))}
-    </>
-  ),
-}));
+        )}
+        <span data-testid="selected-engine">{vendorKey}</span>
+        {(['pi', 'codex'] as const)
+          .filter((engine) => unifiedAgents.includes(engine))
+          .map((engine) => (
+            <button
+              key={engine}
+              disabled={disabled}
+              type="button"
+              onClick={() =>
+                onUnifiedSelect({
+                  engine,
+                  providerId: 'custom',
+                  modelId: 'custom-model',
+                  effort: 'high',
+                  fast: false,
+                })
+              }
+            >
+              {engine === 'pi' ? 'choose-custom-model' : 'choose-custom-codex-model'}
+            </button>
+          ))}
+        <Popover>
+          <PopoverTrigger>open-model-panel</PopoverTrigger>
+          <PopoverContent>
+            <div data-testid="provider-list" style={{ overflowY: 'auto', height: 100 }}>
+              <button type="button">Provider row</button>
+            </div>
+            <div data-testid="model-list" style={{ overflowY: 'auto', height: 100 }}>
+              <button type="button">Model row</button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </>
+    ),
+  };
+});
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 vi.mock('../BotPortraitPicker', () => ({
@@ -253,5 +267,35 @@ describe('name-only creation', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: ' Mika ' } });
     expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(true);
     expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
+  });
+
+  it('allows wheel events in the portaled provider and model lists while locking the background', async () => {
+    render(<BotRosterView />);
+    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'open-model-panel' }));
+    for (const id of ['provider-list', 'model-list']) {
+      const list = screen.getByTestId(id);
+      // jsdom has no layout; supply dimensions but let the real Dialog/Popover
+      // and react-remove-scroll decide whether to cancel the browser's wheel.
+      Object.defineProperties(list, {
+        scrollHeight: { value: 1000 },
+        clientHeight: { value: 100 },
+        scrollTop: { value: 400, writable: true },
+      });
+      expect(
+        screen.getByRole('button', { name: 'open-model-panel' }).closest('[role="dialog"]')?.contains(list),
+      ).toBe(false);
+    }
+    for (const name of ['Provider row', 'Model row']) {
+      for (const deltaY of [-50, 50]) {
+        const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY });
+        fireEvent(screen.getByRole('button', { name }), wheel);
+        expect(wheel.defaultPrevented).toBe(false);
+      }
+    }
+    const backgroundWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 50 });
+    fireEvent(document.body, backgroundWheel);
+    expect(backgroundWheel.defaultPrevented).toBe(true);
+    expect(screen.getByRole('dialog', { name: 'bots.guided.title' })).toBeTruthy();
   });
 });

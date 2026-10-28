@@ -1,4 +1,5 @@
-import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
+import { isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
+import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
@@ -38,6 +39,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
@@ -318,23 +320,29 @@ export function ModelAdvancedDrawer({
     } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setImageCapabilitySaving(false); }
   };
-  const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
+  const setModelApi = async (agent: AgentKind, api: string) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
     if (!runtime || !model) return;
-    model.api = api;
-    if (agent === 'pi') model.piApi = api;
-    const wire = providerWireProtocolForApi(api);
-    if (!wire) return;
-    const existingRoute = { ...(model.route ?? {}) };
-    delete existingRoute.requestPath;
-    model.route = {
-      ...existingRoute,
-      baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-      wireProtocol: wire,
-    };
+    const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
+    if (api === 'auto' || choice) {
+      model.interfaceId = api;
+      delete model.api;
+      delete model.piApi;
+      delete model.route;
+    } else {
+      delete model.interfaceId;
+      model.api = api as PiModelApi;
+      if (agent === 'pi') model.piApi = api as PiModelApi;
+      const wire = providerWireProtocolForApi(api);
+      if (!wire) return;
+      model.route = {
+        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+        wireProtocol: wire,
+      };
+    }
     setProtocolSaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
@@ -435,6 +443,10 @@ export function ModelAdvancedDrawer({
   );
   const description = localizedModelDescription(primaryModel, t);
   const price = pricePresentationOf(primaryAgent, primaryModel);
+  // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
+  const discount =
+    (!primaryModel.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
+    primaryModel.costDiscount;
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
@@ -463,14 +475,16 @@ export function ModelAdvancedDrawer({
     ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
-  const currentEffort = preferredEffort && commonEfforts.some((effort) => effort === preferredEffort)
-    ? preferredEffort : commonEfforts[0] ?? null;
+  const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
   const shownEfforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((agent) => {
       const model = row.byAgent[agent];
       return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
     }),
   );
+  const ultrafastSupport = chatAgents.includes('codex')
+    ? row.byAgent.codex?.supportsUltrafastMode
+    : false;
   /**
    * 推理强度的存储是 per (agent, provider, model) 的。这里按显示轴同一条哲学
    * **一次写该模型全部可用引擎** —— 用户在这个面板里选的是「这个模型默认想多用力」,
@@ -607,7 +621,7 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {canEditProtocol && !model?.catalogPresetId && supported ? (
+                                  {canEditProtocol && (!model?.catalogPresetId || !!model.availableInterfaces?.length) && supported ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}
@@ -617,9 +631,12 @@ export function ModelAdvancedDrawer({
                                         </button>
                                       </DropdownMenuTrigger>
                                       <DropdownMenuContent className="z-[10003]" align="start">
-                                        <DropdownMenuRadioGroup value={protocol.outbound ?? ''}
-                                          onValueChange={value => void setModelApi(agent, value as PiModelApi)}>
-                                          {MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
+                                        <DropdownMenuRadioGroup value={model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound ?? ''}
+                                          onValueChange={value => void setModelApi(agent, value)}>
+                                          {model?.availableInterfaces?.length ? <>
+                                            <DropdownMenuRadioItem value="auto">{t('settings.providers.models.advanced.protocol.automatic')}</DropdownMenuRadioItem>
+                                            {model.availableInterfaces.map(item => <DropdownMenuRadioItem key={item.profileId} value={item.profileId}>{protocolLabel(item.api)}</DropdownMenuRadioItem>)}
+                                          </> : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
                                         </DropdownMenuRadioGroup>
                                       </DropdownMenuContent>
                                     </DropdownMenu>
@@ -710,6 +727,14 @@ export function ModelAdvancedDrawer({
                       <SegmentedControl
                         className="mt-1"
                         fullWidth
+                        // Six translated labels exceed a details column. Keep every
+                        // level visible instead of hiding Ultra in horizontal overflow.
+                        style={shownEfforts.length > 4 ? {
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                          borderRadius: 'var(--radius-xl)',
+                        } : undefined}
+                        optionClassName={shownEfforts.length > 4 ? '!min-w-0 px-1' : undefined}
                         height={32}
                         optionHeight={24}
                         aria-label={t('settings.providers.models.advanced.defaultEffort')}
@@ -842,6 +867,11 @@ export function ModelAdvancedDrawer({
                           )}
                         </>
                       )}
+                      {ctx.compaction && (
+                        <ModelCompactionSettings policy={ctx.compaction}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          onChange={ctx.setCompaction} />
+                      )}
                     </Section>
                   )}
 
@@ -963,11 +993,41 @@ export function ModelAdvancedDrawer({
                         )}
                       />
                     </Row>
+                    <Row label={t('newChat.modelSelector.speed.ultrafast')} muted>
+                      <CapabilityValue
+                        state={ultrafastSupport}
+                        label={t(
+                          `settings.providers.models.advanced.${ultrafastSupport === true ? 'supported' : ultrafastSupport === false ? 'unsupported' : 'undeclared'}`,
+                        )}
+                      />
+                    </Row>
                   </Section>
 
                   <Section title={t('settings.providers.models.advanced.pricing')}>
                     {primaryModel.displayPricing && primaryModel.currency ? (
-                      <DisplayPricingDetails model={primaryModel} />
+                      <>
+                        {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
+                          const quotes = primaryModel.displayPricing?.summary?.[role];
+                          if (!quotes?.length) return null;
+                          return (
+                            <Row
+                              key={role}
+                              label={t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                            >
+                              <span className="flex flex-col items-end gap-1">
+                                {quotes.map((quote, index) => (
+                                  <DisplayPricingQuote
+                                    key={index}
+                                    quote={quote}
+                                    currency={primaryModel.currency!}
+                                    costDiscount={discount}
+                                  />
+                                ))}
+                              </span>
+                            </Row>
+                          );
+                        })}
+                      </>
                     ) : price === null ? (
                       <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
                         {t(
@@ -1000,7 +1060,7 @@ export function ModelAdvancedDrawer({
                         </Row>
                       ))
                     )}
-                    {!primaryModel.displayPricing && price?.kind === 'priced' && price.discount !== undefined && (
+                    {discount !== undefined && discount > 0 && discount <= 1 && (
                       <Row label={t('settings.providers.models.advanced.discount')}>
                         <span
                           className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
@@ -1009,10 +1069,17 @@ export function ModelAdvancedDrawer({
                             backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
                           }}
                         >
-                          {`↓${Math.round(price.discount * 100)}%`}
+                          {`↓${Math.round(discount * 100)}%`}
                         </span>
                       </Row>
                     )}
+                    {/* Keep conditions and notes after the primary quotes and their discount. */}
+                    {primaryModel.displayPricing && primaryModel.currency &&
+                      !isDisplayPricingTableRedundant(primaryModel.displayPricing) && (
+                        <div className={primaryModel.displayPricing.summary ? 'pt-3' : undefined}>
+                          <DisplayPricingDetails model={primaryModel} />
+                        </div>
+                      )}
                     {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
                     XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
                     {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (

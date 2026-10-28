@@ -12,6 +12,31 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
+连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
+钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
+服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
+与 SDK 真实连接状态一致。微信、企业微信保留已有重试循环。恢复成功立即更新状态，
+不等待下一条消息；凭据失效保留明确错误，冲突沿用各渠道原策略。主动下线、解绑、换账号或退出
+必须取消重试，旧连接结果不得复活。设置页的手动重连复用保存的凭据，不要求重新输入或解绑。
+
+退避计算、默认间隔、抖动和可取消定时器统一放在 `@cindy/im/connection-retry`：飞书、
+Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询复用同一退避策略。
+官方 hook 的冲突等待间隔和抖动范围通过参数保留；鉴权、冲突及 SDK 回调仍由渠道适配层处理。
+设置页共用 `ImConnectionRecovery.tsx` 的错误提示、重连按钮和已保存凭据恢复行，避免各渠道
+重复维护文案、加载状态和错误详情展示。
+
+机器人未单独选择模型时，空的模型配置表示自动选择意图。个人渠道、官方 hook 与设置页均经
+`shared/imAutomaticModel.ts` 复用普通新任务的默认组合与目录回退规则，不读取输入框的最近选择。
+解析结果包含来源、引擎、模型和思考强度，只用于执行和展示，不写回 override。自动模式的
+跟随记录同时记下解析结果，下一条消息重新解析目录；结果未变不改任务，任务手动选择仍优先。
+无可用来源时明确失败，不把空字符串或历史写死型号交给执行器。已有显式配置保留原值；恢复
+自动选择只清模型路由覆盖，保留权限档。
+自动候选同时遵守执行端的模型显示偏好；显式固定模型仍按原路由准入规则校验。官方目录指向
+远程电脑时，只从那台电脑授权远程调用且可见的目录解析，失败不改成本机。继承本机默认时，
+先解析默认模型，再按既有规则判断目录的残留来源；断开或停用的显式来源仍拒绝替换。
+设置页在自动模式下随目录更新重读实际模型，加载、刷新与保存共用请求代次，迟到刷新不得
+覆盖用户刚固定的模型或切换后的渠道。
+
 ## 1. 入口账本
 
 每一行是一轮任务的一个步骤。「现状」列写真正干活的函数；「目标」列写合并后的归属：
@@ -31,7 +56,7 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
 | 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram/X）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
 | 观察事件 | `turnPresenter`（buffer-replace）+ 流式 handle | `turnObserver`（finalized-segments）+ 进度发射器 | 共用流程（presenter 已同源；两个正文累积引擎有意不同） |
-| 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信、Agent 自己唤醒；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
+| 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信；后台唤醒继承当前 Session 最近实际派发的来源，Cindy 输入及内部协调不回传；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
 | 表情 | `TurnState` 的 ack 句柄 | `ackReactions`（msg.op react） | 渠道适配（出站载体不同，档位语义同源） |
 | 交互 | `beginInteractionRoute` + `pendingInteractions` + 渠道卡片 | `beginInteractionRoute` + `interactions.ts`（30 分钟超时）+ 卡片发布器 | 共用流程（路由与语义层已同源；超时差异见台账缺口 2g） |
 | 收尾 | `handleTurnDoneAsync` / `handleTurnErrorAsync` → 流式 handle finalize | `execute` 收口 → `turnCarrier.publishFinal` → `turn.end`（持久出箱） | 共用流程的收口骨架 + 渠道出站载体 |
@@ -103,11 +128,17 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
    workdir 快照放行，再由 `codexEnvironment.buildSessionMcpConfig` / `piEnvironment` 逐会话收可见性）。
    渠道工具租约还被 `botSkillService` 复用来判定专线上「是不是主人触发的轮次」；没有 `channelToolScopeFor`
    的可绑定渠道靠 `LaneTurnScope` 兜住这一判定，否则主人在专线上也只能只读技能。
+   `onAccepted` 成功落库后把本轮输入的 `clientId` 绑定到同一租约；事件持久化在租约释放前
+   将它写为 `replyToClientId`，用于保留回复与本轮输入的确切关联；这不是后台学习的触发约定，
+   回复后不再启动辅助模型复盘。显式技能工具的写权限仍按当前轮租约 / `LaneTurnScope` 的
+   主人身份判定，不把持久回复关联当作新授权，也不借用后续轮次的租约或最近一条消息。
+   受保护内容未落库时不绑定，复用作用域前清除旧输入。
    6b. **发送前上下文体检同源**：个人 IM 的 `dispatchQueuedSend` 在伙伴守卫（`companion.prepareSend`）
    之后、拿发送锁（`acquirePendingAgentSwitch`）之前调用 `deps.prepareUnhealthySession`（orchestrator 接
    `register.prepareUnhealthySessionForSend`），与桌面直发、官方 hook 走同一个
-   `contextOverflowRollover.prepareUnhealthySession`：伙伴对话（主任务 + channel / group 专线）的空闲
-   间隔刷新（≥12h）、90% 到线换窗、坏历史重建都在这里发生，IM 不另设换窗 / 换任务规则
+   `contextOverflowRollover.prepareUnhealthySession`：伙伴对话（主任务 + channel / group 专线）沿用
+   普通 Session 的真实满窗、明确压缩失败和坏历史恢复；健康上下文交给原生压缩，不按空闲时长
+   或 70%/90% 伙伴阈值提前换窗，正常压缩也不重启伙伴实例。IM 不另设换窗 / 换任务规则
    （[`cindy-bots-runtime.md` §3.2](../product-rules/cindy-bots-runtime.md)）。体检关闭 live handle 的原因是
    `runtime-refresh`，close 监听在有 `acquirePendingAgentSwitch` 时保住任务，新 handle 由
    `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建；体检抛错按直发口径让这条消息失败。
@@ -143,6 +174,12 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
     **边界**：`Maker.createSession` 内部「先异步启动 Agent、再取当前库写行」的窗口不在本条范围——
     它是桌面、IM、目标恢复等所有建任务入口共有的既有问题，要堵需让账号守卫穿过 maker-core
     启动 / 持久化边界或新增回滚机制，另行处理。
+
+12. **飞书回复跟随提问位置**：群主聊天的消息用群 lane，带 `thread_id` 的消息用原话题 lane；
+    普通引用的 `parent_id` / `root_id` 不等于话题，不自动开新话题。个人和伙伴复用同一渠道实现。
+    工作中编辑进度卡；完成后在同一位置新发终稿，确认发送成功再撤回进度卡，避免失败时丢掉已有内容。
+    终稿和附件不领取下一轮排队消息的锚点。空结果撤回进度卡且不发占位，图片／文件仍正常投递；
+    新消息发送失败时保留进度卡并尝试就地展示终稿，撤回失败不得重复发送已成功的终稿。
 
 ## 4. 状态模型（一轮）
 

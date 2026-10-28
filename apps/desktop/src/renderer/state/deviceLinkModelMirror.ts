@@ -26,7 +26,7 @@ import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 /** 单槽:被控端某 (agent, 来源) 下每个模型的 effort/fast 镜像。 */
 interface Slot {
   effortByModel: Record<string, Effort>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
   thinkingByModel: Record<string, boolean>;
 }
 
@@ -35,7 +35,7 @@ export type RemoteModelMemorySnapshot = Record<
   string,
   {
     effortByModel: Record<string, string>;
-    fastByModel: Record<string, boolean>;
+    fastByModel: Record<string, boolean | 'ultrafast'>;
     thinkingByModel?: Record<string, boolean>;
   }
 >;
@@ -140,7 +140,7 @@ export function getMirrorFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-): boolean | undefined {
+): boolean | 'ultrafast' | undefined {
   if (!scopeKey || !providerId || !model) return undefined;
   const bySlot = store.get(scopeKey);
   return (
@@ -211,7 +211,7 @@ export function setMirrorFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-  enabled: boolean,
+  enabled: boolean | 'ultrafast',
 ): void {
   if (!scopeKey || !providerId || !model) return;
   const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
@@ -236,7 +236,7 @@ export function makeMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: Effort; fast?: boolean; thinking?: boolean; markModelChoice?: boolean },
+    patch: { effort?: Effort; fast?: boolean | 'ultrafast'; thinking?: boolean; markModelChoice?: boolean },
   ) => void,
 ): ModelMemoryAccessors {
   return {

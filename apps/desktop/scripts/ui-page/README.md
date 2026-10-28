@@ -39,6 +39,9 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
   列出，可以直接比对。元素在某次截图时不存在会跳过，全程都不存在才给警告。
 - 截图按 2 倍像素密度渲染（与 Retina Mac 一致，不随外接显示器变化），整页截图按 CSS
   尺寸保存。
+- 后台检查使用无边框窗口，Windows 额外启用离屏渲染，避免原生边框的 DPI 取整和隐藏
+  窗口不刷新导致尺寸偏差或截图超时；仍严格核对实际视口与目标尺寸。`ui:preview` 保留
+  正常的可见窗口。
 - 报告写到 stdout。环境里设置了 `NODE_DEBUG` 时 Node 会往 stderr 刷调试日志，用
   `env -u NODE_DEBUG pnpm ui:check …` 或丢弃 stderr。
 - `real` 是本页面真实加载的产品代码，`not covered` 是这些场景没有验证的行为，`replaced`

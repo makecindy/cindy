@@ -20,6 +20,7 @@ import { assertCronAndTimezoneValid, withScheduler } from './_shared.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
+import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import { stabilizePreRunHookForCreate } from '@cindy/maker-scheduler';
 
 export function registerScheduleCreateTool(
@@ -42,7 +43,7 @@ export function registerScheduleCreateTool(
       '(7) 确定是检查时显式设 silentWhenIdle=true（无变化不播报）；提醒/定时发送设 false，保留用户选择。省略此字段会按 false 处理，避免旧调用方的提醒被吞。如果用户定义了提醒条件，把条件保留在 prompt 里（如 CI 失败/新评论时提醒），有结果时用 schedule_notify_current_run 主动上报；' +
       '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载；' +
       '(9) 既有工作流程中的自动跟进，沿用该流程明确的频率、执行引擎、静默与通知默认值；用户在线也不需要为这些默认值另行确认。用户主动新建独立任务时，若关键实体或会实质改变目标的参数缺失，先询问，不盲猜；用户已明确说明或已有流程定义的参数不重复问。' +
-      '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，目标归档、删除或不存在时自动暂停，恢复任务不会自动恢复调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。',
+      '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。',
     inputShape: {
       name: z.string().min(1).describe('展示名（GUI / 通知里出现）'),
       prompt: z
@@ -90,6 +91,9 @@ export function registerScheduleCreateTool(
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
       agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
+      modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
+      fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
+      modelAgentDeviceId: z.string().optional().describe('模型运行位置：远程或分享供应商的 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
       kind: z
         .literal('cron')
         .default('cron')
@@ -105,6 +109,14 @@ export function registerScheduleCreateTool(
           '可选：显式指定模型来源(供应商)id，例 "anthropic" / "openai" / "xd"。' +
             '省略 → 走该 agent 原生默认来源（与不带本字段的旧行为字节级一致）。' +
             '只有要把任务钉在某个非原生来源（如 Anthropic 订阅档）时才传；heartbeat 模式留空则沿用绑定会话的来源。',
+        ),
+      agentDeviceId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          '可选：每次新建任务时 Agent 在哪里运行——同账号另一台电脑或分享来的供应商。取 schedule_list_models 返回的 locations[].agentDeviceId；省略或 "local" = 本机。' +
+            '设了必须同时传 schedule_list_models 在该位置列出的 model（建议连同 providerId）。绑定已有任务（targetSessionId / bindToCurrentSession 且非 persistentSession）时运行位置跟随该任务，不能设。',
         ),
       effort: z
         .enum(EFFORT)
@@ -167,6 +179,13 @@ export function registerScheduleCreateTool(
           bindToCurrentSession?: boolean;
         };
         let input = rest as CreateScheduleInput;
+        if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
+          const { agentDeviceId: _local, ...localInput } = input;
+          input = localInput;
+        }
+        if (input.agentDeviceId && (bindToCurrentSession || input.targetSessionId) && !input.persistentSession) {
+          throw new Error('invalid request: 绑定已有任务时运行位置跟随该任务，不能设 agentDeviceId');
+        }
         // script 模式工具层前置校验(引擎也校验,这里保证报错落 INVALID_PARAMS 且
         // 消息可直接指导模型自纠;agent 模式则补回 prompt 非空校验——schema 里
         // prompt 已放宽为 optional 以兼容 script 模式)。

@@ -299,12 +299,11 @@ describe('Shared create project picker', () => {
     expect(toggleHandler.indexOf('setWtEnabled(enabled)')).toBeGreaterThan(
       toggleHandler.indexOf("'maker:apply-new-maker-worktree-pref'"),
     );
+    // 镜像与切设备重置共用一个按帧判定的落点(行为见 deviceLinkDraftDefaults.test.ts)。
     expect(newMakerDraftRouteSource).toContain(
-      "if (typeof remotePreference === 'boolean') setWtEnabled(remotePreference);",
+      'const next = resolveDeviceLinkWorktreeEnabled(previous, frame);',
     );
-    expect(newMakerDraftRouteSource).toContain(
-      'if (isDeviceLinkDraft) setWtEnabled(false);',
-    );
+    expect(newMakerDraftRouteSource).toContain('if (next !== null) setWtEnabled(next);');
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
     const sendGuardStart = newMakerDraftRouteSource.indexOf(
       '&& selectedWorktree.confirmedIneligible !== true',
@@ -1434,13 +1433,9 @@ describe('Shared create project picker', () => {
    * fetch):任何一端被改动都会在这里失败,而不是等到用户发不出消息。
    */
   it('does not evict same-device snapshots when only the workspace changes', () => {
-    // 上游事实:evict 会把已挂载的 hook 推进 loading 态。
-    expect(agentCapabilitiesHookSource).toContain(
-      "notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });",
-    );
-    expect(deviceProvidersHookSource).toMatch(
-      /notifyDeviceProviders\(deviceId,\s*\{\s*status: 'loading'/,
-    );
+    // 驱逐后挂载中的 loading/清空行为由 agentCapabilitiesDeviceCache、
+    // deviceProvidersRecovery 与 AuthContextInitializeCatch 的生产 hook 用例覆盖。
+    // 这里保留 #807 的跨文件竞态约束：只切项目不能让同设备永久停在 loading。
     // 上游事实:fetch effect 只按 (agentKind, deviceId) 重跑,换项目不会触发它。
     expect(agentCapabilitiesHookSource).toContain('}, [agentKind, deviceId]);');
     expect(deviceProvidersHookSource).toContain('}, [deviceId]);');

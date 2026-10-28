@@ -27,6 +27,9 @@ const nativeSurfaceMocks = vi.hoisted(() => ({
   attribute: vi.fn(),
 }));
 
+// Native capture's focus/frame/lifecycle contract has its own injected tests.
+vi.mock('../nativeTrackpad', () => ({ installNativeTrackpad: vi.fn() }));
+
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   createRsbNativePopupSurface: nativeSurfaceMocks.create,
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,

@@ -46,6 +46,15 @@ const LAYER_SELECTOR = [
 ].join(',');
 
 /**
+ * 焦点是否落在「别处的控件」上：可编辑控件、按钮 / 链接等自带键盘语义的控件，
+ * 或菜单 / 弹层 / 对话框。调用方已确认焦点不在自己的卡片里时，用它判断按键是否属于那里。
+ */
+export function isForeignKeyboardControl(target: Element): boolean {
+  return isEditableKeyboardTarget(target) || target.closest(INTERACTIVE_SELECTOR) !== null
+    || target.closest(LAYER_SELECTOR) !== null;
+}
+
+/**
  * 替代输入框的交互卡片（授权、计划审批、提问）在 window 上挂了回车 / Esc / 数字键
  * 快捷键。这些按键同时可能属于别处：焦点所在的按钮、刚被关闭的菜单、正在打字的
  * 输入框。快捷键只在按键确实「无人认领」时才替用户做决定，否则让位。

@@ -308,7 +308,10 @@ describe('persistent native history ownership', () => {
     expect(home).toContain('{residentList.enabled ? (');
     expect(home).not.toContain('residentList.enabled && !embedded');
     const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    expect(route).toContain('<MessageHistoryOverlay enabled={!paneLayout.persistent || sessionListDrawerOverlayMounted}>');
+    const layout = readFileSync(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
+    expect(route).toContain('<SessionTaskLayout>');
+    expect(layout).toContain('<MessageHistoryOverlay enabled={false}>');
+    expect(layout).toContain('persistent={paneLayout.persistent}');
   });
   it('does not keep the old route preloading mechanism alongside the resident host', () => {
     const home = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');

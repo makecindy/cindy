@@ -2,14 +2,16 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
-import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
+import type { AgentKind, CustomProviderConfig, DiscoveredModel, ModelRegistry, ProviderPreset, ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { providerViewToCustomProviderConfig } from '../../../renderer/lib/customProviders.js';
 
 import type { ProviderImportPreview } from '../../../shared/providerImport.js';
 import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { createCustomProvider, getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { createCustomProvider, getCustomProvider, listCustomProviders, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
   beginProviderRouteMutation,
@@ -128,7 +130,9 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     setProviderOrder: vi.fn(() => true),
     getProviderOrder: () => [],
     listPresets: () => [],
+    getModelCatalog: () => BUNDLED_CATALOG,
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
+    accountUsage: vi.fn(async (): Promise<import('../../../shared/providerAccountUsage.js').ProviderAccountUsageResult> => ({ status: 'unsupported' })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
     rediscoverModels: vi.fn(async () => null),
     refreshBuiltinModels: vi.fn(async () => {}),
@@ -164,6 +168,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     writeModelPriceOverride: vi.fn(() => {}),
     clearModelPriceOverride: vi.fn(() => {}),
     stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
+    stageClearProviderModelCompaction: vi.fn(() => () => true),
     broadcastPricingChanged: vi.fn(() => {}),
     ...over,
   };
@@ -2621,6 +2626,7 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect(deps.stageClearProviderDisableOverrides).toHaveBeenCalledWith('custom:xai');
     expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('custom:xai');
+    expect(deps.stageClearProviderModelCompaction).toHaveBeenCalledWith('custom:xai');
     expect(await listCustomProviders()).toEqual([]);
   });
 
@@ -3343,6 +3349,46 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.name).toBe('Second edit');
   });
 
+  // PR #7460 P1: the old delete transaction cleaned prices/disable flags only.
+  // Unit: delete + recreate must not revive a saved percentage; failed deletion
+  // must preserve it. Existing deletion tests never supplied compaction state.
+  it.each(['success', 'oauth-failed', 'cleanup-failed', 'restore-failed'] as const)(
+    'cleans model compaction inside the provider deletion transaction (%s)', async (outcome) => {
+      mountDb();
+      const harness = new IpcHarness();
+      let pct: number | null = 65;
+      const deps = makeDeps({
+        stageClearProviderModelCompaction: vi.fn(() => {
+          if (outcome === 'cleanup-failed') throw new Error('compaction cleanup failed');
+          const previous = pct;
+          pct = null;
+          return () => {
+            if (outcome === 'restore-failed') return false;
+            pct = previous;
+            return true;
+          };
+        }),
+        removeOAuthCredentials: vi.fn(() => outcome === 'success' ? () => true : null),
+      });
+      registerProviderHandlers(harness, deps);
+      await createCustomProvider(validConfig);
+      const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, validConfig.id);
+      if (outcome === 'success') {
+        await expect(deletion).resolves.toEqual({ ok: true });
+        expect(await getCustomProvider(validConfig.id)).toBeNull();
+        await createCustomProvider(validConfig);
+        expect(pct).toBeNull();
+      } else {
+        const message = outcome === 'cleanup-failed' ? 'compaction cleanup failed'
+          : outcome === 'restore-failed' ? 'could not be restored' : 'failed to remove existing OAuth';
+        await expect(deletion).rejects.toThrow(message);
+        expect(await getCustomProvider(validConfig.id)).not.toBeNull();
+        expect(pct).toBe(outcome === 'restore-failed' ? null : 65);
+        if (outcome === 'cleanup-failed') expect(deps.removeOAuthCredentials).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3411,6 +3457,7 @@ describe('provider:custom:* CRUD handlers', () => {
       const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id).catch(error => error);
       await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
       const writes = [deps.stageClearProviderDisableOverrides, deps.stageClearProviderModelPriceOverrides,
+        deps.stageClearProviderModelCompaction,
         deps.removeOAuthCredentials, deps.removeCustomProviderKey, deps.removeCustomProviderHeaders];
       for (const write of writes) expect(write).not.toHaveBeenCalled();
       if (outcome === 'switch-account') owner.generation++;
@@ -3920,6 +3967,35 @@ describe('provider:models-fetch handler', () => {
 });
 
 describe('provider:oauth mutation ordering', () => {
+  // PR #6900 unit: the login discovery callback must lose its authority on an
+  // owner switch too. Existing cancellation tests only invalidated the login ID.
+  it('invalidates login discovery and rolls credentials back after an owner change', async () => {
+    const harness = new IpcHarness();
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    let isCurrent!: () => boolean;
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const rollbackCredentials = vi.fn(() => true);
+    const afterCommit = vi.fn();
+    const oauthLogin = vi.fn(async (_id: string, current: () => boolean) => {
+      isCurrent = current;
+      await pending;
+      return { ok: true, rollbackCredentials, afterCommit };
+    });
+    registerProviderHandlers(harness, makeDeps({ oauthLogin, currentOwnerSession: () => ({ ...owner }) }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(oauthLogin).toHaveBeenCalledOnce());
+    expect(isCurrent()).toBe(true);
+    owner.generation++;
+    const currentAfterSwitch = isCurrent();
+    finish();
+    const result = await login;
+    expect(currentAfterSwitch).toBe(false);
+    expect(result).toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(rollbackCredentials).toHaveBeenCalledOnce();
+    expect(afterCommit).not.toHaveBeenCalled();
+  });
+
   it('keeps the old persisted generation reusable when retirement fails before credential write', async () => {
     const harness = new IpcHarness();
     const providerId = 'logout-prewrite-retire';
@@ -4131,7 +4207,9 @@ describe('provider:oauth mutation ordering', () => {
     const owner = { dataOwnerId: 'owner-a', generation: 1 };
     registerProviderHandlers(harness, makeDeps({
       currentOwnerSession: () => ({ ...owner }),
-      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      assertTrustedSender: (event) => {
+        (event as { sender: { send?: typeof send } }).sender.send = send;
+      },
       oauthLogin: async (_id, _current, onBrowserUrl) => {
         progress = onBrowserUrl!;
         return new Promise(resolve => { finish = resolve; });
@@ -4163,7 +4241,9 @@ describe('provider:oauth mutation ordering', () => {
     const owner = { dataOwnerId: 'owner-a', generation: 1 };
     registerProviderHandlers(harness, makeDeps({
       currentOwnerSession: () => ({ ...owner }),
-      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      assertTrustedSender: (event) => {
+        (event as { sender: { send?: typeof send } }).sender.send = send;
+      },
       oauthLogin: async (_id, _current, _onBrowserUrl, method, onDeviceCode) => {
         receivedMethod = method;
         progress = onDeviceCode!;
@@ -4242,6 +4322,140 @@ describe('provider:oauth mutation ordering', () => {
     finishLogin({ ok: true, rollbackCredentials });
     await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     expect(rollbackCredentials).toHaveBeenCalledOnce();
+  });
+
+  // Regression: a replacement login must not survive an interleaved settings
+  // write or owner switch before revocation. Use the real handler and SQLite CAS.
+  it.each(['settings-edit', 'owner-switch'] as const)('rolls replacement login back after %s during capability commit', async (interleaving) => {
+    mountDb();
+    const config: CustomProviderConfig = { ...validConfig,
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { ...validConfig.runtimes.codex!,
+        baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode: true }],
+      } },
+    };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'owner-a', generation: 1 };
+    let identity = 'new-account';
+    let release!: () => void;
+    let read!: () => void;
+    const paused = new Promise<void>(resolve => { read = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    const rollbackCredentials = vi.fn(() => { identity = 'old-account'; return true; });
+    const afterCommit = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => owner,
+      oauthLogin: async () => ({ ok: true, rollbackCredentials, afterCommit,
+        commitAccountCapabilities: async () => {
+          // Delay only the first real row read; the concurrent settings IPC uses
+          // the same database normally and makes the original snapshot stale.
+          const select = client!.drizzle.select.bind(client!.drizzle);
+          vi.spyOn(client!.drizzle, 'select').mockImplementationOnce((...args: Parameters<typeof select>) => {
+            const builder = select(...args);
+            // The caller awaits get(); widen only the intercepted read result so
+            // this synchronous test database can pause it without untyped casts.
+            const pausableBuilder: {
+              from: (...fromArgs: Parameters<typeof builder.from>) => { get: () => unknown };
+            } = builder;
+            const from = pausableBuilder.from.bind(builder);
+            pausableBuilder.from = (...fromArgs: Parameters<typeof from>) => {
+              const query = from(...fromArgs);
+              const get = query.get.bind(query);
+              query.get = async () => { const row = get(); read(); await resume; return row; };
+              return query;
+            };
+            return builder;
+          });
+          return revokeCodexAccountUltrafast(config.id, () => owner.generation === 1);
+        },
+      }),
+    }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, config.id);
+    await paused;
+    if (interleaving === 'settings-edit') {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, name: 'Edited while logging in' });
+    } else owner = { dataOwnerId: 'owner-b', generation: 2 };
+    release();
+    await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(identity).toBe('old-account');
+    expect(rollbackCredentials).toHaveBeenCalledOnce();
+    expect(afterCommit).not.toHaveBeenCalled();
+    const saved = (await getCustomProvider(config.id))!;
+    expect(saved.runtimes.codex!.models[0].supportsUltrafastMode).toBe(true);
+    expect(saved.name).toBe(interleaving === 'settings-edit' ? 'Edited while logging in' : config.name);
+  });
+
+  it('does not restore an old account grant when a stale settings dialog saves after login acceptance', async () => {
+    mountDb();
+    const initial: CustomProviderConfig = { ...validConfig,
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { ...validConfig.runtimes.codex!,
+        baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode: true }],
+      } },
+    };
+    await createCustomProvider(initial);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      oauthLogin: async () => ({ ok: true,
+        commitAccountCapabilities: () => revokeCodexAccountUltrafast(initial.id, () => true),
+      }),
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, initial.id)).resolves.toEqual({ ok: true });
+    // Same payload as the native connection dialog's captured { ...initial, name }.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...initial, name: 'Renamed after login' });
+    const saved = (await getCustomProvider(initial.id))!;
+    expect(saved.name).toBe('Renamed after login');
+    expect(saved.runtimes.codex!.models[0].supportsUltrafastMode).toBe(false);
+    expect(buildUserProvider(saved).models.codex![0].supportsUltrafastMode).toBe(false);
+  });
+
+  it.each(['cancel', 'release', 'destroy'] as const)('finishes account acceptance when %s arrives during capability commit', async (action) => {
+    mountDb();
+    const config: CustomProviderConfig = { ...validConfig,
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { ...validConfig.runtimes.codex!,
+        baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode: true }],
+      } },
+    };
+    await createCustomProvider(config);
+    let release!: () => void;
+    let started!: () => void;
+    const paused = new Promise<void>(resolve => { started = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    const rollbackCredentials = vi.fn(() => true);
+    const afterCommit = vi.fn(async () => {});
+    const oauthCancel = vi.fn();
+    let isCurrent!: () => boolean;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ oauthCancel,
+      oauthLogin: async (_id, current) => {
+        isCurrent = current;
+        return { ok: true, rollbackCredentials,
+          afterCommit: async () => { if (current()) await afterCommit(); },
+          commitAccountCapabilities: async () => {
+            started();
+            await resume;
+            return revokeCodexAccountUltrafast(config.id, () => true);
+          },
+        };
+      },
+    }));
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, config.id, { ownerId: 'accepting-login' });
+    await paused;
+    if (action === 'destroy') harness.destroySender(101);
+    else await harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, config.id,
+      action === 'release' ? { releaseOwner: true, ownerId: 'accepting-login' } : undefined);
+    expect(isCurrent()).toBe(true);
+    expect(oauthCancel).not.toHaveBeenCalled();
+    release();
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(rollbackCredentials).not.toHaveBeenCalled();
+    expect(afterCommit).toHaveBeenCalledOnce();
+    expect((await getCustomProvider(config.id))!.runtimes.codex!.models[0].supportsUltrafastMode).toBe(false);
   });
 
   it.each([false, true])('publishes login identity only after acceptance (cancelled=%s)', async (cancelled) => {
@@ -4422,6 +4636,29 @@ describe('model context limit IPC', () => {
   const primary = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-6' };
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+
+  it('saves model compaction for all aliases with owner and range validation', async () => {
+    const harness = new IpcHarness();
+    const writeModelCompaction = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: vi.fn(), writeModelCompaction,
+      readModelCompaction: () => ({ pct: 90, isCustomized: false }),
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, target)).resolves.toMatchObject({
+      compaction: { pct: 90, isCustomized: false },
+    });
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
+    expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
+    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
+    }
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+  });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
     const harness = new IpcHarness();
@@ -4667,3 +4904,374 @@ it('preserves the actual Vertex API through the probe IPC and rejects unknown SD
     { kind: 'adhoc', spec: { ...spec, api: 'invented-sdk' } })).rejects.toThrow(/INVALID_PARAMS/);
   expect(deps.testConnection).toHaveBeenCalledOnce();
 });
+
+// Scheme-2 detection shares the existing local credential boundary. The new ingress
+// needs explicit sender/cancellation coverage; ordinary model fetch has no draft lifecycle.
+describe('provider detection drafts', () => {
+  const input = { requestId: 'draft-1', agent: 'pi', authMethod: 'apiKey', baseUrl: 'https://relay.example/v1', apiKey: 'fake-test-key' };
+  it('rejects untrusted senders and invalid inputs before dispatch', async () => {
+    const harness = new IpcHarness();
+    const detectProvider = vi.fn();
+    const guard = vi.fn<() => void>(() => { throwIpcError('PERMISSION_DENIED', 'untrusted'); });
+    registerProviderHandlers(harness, makeDeps({ detectProvider, assertTrustedSender: guard }));
+    await expect(harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, input)).rejects.toThrow(/PERMISSION_DENIED/);
+    guard.mockImplementation(() => undefined);
+    for (const invalid of [{ ...input, requestId: '../other' }, { ...input, savedProviderId: 'saved' }, { ...input, baseUrl: 'file:///tmp/key' }, { ...input, headers: { bad: 1 } }]) {
+      await expect(harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, invalid)).rejects.toThrow(/INVALID_PARAMS/);
+    }
+    expect(detectProvider).not.toHaveBeenCalled();
+  });
+  it('discards a replaced result without deleting the newer detection operation', async () => {
+    const harness = new IpcHarness();
+    const pending: { signal: AbortSignal; finish: (value: any) => void }[] = [];
+    registerProviderHandlers(harness, makeDeps({ detectProvider: (_spec, signal) => new Promise(resolve => {
+      pending.push({ signal, finish: resolve });
+    }) }));
+    const first = harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, input);
+    const second = harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, { ...input, requestId: 'draft-2' });
+    expect(pending[0].signal.aborted).toBe(true);
+    pending[0].finish({ candidates: ['sub2api'], reason: 'matched' });
+    expect(await first).toEqual({ candidates: [], reason: 'insufficient_evidence' });
+    await harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, { requestId: 'draft-1', cancel: true });
+    expect(pending[1].signal.aborted).toBe(false);
+    await harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, { requestId: 'draft-2', cancel: true });
+    expect(pending[1].signal.aborted).toBe(true);
+    pending[1].finish({ candidates: ['litellm'], reason: 'matched' });
+    expect(await second).toEqual({ candidates: [], reason: 'insufficient_evidence' });
+  });
+  it('isolates cancellations by sender and request, and cancels destroyed windows', async () => {
+    const harness = new IpcHarness();
+    const signals: AbortSignal[] = [];
+    registerProviderHandlers(harness, makeDeps({ detectProvider: async (_spec, signal) => {
+      signals.push(signal);
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+      return { candidates: [], reason: 'insufficient_evidence' };
+    } }));
+    const first = harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, input);
+    const second = harness.invokeFrom(2, MAKER_INVOKE.PROVIDER_DETECT, input);
+    await harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, { requestId: 'old-draft', cancel: true });
+    expect(signals.map(s => s.aborted)).toEqual([false, false]);
+    await harness.invokeFrom(1, MAKER_INVOKE.PROVIDER_DETECT, { requestId: 'draft-1', cancel: true });
+    expect(signals.map(s => s.aborted)).toEqual([true, false]);
+    harness.destroySender(2);
+    await Promise.all([first, second]);
+    expect(signals[1].aborted).toBe(true);
+  });
+});
+
+// New probe lifecycle shares the existing IPC, with sender-owned cancellation and no secret echo.
+describe('one-click protocol test ownership', () => {
+  const request = { kind: 'adhoc', requestId: 'probe-test', strategy: 'auto', spec: {
+    agent: 'pi', authMethod: 'apiKey', baseUrl: 'https://relay.example/v1', modelId: 'test', apiKey: 'fake-key',
+  } };
+  it('forwards the automatic strategy and cancels only the owning renderer operation', async () => {
+    const harness = new IpcHarness();
+    let signal!: AbortSignal;
+    let finish!: (result: { ok: boolean; latencyMs: number }) => void;
+    const testConnection = vi.fn((_input: unknown, current?: AbortSignal) => { signal = current!; return new Promise<{ ok: boolean; latencyMs: number }>(resolve => { finish = resolve; }); });
+    registerProviderHandlers(harness, makeDeps({ testConnection }));
+    const pending = harness.invokeFrom(7, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, request);
+    await harness.invokeFrom(8, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'cancel', requestId: request.requestId });
+    expect(signal.aborted).toBe(false);
+    await expect(harness.invokeFrom(7, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, request)).rejects.toThrow(/PRECONDITION_FAILED/);
+    await harness.invokeFrom(7, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'cancel', requestId: request.requestId });
+    expect(signal.aborted).toBe(true);
+    finish({ ok: true, latencyMs: 1 });
+    expect(await pending).toMatchObject({ ok: false, decision: 'cancelled' });
+    expect(testConnection).toHaveBeenCalledOnce();
+    expect(testConnection.mock.calls[0][0]).toMatchObject(request);
+  });
+  it.each([
+    { ...request, spec: { ...request.spec, agent: 'codex' } },
+    { ...request, spec: { ...request.spec, catalogPresetId: 'google-gemini-api' } },
+    { ...request, spec: { ...request.spec, api: 'google-vertex' } },
+    { ...request, spec: { ...request.spec, baseUrl: 'https://user:pass@relay.example/v1' } },
+    { ...request, requestId: '../bad' },
+  ])('rejects unsupported strategy or credential binding before executing', async input => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invokeFrom(7, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, input)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.testConnection).not.toHaveBeenCalled();
+  });
+  it('aborts the operation when its renderer is destroyed', async () => {
+    const harness = new IpcHarness();
+    let signal!: AbortSignal;
+    const testConnection = vi.fn((_input: unknown, current?: AbortSignal) => {
+      signal = current!;
+      return new Promise<{ ok: boolean; latencyMs: number }>(resolve => current!.addEventListener('abort', () => resolve({ ok: false, latencyMs: 0 }), { once: true }));
+    });
+    registerProviderHandlers(harness, makeDeps({ testConnection }));
+    const pending = harness.invokeFrom(7, MAKER_INVOKE.PROVIDER_TEST_CONNECTION, request);
+    harness.destroySender(7);
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toMatchObject({ decision: 'cancelled' });
+  });
+});
+
+// #6928 unit regression: discovery returns a new ID without mode, and only the
+// active Registry classifies it. Exercise fetch -> merge -> update -> DB reread;
+// Renderer-only tests cannot prove Main classifies before the one persisted write.
+describe('manual refresh speech references through the real provider update handler', () => {
+  // #6928 P1, unit with an in-memory DB: the real update handler/signature must
+  // gate a reference-only Responses route change before persistence/Host restart.
+  // The existing speech cases use openai-chat, so they never require a restart.
+  it.each([true, false])('gates reference-only Responses changes before saving (busy=%s)', async busy => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = imageProviderConfig('refresh-image-speech', {
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'chat-model', name: 'My chat', defaultEnabled: false }],
+    });
+    let busyIds: string[] = [];
+    const deps = makeDeps({
+      listBusyLocalCodexSessionIds: () => busyIds,
+      listProviders: async () => [{ ...buildUserProvider((await getCustomProvider(config.id))!), connected: true }],
+    });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    const before = (await getCustomProvider(config.id))!;
+    vi.mocked(deps.prepareCodexCustomProviderHostChange!).mockClear().mockImplementation(async () => {
+      expect((await getCustomProvider(config.id))!.runtimes).toEqual(before.runtimes);
+    });
+    vi.mocked(deps.finalizeCodexCustomProviderHostChange!).mockClear();
+    vi.mocked(deps.storeCustomProviderKey).mockClear();
+    vi.mocked(deps.refreshCatalog).mockClear();
+    busyIds = busy ? ['local-codex-running'] : [];
+    const options = { source: 'manual-settings', speechReferenceRefreshAgents: ['codex'] };
+    const first = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, before, {}, options);
+    if (busy) {
+      expect(first).toEqual({ ok: false, confirmationRequired: 'codex-image-generation-reload', busyCount: 1 });
+      expect((await getCustomProvider(config.id))!.runtimes).toEqual(before.runtimes);
+      expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+      expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+      expect(deps.refreshCatalog).not.toHaveBeenCalled();
+      expect(await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, before, {}, {
+        ...options, codexImageGenerationRestartPolicy: 'interrupt',
+      })).toEqual({ ok: true, speechReferenceAdded: true });
+    } else {
+      expect(first).toEqual({ ok: true, speechReferenceAdded: true });
+    }
+    const saved = (await getCustomProvider(config.id))!;
+    expect(saved.runtimes.codex!.models).toEqual([
+      before.runtimes.codex!.models[0],
+      expect.objectContaining({ id: 'gpt-4o-mini-tts', defaultEnabled: true }),
+    ]);
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    // Refreshing the saved reference neither duplicates it nor restarts again.
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, saved, {}, options)).toEqual({ ok: true });
+    expect((await getCustomProvider(config.id))!.runtimes).toEqual(saved.runtimes);
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'new', 'new-pi', 'hidden', 'hidden-pi', 'transcription', 'discovery-other',
+    'user-other', 'missing', 'reference-other', 'failed-target', 'disabled', 'oauth', 'proxy',
+    'registry-other', 'registry-transcription',
+  ] as const)('preserves effective classification and saved settings: %s', async kind => {
+    mountDb();
+    const harness = new IpcHarness();
+    const id = kind === 'reference-other' ? 'speech-2.8-turbo' : 'server-only-audio';
+    const registryMode = kind === 'transcription' ? 'audio_transcription' : 'audio_speech';
+    const modelRegistry: ModelRegistry = {
+      ...BUNDLED_CATALOG.modelRegistry!,
+      baseModels: [...BUNDLED_CATALOG.modelRegistry!.baseModels!,
+        { id: 'server-only-audio', aliases: [], defaults: { mode: registryMode } }],
+    };
+    // #6928 P2, Main unit: unlike reference-other, this ID is absent from both
+    // saved settings and discovery. The active Registry must also govern the
+    // candidate before the real update handler persists a reference addition.
+    if (kind === 'registry-other' || kind === 'registry-transcription') {
+      modelRegistry.baseModels = modelRegistry.baseModels!.map(model =>
+        model.aliases.includes('speech-2.8-turbo') ? { ...model, defaults: { ...model.defaults,
+          mode: kind === 'registry-other' ? 'other' : 'audio_transcription' } } : model);
+    }
+    const config: CustomProviderConfig = { id: 'refresh-speech', name: 'My connection', runtimes: {
+      codex: { baseUrl: kind === 'proxy' ? 'https://proxy.example/v1' : 'https://api.minimax.io/v1',
+        wireProtocol: 'openai-chat', models: [{ id: 'MiniMax-M3', name: 'My chat', defaultEnabled: false }] },
+    } };
+    const agent = kind === 'new-pi' || kind === 'hidden-pi' ? 'pi' : 'codex';
+    if (agent === 'pi') config.runtimes.pi = {
+      baseUrl: 'https://api.minimax.io/anthropic', wireProtocol: 'anthropic-messages', models: [],
+    };
+    if (kind === 'hidden' || kind === 'hidden-pi' || kind === 'user-other') {
+      config.runtimes[agent]!.models.push({ id, name: 'My saved audio', defaultEnabled: false,
+        ...(kind === 'user-other' ? { mode: 'other' as const } : {}) });
+    }
+    const discovered: DiscoveredModel[] = ['missing', 'failed-target', 'disabled', 'oauth', 'proxy',
+      'registry-other', 'registry-transcription'].includes(kind)
+      ? [{ id: 'MiniMax-M3', name: 'Upstream chat' }]
+      : [{ id, name: 'Discovered audio', ...(['discovery-other', 'reference-other'].includes(kind)
+        ? { discoveredMetadata: { mode: 'other' as const } } : {}) }];
+    const deps = makeDeps({
+      getModelCatalog: () => ({ modelRegistry }),
+      fetchModels: vi.fn(async () => ({ ok: true as const, models: discovered })),
+      listProviders: async () => {
+        const current = (await getCustomProvider(config.id))!;
+        const provider: ProviderView = { ...buildUserProvider(current, { modelRegistry }), connected: true };
+        if (kind === 'disabled') provider.routing.codex!.disabled = true;
+        if (kind === 'oauth') provider.auth = { method: 'oauth' };
+        return [provider];
+      },
+    });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    vi.mocked(deps.storeCustomProviderKey).mockClear();
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent, baseUrl: config.runtimes[agent]!.baseUrl, authMethod: 'apiKey', savedProviderId: config.id,
+    }) as { ok: true; models: DiscoveredModel[] };
+    const merged = structuredClone(config);
+    merged.runtimes[agent]!.models = mergeDiscoveredRuntimeModels(merged.runtimes[agent]!.models, fetched.models);
+    const options = { speechReferenceRefreshAgents: kind === 'failed-target' ? ['pi'] : ['codex', 'pi'] };
+    const shouldAdd = ['transcription', 'discovery-other', 'user-other', 'missing'].includes(kind);
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, merged, {}, options))
+      .toEqual({ ok: true, ...(shouldAdd ? { speechReferenceAdded: true } : {}) });
+    const saved = (await getCustomProvider(config.id))!;
+    const expected = structuredClone(merged);
+    if (shouldAdd) expected.runtimes.codex!.models.push({
+      id: 'speech-2.8-turbo', name: 'MiniMax Speech 2.8 Turbo', defaultEnabled: true,
+    });
+    expect(saved.runtimes).toEqual(expected.runtimes);
+    expect(saved.name).toBe(config.name);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    const speechIds = buildUserProvider(saved, { modelRegistry }).audioModels
+      ?.filter(model => model.mode === 'audio_speech').map(model => model.id) ?? [];
+    expect(speechIds).toEqual(shouldAdd ? ['speech-2.8-turbo']
+      : ['new', 'new-pi', 'hidden', 'hidden-pi'].includes(kind) ? [id] : []);
+    // A repeated refresh starts from the saved configuration and never adds HD.
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, saved, {}, options)).toEqual({ ok: true });
+    expect((await getCustomProvider(config.id))!.runtimes).toEqual(saved.runtimes);
+  });
+
+  it('rejects invalid refresh routes and incompatible append options before saving', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    for (const agents of [[], ['unknown'], ['codex', 'codex'], 'codex']) {
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, validConfig, {},
+        { speechReferenceRefreshAgents: agents })).rejects.toThrow(/INVALID_PARAMS/);
+    }
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, validConfig, {},
+      { speechReferenceRefreshAgents: ['codex'], appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+    expect((await getCustomProvider(validConfig.id))!.runtimes).toEqual(validConfig.runtimes);
+  });
+
+  it('does not save after the owner changes during the current provider lookup', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const deps = makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      listProviders: async () => {
+        owner.generation += 2;
+        return [{ ...buildUserProvider(validConfig), connected: true }];
+      },
+    });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+      { ...validConfig, name: 'Stale refresh' }, {}, { speechReferenceRefreshAgents: ['codex'] }))
+      .rejects.toThrow(/INTERNAL/);
+    expect((await getCustomProvider(validConfig.id))!.name).toBe(validConfig.name);
+  });
+});
+
+describe('speech additions through the real provider update handler', () => {
+  it('merges into the latest connection, preserving settings, credentials, duplicate IDs and another connection', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = { id: 'speech-a', name: 'Renamed while dialog open', runtimes: {
+      codex: { baseUrl: 'https://api.minimax.io/v1', wireProtocol: 'openai-chat', models: [
+        { id: 'MiniMax-M3', name: 'My chat', defaultEnabled: false },
+        { id: 'speech-2.8-hd', name: 'My voice', mode: 'audio_speech', defaultEnabled: false },
+      ] },
+      pi: { baseUrl: 'https://api.minimax.io/anthropic', wireProtocol: 'anthropic-messages', models: [{ id: 'MiniMax-M3', name: 'Pi chat' }] },
+    } };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, { ...config, id: 'speech-b' });
+    vi.mocked(deps.storeCustomProviderKey).mockClear();
+    vi.mocked(deps.removeCustomProviderKey).mockClear();
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...config, name: 'Stale name', runtimes: { codex: { ...config.runtimes.codex, models: [
+        { id: 'speech-2.8-turbo', name: 'Speech 2.8 Turbo' },
+        { id: 'speech-2.8-hd', name: 'Overwrite attempt', mode: 'audio_speech' },
+      ] } },
+    }, {}, { appendSpeechModelsOnly: true });
+    expect(result).toEqual({ ok: true });
+    const saved = await getCustomProvider(config.id);
+    expect(saved?.name).toBe(config.name);
+    expect(saved?.runtimes.pi).toEqual(config.runtimes.pi);
+    expect(saved?.runtimes.codex?.models).toEqual([...config.runtimes.codex!.models, { id: 'speech-2.8-turbo', name: 'Speech 2.8 Turbo' }]);
+    expect((await getCustomProvider('speech-b'))?.runtimes).toEqual(config.runtimes);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it('rejects stale endpoints and attempts to replace credentials without changing membership', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    const request = { ...validConfig, runtimes: { codex: { ...validConfig.runtimes.codex, models: [{ id: 'speech-2.8-turbo', name: 'Speech' }] } } };
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, { codex: 'fake-replacement' }, { appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...request, runtimes: { codex: { ...request.runtimes.codex, baseUrl: 'https://changed.example/v1' } } }, {}, { appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+    expect((await getCustomProvider(validConfig.id))?.runtimes).toEqual(validConfig.runtimes);
+  });
+});
+
+// A saved explicit default becomes omitted in ProviderView; opening Settings must not make it stale.
+it('speech additions accept an unchanged projected default protocol and preserve its declaration', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  registerProviderHandlers(harness, makeDeps());
+  const config: CustomProviderConfig = { id: 'legacy-speech', name: 'Legacy', runtimes: {
+    codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses', models: [{ id: 'gpt-5.4', name: 'Chat' }] },
+    pi: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'tts-1', name: 'Already added', defaultEnabled: false }] },
+  } };
+  await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: {
+    codex: { baseUrl: config.runtimes.codex!.baseUrl, models: [{ id: 'gpt-4o-mini-tts', name: 'Speech' }, { id: 'tts-1', name: 'Duplicate' }] },
+  } }, {}, { appendSpeechModelsOnly: true })).resolves.toEqual({ ok: true });
+  const stored = await getCustomProvider(config.id);
+  expect(stored?.runtimes.codex?.wireProtocol).toBe('openai-responses');
+  expect(stored?.runtimes.codex?.models.map(model => model.id)).toEqual(['gpt-5.4', 'gpt-4o-mini-tts']);
+  expect(stored?.runtimes.pi).toEqual(config.runtimes.pi);
+});
+
+// Review regression: real catalog projection + update handler. A current preset can
+// replace a stored directory URL without changing the connection. Existing tests
+// only compared raw snapshots, so they missed this failed save (DB tier, no network).
+it.each([undefined, 'https://api.minimax.io/v1/old-models'])(
+  'appends speech against the current preset while preserving stored modelsUrl %s',
+  async (modelsUrl) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config: CustomProviderConfig = { id: 'preset-speech', name: 'My MiniMax', runtimes: {
+      codex: { catalogPresetId: 'minimax-api', baseUrl: 'https://api.minimax.io/v1',
+        modelsUrl, models: [{ id: 'MiniMax-M3', name: 'My chat' }] },
+    } };
+    const presets: ProviderPreset[] = [{ id: 'minimax-api', name: 'MiniMax API', runtimes: {
+      codex: { baseUrl: 'https://api.minimax.io/v1', modelsUrl: 'https://api.minimax.io/v1/current-models', models: [] },
+    } }];
+    registerProviderHandlers(harness, makeDeps({ listPresets: () => presets }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    const projected = buildUserProvider(config, { presets });
+    const request = providerViewToCustomProviderConfig({ ...projected, connected: true } as ProviderView);
+    request.runtimes.codex!.models = [{ id: 'speech-2.8-turbo', name: 'Speech' }];
+    expect(request.runtimes.codex!.modelsUrl).toBe(presets[0].runtimes.codex!.modelsUrl);
+    // A dialog from before the preset update is genuinely stale; reopening fixes it.
+    const stale = structuredClone(request);
+    stale.runtimes.codex!.modelsUrl = 'https://api.minimax.io/v1/stale-models';
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stale, {}, { appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendSpeechModelsOnly: true })).resolves.toEqual({ ok: true });
+    expect((await getCustomProvider(config.id))?.runtimes.codex).toEqual({
+      ...config.runtimes.codex, models: [...config.runtimes.codex!.models, ...request.runtimes.codex!.models],
+    });
+  },
+);

@@ -65,6 +65,8 @@ export interface GhostInstallConsentRequest {
   origin: GhostInstallConsentOrigin;
   /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */
   originLabel?: string;
+  /** Host-generated installation identity and account impact, never package-provided. */
+  target?: { namespace: string | null; sourceChanged: boolean; otherCopies: number };
   facts: GhostInstallConsentFacts;
 }
 
@@ -87,6 +89,7 @@ function withoutTools(items: readonly GhostPermissionItem[]): GhostPermissionIte
 export function evaluateGhostInstallConsent(
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
+  force = false,
 ): GhostInstallConsentFacts | null {
   if (!installed) {
     return {
@@ -99,7 +102,7 @@ export function evaluateGhostInstallConsent(
   }
   const diff = diffInstalledGhostPermissionItems(installed, next);
   const added = withoutTools(diff.added);
-  if (added.length === 0 && !diff.builtinOauthClientChanged) return null;
+  if (!force && added.length === 0 && !diff.builtinOauthClientChanged) return null;
   return {
     kind: 'update',
     ghostId: next.id,

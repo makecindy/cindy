@@ -24,8 +24,12 @@ import {
   createBotGroupChatService,
   resolveGroupMentions,
   rotateResponders,
+  settleBotGroupLaneTerminal,
   type BotGroupChatServiceDeps,
+  type BotGroupLaneTerminal,
 } from '../botGroupChatService.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
+import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import {
   buildPlanDecisionPrompt,
   buildPlanStepBrief,
@@ -233,6 +237,64 @@ describe('botGroupChatService', () => {
     ]);
   });
 
+  // #6671 / bot-group-chat §4.3–4.4 (unit): a held done-only turn can have
+  // streamed text still queued for persistence. Existing tests covered the
+  // ordinary event path, not release/handback through the real recovery stores.
+  // Read the actual group result so an early empty DB read cannot silently eat it.
+  it.each(['group', 'generic'] as const)('keeps a streamed reply pending until persistence when %s recovery releases it', async recovery => {
+    let written = false;
+    let finishWrite!: () => void;
+    const writing = new Promise<void>(resolve => { finishWrite = () => { written = true; resolve(); }; });
+    const drain = vi.fn(() => writing);
+    const readReplyText = vi.fn(async () => written ? '落库后的实际回复' : null);
+    const harness = createHarness((_bot, _prompt, index) => index === 0 ? null : 'NO_REPLY', { readReplyText });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '继续讨论', mentions: { all: true, botIds: [] }, clientId: 'source-input' });
+    await vi.waitFor(() => expect(harness.dispatches).toHaveLength(3));
+    const call = harness.dispatches[0]!;
+    let settlement: Promise<boolean> | undefined;
+    const deliver = (terminal: BotGroupLaneTerminal) => {
+      settlement = settleBotGroupLaneTerminal(harness.service, terminal, drain);
+    };
+    const held = createProviderGroupHeldWorkerTerminals<BotGroupLaneTerminal>({
+      ownerKey: () => 'account', deliver: (_sessionId, terminal) => deliver(terminal),
+    });
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+      rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+      finalizeBotGroupSuppressedTerminal: deliver,
+    });
+    held.stash(call.sessionId, 3, {
+      sessionId: call.sessionId, activeInputClientId: call.clientId,
+      outcome: 'done', resultText: '', resultMessageClientId: 'queued-reply',
+    });
+    try {
+      if (recovery === 'generic') {
+        book.stashSuppressedError(call.sessionId, { reason: 'upstream-overload' });
+        book.stashBotGroupSuppressedTerminal(call.sessionId, held.takeForRecovery(call.sessionId, 3)!);
+        book.surfaceSuppressedError(call.sessionId);
+        book.surfaceSuppressedError(call.sessionId);
+      }
+      held.release(call.sessionId, 3);
+      held.release(call.sessionId, 3);
+      await Promise.resolve();
+      expect(readReplyText.mock.calls.length).toBe(0);
+      const waiting = await harness.service.getGroup(groupId);
+      expect(waiting.ok && waiting.group.speakingBotIds).toContain(call.botId);
+      finishWrite();
+      await settlement;
+      const group = await waitForIdle(harness, groupId);
+      expect(drain).toHaveBeenCalledOnce();
+      expect(readReplyText).toHaveBeenCalledExactlyOnceWith(call.sessionId, 'queued-reply');
+      expect(group.messages.filter(message => message.authorKind === 'bot').map(message => message.content))
+        .toEqual(['落库后的实际回复']);
+    } finally {
+      finishWrite();
+      await settlement;
+      await waitForIdle(harness, groupId);
+    }
+  });
+
   it('in sequential mode lets every member answer in turn, rotates the next circle, and ends when a circle is silent', async () => {
     const replies: Record<string, string[]> = {
       mimi: ['先定个大框架', 'NO_REPLY'],
@@ -416,11 +478,15 @@ describe('botGroupChatService', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, {
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness, ['mimi', 'abu']);
     await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'no-lane' });
@@ -566,6 +632,8 @@ describe('group mention and prompt helpers', () => {
     const twins = [{ botId: 'x1', name: '小满' }, { botId: 'x2', name: '小满' }];
     expect(resolveGroupMentions('@小满 在吗', { all: false, botIds: ['x2'] }, twins))
       .toEqual({ all: false, botIds: ['x2'] });
+    // Typed text alone cannot tell same-named members apart: all of them are addressed, never just the first.
+    expect(resolveGroupMentions('@小满 在吗', null, twins)).toEqual({ all: false, botIds: ['x1', 'x2'] });
     expect(resolveGroupMentions('@小满帮我查一下', null, members)).toEqual({ all: false, botIds: ['xiaoman'] });
     expect(resolveGroupMentions('@所有人看这里', null, members).all).toBe(true);
     expect(resolveGroupMentions('@Everyone look', null, members).all).toBe(true);
@@ -767,11 +835,15 @@ describe('botGroupChatService 分工', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness);
     const plan = await proposePlan(harness, groupId);
@@ -916,7 +988,7 @@ describe('botGroupChatService 分工', () => {
       .toEqual(['加上英文版了']);
   });
 
-  it('checks 「@所有人」 and mention-only groups too; only naming a Bot skips the check', async () => {
+  it('checks 「@所有人」 but leaves unaddressed messages idle in mention-only groups', async () => {
     const decidePlan = vi.fn(async (_input: PlanDecisionInput) => ({ needsPlan: false }) as PlanDecision);
     const harness = createHarness(() => 'NO_REPLY', { decidePlan });
     const groupId = await createGroup(harness);
@@ -927,8 +999,11 @@ describe('botGroupChatService 分工', () => {
     await harness.service.updateGroup({ groupId, replyMode: 'mentioned' });
     await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'quiet' });
     await waitForIdle(harness, groupId);
-    expect(decidePlan).toHaveBeenCalledTimes(2);
+    expect(decidePlan).toHaveBeenCalledTimes(1);
     expect(harness.dispatches).toHaveLength(3);
+    await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'explicit', division: true });
+    await waitForIdle(harness, groupId);
+    expect(decidePlan).toHaveBeenCalledTimes(2);
   });
 
   it('an explicit request whose chosen members all became unavailable says so', async () => {

@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { resolveHistoryScope } from './_history_scope.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
@@ -47,6 +48,7 @@ const ROLE_VALUES = [
 const DEFAULT_QA_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const satisfies readonly HistoryRole[];
 
 const DESCRIPTION = [
+  'sessions 元数据中的 sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
   HISTORY_DEVICE_DESCRIPTION,
   '跨所有 session 用自然语言语义检索历史聊天记录, 返回相关命中 + 上下文窗口的原始数据。',
   '',
@@ -88,6 +90,8 @@ export function registerSearchChatHistoryTool(
     description: DESCRIPTION,
     inputShape: {
       ...historyDeviceShape,
+      teammate_id: z.string().min(1).max(256).optional().describe('限定已保存归属的伙伴聊天（含历史、话题、渠道专线），使用 get_teammate_state 的 profile.id。不限制当前 workdir；未关联的旧 IM 记录不自动认领。'),
+      source: z.string().min(1).max(64).optional().describe('精确匹配任务原始 source，如 telegram（旧独立机器人）或 bot（伙伴）。不指定则跨来源搜索。'),
       query: z.string().min(1).max(256).describe('自然语言查询(必填, 最长 256)。例: "上次怎么修的语音输入授权问题"。'),
       session_ids: stringArrayParam(z.array(z.string().min(1)).max(50))
         .optional()
@@ -164,6 +168,8 @@ export function registerSearchChatHistoryTool(
       const res = await deps.history.searchChatHistory({
         query: query.trim(),
         sessionIds: scope.sessionIds,
+        ...(args.teammate_id ? { teammateId: args.teammate_id } : {}),
+        ...(args.source ? { source: args.source } : {}),
         workdir: workdir ?? null,
         fromMs,
         toMs,
@@ -213,7 +219,10 @@ export function registerSearchChatHistoryTool(
           if (h.vectorDistance !== null) out.vectorDistance = h.vectorDistance;
           return out;
         }),
-        sessions: result.sessions,
+        sessions: Object.fromEntries(Object.entries(result.sessions).map(([id, meta]) => [id, {
+          ...meta,
+          ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(id) } : {}),
+        }])),
         vector_used: result.vectorUsed,
         ...(result.vectorSkipReason ? { vector_skip_reason: result.vectorSkipReason } : {}),
         pool_size: result.poolSize,
@@ -222,6 +231,8 @@ export function registerSearchChatHistoryTool(
         hasMore: result.hasMore,
         query: {
           query: query.trim(),
+          teammate_id: args.teammate_id,
+          source: args.source,
           session_ids,
           workdir,
           from,
@@ -239,13 +250,6 @@ export function registerSearchChatHistoryTool(
       });
     },
   });
-}
-
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
 }
 
 /**

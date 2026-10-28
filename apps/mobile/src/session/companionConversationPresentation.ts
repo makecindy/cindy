@@ -1,13 +1,7 @@
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
-import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
-
-const isDelivery = (item: MobileMessageRenderItem) => (item.type === 'message' && !item.message.failedSamplingAttempt && item.message.kind === 'assistant' && hasRichAnswer(item.message.body)) || item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && !item.message.failedSamplingAttempt && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
-    || !!item.message.attachments?.length || !!item.message.media?.length
-    || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
@@ -53,7 +47,8 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
   for (const item of expandWorkGroups(items).reverse()) {
-    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType) {
+    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType
+      || item.message.source.agentMeta?.assistantPhase === 'commentary') {
       sealedRun = false;
       nextAssistantAt = null;
     } else {
@@ -75,23 +70,6 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     && (item.message.source.agentMeta?.assistantPhase === 'final_answer' || item.message.turnCompleted
       || sealed.has(item.key) || Boolean(item.message.sourceGroup) || item.message.explicitDelivery || hasRichAnswer(item.message.body));
   const flattened = items.flatMap(item => item.type === 'work_group' ? liftReplies(item, isAddressedReply) : [item]);
-  // A later delivery is already the result. Do not restore its unsealed preamble.
-  const deliveredAfter = new Set<string>();
-  let delivery = false;
-  let nextMessageAt: number | null = null;
-  for (const item of [...flattened].reverse()) {
-    if (item.type === 'message') {
-      const createdAt = Date.parse(item.message.createdAt);
-      if (Number.isFinite(createdAt)) {
-        // A receipt in a newer loaded window cannot suppress an older reply.
-        if (nextMessageAt !== null && nextMessageAt - createdAt > HISTORY_GAP_SPLIT_MS) delivery = false;
-        nextMessageAt = createdAt;
-      }
-    }
-    if (item.type === 'message' && item.message.kind === 'user') delivery = false;
-    else if (isDelivery(item)) delivery = true;
-    else if (delivery) deliveredAfter.add(item.key);
-  }
   const attached = new Set(flattened.flatMap(item => item.type === 'message'
     && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt && item.message.turnCompleted === true && item.message.body.trim()
     ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(botTaskResultKey) : []));
@@ -111,9 +89,8 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     }
     if (message.systemCardType) return true;
     if (message.kind === 'thinking' || message.kind === 'tool') return false;
-    if (message.kind === 'assistant' && message.source.agentMeta?.assistantPhase === 'commentary'
-      && !message.explicitDelivery && !isDelivery(item)) return false;
-    return message.kind !== 'assistant' || isAddressedReply(item) || isDelivery(item)
-      || message.isTurnFinalAssistant && !deliveredAfter.has(item.key);
+    // Ordinary task grouping owns when prose enters the completed work fold.
+    // Metadata arriving after a text delta must not hide a still-visible row.
+    return true;
   });
 }

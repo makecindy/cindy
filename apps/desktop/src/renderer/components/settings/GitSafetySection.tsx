@@ -54,7 +54,7 @@ export function GitSafetySection() {
             <p id="settings-search-settings-gitSafety-autoSnapshotTitle" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
               {t('settings.gitSafety.autoSnapshotTitle')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">{t('settings.gitSafety.description')}</p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('settings.gitSafety.description')}</p>
           </div>
 
           <div className="cindy-segmented-row-actions">

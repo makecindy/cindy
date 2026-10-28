@@ -664,11 +664,11 @@ export function MessageNavRail({
                   <span className="flex max-w-[344px] flex-col gap-1">
                     <span className="truncate text-13 font-medium">{preview}</span>
                     {entry.answerExcerpt ? (
-                      // 摘要 = 主文字色 × 50% 透明度,不引新 token。数值由多轮
-                      // 实机验收夹逼、最终用户直接指定(2026-07-28)。注意半透明
-                      // 文字经抗锯齿合成会比同亮度实心灰**显得更亮**,别拿色值
-                      // 计算器推这个数,调整必须实机看效果。
-                      <span className="line-clamp-3 whitespace-normal break-normal text-13 leading-relaxed opacity-50">
+                      // 摘要 = 三级文字档。原为「主文字色 × 50% 透明度」(多轮实机验收后
+                      // 用户直接指定,2026-07-28);2026-10-22 起文字是墨水阶梯,三级档
+                      // (浅 44% / 深 40%)与正文 88% × 50% 等值,改用档位 token,不再
+                      // 在文字色上叠透明度。调整仍须实机看效果。
+                      <span className="line-clamp-3 whitespace-normal break-normal text-13 leading-relaxed text-[var(--text-tertiary)]">
                         {entry.answerExcerpt}
                       </span>
                     ) : null}

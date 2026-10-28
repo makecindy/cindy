@@ -1,10 +1,15 @@
 {
   "site": "reuters.com",
-  "auth": "走持久浏览器会话(带 cookie);Reuters 有强反爬 + 区域/付费墙,未登录或被风控时接口返回非 JSON",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.reuters.com",
-    "searchApi": "https://www.reuters.com/pf/api/v3/content/fetch/articles-by-search-v2?query=<urlencoded-json>"
+    "home": "https://www.reuters.com"
   },
-  "recipes": ["reuters-search"],
-  "notes": "Reuters 站内搜索走 PageForge 接口:/pf/api/v3/content/fetch/articles-by-search-v2?query=<把一段 JSON urlencode>。那段 JSON 形如 {keyword, offset:0, orderby:'display_date:desc', size, website:'reuters'}。响应 {result:{articles:[{title 或 headlines.basic, display_date(ISO), taxonomy.section.name, canonical_url(站内相对路径)}], ...}}。文章 URL = 'https://www.reuters.com' + canonical_url。关键:必须先 navigate 到 https://www.reuters.com 再在页面内同源 fetch(带 credentials:'include'),直接跨域请求会被反爬/CORS 挡。Reuters 风控较强,撞墙时配方会抛中文提示让用户在持久浏览器先正常访问/登录;若长期取不到,改用 BBC 等公开 RSS 源更稳。"
+  "recipes": [
+    "reuters-search"
+  ],
+  "notes": "兼容入口 reuters-search 现执行内置 reuters/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

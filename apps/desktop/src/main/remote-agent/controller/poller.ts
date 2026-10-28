@@ -2,8 +2,10 @@
  * 远程 Agent 事件拉取(控制端，每台运行 Agent 的电脑一个)。
  *
  * 同一台电脑上的全部任务共用一个拉取器：每个 `poll` 最多携带 64 个任务的游标，按整批轮转，
- * 对方没有新数据时挂起最多 READ_WAIT_MS。新任务登记时可另发一个 poll，同时在途最多两个。
- * 两个 poll 返回的数据可能重叠，按 from 去重，游标只前进不后退。
+ * 对方没有新数据时挂起最多 READ_WAIT_MS。新任务登记时可另发一个 poll，长等待同时在途最多两个；
+ * 两个都被旧任务的长等待占着时，再留一个名额给没有在途 poll 覆盖的任务(排在最前)，
+ * 否则新任务要等旧长等待超时(恰好等于 Codex 执行环境握手的 10 秒上限)才有人拉。
+ * 几个 poll 返回的数据可能重叠，按 from 去重，游标只前进不后退。
  *
  * 链路抖动：poll 按游标幂等，可恢复的错误退避后重拉；对方长时间不可达时结束全部任务。
  */
@@ -24,6 +26,10 @@ const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 5_000;
 /** 同时在途的 poll 上限：一个长等待 + 一个覆盖新任务的。 */
 const MAX_INFLIGHT_POLLS = 2;
+/** 有任务没有被在途 poll 覆盖时，多留一个补位名额，直到普通 poll 接手。 */
+const FRESH_RUN_EXTRA_POLLS = 1;
+/** 补位不要变成长等待，否则第四个新任务仍会被三个旧 poll 挡住。 */
+const FRESH_RUN_WAIT_MS = 1_000;
 /** 对方连续几次立刻返回、却没有任何新数据时，放慢重拉(防止对方行为异常时空转)。 */
 const EMPTY_FAST_STREAK = 3;
 const EMPTY_FAST_MS = 50;
@@ -35,6 +41,8 @@ export interface PolledRun {
   onData(data: Buffer, done: boolean): void;
   /** 任务已不能再拉取(对方不认识这个任务、协议错误或对方长时间不可达)。 */
   onLost(reason: string, error: RemoteAgentErrorInfo): void;
+  /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
+  holdsRemote?(): boolean;
 }
 
 interface Entry {
@@ -102,31 +110,50 @@ export class RemoteAgentPoller {
   private ensure(): void {
     if (this.entries.size === 0 || this.retryTimer) return;
     if (this.inflight > 0 && !this.needFresh) return;
-    if (this.inflight >= MAX_INFLIGHT_POLLS) return;
+    const limit = this.hasUncoveredRun() ? MAX_INFLIGHT_POLLS + FRESH_RUN_EXTRA_POLLS : MAX_INFLIGHT_POLLS;
+    if (this.inflight >= limit) return;
     this.needFresh = false;
     void this.pollOnce();
   }
 
-  private snapshot(): Array<{ runId: string; cursor: number }> {
-    const all = [...this.entries.values()].map((entry) => ({ runId: entry.run.runId, cursor: entry.cursor }));
-    if (all.length <= REMOTE_AGENT_MAX_POLL_RUNS) return all;
-    // 按整批推进，避免大量空闲任务在下次被拉取前超过 host 的存活期限。
-    const start = this.rotation % all.length;
-    this.rotation = (start + REMOTE_AGENT_MAX_POLL_RUNS) % all.length;
-    this.needFresh = true;
-    return [...all.slice(start), ...all.slice(0, start)].slice(0, REMOTE_AGENT_MAX_POLL_RUNS);
+  private snapshot(): Array<{ runId: string; cursor: number; hold?: true }> {
+    const all = [...this.entries.values()].map((entry) => {
+      let hold = false;
+      try {
+        hold = entry.run.holdsRemote?.() === true;
+      } catch {
+        // 判断失败时照常拉取，不报 hold。
+      }
+      return { runId: entry.run.runId, cursor: entry.cursor, ...(hold ? { hold: true as const } : {}) };
+    });
+    let wanted = all;
+    if (all.length > REMOTE_AGENT_MAX_POLL_RUNS) {
+      // 按整批推进，避免大量空闲任务在下次被拉取前超过 host 的存活期限；没有在途覆盖的任务排在最前。
+      const start = this.rotation % all.length;
+      const ordered = [...all.slice(start), ...all.slice(0, start)];
+      const uncovered = new Set(all.filter((item) => !this.isCovered(item.runId)).map((item) => item.runId));
+      const fresh = ordered.filter((item) => uncovered.has(item.runId)).slice(0, REMOTE_AGENT_MAX_POLL_RUNS);
+      const rotated = ordered
+        .filter((item) => !uncovered.has(item.runId))
+        .slice(0, REMOTE_AGENT_MAX_POLL_RUNS - fresh.length);
+      this.rotation = (start + fresh.length + rotated.length) % all.length;
+      this.needFresh = true;
+      wanted = [...fresh, ...rotated];
+    }
+    return wanted;
   }
 
   private async pollOnce(): Promise<void> {
     const wanted = this.snapshot();
     const startedAt = this.now();
     const coverage: ReadonlySet<string> = new Set(wanted.map((item) => item.runId));
+    const waitMs = this.inflight >= MAX_INFLIGHT_POLLS ? FRESH_RUN_WAIT_MS : REMOTE_AGENT_READ_WAIT_MS;
     this.inflight += 1;
     this.inflightCoverage.add(coverage);
     let raw: unknown;
     let failure: unknown = null;
     try {
-      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs: REMOTE_AGENT_READ_WAIT_MS }]);
+      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs }]);
     } catch (error) {
       failure = error;
     } finally {
@@ -174,14 +201,14 @@ export class RemoteAgentPoller {
 
   private hasUncoveredRun(): boolean {
     for (const runId of this.entries.keys()) {
-      let covered = false;
-      for (const coverage of this.inflightCoverage) {
-        if (coverage.has(runId)) {
-          covered = true;
-          break;
-        }
-      }
-      if (!covered) return true;
+      if (!this.isCovered(runId)) return true;
+    }
+    return false;
+  }
+
+  private isCovered(runId: string): boolean {
+    for (const coverage of this.inflightCoverage) {
+      if (coverage.has(runId)) return true;
     }
     return false;
   }

@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { HOOK_STATUS_REACTIONS } from './statusReactions.js';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
@@ -1867,6 +1868,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 每条连接只声明其服务会实际使用的能力，避免把 provider-neutral wire 误投
       // 到 Slack 服务，也保持老 Slack hello 的兼容面最小。
       features: [...features],
+      ...(provider === undefined || provider === 'telegram'
+        ? { statusReactions: HOOK_STATUS_REACTIONS[provider ?? 'slack'] }
+        : {}),
       ...(includeLifecycleAnnouncement
         ? { lifecycleAnnouncement: lifecycleAnnouncementEnabled() }
         : {}),

@@ -15,8 +15,8 @@
  * 或等继续时不能再安排新的：小菜单时点「+」只说明原因，面板里这一行置灰并写明原因（同桌面）。
  * 占位文字跟随未结束的安排。
  */
-import { useMemo, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { Camera, Folder, Image as ImageIcon, Plus, Square, Users, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -75,7 +75,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, onSend, onStop,
+  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, quoteMessageId, focusRequest, onSend, onStop,
 }: {
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
@@ -86,6 +86,10 @@ export function BotGroupComposer({
   /** The computer takes attachments on `send` (`BotGroupRemoteChatData.supportsAttachments`). */
   attachmentsSupported: boolean;
   divisionSupported?: boolean;
+  /** The message being replied to; part of the send intent. */
+  quoteMessageId?: string;
+  /** Bumped on every reply tap, so replying to the same message again still focuses the input. */
+  focusRequest?: number;
   /** Rejects with the host's error; the draft (and its tag) come back and the attachments stay. */
   onSend(input: BotGroupSendInput): Promise<void>;
   onStop(): Promise<void>;
@@ -104,6 +108,14 @@ export function BotGroupComposer({
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(waitingUploads);
   const [stopping, setStopping] = useState(false);
   const inputRef = useRef<NativeTextInput>(null);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!focusRequest || !input) return;
+    // focus() is a no-op on an input that is already focused, and Android keeps focus after Back
+    // hides the keyboard. Re-focus only then; with the keyboard up, an IME composition is left alone.
+    if (input.isFocused() && !Keyboard.isVisible()) input.blur();
+    input.focus();
+  }, [focusRequest]);
   const textRef = useRef(text); textRef.current = text;
   const selectionRef = useRef({ start: 0, end: 0 });
   const sendingRef = useRef(false);
@@ -211,7 +223,7 @@ export function BotGroupComposer({
         tracked: draftTracked,
       });
       // Targets, tag and attachments are part of the same send intent.
-      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions);
+      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions, quoteMessageId);
       attemptRef.current = attempt;
       release = tray.holdForSend(attachmentIds);
       await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments });

@@ -3,7 +3,7 @@
  * 分享状态、关闭／恢复与删除(收进行内 `···`，与组内电脑一行的「移出组」同一模式)，以及经这个人的供应商组
  * 转给别人用、已处理过的人(provider-sharing.md §4.3)。操作由「远程与分享」页执行，结果以 toast 说明。
  */
-import { CirclePause, CirclePlay, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { CirclePause, CirclePlay, MoreHorizontal, Pencil, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -24,6 +24,7 @@ export interface ProviderShareMemberActions {
   onTogglePause: (member: ProviderShareMemberView) => void;
   onRemove: (member: ProviderShareMemberView) => void;
   onEditNote: (member: ProviderShareMemberView, trigger: HTMLButtonElement | null) => void;
+  onModelAccess?: (member: ProviderShareMemberView, trigger: HTMLButtonElement | null) => void;
   onReshare: (member: ProviderShareMemberView, reshare: ProviderShareReshareView, decision: 'approve' | 'reject') => void;
 }
 
@@ -56,12 +57,14 @@ export function ShareMemberMenu({
   onTogglePause,
   onRemove,
   onEditNote,
+  onModelAccess,
 }: {
   member: ProviderShareMemberView;
   disabled: boolean;
   onTogglePause: () => void;
   onRemove: () => void;
   onEditNote: (trigger: HTMLButtonElement | null) => void;
+  onModelAccess?: (trigger: HTMLButtonElement | null) => void;
 }) {
   const { t } = useTranslation();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -83,6 +86,10 @@ export function ShareMemberMenu({
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {onModelAccess && <DropdownMenuItem disabled={disabled} onClick={() => onModelAccess(triggerRef.current)}>
+          <SlidersHorizontal size={18} className="mr-2.5" />
+          {t('providerShare.modelAccess.memberTitle')}
+        </DropdownMenuItem>}
         <DropdownMenuItem disabled={disabled} onClick={() => onEditNote(triggerRef.current)}>
           <Pencil size={18} className="mr-2.5" />
           {t(member.note ? 'providerShare.manage.memberNote.edit' : 'providerShare.manage.memberNote.add')}

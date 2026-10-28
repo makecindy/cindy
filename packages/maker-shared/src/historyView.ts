@@ -138,23 +138,56 @@ export interface HistoryViewPage<TMessage extends HistoryMessageSource> {
   hasMore: boolean;
 }
 
+function historyPrefixBoundary<T extends HistoryMessageSource>(
+  page: HistoryViewPage<T>, previous: readonly HistoryViewItem<T>[],
+): number {
+  const firstSourceId = (item: HistoryViewItem<T> | undefined) => item?.type === 'work'
+    ? item.summary.firstMessageId : item?.messages[0]?.id;
+  const first = page.items[0];
+  const sourceId = firstSourceId(first);
+  return previous.findIndex(item => item.key === first?.key
+    || (sourceId !== undefined && firstSourceId(item) === sourceId));
+}
+
 /** Keep already read pages only when the latest page proves a continuous source boundary. */
 export function retainHistoryViewPrefix<T extends HistoryMessageSource>(
   page: HistoryViewPage<T>,
   previous: { items: readonly HistoryViewItem<T>[]; hasMore: boolean; nextCursor: string | null } | null | undefined,
 ): HistoryViewPage<T> {
   if (!page.hasMore || !previous?.items.length) return page;
-  const firstSourceId = (item: HistoryViewItem<T> | undefined) => item?.type === 'work'
-    ? item.summary.firstMessageId : item?.messages[0]?.id;
-  const first = page.items[0];
-  const sourceId = firstSourceId(first);
-  const boundary = previous.items.findIndex(item => item.key === first?.key
-    || (sourceId !== undefined && firstSourceId(item) === sourceId));
+  const boundary = historyPrefixBoundary(page, previous.items);
   // Completed groups can replace a running key while keeping its exact source start.
   // A later overlap cannot prove continuity; a full page/rewind replaces the old view.
   if (boundary <= 0) return page;
   return { ...page, items: [...previous.items.slice(0, boundary), ...page.items],
     hasMore: previous.hasMore, nextCursor: previous.nextCursor };
+}
+
+/** Fill a missed-page gap before replacing a cached reading window. Never join on time alone. */
+export async function readContinuousHistoryPage<T extends HistoryMessageSource>(
+  latest: HistoryViewPage<T>,
+  previous: { items: readonly HistoryViewItem<T>[]; hasMore: boolean; nextCursor: string | null } | null | undefined,
+  readOlder: (before: string) => Promise<HistoryViewPage<T> | null | undefined>,
+  isCurrent: () => boolean,
+): Promise<HistoryViewPage<T> | null> {
+  let page = latest;
+  const startedAt = (item: HistoryViewItem<T> | undefined) => item?.type === 'work'
+    ? item.summary.startedAtMs : Date.parse(item?.messages[0]?.createdAt ?? '');
+  const seen = new Set<string>();
+  while (isCurrent() && previous?.items.length && page.hasMore
+    && historyPrefixBoundary(page, previous.items) < 0
+    // Equal timestamps can still contain later rows in the Host's rowid order.
+    && startedAt(page.items[0]) >= startedAt(previous.items[0])) {
+    const cursor = page.nextCursor;
+    if (!cursor || seen.has(cursor)) throw new Error('History page cursor did not advance');
+    seen.add(cursor);
+    const older = await readOlder(cursor);
+    if (!isCurrent()) return null;
+    if (!older) throw new Error('History page is unavailable while filling a gap');
+    const keys = new Set(page.items.map(item => item.key));
+    page = { ...older, items: [...older.items.filter(item => !keys.has(item.key)), ...page.items] };
+  }
+  return isCurrent() ? page : null;
 }
 
 /**

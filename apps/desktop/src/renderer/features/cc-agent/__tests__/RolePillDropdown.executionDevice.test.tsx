@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import type { WorkerInfo } from '../hooks/useWorkers';
 import { RolePillDropdown } from '../RolePillDropdown';
 
-const confirm = vi.hoisted(() =>
-  vi.fn(async (_opts: { description: string }) => false),
-);
+const confirm = vi.hoisted(() => vi.fn(async (_opts: { description: string }) => false));
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -114,4 +115,53 @@ describe('RolePillDropdown worker on another computer', () => {
     expect(screen.queryByText('orca.rolePill.unknownDevice')).toBeNull();
     expect(screen.getAllByText('claude-opus-5-5').length).toBeGreaterThan(0);
   });
+});
+
+// Guard: actual remote session origin + execution-device projection must prevent local
+// project reads/badges. Existing device-name tests did not install a projectLabel endpoint.
+describe('Worker project badge device boundary', () => {
+  afterEach(() => {
+    cleanup();
+    remoteProjectsStore.__resetPinnedOriginsForTest();
+    __resetStickySessionOriginForTest();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+  it.each(['controlled-lead', 'execution-device', 'local'])(
+    'only queries and displays the local project for %s',
+    async (location) => {
+      const projectLabel = vi
+        .fn()
+        .mockResolvedValue({ name: 'other-project', path: '/other-project' });
+      (window as unknown as { electronAPI: unknown }).electronAPI = {
+        localDb: { orcaWorkflows: { projectLabel } },
+      };
+      const current = worker(
+        location === 'execution-device'
+          ? {
+              executionDevice: {
+                deviceId: 'execution-pc',
+                remoteSessionId: 'remote-worker',
+                deviceName: 'Execution PC',
+                reachable: true,
+                workingDir: '/remote-project',
+              },
+            }
+          : {},
+      );
+      if (location === 'controlled-lead') {
+        remoteProjectsStore.pinSessionOrigin('controlled-pc', 'lead');
+        remoteProjectsStore.pinSessionOrigin('controlled-pc', current.sessionId);
+      }
+      openMenu(current);
+      await act(async () => {});
+      if (location === 'local') {
+        expect(projectLabel).toHaveBeenCalledWith(current.sessionId);
+        expect(screen.getAllByText('other-project').length).toBeGreaterThan(0);
+      } else {
+        expect(projectLabel).not.toHaveBeenCalled();
+        expect(screen.queryByText('other-project')).toBeNull();
+        expect(screen.getAllByText('claude-opus-5-5').length).toBeGreaterThan(0);
+      }
+    },
+  );
 });

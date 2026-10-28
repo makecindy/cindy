@@ -820,6 +820,17 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                     <>
                                       <DropdownMenuSeparator />
                                       <DropdownMenuItem
+                                        onSelect={() => onScheduleAction(group, 'archive-all')}
+                                        disabled={
+                                          !group.sessions.some(
+                                            (session) => session.status === 'active',
+                                          )
+                                        }
+                                        className={MENU_ITEM_CLASS}
+                                      >
+                                        {t('ccAgent.sidebar.projectAction.archivedAll')}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
                                         onSelect={() => onScheduleAction(group, 'delete')}
                                         disabled={
                                           group.scheduleSource === 'project' &&

@@ -411,8 +411,8 @@ function main() {
 
   // The terminal status is the opposite case and must not reuse the path above:
   // scheduleStatus() refuses to re-arm once terminal, so a swallowed failure
-  // there is a permanent loss, and status.json is the only record the product
-  // reads back (nothing consumes result.json today) — the run would keep reading
+  // there is a permanent loss: product views still read status.json (only
+  // account-boundary recovery can use result.json), so the run keeps reading
   // as running until it aged into a stale diagnostic. Retry on a wider budget
   // instead; the runner is on its way out, so blocking here costs nothing.
   function flushTerminalStatus() {
@@ -434,9 +434,11 @@ function main() {
     }
   }
 
-  // result.json is a best-effort *attachment*, not the terminal record: nothing
-  // in the product reads it back, while status.json is what the Host converges
-  // on. So its write must never decide the run's outcome — letting it throw once
+  // result.json is a best-effort attachment; status.json remains the primary
+  // record. Account-boundary recovery can validate this independent terminal
+  // receipt if status is unreadable AND the OS confirms no runner/child remains.
+  // A signal attempt alone is not exit evidence. Its write must never decide the outcome:
+  // letting it throw once
   // turned a completed run into a published failure (the throw from the success
   // path landed in the failure handler, which rewrote state and republished),
   // and letting it throw from the failure path skipped the terminal status

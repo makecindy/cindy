@@ -193,3 +193,19 @@ it('keeps older hosts usable without advertising an unavailable responsibility w
   expect(names).toContain('get_workbench');
   expect(names).not.toContain('set_workbench_task_responsibility');
 });
+
+// Restored links are independently discoverable; no task responsibility callback runs when linking.
+// Minimal input: list + one project toggle with a caller session. Unit tool registry contract.
+it('exposes project discovery and changes using caller identity without claiming any tasks', async () => {
+  const { callbacks } = setup();
+  callbacks.projects = vi.fn(async () => ({ ok: true as const, projects: [{ project_id: 'a'.repeat(64), working_dir: '/project', linked: true }] }));
+  const registry = new XdtHelperToolRegistry();
+  registerBotWorkbenchTools(registry, { callbacks, getSessionContext: () => ({ sessionId: 'main', agentKind: 'codex', workingDir: '/home' }) });
+  expect(parse(await registry.call('list_teammate_projects', {}))).toMatchObject({ ok: true, projects: [{ linked: true }] });
+  await registry.call('set_teammate_project', { project_id: 'a'.repeat(64), linked: false });
+  expect(callbacks.projects).toHaveBeenLastCalledWith({ callerSessionId: 'main', projectId: 'a'.repeat(64), linked: false });
+  expect(callbacks.setResponsibility).not.toHaveBeenCalled();
+  const unbound = new XdtHelperToolRegistry();
+  registerBotWorkbenchTools(unbound, { callbacks, getSessionContext: () => ({ agentKind: 'codex', workingDir: '/home' }) });
+  expect(parse(await unbound.call('list_teammate_projects', {}))).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+});

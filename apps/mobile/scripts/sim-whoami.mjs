@@ -13,6 +13,7 @@
 //   pnpm mobile:sim:whoami                     # Global(默认)
 //   pnpm mobile:sim:whoami -- --region=cn      # 中国大陆版
 //   pnpm mobile:sim:whoami -- --json           # Skill 可消费的结构化状态
+//   pnpm mobile:sim:whoami -- --mock           # 核对的是 --mock 启动的模拟数据 Metro
 //
 // 模拟器默认先找 Cindy 模拟器(Baguette 插件的独立设备目录)，没有再找系统模拟器；
 // CINDY_MOBILE_SIMULATOR=cindy|system|<设备目录绝对路径> 可固定其一。
@@ -23,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { inspectSimulatorViewer } from "./lib/simulator-viewer.mjs";
 import { inspectSimulatorNativeIdentity } from "./lib/sim-native-identity.mjs";
 import { mobileClientBundleEnv } from "../../../scripts/shared/client-endpoint-build-env.mjs";
-import { readSimEnvironment } from "./lib/sim-environment.mjs";
+import { applySimMockArg, readSimEnvironment } from "./lib/sim-environment.mjs";
 import { withLocalMobileRegionConfig, extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
 import {
   ensureMobileLocalRegionConfig,
@@ -49,12 +50,13 @@ const PORTS = [8081, 8082, 8083, 8084, 8085, 8086];
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const worktreeRoot = resolve(mobileDir, "../..");
 
-const jsonOutput = process.argv.slice(2).includes("--json");
-const requireViewer = process.argv.slice(2).includes("--viewer");
+const cliArgs = applySimMockArg(process.argv.slice(2));
+const jsonOutput = cliArgs.includes("--json");
+const requireViewer = cliArgs.includes("--viewer");
 
 function resolveTarget() {
   const { region, passthrough } = extractMobileDevRegionArgs(
-    process.argv.slice(2).filter((arg) => arg !== "--json" && arg !== "--viewer"),
+    cliArgs.filter((arg) => arg !== "--json" && arg !== "--viewer"),
   );
   const udidArgs = extractSimWhoamiUdidArgs(passthrough);
   const portArgs = extractSimMetroPortArgs(udidArgs.passthrough);
@@ -165,7 +167,7 @@ if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 wo
 let anyMetro = false;
 let currentSourceOnExpectedPort = false;
 const metros = [];
-const { envFingerprint } = readSimEnvironment(mobileDir,
+const { envFingerprint, uiMock } = readSimEnvironment(mobileDir,
   withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })));
 for (const port of ports) {
   const ownership = probeMetroOwnership(port);
@@ -224,6 +226,7 @@ if (!jsonOutput) {
       viewerRequired: requireViewer,
       viewer,
       region,
+      uiMock,
       bundleId,
       worktree: worktreeRoot,
       source: expectedSource,

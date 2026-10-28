@@ -55,7 +55,7 @@ export interface PluginTaskConfig {
   agentKind?: PluginTaskAgentKind;
   model?: string;
   effort?: PluginTaskEffort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string;
   permissionMode?: GhostErrandPermissionMode;
   /** 绝对路径(用户亲选的项目目录);缺省 = 专属对话目录。 */
@@ -101,7 +101,7 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   ) {
     cfg.effort = r.effort as PluginTaskEffort;
   }
-  if (typeof r.fastMode === 'boolean') cfg.fastMode = r.fastMode;
+  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')) cfg.fastMode = r.fastMode;
   if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128) {
     cfg.providerId = r.providerId;
   }

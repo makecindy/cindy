@@ -47,7 +47,9 @@ import {
 // 生产构建由 metro resolveRequest 把整模块替换为空 stub(metro.config.js),
 // 运行时另有 __DEV__ guard 双保险。
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
+import { AskCardAuthContext, type AskCardAuth } from '@/session/askCardAuth';
 import {
   apiFetchRaw,
   ApiError,
@@ -123,6 +125,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
+import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -383,7 +386,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       apiFetch: visualMockApiFetch,
     };
     return (
-      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+      <AuthContext.Provider value={value}>
+        <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+      </AuthContext.Provider>
     );
   }
 
@@ -891,6 +896,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages(),
+      clearMobileChatHistoryStore(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -2069,11 +2075,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               codeChallenge,
               state,
             });
-            const result = await WebBrowser.openAuthSessionAsync(
-              authUrl,
-              MOBILE_REDIRECT_URL,
-            );
-            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            let result: Awaited<ReturnType<typeof WebBrowser.openAuthSessionAsync>>;
+            try {
+              result = await WebBrowser.openAuthSessionAsync(
+                authUrl,
+                MOBILE_REDIRECT_URL,
+              );
+            } catch (error) {
+              // The browser promise outlives the dispatch body. Report launch
+              // failures here, while preserving a newer attempt's ownership.
+              if (loginFlowEpochRef.current !== expectedLoginFlowEpoch
+                || loginActionInFlightRef.current !== run) return false;
+              setAuthError(authErrorCode(error));
+              return false;
+            }
+            if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) return false;
             // Linking may already have handed ownership to a continuation.
             // A late native result must not cancel or mutate that newer work.
             if (loginActionInFlightRef.current !== run) return true;
@@ -2959,6 +2975,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[auth] speaker filter cleanup pending; will retry');
     });
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearMobileChatHistoryStore().catch(() => undefined);
     await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
@@ -3415,7 +3432,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {
@@ -3445,6 +3466,9 @@ function authClientFor(
     clientType: 'mobile',
     locale: getAuthLocale(),
     fetch: scenarioFetch ?? (async (input, init) => fetch(input, init)),
+    onRequestError: (path, status, error) => {
+      mobileDebugLog('warn', 'auth', 'request failed', { path, region, status }, error);
+    },
   });
 }
 

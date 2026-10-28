@@ -7,7 +7,7 @@ export interface ModelRoute {
   model: string;
   providerId: string | null;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   agentDeviceId?: string | null;
 }
 
@@ -31,7 +31,7 @@ export function normalizeModelRoute(value: unknown): ModelRoute | null {
     model: record.model.trim(),
     providerId: typeof record.providerId === 'string' && record.providerId.trim() ? record.providerId.trim() : null,
     effort: typeof record.effort === 'string' ? record.effort : '',
-    fastMode: record.fastMode === true,
+    fastMode: (record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true),
     ...(typeof record.agentDeviceId === 'string' ? { agentDeviceId: record.agentDeviceId.trim() } : {}),
   };
 }

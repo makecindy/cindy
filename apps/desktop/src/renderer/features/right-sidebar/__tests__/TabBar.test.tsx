@@ -24,7 +24,6 @@ vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => [] }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { subscribe: () => () => {}, findById: () => null } }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ useRemoteProjectSessions: () => [] }));
 vi.mock('../lib/openSideChatTab', () => ({ canOpenSideChat: () => false, openSideChatTab: vi.fn() }));
-vi.mock('../lib/openBotWorkbenchTab', () => ({ openBotWorkbenchTab: vi.fn() }));
 
 import { TabStrip } from '../TabBar';
 import { useTabCreationMenu } from '../lib/useTabCreationMenu';

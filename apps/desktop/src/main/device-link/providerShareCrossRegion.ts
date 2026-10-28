@@ -53,9 +53,11 @@ const CREDENTIAL_REFRESH_MARGIN_MS = 60 * 60_000;
 const SESSION_REFRESH_MS = 12 * 60 * 60_000;
 const ONLINE_WAIT_MS = 8_000;
 const MARKER_FILE = 'provider-share-regions.json';
+const GROUP_RECOVERY_INTERVAL_MS = 30_000;
 
 export interface CrossRegionEvents {
   changed(): void;
+  catalogChanged?(agentDeviceId: string): void;
 }
 
 interface RegionState {
@@ -79,6 +81,8 @@ interface Runtime {
   account: string;
   regions: Map<Region, RegionState>;
   stopped: boolean;
+  groupRecovery: Promise<void> | null;
+  nextGroupRecoveryAt: number;
 }
 
 let runtime: Runtime | null = null;
@@ -287,6 +291,15 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
     },
     timing: { pingIntervalMs: 15_000 },
   });
+  client.onFrame?.(frame => {
+    if (!current(rt) || frame.kind !== 'push' || !frame.src) return;
+    const peer = parseProviderSharePeer(frame.src);
+    const payload = frame.payload as { channel?: unknown };
+    if (peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
+    if (state.shares.some(share => share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId && share.status === 'active')) {
+      rt.events.catalogChanged?.(`share:${peer.shareId}`);
+    }
+  });
   client.start();
   return client;
 }
@@ -379,7 +392,7 @@ export function startProviderShareCrossRegion(events: CrossRegionEvents, options
   userDataDir = options.userDataDir;
   const account = accountKey();
   if (!account) return;
-  const rt: Runtime = { events, account, regions: new Map(), stopped: false };
+  const rt: Runtime = { events, account, regions: new Map(), stopped: false, groupRecovery: null, nextGroupRecoveryAt: 0 };
   runtime = rt;
   const activeRegions = readMarkers()[account] ?? [];
   // 清理失败或未完成就退出时，下次只恢复本地空名单，不向对方区域发送身份。
@@ -410,6 +423,43 @@ export function stopProviderShareCrossRegion(): void {
 export function refreshProviderShareCrossRegion(region: Region): Promise<void> {
   const rt = runtime;
   return rt && current(rt) ? refreshRegion(rt, region) : Promise.resolve();
+}
+
+/**
+ * A verified same-account group references shares already accepted on another computer.
+ * Register this computer with the official peer region; its server still decides membership.
+ * Never call this for renderer hints, favorites or arbitrary missing share IDs.
+ */
+export function restoreCrossRegionReceivedForRemoteGroup(shareIds: readonly string[]): Promise<void> {
+  const rt = runtime;
+  if (!rt || !current(rt) || shareIds.length === 0) return Promise.resolve();
+  const region = peerRegion();
+  const state = rt.regions.get(region);
+  if (shareIds.every((id) => state?.shares.some((share) => share.shareId === id))) return Promise.resolve();
+  if (rt.groupRecovery) return rt.groupRecovery;
+  if (state?.refreshing) return state.refreshing;
+  if ((state?.failures && state.timer) || Date.now() < rt.nextGroupRecoveryAt) return Promise.resolve();
+  rt.nextGroupRecoveryAt = Date.now() + GROUP_RECOVERY_INTERVAL_MS;
+  // A previously confirmed empty list is stale once another computer reports membership.
+  if (state && state.shares.length === 0) state.loaded = false;
+  const run = (async () => {
+    await writeMarker(rt.account, region, true, false, () => current(rt)).catch((error) =>
+      log.warn('cross-region marker write failed', { error: String(error) }));
+    if (current(rt)) await refreshRegion(rt, region);
+  })().finally(() => { rt.groupRecovery = null; });
+  rt.groupRecovery = run;
+  return run;
+}
+
+/** Missing shares are not removed until an enabled region has answered successfully. */
+export async function waitForCrossRegionReceived(): Promise<boolean> {
+  const rt = runtime;
+  if (!rt) return true;
+  if (!current(rt)) return false;
+  await rt.groupRecovery;
+  const state = rt.regions.get(peerRegion());
+  await state?.refreshing;
+  return current(rt) && isCrossRegionReceivedReady() && !state?.failures;
 }
 
 export function getCrossRegionReceived(): ProviderShareReceived[] {

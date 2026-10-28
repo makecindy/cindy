@@ -11,6 +11,19 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+// Unit regression: the real normalize → group → companion projection used to
+// hide prose as soon as commentary metadata or a later tool arrived.
+it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {
+  const progress = row('a1', 'assistant', 'Checking the refresh');
+  const marked = { ...progress, agentMeta: { assistantPhase: 'commentary' } };
+  for (const source of [[base[0], progress], [base[0], marked], [base[0], marked, ...base.slice(2)]]) {
+    expect(bodies(source, true).filter(item => item.type === 'message').map(item => item.message.body))
+      .toContain('Checking the refresh');
+  }
+  const completed = bodies([base[0], marked, ...base.slice(2), row('a4', 'assistant', 'Done', { turnCompleted: true })], false);
+  expect(completed.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Done']);
+  expect(JSON.stringify(completed.find(item => item.type === 'work_group'))).toContain('Checking the refresh');
+});
 // #6351: this consumer expands work groups and infers contiguous sealed runs,
 // so grouping alone cannot prevent a failed sample becoming another reply.
 it.each(['retrying', 'completed', 'exhausted'] as const)(
@@ -40,7 +53,7 @@ it.each(['retrying', 'completed', 'exhausted'] as const)(
 // a user row, progress and one tool suffice to lose the only process entry.
 it('keeps live work and completed process details reachable like Desktop', () => {
   const active = bodies(base, true);
-  expect(active.map(item => item.type)).toEqual(['message', 'work_group']);
+  expect(active.map(item => item.type)).toEqual(['message', 'message', 'work_group']);
   expect(JSON.stringify(active)).toContain('technical details');
   const complete = bodies([...base, row('a4', 'assistant', 'Answer', { turnCompleted: true })], false);
   expect(complete.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Answer']);
@@ -66,6 +79,19 @@ it('keeps all contiguous blocks of a sealed final answer', () => {
   const items = bodies([...base, row('a4', 'assistant', 'Part one'), row('a5', 'assistant', 'Part two', { turnCompleted: true })], false);
   const text = items.filter(item => item.type === 'message').map(item => item.message.body);
   expect(text).toEqual(['Help', 'Part one', 'Part two']);
+});
+// #7081 review: no tool/thinking boundary exists between progress and the final.
+// Unit: real normalize → shared grouping → companion projection, including a late running status.
+it.each([false, true])('folds commentary before a directly adjacent sealed answer (running=%s)', (running) => {
+  const progress = row('a1', 'assistant', 'Checking', { assistantPhase: 'commentary' });
+  const final = row('a2', 'assistant', 'Done', { assistantPhase: 'final_answer', turnCompleted: true });
+  expect(bodies([base[0], progress, { ...final, agentMeta: { assistantPhase: 'final_answer', isStreaming: true } }], true)
+    .filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Checking', 'Done']);
+  const complete = bodies([base[0], progress, final], running);
+  expect(complete.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Done']);
+  const work = complete.find(item => item.type === 'work_group');
+  expect(work).toMatchObject({ isStreaming: false });
+  expect(JSON.stringify(work)).toContain('Checking');
 });
 it('keeps every sealed reply block after a continuation even when the main timeline folds earlier seals', () => {
   const items = bodies([...base,
@@ -105,7 +131,7 @@ it.each([false, true])('does not seal old commentary across an unloaded history 
   ];
   const texts = (source: RemoteMessage[]) => bodies(source, running)
     .filter(item => item.type === 'message').map(item => item.message.body);
-  expect(texts(messages)).toEqual(['Current answer, first part', 'Current answer, last part']);
+  expect(texts(messages)).toEqual(['Old commentary', 'Current answer, first part', 'Current answer, last part']);
   // Once the actual user boundary is loaded, retain the older no-final reply
   // through the existing per-turn fallback, independently of the newer seal.
   expect(texts([messages[0], at(row('u2', 'user', 'New question'), currentStart - 1), ...messages.slice(1)]))
@@ -117,10 +143,10 @@ const receipt = row('r6', 'assistant', '', { botCollaboration: {
   toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Brief',
   result: { runSequence: 1, status: 'completed', text: 'The completed brief', artifacts: [] },
 } });
-it.each([false, true])('keeps the result receipt without resurrecting its preamble (streaming=%s)', (running) => {
+it.each([false, true])('keeps progress until a final reply even when a result receipt arrives (streaming=%s)', (running) => {
   const items = bodies([...base, receipt], running);
   expect(JSON.stringify(items)).toContain('The completed brief');
-  expect(JSON.stringify(items)).not.toContain('Public progress');
+  expect(JSON.stringify(items)).toContain('Public progress');
 });
 it.each([false, true])('does not suppress an older reply across a history gap before a receipt (streaming=%s)', (running) => {
   const oldReply = row('a1', 'assistant', 'Earlier useful reply');
@@ -193,8 +219,8 @@ it.each([true, false])('keeps guest-safe explicit delivery without sealing adjac
   expect(JSON.stringify(messages)).not.toMatch(/private-group|Secret group/);
   const text = bodies(messages, running).filter(item => item.type === 'message').map(item => item.message.body);
   expect(text).toContain('Private delivery');
-  expect(text).not.toContain('Before');
-  expect(text).not.toContain('After');
+  expect(text.includes('Before')).toBe(running);
+  expect(text.includes('After')).toBe(running);
 });
 it('keeps a component progress answer visible before finalization and later tool calls', () => {
   const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, op: 'create', id: 'heading', kind: 'heading', props: { text: 'Result' } }) + '\n';

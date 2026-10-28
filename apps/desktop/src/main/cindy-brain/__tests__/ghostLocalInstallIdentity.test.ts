@@ -3,6 +3,7 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 import { findInstalledGhostForDeliveryTarget, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { assertGhostInstallConsent, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
+import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 const createCallbacks = createGhostProductionCallbacks<{
@@ -57,5 +58,50 @@ describe('local root installation consent identity', () => {
     }
     expect(prompt).toHaveBeenCalledOnce();
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ facts: { kind: 'install' } });
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ target: { namespace: null, sourceChanged: false, otherCopies: 1 } });
   });
+});
+
+const forgeCallbacks = createGhostProductionCallbacks<{
+  installOrUpdateLocalGhostPackageFromForge: (file: string, options: Record<string, unknown>) => Promise<{ action: string; ghost: InstalledGhost }>;
+}>({ functions: ['installOrUpdateLocalGhostPackageFromForge'] });
+
+// Production entry regression: current-org authoring must not silently create
+// a duplicate, cross the selected namespace, or proceed after consent expires.
+it.each(['choose', 'update', 'copy', 'cancel', 'changed'] as const)('Forge installation target: %s', async mode => {
+  const manifest: InstalledGhost['manifest'] = { schemaVersion: 3, minCindyVersion: '0.0.0', id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip', entry: 'main.js' };
+  const root: InstalledGhost = { manifest, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_root/helper', enabled: true,
+    approval: { state: 'approved', revision: '11111111-1111-4111-8111-111111111111' } };
+  const digest = 'a'.repeat(64), install = vi.fn<(...args: unknown[]) => Promise<InstalledGhost>>(async () => ({ ...root, namespace: 'acme' })), update = vi.fn<(...args: unknown[]) => Promise<InstalledGhost>>(async () => root);
+  const prompt = vi.fn<(request: Omit<GhostInstallConsentRequest, 'requestId'>) => Promise<boolean>>(async () => {
+    if (mode === 'changed') root.approval = { state: 'approved', revision: '22222222-2222-4222-8222-222222222222' };
+    return mode !== 'cancel';
+  });
+  const entry = forgeCallbacks({
+    getGhostManager: () => ({ list: () => [root], inspect: async () => ({ manifest, canonicalManifest: manifest, packageSha256: digest }) }),
+    rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
+    getAuthState: () => ({ isAuthenticated: true, user: { membershipKind: 'org', orgSlug: 'acme' } }),
+    forgeInstallOriginForMembership: () => 'agent-forge', isValidPluginNamespace: () => true, isValidNewGhostId: () => true,
+    readLocalGhostUpdateSource: () => ({ sourceChanged: true, authorizationOverrides: {} }),
+    ghostInstallApprovalToken, obtainGhostInstallConsent, findInstalledGhostForDeliveryTarget,
+    forgeOidcInstallConfirmFacts: () => null, beginGhostMutation: () => () => {},
+    withGhostInstallLock: async (_id: string, fn: () => unknown) => fn(), installAndDockLocked: install,
+    updateLocalGhostPackageLocked: update, markGhostRecommendationInstalled() {},
+    throwIpcError: (code: string) => { throw new Error(code); }, log: { warn() {} },
+  }).installOrUpdateLocalGhostPackageFromForge;
+  const pending = entry('/tmp/helper.cindy', { ghostId: 'helper', packageSha256: digest, mutationOwner: {}, consentPrompt: prompt,
+    ...(mode === 'copy' ? { installCopy: true, namespace: 'acme' } : mode === 'choose' ? {} : { targetInstanceId: root.instanceKey }) });
+  if (['cancel', 'changed'].includes(mode)) {
+    await expect(pending).rejects.toThrow();
+    expect(install).not.toHaveBeenCalled(); expect(update).not.toHaveBeenCalled();
+  } else if (mode === 'copy') {
+    expect((await pending).action).toBe('installed');
+    expect(install.mock.calls[0]?.[2]).toMatchObject({ namespace: 'acme', enable: true });
+    expect(update).not.toHaveBeenCalled();
+  } else {
+    expect((await pending).action).toBe('updated');
+    expect(update.mock.calls[0]?.[5]).toBe('_root__helper');
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ target: { namespace: null, sourceChanged: true } });
+    expect(install).not.toHaveBeenCalled();
+  }
 });

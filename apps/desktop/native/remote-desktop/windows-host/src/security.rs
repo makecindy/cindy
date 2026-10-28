@@ -1,17 +1,12 @@
 use crate::win::*;
-use std::os::windows::fs::MetadataExt;
 use std::{
     mem,
     path::{Path, PathBuf},
     ptr,
 };
 use windows_sys::Win32::{
-    Foundation::*,
-    Security::Authorization::*,
-    Security::*,
-    Storage::FileSystem::*,
-    System::{Com::*, SystemServices::*},
-    UI::Shell::*,
+    Foundation::*, Security::Authorization::*, Security::*, Storage::FileSystem::*,
+    System::SystemServices::*,
 };
 
 pub fn same_file(a: &Path, b: &Path) -> bool {
@@ -24,35 +19,51 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-// Retain non-delete-sharing handles through caller authorization / worker spawn.
-// Reject ACLs that we cannot prove safe rather than interpreting a path prefix as
-// an integrity boundary. Installation does not silently repair administrator ACLs.
-pub fn protected_install() -> Result<Vec<Handle>> {
-    let mut raw = ptr::null_mut();
-    if unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, ptr::null_mut(), &mut raw) } < 0 || raw.is_null() {
-        return denied();
+/// The OS error number of the call that just failed.
+fn last_os() -> i32 {
+    unsafe { GetLastError() as i32 }
+}
+
+/// Proves the staged directory still holds what the service may run: the two
+/// executables, the record naming the installation they serve, the directory
+/// itself and every directory up to Program Files.
+///
+/// Only this directory is checked. The installation that Cindy itself runs
+/// from is deliberately outside the boundary — it is writable by the account
+/// that installed Cindy, which is why the service runs from a copy rather than
+/// from there.
+pub fn protected_staging(staged: &Path) -> Staged<Vec<Handle>> {
+    let root = crate::naming::program_files()?;
+    if !staged.starts_with(&root) || staged == root {
+        return refuse(Step::ProtectedRoot);
     }
-    let root = unsafe {
-        let mut len = 0;
-        while *raw.add(len) != 0 {
-            len += 1;
+    let mut paths = vec![
+        staged.join(crate::naming::HOST_EXE),
+        staged.join(crate::naming::INPUT_EXE),
+        staged.join(crate::naming::INSTALL_RECORD),
+        staged.to_owned(),
+    ];
+    ancestors(&mut paths, staged, &root);
+    verify_protected(paths)
+}
+
+/// Adds every directory between `from` and the Program Files root: a writable
+/// parent would let an attacker replace the whole subtree.
+pub fn ancestors(paths: &mut Vec<PathBuf>, from: &Path, root: &Path) {
+    let mut directory = from.parent();
+    while let Some(path) = directory {
+        paths.push(path.to_owned());
+        if path == root {
+            break;
         }
-        let result = PathBuf::from(String::from_utf16_lossy(std::slice::from_raw_parts(
-            raw, len,
-        )));
-        CoTaskMemFree(raw.cast());
-        result
-    };
-    let executable = std::env::current_exe()?;
-    let install = executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(error)?;
-    if !install.starts_with(&root) || install == root {
-        return denied();
+        directory = path.parent();
     }
+}
+
+/// Proves every path is owned by, and writable only by, SYSTEM, Administrators
+/// or TrustedInstaller. The returned handles deny deletion for as long as the
+/// caller holds them, so the files cannot be swapped after being checked.
+pub fn verify_protected(paths: Vec<PathBuf>) -> Staged<Vec<Handle>> {
     let mut trusted_installer = ptr::null_mut();
     // Exact Windows servicing identity, not all service SIDs.
     if unsafe {
@@ -62,7 +73,7 @@ pub fn protected_install() -> Result<Vec<Handle>> {
         )
     } == 0
     {
-        return Err(error());
+        return Err(Failure::new(Step::ProtectedOpen, last_os()));
     }
     struct LocalSid(PSID);
     impl Drop for LocalSid {
@@ -73,51 +84,6 @@ pub fn protected_install() -> Result<Vec<Handle>> {
         }
     }
     let trusted_installer = LocalSid(trusted_installer);
-    let mut paths = vec![
-        install.join("resources/app.asar"),
-        executable.clone(),
-        executable.with_file_name("cindy-windows-desktop-host.node"),
-        executable.with_file_name("cindy-windows-desktop-input.exe"),
-    ];
-    // Packaged exe identity is discovered only from the protected app directory.
-    // No caller-selected executable or command line is accepted by the broker.
-    for item in std::fs::read_dir(install)? {
-        let path = item?.path();
-        if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("dll"))
-        {
-            paths.push(path);
-        }
-    }
-    // Unpacked native code is part of the executable trust boundary too.
-    let unpacked = install.join("resources/app.asar.unpacked");
-    if unpacked.exists() {
-        let mut pending = vec![unpacked];
-        while let Some(path) = pending.pop() {
-            let metadata = std::fs::symlink_metadata(&path)?;
-            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return denied();
-            }
-            if metadata.is_dir() {
-                for item in std::fs::read_dir(&path)? {
-                    pending.push(item?.path());
-                }
-            }
-            paths.push(path);
-            if paths.len() + pending.len() > 100_000 {
-                return denied();
-            }
-        }
-    }
-    let mut directory = executable.parent();
-    while let Some(path) = directory {
-        paths.push(path.to_owned());
-        if path == root {
-            break;
-        }
-        directory = path.parent();
-    }
     let mut handles = Vec::new();
     for path in paths {
         let handle = Handle::new(unsafe {
@@ -130,12 +96,14 @@ pub fn protected_install() -> Result<Vec<Handle>> {
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                 ptr::null_mut(),
             )
-        })?;
+        })
+        .stage(Step::ProtectedOpen)?;
         let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { mem::zeroed() };
-        if unsafe { GetFileInformationByHandle(handle.0, &mut info) } == 0
-            || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        {
-            return denied();
+        if unsafe { GetFileInformationByHandle(handle.0, &mut info) } == 0 {
+            return Err(Failure::new(Step::ProtectedOpen, last_os()));
+        }
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return refuse(Step::ProtectedReparse);
         }
         let mut owner = ptr::null_mut();
         let mut acl = ptr::null_mut();
@@ -153,18 +121,23 @@ pub fn protected_install() -> Result<Vec<Handle>> {
             )
         };
         if code != ERROR_SUCCESS {
-            return denied();
+            return Err(Failure::new(Step::ProtectedOpen, code as i32));
         }
         if acl.is_null() || owner.is_null() || unsafe { IsValidAcl(acl) } == 0 {
-            unsafe { LocalFree(descriptor); }
-            return denied();
+            unsafe {
+                LocalFree(descriptor);
+            }
+            return refuse(Step::ProtectedAcl);
         }
         let trusted = |sid| unsafe {
             IsWellKnownSid(sid, WinLocalSystemSid) != 0
                 || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
                 || EqualSid(sid, trusted_installer.0) != 0
         };
-        let mut safe = trusted(owner);
+        // Separate codes: an untrusted owner and a stray writable ACE need
+        // different answers from whoever reads the log.
+        let mut failed = (!trusted(owner)).then_some(Step::ProtectedOwner);
+        let mut safe = failed.is_none();
         if safe {
             unsafe {
                 for i in 0..(*acl).AceCount as u32 {
@@ -212,14 +185,22 @@ pub fn protected_install() -> Result<Vec<Handle>> {
             LocalFree(descriptor);
         }
         if !safe {
-            return denied();
+            return refuse(failed.take().unwrap_or(Step::ProtectedAcl));
         }
         handles.push(handle);
     }
     Ok(handles)
 }
 
-pub fn authorize_client(pid: u32) -> Result<(Handle, u32)> {
+/// Accepts a Cindy process as the owner of this service's lease.
+///
+/// `install` is the directory the staged copy records as its installation.
+/// That directory is writable by the account that installed Cindy, so the
+/// image check below is a consistency check, not a trust boundary: what keeps
+/// an arbitrary process from driving the service is that the caller must be
+/// the exact process an administrator approved during setup, still alive and
+/// still on the active console session.
+pub fn authorize_client(pid: u32, install: &Path, development: bool) -> Result<(Handle, u32)> {
     let client = process(pid)?;
     let session = session(token(client.0)?.0)?;
     if session == 0
@@ -229,19 +210,28 @@ pub fn authorize_client(pid: u32) -> Result<(Handle, u32)> {
         return denied();
     }
     let client_image = image(client.0)?;
-    let executable = std::env::current_exe()?;
-    let install = executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(error)?;
-    if !client_image.parent().is_some_and(|p| same_file(p, install))
-        || !client_image.file_name().is_some_and(|n| {
+    let packaged = client_image.parent().is_some_and(|p| same_file(p, install))
+        && client_image.file_name().is_some_and(|n| {
             n.eq_ignore_ascii_case("Cindy.exe") || n.eq_ignore_ascii_case("CindyDev.exe")
-        })
-    {
+        });
+    // Source-mode Electron is named electron.exe and lives under
+    // node_modules, so it cannot satisfy the packaged installation-parent
+    // check. The PID is still the one explicitly approved by the elevated
+    // setup flow and is retained by the service for every later pipe client.
+    let development_electron = development
+        && client_image
+            .file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case("electron.exe"));
+    if !packaged && !development_electron {
         return denied();
     }
     Ok((client, session))
+}
+
+/// Whether two files hold exactly the same bytes. Used to confirm that the
+/// elevated process asking the service to register a Cindy process is running
+/// the very same helper build the service itself was started from.
+pub fn same_contents(a: &Path, b: &Path) -> Result<bool> {
+    let (a, b) = (std::fs::read(a)?, std::fs::read(b)?);
+    Ok(a == b)
 }

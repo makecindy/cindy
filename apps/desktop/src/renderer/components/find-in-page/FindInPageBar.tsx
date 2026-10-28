@@ -683,7 +683,7 @@ export function FindInPageBar() {
             'w-full min-w-0',
             'bg-transparent outline-none',
             'text-sm',
-            'placeholder:text-muted-foreground',
+            'placeholder:text-[var(--text-placeholder)]',
           )}
         />
       </div>

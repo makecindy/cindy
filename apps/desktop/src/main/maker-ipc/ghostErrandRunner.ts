@@ -45,7 +45,7 @@ export interface GhostErrandSessionRow {
   model: string;
   providerId?: string | null;
   effort?: string | null;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode: string;
   workingDir: string | null;
   workspaceKind: string;
@@ -65,7 +65,7 @@ export interface GhostErrandRunnerDeps {
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
     permissionMode: GhostErrandPermissionMode;
     workingDir?: string;
@@ -129,7 +129,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     if (row.agentKind !== (execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind)) return false;
     if (row.model !== execution.model || (row.providerId ?? null) !== (execution.providerId ?? null)) return false;
     if (row.effort && row.effort !== execution.effort) return false;
-    if (!!row.fastMode !== execution.fastMode) return false;
+    if ((row.fastMode ?? false) !== execution.fastMode) return false;
     if (row.permissionMode !== permissionMode) return false;
     // 这单要目录(用户配置或已对账的插件转述):目录不同(或旧间还是
     // dialogue)就换新间;这单不要目录:旧的 project 间不再复用,回到

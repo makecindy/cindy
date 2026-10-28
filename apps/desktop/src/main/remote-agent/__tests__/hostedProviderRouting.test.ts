@@ -20,7 +20,8 @@ vi.mock('../../maker-host/claude-fast-mode-log', () => ({
 import { setCustomProviders } from '../../maker-host/active-catalog';
 import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
 import { resolveSessionRouteDecision, setCustomProviderKeyReader } from '../../maker-host/provider-route';
-import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider, hasSessionProvider } from '../../maker-host/session-provider-store';
+import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider, hasSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store';
+import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route-store';
 import { LineSplitter } from '../eventLog';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 
@@ -55,6 +56,7 @@ beforeEach(() => {
     id, name: id,
     runtimes: {
       codex: { baseUrl: 'https://' + id + '.example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: MODEL, name: MODEL }] },
+      pi: { baseUrl: 'https://' + id + '.example.invalid/v1', wireProtocol: 'openai-responses', models: [MODEL, CLAUDE_MODEL].map(id => ({ id, name: id })) },
       'claude-code': { baseUrl: 'https://' + id + '.example.invalid/anthropic', wireProtocol: 'anthropic-messages', models: [MODEL, CLAUDE_MODEL].map((model) => ({ id: model, name: model })) },
     },
   })));
@@ -84,6 +86,7 @@ function setup(hooks: {
   requestSessionId?: (input: HostedStartInput) => string;
   isOwnerCurrent?: () => boolean;
   trust?: 'owner' | 'guest';
+  allowsModel?: (providerId: string, model: string) => boolean;
 } = {}) {
   const starts: HostedStartInput[] = [];
   const routes: unknown[] = [];
@@ -95,9 +98,11 @@ function setup(hooks: {
     controllerTrust: () => hooks.trust ?? 'owner',
     providerAccess: {
       resolve: async (_kind, _model, providerId) => providerId === 'forbidden' ? null : providerId ?? 'fp',
-      isAllowed: (providerId) => providerId !== 'forbidden',
+      isAllowed: (providerId, _controller, model) => providerId !== 'forbidden' && (hooks.allowsModel?.(providerId, model ?? '') ?? true),
     },
     bindOwnerProviderRoute: bindHostedSessionProvider,
+    ownerModelAllowed: (sessionId, providerId, kind, model) => hasHostedSessionModelAccess(sessionId)
+      && hostedProviderOffersModel(sessionId, providerId, kind, model),
     bindGuestProviderRoute: async () => ({ routeToken: 'test-guest-route', modelIds: [MODEL], release() {} }),
     startHosted: async (input) => {
       starts.push(input);
@@ -169,6 +174,55 @@ async function switchProvider(runId: string, providerId?: string | null) {
 }
 
 describe('same-account hosted provider routing', () => {
+  // Review 4333949156 / sharing §12, unit: the old host suite checked only the
+  // HTTP proxy. Query the real run tunnel as owner Pi's API-key adapter does;
+  // another approved source is allowed, but revocation/stale bindings are denied.
+  it('checks owner native requests against the actual provider and current model grant', async () => {
+    const allowedProviders = new Set(['fp', 'other']);
+    const env = setup({ allowsModel: (providerId, model) => allowedProviders.has(providerId) && model === MODEL });
+    const runId = await open('fp', 'owner-native', OWNER, 'pi');
+    await waitForEvent(runId, 'started');
+    const input = env.starts[0];
+    const query = async (providerId?: string, model = MODEL) => {
+      const response = await fetch(input.tunnel.url + '/cindy/model-access', { method: 'POST',
+        headers: { Authorization: 'Bearer ' + input.tunnel.token }, body: JSON.stringify({ model, providerId }) });
+      return (await response.json() as { allowed: boolean }).allowed;
+    };
+    expect(await query('fp')).toBe(true);
+    expect(await query('fp', CLAUDE_MODEL)).toBe(false);
+    expect(await query('other')).toBe(true);
+    expect(await query('forbidden')).toBe(false);
+    expect(await query()).toBe(false);
+    allowedProviders.delete('other');
+    expect(await query('other')).toBe(false);
+    clearAllSessionProviders();
+    expect(await query('fp')).toBe(false);
+  });
+  // Unit regression for review 4327641928: real host registration must reach the
+  // proxy before the first request and read live grants. Previous tests only checked
+  // provider selection; minimum is a hosted session allowed one of two catalog models.
+  it('binds live owner model authorization before routing hosted Claude requests', async () => {
+    let allowedModel = MODEL;
+    const sdkSessionId = randomUUID();
+    setup({ requestSessionId: () => sdkSessionId, allowsModel: (_providerId, model) => model === allowedModel });
+    const runId = await open('fp', 'task-1', OWNER, 'claude-code');
+    await waitForEvent(runId, 'started');
+    const request = (model: string) => createModelRoutingTransform()({ model }, {
+      reqId: 1, method: 'POST', url: '/v1/messages', headers: { 'x-claude-code-session-id': sdkSessionId },
+    });
+    const expectDenied = async (model: string) => {
+      const decision = await request(model);
+      let status: number | undefined;
+      await decision?.localHandler?.({ res: { writeHead: (code: number) => { status = code; }, end() {} } } as never);
+      expect(status).toBe(403);
+    };
+    expect(await request(MODEL)).toMatchObject({ upstreamOverride: 'https://fp.example.invalid/anthropic' });
+    await expectDenied(CLAUDE_MODEL);
+    allowedModel = CLAUDE_MODEL;
+    await expectDenied(MODEL);
+    expect(await request(CLAUDE_MODEL)).toMatchObject({ upstreamOverride: 'https://fp.example.invalid/anthropic' });
+  });
+
   it.each([CLAUDE_MODEL, MODEL])('routes Claude SDK-ID requests to the selected provider for %s', async (model) => {
     const sdkSessionId = randomUUID();
     setup({ requestSessionId: () => sdkSessionId });

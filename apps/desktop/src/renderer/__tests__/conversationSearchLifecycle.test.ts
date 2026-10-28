@@ -5,6 +5,13 @@ import { useConversationSearch } from '@/features/cc-agent/sidebar/ConversationS
 import { searchConversations } from '@/lib/conversationSearchService';
 import type { ConversationSearchResponse } from '../../shared/conversationSearch';
 import type { ProjectNode } from '@/features/cc-agent/lib/projectGrouping';
+import type { Session } from '@/lib/ccAgent.types';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  consumeConversationSearchRequest,
+  requestConversationSearch,
+  useConversationSearchRequest,
+} from '@/state/conversationSearchRequest';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/conversationSearchService', () => ({ searchConversations: vi.fn() }));
@@ -81,8 +88,61 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  consumeConversationSearchRequest();
+  remoteProjectsStore.removeDevice('remote');
   vi.useRealTimers();
   Reflect.deleteProperty(window, 'electronAPI');
+});
+
+// Dedicated dialogue menu: the real request store and search hook must send
+// explicit group IDs to the correct local/remote origins. Existing lifecycle
+// tests only cover global/project searches. Minimal input: one local and one
+// remote group member without a project identity. Unit, fake timers.
+// Standalone Vitest: 2.79s (1.86s collection).
+describe('dialogue group search scope', () => {
+  it('keeps mixed group searches scoped through filter reset, then unlocks back to global search', async () => {
+    remoteProjectsStore.setDeviceSessions('remote', 'Mac', [{ id: 'remote-dialogue' } as Session]);
+    vi.mocked(searchConversations).mockResolvedValue(page());
+    const view = renderHook(() => useConversationSearch({
+      enabled: true, navigate: vi.fn(), allKnownProjects: [], searchDevices: devices,
+      projectFilterRequest: useConversationSearchRequest(),
+    }));
+    act(() => requestConversationSearch({
+      kind: 'session-group', groupName: 'Chat',
+      sessionIds: ['remote-dialogue', 'local-dialogue', 'local-dialogue'],
+    }));
+    expect(view.result.current.lockedProjectKey).toBeNull();
+    expect(view.result.current.lockedSessionGroupName).toBe('Chat');
+    act(() => view.result.current.resetFilters());
+    act(() => view.result.current.setQuery('needle'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    const [request, options] = vi.mocked(searchConversations).mock.calls[0];
+    expect(request.filters?.sessionIds).toEqual(['local-dialogue', 'remote-dialogue']);
+    expect(options?.origins).toMatchObject([
+      { kind: 'local', sessionIds: ['local-dialogue'] },
+      { kind: 'remote', deviceId: 'remote', deviceName: 'Mac', connected: true, sessionIds: ['remote-dialogue'] },
+    ]);
+    act(() => view.result.current.clearLock());
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    expect(vi.mocked(searchConversations).mock.lastCall?.[0].filters?.sessionIds).toBeNull();
+    expect(view.result.current.lockedSessionGroupName).toBeNull();
+  });
+
+  it('does not expand an empty group into a global search and releases its lock when the machine changes', async () => {
+    vi.mocked(searchConversations).mockResolvedValue(page());
+    const view = renderHook(({ machineSelection }) => useConversationSearch({
+      enabled: true, navigate: vi.fn(), allKnownProjects: [], searchDevices: devices,
+      machineSelection, projectFilterRequest: useConversationSearchRequest(),
+    }), { initialProps: { machineSelection: 'all' as 'all' | string[] } });
+    act(() => requestConversationSearch({ kind: 'session-group', groupName: 'Chat', sessionIds: [] }));
+    act(() => view.result.current.setQuery('needle'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    expect(vi.mocked(searchConversations).mock.lastCall?.[0].filters?.sessionIds).toEqual([]);
+    expect(vi.mocked(searchConversations).mock.lastCall?.[1]?.origins).toEqual([]);
+    view.rerender({ machineSelection: ['remote'] });
+    expect(view.result.current.lockedSessionGroupName).toBeNull();
+    expect(view.result.current.query).toBe('');
+  });
 });
 
 describe('conversation search request lifecycle', () => {

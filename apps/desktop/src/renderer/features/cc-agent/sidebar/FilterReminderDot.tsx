@@ -9,7 +9,7 @@ export function FilterReminderDot() {
   return (
     <span
       aria-hidden
-      className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-[var(--status-bar-accent)]"
+      className="pointer-events-none absolute right-0.5 top-0.5 size-1.5 rounded-full bg-[var(--status-bar-accent)]"
     />
   );
 }

@@ -38,7 +38,7 @@ function harness(options: {
   row?: Partial<ProviderGroupSessionRow>;
   /** undefined = 组所在电脑读不到；null = 那台没有这个组。 */
   config?: ProviderGroupConfig | null | undefined;
-  picks?: Array<ProviderGroupMember | 'unavailable' | 'none' | Error>;
+  picks?: Array<ProviderGroupMember | 'unavailable' | 'none' | Error | { kind: 'unavailable'; usageLimit: { resetAtMs: number | null } }>;
   view?: Partial<Record<string, ProviderGroupView['members'][number]['state']>>;
   live?: boolean;
 } = {}) {
@@ -73,6 +73,7 @@ function harness(options: {
       const next = picks.shift() ?? 'unavailable';
       if (next instanceof Error) throw next;
       if (next === 'unavailable' || next === 'none') return { kind: next };
+      if (next.kind === 'unavailable') return next;
       const { key, kind, agentDeviceId, providerId } = next;
       return { kind: 'member' as const, member: { key, kind, agentDeviceId, providerId }, label: next.label! };
     }),
@@ -195,6 +196,15 @@ describe('assigning through a group on another computer', () => {
   it('reports a clear error when no computer in the group can take the task', async () => {
     const h = harness({ picks: ['unavailable'] });
     await expect(h.service.assignBeforeStart(START)).rejects.toThrow(PROVIDER_GROUP_UNAVAILABLE_ERROR);
+  });
+
+  // Unit regression: group quota details must survive both initial allocation and model switches.
+  it('preserves the quota error before starting an agent', async () => {
+    const h = harness({ picks: [{ kind: 'unavailable', usageLimit: { resetAtMs: 5_000_000 } }] });
+    await expect(h.service.assignBeforeStart(START)).rejects.toMatchObject({
+      message: expect.stringContaining('REMOTE_AGENT_GROUP_USAGE_LIMIT'), limit: { resetAtMs: 5_000_000 },
+    });
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
   });
 
   it('takes in a task that already ran on the group computer without moving it, and leaves shares alone', async () => {
@@ -671,6 +681,15 @@ describe('moving a task into a group on another computer from the model list (20
     const h = harness({ picks: ['unavailable'] });
     await expect(h.service.resolveSwitchTarget('s1', target)).rejects.toThrow(PROVIDER_GROUP_UNAVAILABLE_ERROR);
     expect(h.bindings.size).toBe(0);
+  });
+
+  it('preserves an unknown group quota reset without adopting the requested route', async () => {
+    const h = harness({ picks: [{ kind: 'unavailable', usageLimit: { resetAtMs: null } }] });
+    await expect(h.service.resolveSwitchTarget('s1', target)).rejects.toMatchObject({
+      message: expect.stringContaining('REMOTE_AGENT_GROUP_USAGE_LIMIT'), limit: { resetAtMs: null },
+    });
+    expect(h.bindings.size).toBe(0);
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
   });
 
   it('keeps the chosen place when it is not a group or the group computer cannot be read', async () => {

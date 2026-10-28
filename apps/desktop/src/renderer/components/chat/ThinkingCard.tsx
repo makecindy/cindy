@@ -137,13 +137,13 @@ export function ThinkingCard({
                 className="text-[var(--msg-tool-card-chevron)]"
               />
             </span>
-            <span className="text-14 italic text-[var(--msg-tool-card-chevron)] opacity-90 translate-y-[1px]">
+            <span className="text-14 italic text-[var(--msg-tool-card-chevron)] translate-y-[1px]">
               Thinking hidden
             </span>
             <div className="flex-1" />
             <Lock
               size={14}
-              className="shrink-0 text-[var(--msg-tool-card-chevron)] opacity-75"
+              className="shrink-0 text-[var(--text-secondary)]"
             />
           </div>
         </div>
@@ -207,7 +207,7 @@ export function ThinkingCard({
                   <ThinkingText content={content} />
                 </p>
               ) : (
-                <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)] opacity-70">
+                <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
                   (no thinking content captured yet)
                 </p>
               )}
@@ -267,7 +267,7 @@ export function ThinkingCard({
                 <ThinkingText content={content} />
               </p>
             ) : (
-              <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)] opacity-70">
+              <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
                 (no thinking content captured)
               </p>
             )}

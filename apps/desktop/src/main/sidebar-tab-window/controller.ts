@@ -256,10 +256,12 @@ export class SidebarTabWindowsController {
   }
 
   /** 聚焦已弹出页签的窗口;未弹出 / 仍在等首份内容时 no-op。 */
-  focus(tabId: string): void {
+  focus(tabId: string, options: { userInitiated?: boolean } = {}): void {
     const slot = this.slotForTab(tabId);
     if (!slot || slot.win.isDestroyed()) return;
     if (!slot.visible) return;
+    this.deliverAssignment(slot, tabId);
+    if (options.userInitiated === false) return;
     if (slot.win.isMinimized()) slot.win.restore();
     slot.win.show();
     slot.win.focus();
@@ -517,7 +519,7 @@ export class SidebarTabWindowsController {
     return slot;
   }
 
-  private deliverAssignment(slot: WindowSlot): void {
+  private deliverAssignment(slot: WindowSlot, revealTabId?: string): void {
     if (!slot.assignment || slot.win.isDestroyed()) return;
     // 壳还没挂上:等 renderer-ready 时再送(它会主动 getAssignment / 收推送)。
     if (!slot.rendererReady) return;
@@ -525,6 +527,7 @@ export class SidebarTabWindowsController {
     const payload: SidebarTabWindowAssignmentPayload = {
       ...slot.assignment,
       handoff: slot.handoff,
+      ...(revealTabId ? { revealTabId } : {}),
     };
     this.deps.sendToWindow(slot.win, SIDEBAR_TAB_WINDOW_ASSIGNED_CHANNEL, payload);
   }

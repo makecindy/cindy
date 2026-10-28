@@ -40,6 +40,9 @@ import { outboundFetch } from './outbound-fetch.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
+import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
+import { probeProviderProtocols } from './provider-protocol-probe.js';
+
 const log = createMakerLogger('provider-probe');
 
 /** 探测请求超时。 */
@@ -70,21 +73,8 @@ export interface ProviderProbeSpec {
 }
 
 /** 测试入参：已保存供应商（key 从 safeStorage 读）或表单态 adhoc。 */
-export type ProviderTestInput =
-  | { kind: 'saved'; providerId: string; agent: AgentKind }
-  | { kind: 'adhoc'; spec: ProviderProbeSpec };
-
-/** 结构化测试结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
-export interface ProviderTestResult {
-  ok: boolean;
-  /** 失败分类码（ok=true 时缺省）。 */
-  code?: ProviderErrorCode;
-  /** HTTP 状态码（网络层失败时缺省）。 */
-  status?: number;
-  latencyMs: number;
-  /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
-  detail?: string;
-}
+export type ProviderTestInput = ProviderConnectionTestInput;
+export type ProviderTestResult = ProviderConnectionTestResult;
 
 // ── key 读取注入（同 provider-route 模式，避免纯逻辑单测触电 safeStorage）─────────
 type KeyReader = (providerId: string, agent: AgentKind) => string | null;
@@ -563,8 +553,14 @@ export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): v
 export async function testProviderConnection(
   input: ProviderTestInput,
   fetchImpl: typeof fetch = outboundFetch,
+  signal?: AbortSignal,
 ): Promise<ProviderTestResult> {
   const spec =
     input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  const portable = !spec.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(spec.api);
+  // Keep preset/saved SDK-specific authentication and legacy callers on their existing path.
+  if (input.kind === 'adhoc' && input.requestId && spec.agent === 'pi' && portable && !spec.catalogPresetId) {
+    return logProbeFailure(spec, await probeProviderProtocols(spec, input.strategy === 'auto' && !spec.catalogPresetId && !spec.api && !spec.requestPath, fetchImpl, signal));
+  }
   return runProviderProbe(spec, fetchImpl);
 }

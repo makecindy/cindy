@@ -75,6 +75,20 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // Audit regression: discovery returned every schema even when only one was
+  // needed. Exercise the real MCP list entry with no driver/process side effects.
+  it('returns only requested schemas for focused discovery', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: { names: ['click'] } })) as {
+        tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      };
+      expect(payload.tools.map((tool) => tool.name)).toEqual(['click']);
+      expect(payload.tools[0]?.inputSchema.properties).toHaveProperty('observe');
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
   it('advertises a first-call goal and keeps host session routing independent of it', async () => {
     const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ windows: [] })) };
     const h = await makeHarness(deps, { sessionId: 'stable-task' });

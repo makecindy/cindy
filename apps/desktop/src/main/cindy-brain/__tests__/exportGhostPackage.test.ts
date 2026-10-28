@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
-import { exportGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
+import { exportGhostPackage, snapshotInstalledGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
 import { MAX_BASIC_ZIP_ENTRIES } from '../GhostManager';
 import { signGhostPackage } from '../ghostSignature';
 
@@ -135,6 +135,27 @@ function makeDeps(overrides: Partial<Parameters<typeof exportGhostPackage>[1]> =
     ...overrides,
   };
 }
+
+describe('snapshotInstalledGhostPackage', () => {
+  it('pins bytes of the exact root instance without opening a picker or saving a file', async () => {
+    const root = { ...makeGhost(), namespace: null, namespaceState: 'confirmed' as const };
+    const otherDir = path.join(workDir, 'other-owner');
+    await fs.promises.mkdir(otherDir);
+    await fs.promises.writeFile(path.join(otherDir, 'ghost.json'), JSON.stringify(root.manifest));
+    await fs.promises.writeFile(path.join(otherDir, 'main.js'), 'OTHER_OWNER');
+    const deps = makeDeps({ listInstalled: () => [{ ...root, namespace: 'another-org', dir: otherDir }, root] });
+    const result = await snapshotInstalledGhostPackage('hello', deps);
+    expect(result.status).toBe('prepared');
+    if (result.status !== 'prepared') throw new Error('Expected a package snapshot');
+    await fs.promises.writeFile(path.join(ghostDir, 'main.js'), 'CHANGED_AFTER_PREPARING');
+    const zip = await JSZip.loadAsync(result.bytes);
+    expect(await zip.file('main.js')!.async('string')).toBe('console.log("hi")');
+    expect(result.ghost.dir).toBe(ghostDir);
+    expect(deps.showSaveDialog).not.toHaveBeenCalled();
+    expect(Object.keys(zip.files)).not.toContain('.cindy-trust.json');
+    expect(Object.keys(zip.files)).not.toContain('.disabled');
+  });
+});
 
 describe('exportGhostPackage', () => {
   it.skipIf(process.platform === 'win32')(

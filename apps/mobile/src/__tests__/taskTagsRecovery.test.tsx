@@ -81,6 +81,7 @@ vi.mock("@expo/ui/swift-ui", () => {
     Group: Container,
     HStack: Container,
     ZStack: Container,
+    Rectangle: () => null,
     RNHostView: Container,
     Text: Container,
     Image: () => null,
@@ -297,7 +298,7 @@ it("refreshes only after the target peer recovers and retains cached offline nav
   expect(h.compact.tags).toHaveLength(1);
   const manage = () =>
     node.querySelector<HTMLButtonElement>(
-      'button[aria-label="taskTags.title"]',
+      'button[aria-label="taskTags.more"]',
     )!;
   expect(manage().disabled).toBe(false);
   expect(
@@ -321,7 +322,7 @@ it("refreshes only after the target peer recovers and retains cached offline nav
 it("does not expose native management when offline without a catalog", async () => {
   h.context.status = "offline";
   await render();
-  expect(node.querySelector('button[aria-label="taskTags.title"]')).toBeNull();
+  expect(node.querySelector('button[aria-label="taskTags.more"]')).toBeNull();
 });
 it("discards the request from before peer recovery", async () => {
   let finish!: (value: any) => void;
@@ -380,4 +381,196 @@ it("retries a committed attachment whose response was lost without updating a st
   const actions = h.invoke.mock.calls.map((call) => call[2][0].action);
   expect(actions).toEqual(["get", "create", "attach", "attach"]);
   expect(node.querySelector("input")).toBeNull();
+});
+
+it("drives native tag pages from the shared expanded state", async () => {
+  const second = { ...tag, id: "second", name: "Home", revision: 1 };
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => ({
+    tags: request.action === "reorder" ? [second, tag] : [tag, second],
+    sessions: [],
+  }));
+  let state: any;
+  const pages: (string | null)[] = [];
+  let back = () => {};
+  await act(async () =>
+    root.render(
+      <TaskTagsPanel
+        session={session}
+        expanded
+        onExpandedChange={onExpandedChange}
+        renderExpanded={(value) => {
+          state = value;
+          return null;
+        }}
+        onPageChange={(page, goBack) => {
+          pages.push(page);
+          back = goBack;
+        }}
+      />,
+    ),
+  );
+  expect(state.page).toBe("list");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["tag", "second"]);
+  await act(async () => state.onMove(0, 1));
+  expect(h.invoke.mock.calls.at(-1)![2][0]).toEqual({
+    action: "reorder",
+    tagIds: ["second", "tag"],
+    expectedOrder: ["tag", "second"],
+  });
+  await act(async () => state.onEdit("tag"));
+  expect(state.page).toBe("edit");
+  expect(state.form.canDelete).toBe(true);
+  await act(async () => back());
+  expect(state.page).toBe("list");
+  await act(async () => state.onAdd());
+  expect(state.page).toBe("add");
+  expect(state.form.canSubmit).toBe(false);
+  await act(async () => state.form.onNameChange("Ideas"));
+  expect(state.form.canSubmit).toBe(true);
+  await act(async () => back());
+  await act(async () => back());
+  expect(onExpandedChange).toHaveBeenCalledWith(false);
+  expect(pages).toEqual(["list", "edit", "list", "add", "list"]);
+});
+
+it("reports the native back arrow as disabled while a form save is in flight", async () => {
+  let finish!: (value: any) => void;
+  const pages: [string | null, boolean][] = [];
+  let back = () => {};
+  let state: any;
+  await act(async () =>
+    root.render(
+      <TaskTagsPanel
+        session={session}
+        expanded
+        onExpandedChange={onExpandedChange}
+        renderExpanded={(value) => {
+          state = value;
+          return null;
+        }}
+        onPageChange={(page, goBack, backDisabled) => {
+          pages.push([page, backDisabled]);
+          back = goBack;
+        }}
+      />,
+    ),
+  );
+  await act(async () => state.onAdd());
+  await act(async () => state.form.onNameChange("Ideas"));
+  h.invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await act(async () => state.form.onSubmit());
+  // The save is pending: the header must say so, and tapping back must not slip through.
+  expect(pages.at(-1)).toEqual(["add", true]);
+  await act(async () => back());
+  expect(state.page).toBe("add");
+  await act(async () => finish({ tags: [], sessions: [] }));
+  expect(pages.at(-1)![1]).toBe(false);
+});
+
+it("offers retry only for failed reads, not for failed writes", async () => {
+  let state: any;
+  const mount = async () =>
+    act(async () =>
+      root.render(
+        <TaskTagsPanel
+          session={session}
+          expanded
+          onExpandedChange={onExpandedChange}
+          renderExpanded={(value) => {
+            state = value;
+            return null;
+          }}
+        />,
+      ),
+    );
+  // A catalog that never loaded can only be repaired by reading it again.
+  h.invoke.mockRejectedValueOnce(new Error("boom"));
+  await mount();
+  expect(state.message).toBe("taskTags.loadFailed");
+  expect(state.canRetry).toBe(true);
+  await act(async () => root.unmount());
+
+  // With a loaded catalog, a failed write is not something "refresh" can retry.
+  root = createRoot(node);
+  resetTaskTagCatalogCache();
+  h.invoke.mockReset().mockResolvedValue({ tags: [tag], sessions: [] });
+  await mount();
+  expect(state.canRetry).toBe(false);
+  await act(async () => state.onAdd());
+  await act(async () => state.form.onNameChange("Ideas"));
+  h.invoke.mockRejectedValueOnce(new Error("boom"));
+  await act(async () => state.form.onSubmit());
+  expect(state.message).toBe("taskTags.failed");
+  expect(state.canRetry).toBe(false);
+});
+
+it("persists native reorder and confirmed deletion when the panel is reopened", async () => {
+  const second = { ...tag, id: "second", name: "Home" };
+  let catalog = [tag, second];
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "reorder") {
+      catalog = request.tagIds.map((id: string) =>
+        catalog.find((item) => item.id === id)!,
+      );
+    }
+    if (request.action === "delete") {
+      catalog = catalog.filter((item) => item.id !== request.tagId);
+    }
+    return {
+      tags: catalog,
+      sessions: [],
+      ...(request.action === "previewDelete"
+        ? {
+            deletion: { tagId: tag.id, revision: tag.revision, count: 2 },
+          }
+        : {}),
+    };
+  });
+  let state: any;
+  const open = async (key: string) =>
+    act(async () =>
+      root.render(
+        <TaskTagsPanel
+          key={key}
+          session={session}
+          expanded
+          onExpandedChange={onExpandedChange}
+          renderExpanded={(value) => {
+            state = value;
+            return null;
+          }}
+        />,
+      ),
+    );
+  await open("initial");
+  await act(async () => state.onMove(0, 1));
+  await open("reordered");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second", "tag"]);
+  await act(async () => state.onEdit("tag"));
+  await act(async () => state.form.onDelete());
+  expect(state.page).toBe("delete");
+  expect(catalog).toHaveLength(2);
+  expect(
+    h.invoke.mock.calls.some((call) => call[2][0].action === "delete"),
+  ).toBe(false);
+  await act(async () => state.deletion.onConfirm());
+  expect(h.invoke.mock.calls.at(-1)!.slice(0, 3)).toEqual([
+    "host",
+    "local-db:task-tags:execute",
+    [
+      {
+        action: "delete",
+        tagId: "tag",
+        revision: tag.revision,
+        expectedCount: 2,
+      },
+    ],
+  ]);
+  await open("deleted");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second"]);
 });

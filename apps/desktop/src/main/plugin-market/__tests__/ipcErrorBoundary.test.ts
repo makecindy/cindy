@@ -102,7 +102,7 @@ describe('Plugin Market IPC error boundary', () => {
 
   it('runs plugin reconciliation on cold start, foreground, resume and stable owner changes', () => {
     const syncStart = registerSource.indexOf(
-      'export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome>',
+      'export async function syncDefaultMarketPlugins(',
     );
     const syncEnd = registerSource.indexOf('\n}\n\n/**\n * Preserve stable IPC errors', syncStart);
     const syncBody = registerSource.slice(syncStart, syncEnd);
@@ -136,12 +136,13 @@ describe('Plugin Market IPC error boundary', () => {
     expect(serviceSource).toContain("const outcome = completed ? 'completed' : 'failed';");
     expect(serviceSource).toContain('options.onDefaultReconciliationOutcome?.(outcome);');
     expect(serviceSource).toContain(
-      'await this.applyDefaultInstalls(plugins, currentOrganization, owner, ledger)',
+      'await this.applyDefaultInstalls(plugins, currentOrganization, owner, ledger, refresh)',
     );
-    expect(serviceSource).toContain('await this.applyAutomaticUpgrades(plugins, customDiscovery.entries, owner, ledger)');
+    expect(serviceSource).toContain('await this.applyAutomaticUpgrades(plugins, customDiscovery.entries, owner, ledger, refresh)');
     expect(serviceSource).toContain('if (error instanceof SilentUpgradeBusyError) {');
 
-    expect(registerSource).toContain('deferReconciliation: true');
+    // Capability boundary: catalog readers cannot initiate install/update/removal maintenance.
+    expect(registerSource).toContain('discoveryOnly: true');
     expect(registerSource).toContain('plugin-market:update-consent-holds-changed');
     expect(registerSource).toContain('onConsentHoldsChanged:');
     expect(ghostPluginPageSource).toContain('const installedGhostMarketKey = useMemo(');
@@ -162,13 +163,13 @@ describe('Plugin Market IPC error boundary', () => {
       "if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';",
     );
     expect(ownerTaskBody.indexOf('dataOwnerId === null')).toBeLessThan(
-      ownerTaskBody.indexOf('syncDefaultMarketPlugins()'),
+      ownerTaskBody.indexOf("syncDefaultMarketPlugins('owner-ready')"),
     );
     expect(ownerTaskBody).not.toContain("builtinOutcome === 'failed') return builtinOutcome");
     expect(ownerTaskBody).toContain("outcome === 'retry-pending' ? 'failed' : outcome");
     expect(ownerTaskBody).toContain("builtinOutcome === 'failed'");
     expect(ownerTaskBody).toContain('const marketOutcome = await marketPostCommitStep.run(');
-    expect(ownerTaskBody).toContain('return syncDefaultMarketPlugins();');
+    expect(ownerTaskBody).toContain("return syncDefaultMarketPlugins('owner-ready');");
     expect(ownerTaskBody).toContain("marketOutcome === 'failed'");
     expect(ownerTaskBody).toContain("marketOutcome === 'deferred'");
     expect(ownerTaskBody).toContain('await reconcileGhostOauthAccountsForActiveOwner()');
@@ -184,7 +185,7 @@ describe('Plugin Market IPC error boundary', () => {
     expect(bootstrapSource).not.toContain('syncDefaultPluginsForActiveOwner');
 
     const ownerSyncStart = bootstrapSource.indexOf(
-      'function syncPluginMarketForActiveOwner(minIntervalMs = 0): void',
+      'function syncPluginMarketForActiveOwner(',
     );
     const ownerSyncEnd = bootstrapSource.indexOf('\n}\n\nfunction parseOptionalDeviceLinkDeviceId', ownerSyncStart);
     const ownerSyncBody = bootstrapSource.slice(ownerSyncStart, ownerSyncEnd);
@@ -195,7 +196,7 @@ describe('Plugin Market IPC error boundary', () => {
     expect(ownerSyncBody).toContain('void marketPostCommitStep.run(scope,');
     expect(ownerSyncBody).toContain('pluginMarketSyncInFlightScope = null;');
     expect(bootstrapSource).toContain('PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000');
-    expect(bootstrapSource).toContain('syncPluginMarketForActiveOwner(30_000);');
+    expect(bootstrapSource).toContain("syncPluginMarketForActiveOwner(30_000, 'resume');");
   });
 });
 

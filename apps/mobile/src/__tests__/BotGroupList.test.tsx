@@ -88,7 +88,14 @@ vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammat
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
 import { BotGroupListRow } from '@/session/BotGroupList';
-import { TeammateCreateButton } from '@/session/TeammateCreateButton';
+import { useTeammateCreateController } from '@/session/TeammateCreateController';
+import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+
+/** The home teammate section's create trigger: the caller's button inside the controller's menu. */
+function CreateTrigger(props: Parameters<typeof useTeammateCreateController>[0]) {
+  const create = useTeammateCreateController(props);
+  return el('div', null, create.renderTrigger(el(HomeHeaderGlassButton, { accessibilityLabel: create.label, testID: 'teammates.create', onPress: create.press, children: null })), create.sheets);
+}
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -158,11 +165,11 @@ describe('group row', () => {
   });
 });
 
-describe('create from the teammate page + menu', () => {
+describe('create from the home teammate section + menu', () => {
   async function render(groupTargets = [mac], nativeMenu = true) {
     h.nativeMenu = nativeMenu;
     const onGroupCreated = vi.fn();
-    await act(async () => root.render(el(TeammateCreateButton, {
+    await act(async () => root.render(el(CreateTrigger, {
       targets: [mac], groupTargets, preferredDeviceId: 'pc', onCreated: vi.fn(), onGroupCreated,
     })));
     return onGroupCreated;
@@ -179,8 +186,14 @@ describe('create from the teammate page + menu', () => {
     expect(node.textContent).toContain('groupChat.create.minMembers(min=2)');
     expect(h.invoke).not.toHaveBeenCalled();
     await act(async () => { h.inputs['botGroup.create.name'].onChangeText('  官网  '); });
-    await click('botGroup.create.member.abu');
+    // Equal timestamps now have a stable identity tie-breaker. Select in the
+    // reverse order so the assertion still proves list order, not click order.
+    expect([...node.querySelectorAll('[data-testid^="botGroup.create.member."]')]
+      .map(entry => entry.getAttribute('data-testid'))).toEqual([
+      'botGroup.create.member.abu', 'botGroup.create.member.mimi', 'botGroup.create.member.xiaoman',
+    ]);
     await click('botGroup.create.member.mimi');
+    await click('botGroup.create.member.abu');
     h.invoke.mockResolvedValueOnce({ effects: [
       { kind: 'refresh-collection', collectionId: 'bot-groups' },
       { kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g9' } } },
@@ -189,7 +202,7 @@ describe('create from the teammate page + menu', () => {
     const request = h.invoke.mock.calls[0]!;
     expect(request[0]).toBe('mac');
     expect(request[1]).toBe('maker:remote-resources:invoke');
-    expect(request[2][0]).toMatchObject({ collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: ['mimi', 'abu'] } });
+    expect(request[2][0]).toMatchObject({ collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: ['abu', 'mimi'] } });
     expect(byId('botGroup.create')).toBeNull();
     expect(onGroupCreated).toHaveBeenCalledWith(mac, 'g9');
   });

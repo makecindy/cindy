@@ -117,7 +117,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
-      "sourceReads": 4
+      "sourceReads": 2
     },
     "apps/desktop/src/main/__tests__/setSessionsStatusInDb.test.ts": {
       "sourceReads": 2
@@ -379,9 +379,6 @@
     "apps/desktop/src/main/plugin-market/__tests__/sources-cache-lease.test.ts": {
       "realWaits": 1
     },
-    "apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts": {
-      "sourceReads": 4
-    },
     "apps/desktop/src/main/plugin-publisher/__tests__/host.test.ts": {
       "resetModules": 1
     },
@@ -458,9 +455,6 @@
       "realWaits": 2
     },
     "apps/desktop/src/main/voice-input/__tests__/globalShortcut.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/main/voice-input/__tests__/MacModifierShortcutListenerStartRace.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/main/voice-input/__tests__/RealtimeAsrWebSocketProvider.test.ts": {
@@ -726,9 +720,6 @@
     "apps/desktop/src/renderer/__tests__/releaseNotesNormalize.test.ts": {
       "resetModules": 2
     },
-    "apps/desktop/src/renderer/__tests__/remoteCatalogSnapshot.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/__tests__/remoteHistoryHandoff.test.ts": {
       "sourceReads": 1
     },
@@ -792,12 +783,6 @@
     "apps/desktop/src/renderer/__tests__/userMessageCollapse.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/renderer/__tests__/voiceInputEnterToSend.test.ts": {
-      "sourceReads": 2
-    },
-    "apps/desktop/src/renderer/__tests__/worktreeRemovalWarning.test.ts": {
-      "sourceReads": 2
-    },
     "apps/desktop/src/renderer/components/chat/__tests__/embeddedSessionNavigation.test.tsx": {
       "sourceReads": 1
     },
@@ -838,9 +823,6 @@
       "realWaits": 1
     },
     "apps/desktop/src/renderer/features/bots/__tests__/botGroupListRemoval.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botModelChainDefaults.test.tsx": {
       "resetModules": 1
     },
     "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
@@ -912,9 +894,6 @@
     "apps/desktop/src/renderer/hooks/__tests__/useDingTalkBot.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/hooks/__tests__/useFeishuBot.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/hooks/__tests__/useModelPricing.test.ts": {
       "resetModules": 1
     },
@@ -947,9 +926,6 @@
     },
     "apps/desktop/src/renderer/voice-input/__tests__/VoiceInputSection.recordingGate.test.ts": {
       "sourceReads": 9
-    },
-    "apps/desktop/src/renderer/voice-input/__tests__/WebMicAudioEngine.keepAliveIdle.test.ts": {
-      "resetModules": 1
     },
     "apps/mobile/src/__tests__/agentCapabilitiesCache.test.ts": {
       "resetModules": 1

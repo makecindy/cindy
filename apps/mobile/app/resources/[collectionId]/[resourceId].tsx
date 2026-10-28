@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { randomUUID } from 'expo-crypto';
 import { useAuth } from '@/auth/AuthContext';
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -54,7 +55,7 @@ function RemoteResourceResolverScreenContent() {
   const resourceId = firstParam(params.resourceId);
   const resourceKind = firstParam(params.resourceKind);
   const deviceId = firstParam(params.deviceId);
-  const deviceName = firstParam(params.deviceName) || deviceId;
+  const deviceName = deviceDisplayName(deviceId, firstParam(params.deviceName));
   const title = firstParam(params.title) || t('devices.resources.titleFallback');
   const host = useMemo<RemoteResourceHostTarget>(
     () => ({ deviceId, deviceName }),

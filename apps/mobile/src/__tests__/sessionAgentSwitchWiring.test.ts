@@ -28,8 +28,9 @@ describe('new task remote Agent wiring', () => {
     expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
-    // 恢复草稿时把 Agent 所在电脑拆回远程选择。
-    expect(source).toContain('const { agentDeviceId, ...recovered } = saved;');
+    // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
+    // restoreNewSessionDraft 覆盖；这里保留页面接入，防止恢复时漏掉被控电脑身份。
+    expect(source).toMatch(/restoreNewSessionDraft\(\s*\{\s*setRemoteAgentChoice,/);
   });
 });
 

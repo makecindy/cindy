@@ -8,7 +8,7 @@ import { ensureBotChatOnlyWorkspaceDir, ensureBotWorkspaceDir } from './botProfi
 import { getDbClient } from '../localDb/client/current.js';
 import { botGroupPlans, botSessionLinks, sessions } from '../localDb/schema.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { botGroupPlanRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
+import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
 
 export interface BotWorkspaceRuntimeDeps {
   ensureWorkspaceDir?: typeof ensureBotWorkspaceDir;
@@ -68,7 +68,7 @@ export async function prepareBotWorkspaceRuntime(
   const ownerUserDataPath = deps.ownerUserDataPath ?? ownerScopedUserDataPath;
   const groupRouteKey = link[0]?.role === 'group' ? link[0].routeKey : null;
   if (isChatOnlyGroupLane(groupRouteKey)) {
-    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupRouteKey!);
+    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
     opts.workspaceKind = 'dialogue';
     opts.remoteHostId = undefined;
     return;

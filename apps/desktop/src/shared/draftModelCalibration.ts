@@ -413,3 +413,40 @@ export function resolveDraftSessionProviderId({
     ? null
     : effectiveProviderId;
 }
+
+/**
+ * 新建任务草稿此刻实际会落在哪个来源：与新建页同口径(显式来源 > 校准挑中的来源 > 原生默认)。
+ * 草稿没存来源(跟随默认路由)时不能直接按模型 id 取原生默认——校准可能把它指向订阅来源。
+ * 用于任务内换模时判断「新建默认是否已在别的来源上」；未选过模型时剔除清单发现失败的来源，
+ * 与新建页自动校准一致。解析不出来返回 null。
+ */
+export function resolveDraftEffectiveProviderId(args: {
+  providers: readonly ProviderView[];
+  agent: AgentKind;
+  model: string;
+  providerId: string | null | undefined;
+  chosenByUser: boolean;
+  /** 与新建页同源的模型可见性谓词：用户隐藏的推荐模型不参与校准。 */
+  isModelEnabled?: ModelEnabledPredicate;
+}): string | null {
+  const { providers, agent, model, chosenByUser } = args;
+  const providerId = args.providerId ?? null;
+  const healthy =
+    chosenByUser || providerId ? providers : providers.filter((p) => !p.modelDiscoveryFailure);
+  const candidates = healthy.length > 0 ? healthy : providers;
+  const calibration = calibrateDraftModel({
+    providers: candidates,
+    agent,
+    model,
+    chosenByUser,
+    preferredProviderId: providerId,
+    providersLoading: false,
+    isModelEnabled: args.isModelEnabled,
+  });
+  return effectiveSourceIdForModel(
+    [...candidates],
+    providerId ?? calibration.providerId,
+    calibration.model,
+    agent,
+  );
+}

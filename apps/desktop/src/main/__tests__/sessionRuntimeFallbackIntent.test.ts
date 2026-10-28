@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { transpileModule, ScriptTarget } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { shouldPreserveRuntimeFallbackAutoResume } from '../maker-ipc/interruptedTurnAutoResume';
 import { createPendingAgentSwitchRegistry } from '../maker-ipc/sessionAgentSwitchHandler';
 
 const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
@@ -229,4 +230,64 @@ it.each(['device-b', 'share:one'])('applies a same-engine fallback at %s without
   expect(h.apply).toHaveBeenCalledWith('session', 'next', 'other', expect.anything(),
     expect.objectContaining({ source: 'fallback', sessionLockHeld: true }));
   expect(h.failed).not.toHaveBeenCalled();
+});
+
+// Execute the production close predicate: the old Session is a lease for one
+// scheduled recovery attempt, even when the replacement uses another harness.
+const preserveFallback = source.slice(
+  source.indexOf('function shouldPreserveSessionRuntimeFallbackAutoResume('),
+  source.indexOf('export function stopActiveGoalTurnForClear('),
+);
+const preserveFallbackJs = transpileModule(`${preserveFallback}\nreturn shouldPreserveSessionRuntimeFallbackAutoResume;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+
+function closeHarness() {
+  const session = { id: 'session' };
+  const leases = new WeakMap<object, number>([[session, 7]]);
+  const guard = vi.fn(() => true);
+  const bookkeeping = vi.fn(() => true);
+  const pending = vi.fn(() => true);
+  const token = vi.fn(() => 7);
+  const scheduled = vi.fn(() => true);
+  const deps = {
+    shouldPreserveRuntimeFallbackAutoResume,
+    pendingSessionRuntimeFallbackRebuilds: leases,
+    interruptedTurnAutoResumeGuard: { isCurrentAttempt: guard },
+    autoResumeBookkeeping: { isCurrentAttempt: bookkeeping, hasLiveSchedule: scheduled },
+    agentInputCoordinatorHolder: { isAutoResumePending: pending, getAutoResumeAttemptToken: token },
+  };
+  const preserve = new Function(...Object.keys(deps), preserveFallbackJs)(...Object.values(deps));
+  return { session, leases, guard, bookkeeping, pending, token, scheduled, preserve };
+}
+
+describe('runtime fallback close handoff', () => {
+  it.each(['requested', 'runtime-refresh', 'agent-switch'])('preserves the active attempt during %s', (reason) => {
+    const h = closeHarness();
+    expect(h.preserve(h.session, reason)).toBe(true);
+    expect(h.guard).toHaveBeenCalledWith('session', 7);
+    expect(h.bookkeeping).toHaveBeenCalledWith('session', 7);
+  });
+
+  it('does not transfer a lease to another Session with the same id', () => {
+    const h = closeHarness();
+    expect(h.preserve({ id: h.session.id }, 'agent-switch')).toBe(false);
+  });
+
+  it.each(['unexpected', 'deleted'])('does not preserve unrelated close reason %s', (reason) => {
+    const h = closeHarness();
+    expect(h.preserve(h.session, reason)).toBe(false);
+  });
+
+  it.each(['guard', 'bookkeeping', 'pending', 'scheduled'] as const)('does not revive recovery after %s was cleared', (field) => {
+    const h = closeHarness();
+    h[field].mockReturnValue(false);
+    expect(h.preserve(h.session, 'agent-switch')).toBe(false);
+  });
+
+  it('does not preserve an attempt replaced by a newer input', () => {
+    const h = closeHarness();
+    h.token.mockReturnValue(8);
+    expect(h.preserve(h.session, 'agent-switch')).toBe(false);
+  });
 });

@@ -23,7 +23,6 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
 | [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
-| [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
 | [`README.md`](./README.md) | 本目录使用规则 | 说明 |
@@ -53,6 +52,8 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 
 ## 版本记录
+
+- **2026-10-23（登录页文字并入墨水阶梯；移除 Figma 组件读取记录）**：`DESIGN.md §16` 改为登录域唯一现行规则来源，登录文字 token 与主界面墨水档同值（`loginInkLadder.test.ts` 守护）；`figma-component-spec.md` 移除，按钮族状态矩阵迁入 §16.5。详见 `design-decision-log.md` 10-23。
 
 - **2026-09-27（Mobile 文字规范：字色 / 字号 / 字重 / 行高按角色收拢）**：`apps/mobile/docs/mobile-design-guide.md §3` 新增「文字规范速查」一张表作为 Mobile 文字规则正本（角色 → 字号 / 行高 / 字重 / 字色 + 四条硬规则 + 登记例外 + 机器拦截边界）；根 `AGENTS.md`、`DESIGN.md` Mobile 节与本索引「新贡献者」第 9 步指向该表；`typographyTokenDiscipline.test.ts` 新增「必须配行高」「浅色字不配粗字重」两条守护。裁决过程见 [`design-decision-log.md`](./design-decision-log.md) 09-26 / 09-27 各条。
 

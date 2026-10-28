@@ -60,6 +60,12 @@ export type BotImConnectionStatus =
   | { kind: 'offline'; appId: string }
   | { kind: 'error'; reason: string; code?: string };
 
+/** Message identity and archive generation supplement legacy timestamp cutoffs. */
+export interface BotImTaskArchiveActivity {
+  messageId: string | null;
+  generation: string;
+}
+
 /** 落盘记录: 不含凭证, 凭证按连接 id 前缀存在本机安全存储里。 */
 export interface BotImConnectionRecord {
   id: string;
@@ -76,6 +82,10 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /** List-only archive cutoffs. Never changes the referenced session or its routing. */
+  archivedTaskRows?: Record<string, number>;
+  /** Optional anchors for the same archived rows; older clients retain numeric cutoffs. */
+  archivedTaskActivity?: Record<string, BotImTaskArchiveActivity>;
 }
 
 export type BotImGroupActivationMode = 'mention' | 'always';

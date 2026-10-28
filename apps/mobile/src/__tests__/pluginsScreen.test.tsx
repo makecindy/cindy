@@ -3,9 +3,15 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import PluginsScreen from "@/plugins/PluginsScreen";
+import { usePluginManagement } from "@/plugins/usePluginManagement";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  realManagement: false,
+  accountGeneration: 0,
+  wire: vi.fn(),
+  management: { state: null, controller: null } as any,
+  marketRead: vi.fn(),
   enabled: true,
   online: true,
   focused: true,
@@ -20,20 +26,45 @@ const fixture = vi.hoisted(() => ({
   devicesFailed: false,
   devicesAbsent: false,
   platform: "ios",
+  width: 390,
   storage: new Map<string, string>(),
   getStored: vi.fn(),
   setStored: vi.fn(),
 }));
+vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return ({
+  usePluginManagement: (...args: any[]) => {
+    fixture.props.set("managementScope", args);
+    return fixture.realManagement ? actual.usePluginManagement(...args) : fixture.management;
+  },
+});
+});
+vi.mock("expo-crypto", () => ({ randomUUID: () => "screen-operation" }));
+vi.mock("@/plugins/PluginOriginalSettings", () => ({
+  PluginOriginalSettings: (p: any) => { fixture.props.set("originalSettings", p); return null; },
+}));
+vi.mock("@/plugins/pluginManagementClient", async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return { ...actual, createPluginManagementClient: (...args: any[]) => fixture.realManagement
+    ? actual.createPluginManagementClient(...args) : ({ detail: fixture.marketRead }) };
+});
+vi.mock("@/plugins/PluginManagementMenu", () => ({
+  PluginManagementMenu: () => null,
+}));
+vi.mock("@/plugins/PluginManagementConfirmation", () => ({ PluginManagementConfirmation: () => null }));
+vi.mock("@/plugins/PluginNotice", () => ({ PluginNotice: (p: any) => { fixture.props.set(p.testID ?? "notice", p); return createElement("span", null, p.title); } }));
 vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children }: any) =>
     React.createElement("div", null, children);
   return {
+    AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
     ActivityIndicator: view,
     Alert: { alert: fixture.alert },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
     Image: view,
-    Pressable: view,
+    Pressable: (p: any) => { if (p.accessibilityLabel) fixture.props.set("pressable." + p.accessibilityLabel, p); return view(p); },
     RefreshControl: view,
     ScrollView: view,
     View: view,
@@ -43,7 +74,7 @@ vi.mock("react-native", async () => {
       },
     },
     StyleSheet: { create: (s: any) => s, hairlineWidth: 1 },
-    useWindowDimensions: () => ({ width: 390 }),
+    useWindowDimensions: () => ({ width: fixture.width }),
   };
 });
 vi.mock("react-native-safe-area-context", async () => ({
@@ -66,9 +97,15 @@ vi.mock("react-i18next", () => ({
 }));
 vi.mock("lucide-react-native", () =>
   Object.fromEntries(
-    ["ChevronDown", "ChevronRight", "Info", "Monitor", "Puzzle", "Search"].map(
-      (key) => [key, () => null],
-    ),
+    [
+      "ChevronDown",
+      "ChevronRight",
+      "Info",
+      "Monitor",
+      "Puzzle",
+      "Search",
+      "Plus",
+    ].map((key) => [key, () => null]),
   ),
 );
 vi.mock("@/components/AppText", () => ({
@@ -76,14 +113,15 @@ vi.mock("@/components/AppText", () => ({
   TextInput: () => null,
 }));
 vi.mock("@/auth/AuthContext", () => ({
-  useAuth: () => ({ accountGeneration: 0, apiFetch: vi.fn() }),
+  useAuth: () => ({ accountGeneration: fixture.accountGeneration, apiFetch: vi.fn() }),
 }));
 vi.mock("@/auth/authOwnerGeneration", () => ({
+  subscribeMobileAuthOwner: () => () => {},
   getMobileAuthOwner: () => ({ accountKey: "demo" }),
   isMobileAuthOwnerCurrent: () => fixture.owner,
 }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({
-  useDeviceLink: () => ({ invoke: vi.fn() }),
+  useDeviceLink: () => ({ invoke: fixture.wire }),
 }));
 vi.mock("@/device-link/useDeviceManagement", () => ({
   useDeviceManagement: () => ({
@@ -115,6 +153,7 @@ const row = () => ({
 });
 vi.mock("@/device-link/remoteResources", () => ({
   getRemoteResource: (...args: any[]) => fixture.read(...args),
+  isRemoteResourcesUnsupported: () => false,
 }));
 vi.mock("@/session/useRemoteResourceList", () => ({
   useRemoteResourceList: () => ({
@@ -164,7 +203,7 @@ vi.mock("@/plugins/PluginDirectoryView", () => ({
 vi.mock("@/plugins/PluginDetailView", () => ({
   PluginDetailView: (p: any) => {
     fixture.props.set("detail", p);
-    return null;
+    return createElement("div", null, p.settingsContent);
   },
 }));
 vi.mock("@/plugins/PluginTaskPicker", () => ({
@@ -181,6 +220,11 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
   fixture.props.clear();
+  fixture.realManagement = false;
+  fixture.accountGeneration = 0;
+  fixture.wire.mockReset();
+  fixture.management = { state: null, controller: null };
+  fixture.marketRead.mockReset();
   fixture.storage.clear();
   fixture.getStored
     .mockReset()
@@ -202,6 +246,7 @@ beforeEach(() => {
   fixture.focused = true;
   fixture.owner = true;
   fixture.platform = "ios";
+  fixture.width = 390;
   fixture.invoke
     .mockReset()
     .mockImplementation(async (_invoke, _device, _plugin, action) => {
@@ -663,6 +708,7 @@ it("guides setup to PC without opening configuration or creating a task", async 
   await openDetail();
   const detail = fixture.props.get("detail");
   expect(detail.model.status).toBe("setupRequired");
+  expect(detail.model.canUseTasks).toBe(true);
   expect(detail.children).toBeUndefined();
   await act(async () => detail.onResolveStatus());
   expect(fixture.alert).toHaveBeenCalledWith("plugins.detail.computerSettings");
@@ -689,4 +735,344 @@ it("records recent use when choosing an existing task", async () => {
     "cindy.pluginRecent.v1.demo",
     JSON.stringify(["mac:plugin"]),
   );
+});
+
+// Management UI integration: the real screen must bind actions to the selected Host/instance,
+// discard late native confirmations and expose only negotiated original-settings support.
+// Existing controller tests cover wire validation; these unit cases cover the missing UI wiring.
+function managedScreen() {
+  const plugin = {
+    instanceKey: "demo",
+    namespace: null,
+    enabled: true,
+    manifest: { id: "demo", name: "Demo", version: "1" },
+    approval: {
+      state: "approved",
+      revision: "12345678-1234-4123-8123-123456789abc",
+    },
+  };
+  const market = {
+    pluginId: "market/demo",
+    ghostId: "demo",
+    namespace: null,
+    name: "Demo",
+    releaseId: "r2",
+    version: "2",
+    sourceType: "server",
+    installState: "update-available",
+    manifest: { ...plugin.manifest, version: "2" },
+  };
+  const snapshot = {
+    version: 1,
+    settingsPage: true,
+    ghosts: [plugin],
+    market: { items: [market], unavailableCustomSourceNames: [] },
+  };
+  const controller = {
+    uninstall: vi.fn(),
+    install: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(undefined),
+    getState: () => fixture.management.state,
+  };
+  fixture.management = {
+    state: {
+      capability: "supported",
+      snapshot,
+      online: true,
+      busy: false,
+      outcome: "idle",
+    },
+    controller,
+  };
+  fixture.marketRead.mockResolvedValue(market);
+  return { plugin, market, snapshot, controller };
+}
+it("binds update and uninstall to the selected physical installation", async () => {
+  const { plugin, market, controller } = managedScreen();
+  await openDetail();
+  const menu = fixture.props.get("header").rightToolbar.props;
+  expect(menu.nativeToolbar).toBe(true);
+  expect(fixture.props.get("header").right).toBeUndefined();
+  expect(menu.actions.map((a: any) => a.id)).toEqual(["update", "uninstall"]);
+  await act(async () => menu.onAction("update"));
+  expect(controller.install).toHaveBeenCalledWith(market, plugin);
+  await act(async () => menu.onAction("uninstall"));
+  const buttons = fixture.alert.mock.calls.at(-1)![2];
+  expect(controller.uninstall).not.toHaveBeenCalled();
+  await act(async () => buttons[1].onPress());
+  expect(controller.uninstall).toHaveBeenCalledWith(plugin);
+  expect(fixture.props.get("managementScope")[0]).toBe("mac");
+});
+// Preflight can fail before an operation ID exists; the removed status strip must not swallow that failure.
+it.each(["update", "uninstall"])("reports %s preflight failure without an operation ID", async (action) => {
+  const { controller } = managedScreen();
+  controller[action === "update" ? "install" : "uninstall"].mockImplementation(async () => {
+    fixture.management.state = { ...fixture.management.state, outcome: "failed", operationId: null, errorCode: "PLUGIN_INSTALL_CHANGED" };
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("header").rightToolbar.props.onAction(action));
+  if (action === "uninstall") await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed");
+});
+it("discards an uninstall confirmation after navigating to another plugin", async () => {
+  const { controller } = managedScreen();
+  await openDetail();
+  act(() => fixture.props.get("header").rightToolbar.props.onAction("uninstall"));
+  const confirm = fixture.alert.mock.calls.at(-1)![2][1].onPress;
+  await act(async () =>
+    fixture.props
+      .get("directory")
+      .onDetail({
+        ...row(),
+        key: "mac:other",
+        item: { ...row().item, ref: { ...row().item.ref, id: "other" } },
+      }),
+  );
+  await act(async () => confirm());
+  expect(controller.uninstall).not.toHaveBeenCalled();
+});
+it("requires an explicit review when the release changed before installing", async () => {
+  const { market, controller } = managedScreen();
+  fixture.marketRead.mockResolvedValue({ ...market, releaseId: "r3" });
+  await openDetail();
+  await act(async () =>
+    fixture.props.get("header").rightToolbar.props.onAction("update"),
+  );
+  expect(controller.install).not.toHaveBeenCalled();
+  expect(controller.refresh).toHaveBeenCalled();
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "plugins.management.releaseChanged",
+  );
+});
+it("mounts original settings with Host approval and retains the old-Host fallback", async () => {
+  const { snapshot } = managedScreen();
+  fixture.blocks = [
+    {
+      id: "capabilities",
+      primitive: "plugin-capabilities",
+      data: {
+        usage: {
+          taskUsable: true,
+          hasSettings: true,
+          approvalRequired: false,
+          builtin: false,
+          retired: false,
+          setup: { state: "ready", missing: [], expired: [] },
+          configuration: { items: [], alternatives: [] },
+        },
+      },
+    },
+  ];
+  await openDetail();
+  expect(fixture.props.get("detail").settingsContent.props.identity).toEqual({
+    deviceId: "mac",
+    instanceId: "demo",
+    expectedInstalledApproval: "approved:12345678-1234-4123-8123-123456789abc",
+  });
+  snapshot.settingsPage = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.props.get("detail").settingsContent).toBeUndefined();
+});
+// Production screen → hook → controller → client. Transport and visual leaves remain isolated.
+function realManagementHost() {
+  const { plugin, market, snapshot } = managedScreen();
+  Object.assign(plugin.manifest, { schemaVersion: 3 });
+  Object.assign(market, { description: null, author: null, scope: "public", organizationId: null,
+    defaultInstall: false, publishedAt: "", icon: null, enabled: true, sourceMarketName: null });
+  Object.assign(market.manifest, { schemaVersion: 3 });
+  Object.assign(snapshot.market, { unavailableReason: null, customSourceNames: [] });
+  fixture.realManagement = true;
+  fixture.wire.mockImplementation(async (_host, channel, args, options) => {
+    options?.preSend?.();
+    if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+    const request = args[0];
+    if (request.actionId === "management:snapshot") return { result: snapshot };
+    if (request.actionId === "management:market-detail") return { result: market };
+    throw new Error("Unexpected action " + request.actionId);
+  });
+  return { plugin, market, snapshot };
+}
+it("rejects a delayed native menu after changing selection through the real hook", async () => {
+  realManagementHost();
+  await openDetail();
+  const menu = fixture.props.get("header").rightToolbar.props;
+  await act(async () => fixture.props.get("directory").onDetail({ ...row(), key: "mac:other",
+    item: { ...row().item, ref: { ...row().item.ref, id: "other" } } }));
+  await act(async () => menu.onAction("uninstall"));
+  expect(fixture.alert).not.toHaveBeenCalled();
+  expect(fixture.wire.mock.calls.some((call) => call[2]?.[0]?.actionId === "management:begin")).toBe(false);
+});
+it("keeps a successful write unconfirmed when production snapshot readback fails", async () => {
+  realManagementHost();
+  const readHost = fixture.wire.getMockImplementation()!;
+  let completed = false;
+  fixture.wire.mockImplementation(async (...args) => {
+    const request = args[2]?.[0];
+    if (request?.actionId === "management:begin") {
+      args[3]?.preSend?.();
+      completed = true;
+      return { result: { operationId: request.input.operationId, phase: "succeeded" } };
+    }
+    if (completed && request?.actionId === "management:snapshot") throw new Error("READ_FAILED");
+    return readHost(...args);
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("header").rightToolbar.props.onAction("uninstall"));
+  await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+  expect(completed).toBe(true);
+  expect(fixture.read).toHaveBeenCalledTimes(1);
+  expect(fixture.props.get("detail").row.item.ref.id).toBe("demo");
+  expect(fixture.props.get("header").rightToolbar.props.actions.every((action: any) => action.disabled)).toBe(true);
+});
+
+it("isolates Host and selection changes during render before effects publish new facts", async () => {
+  const { plugin } = realManagementHost();
+  const renders: any[] = [];
+  function Probe({ host, selection }: { host: string; selection: string }) {
+    const binding = usePluginManagement(host, true, true, selection);
+    renders.push({ host, selection, ...binding });
+    return null;
+  }
+  await act(async () => root.render(createElement(Probe, { host: "mac", selection: "same-instance" })));
+  const oldController = renders.at(-1).controller;
+  const start = renders.length;
+  await act(async () => root.render(createElement(Probe, { host: "other-mac", selection: "same-instance" })));
+  expect(renders[start]).toMatchObject({ state: null, controller: null });
+  await act(async () => oldController.uninstall(plugin));
+  expect(fixture.wire.mock.calls.some((call) => call[2]?.[0]?.actionId === "management:begin")).toBe(false);
+  const next = renders.length;
+  await act(async () => root.render(createElement(Probe, { host: "other-mac", selection: "other-instance" })));
+  expect(renders[next]).toMatchObject({ state: null, controller: null });
+  const account = renders.length;
+  fixture.accountGeneration += 1;
+  await act(async () => root.render(createElement(Probe, { host: "other-mac", selection: "other-instance" })));
+  expect(renders[account]).toMatchObject({ state: null, controller: null });
+});
+
+
+it.each(["required", "unknown"] as const)("allows %s configuration plugins to start and choose tasks without claiming configuration is ready", async (assessment) => {
+  fixture.blocks = [{ id: "capabilities", data: { usage: {
+    taskUsable: true, hasSettings: true, approvalRequired: false, builtin: false, retired: false,
+    setup: { state: assessment, missing: ["Account"], expired: [] },
+  } } }];
+  await openDetail();
+  const detail = fixture.props.get("detail");
+  expect(detail.model.status).toBe(assessment === "unknown" ? "setupUnknown" : "setupRequired");
+  expect(detail.model.missing).toEqual(["Account"]);
+  await act(async () => detail.onNewTask());
+  expect(fixture.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: "/sessions/new" }));
+  await act(async () => detail.onChooseTask());
+  await act(async () => fixture.props.get("taskPicker").onSelect("pending-setup-task"));
+  expect(fixture.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: "/sessions/[sessionId]", params: expect.objectContaining({ sessionId: "pending-setup-task" }) }));
+});
+
+it("keeps recovery navigation and reads available during pending management while retaining local locks", async () => {
+  fixture.management = { state: { outcome: "unknown", busy: false, capability: "supported", online: false, snapshot: null }, controller: null };
+  fixture.online = false;
+  await openDetail();
+  expect(fixture.props.get("detail")).toMatchObject({ busy: true, statusRecoveryBusy: false });
+  act(() => fixture.props.get("detail").onResolveStatus());
+  expect(fixture.push).toHaveBeenCalledWith("/devices/manage");
+  fixture.management.state.outcome = "running";
+  fixture.online = true;
+  fixture.read.mockRejectedValueOnce(new Error("READ_FAILED"));
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.props.get("detail")).toMatchObject({ busy: true, statusRecoveryBusy: false, model: { status: "loadFailed" } });
+  let finish!: (resource: any) => void;
+  fixture.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => fixture.props.get("detail").onResolveStatus());
+  expect(fixture.props.get("detail")).toMatchObject({ busy: true, statusRecoveryBusy: true });
+  await act(async () => finish({ ...row().item, blocks: [] }));
+  expect(fixture.props.get("detail")).toMatchObject({ busy: true, statusRecoveryBusy: false });
+  expect(fixture.invoke).not.toHaveBeenCalled();
+  fixture.management = { state: null, controller: null };
+  await act(async () => root.render(createElement(PluginsScreen)));
+  let reject!: (error: Error) => void;
+  fixture.invoke.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  act(() => fixture.props.get("detail").onEnabledChange(false));
+  expect(fixture.props.get("detail")).toMatchObject({ busy: true, statusRecoveryBusy: true });
+  await act(async () => reject(new Error("WRITE_FAILED")));
+});
+
+
+it("silently reads uncertain configuration once without clearing the detail or replacing its form identity", async () => {
+  fixture.blocks = [{ id: "capabilities", primitive: "plugin-capabilities", data: { usage: { taskUsable: true, hasSettings: true, builtin: false, retired: false, approvalRequired: false, setup: { state: "unknown", missing: [], expired: [] } } } }];
+  await openDetail();
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.props.get("detail")).toMatchObject({ model: { status: "setupUnknown" }, busy: false });
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.alert).not.toHaveBeenCalled();
+  expect(fixture.invoke).not.toHaveBeenCalled();
+});
+
+
+it("reports a failed management operation once without a permanent refresh card", async () => {
+  fixture.management = { state: { outcome: "failed", operationId: "failed-once", busy: false, capability: "supported", online: true, snapshot: null }, controller: null };
+  await openDetail();
+  expect(fixture.alert).toHaveBeenCalledWith("plugins.notice.title.managementFailed");
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.alert).toHaveBeenCalledTimes(1);
+  expect(fixture.invoke).not.toHaveBeenCalled();
+});
+
+
+it.each(["ios", "android"])("removes only the %s plugin-list plus while retaining device selection and detail management", async (platform) => {
+  fixture.platform = platform;
+  managedScreen();
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.props.get("header").right).toBeUndefined();
+  expect(fixture.props.get("header").rightToolbar).toBeUndefined();
+  if (platform === "ios") {
+    expect(fixture.props.get("directory").targets).toBeDefined();
+    await act(async () => fixture.props.get("directory").onDetail(row()));
+  } else await act(async () => fixture.props.get("pressable.plugins.detailsFor").onPress());
+  const header = fixture.props.get("header");
+  const menu = platform === "ios" ? header.rightToolbar : header.right;
+  expect(menu.props.actions.some((action: any) => action.id === "uninstall")).toBe(true);
+});
+
+it("refreshes an unknown management result using its original operation without replaying the write", async () => {
+  realManagementHost();
+  fixture.width = 900;
+  const readHost = fixture.wire.getMockImplementation()!;
+  fixture.wire.mockImplementation(async (...args) => {
+    const request = args[2]?.[0];
+    if (request?.actionId === "management:begin") throw new Error("CONNECTION_LOST");
+    if (request?.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "running" } };
+    return readHost(...args);
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("header").rightToolbar.props.onAction("uninstall"));
+  await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+  expect(fixture.props.get("detail").busy).toBe(true);
+  await act(async () => fixture.props.get("directory").onRefresh());
+  const requests = fixture.wire.mock.calls.map((call) => call[2]?.[0]);
+  expect(requests.filter((request) => request?.actionId === "management:begin")).toHaveLength(1);
+  expect(requests.filter((request) => request?.actionId === "management:operation").map((request) => request.input.operationId)).toEqual(["screen-operation"]);
+});
+
+// Narrow detail hides the directory refresh. Recovery must remain reachable while
+// mutations/settings are blocked, and query the same operation rather than replay it.
+it("checks an unknown operation from the phone detail and restores actions", async () => {
+  realManagementHost();
+  const readHost = fixture.wire.getMockImplementation()!;
+  fixture.wire.mockImplementation(async (...args) => {
+    const request = args[2]?.[0];
+    if (request?.actionId === "management:begin") throw new Error("CONNECTION_LOST");
+    if (request?.actionId === "management:operation") return { result: { operationId: request.input.operationId, phase: "succeeded" } };
+    return readHost(...args);
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("header").rightToolbar.props.onAction("uninstall"));
+  await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+  const detail = fixture.props.get("detail");
+  expect(detail.busy).toBe(true);
+  expect(detail.managementNotice?.actions?.[0].disabled).toBe(false);
+  await act(async () => detail.managementNotice.actions[0].onPress());
+  const requests = fixture.wire.mock.calls.map((call) => call[2]?.[0]);
+  expect(requests.filter((request) => request?.actionId === "management:begin")).toHaveLength(1);
+  expect(requests.filter((request) => request?.actionId === "management:operation").map((request) => request.input.operationId)).toEqual(["screen-operation"]);
+  expect(fixture.props.get("detail").managementNotice).toBeUndefined();
+  expect(fixture.props.get("detail").busy).toBe(false);
 });

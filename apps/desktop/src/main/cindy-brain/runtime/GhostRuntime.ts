@@ -1,4 +1,4 @@
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 /**
@@ -58,8 +58,25 @@ interface RuntimeEntry {
   state: GhostRuntimeState;
   handle: SandboxHandle | null;
   loading: Promise<void> | null;
+  /** 当前沙箱按哪一份安装拉起(sandboxIdentity);换版后据此识别过期沙箱。 */
+  identity: string | null;
   /** 熔断窗口内的崩溃时间戳(旧的滚动淘汰)。 */
   crashTimestamps: number[];
+}
+
+/**
+ * 沙箱的安装身份:adapter 按安装目录 + 安装回执划分区,面板 webview 也按同一份
+ * 现装记录解析分区。更新换版期间若有人(面板 /wake、常驻拉起)拿旧记录把沙箱
+ * 拉了起来,提交后它就留在旧分区,与重挂载的面板永远不同源——spawn 据此识别
+ * 并换新。
+ */
+function sandboxIdentity(ghost: InstalledGhost): string {
+  return JSON.stringify([
+    ghost.dir,
+    ghostInstallApprovalToken(ghost.approval),
+    ghost.manifest.version,
+    ghost.namespace ?? null,
+  ]);
 }
 
 export class GhostRuntime {
@@ -89,7 +106,13 @@ export class GhostRuntime {
   async spawn(ghost: InstalledGhost): Promise<{ ok: true; state: GhostRuntimeState } | { ok: false; reason: string }> {
     const id = installedGhostStoragePart(ghost);
     const entry = this.getEntry(id);
-    if (entry.state === 'starting' || entry.state === 'running') return { ok: true, state: entry.state };
+    const identity = sandboxIdentity(ghost);
+    if (entry.state === 'starting' || entry.state === 'running') {
+      if (entry.identity === identity) return { ok: true, state: entry.state };
+      // 旧安装的沙箱(更新换版窗口里被拉起)按新记录重开,否则它困在旧分区。
+      this.options.log?.info('ghost sandbox restarts for the updated install', { id });
+      this.stop(id);
+    }
     if (entry.state === 'fused') return { ok: false, reason: '已熔断(反复崩溃),重新唤醒后可再试' };
     if (entry.state === 'stopping') return { ok: false, reason: '正在熄灯,稍后再试' };
     const blocked = this.options.startBlockedReason?.(id) ?? null;
@@ -107,6 +130,7 @@ export class GhostRuntime {
       return { ok: false, reason: '沙箱创建失败' };
     }
     entry.handle = handle;
+    entry.identity = identity;
     handle.onGone((details) => this.handleGone(id, details.reason));
     try {
       entry.loading = handle.load();
@@ -180,7 +204,7 @@ export class GhostRuntime {
   private getEntry(id: string): RuntimeEntry {
     let entry = this.entries.get(id);
     if (!entry) {
-      entry = { state: 'off', handle: null, loading: null, crashTimestamps: [] };
+      entry = { state: 'off', handle: null, loading: null, identity: null, crashTimestamps: [] };
       this.entries.set(id, entry);
     }
     return entry;

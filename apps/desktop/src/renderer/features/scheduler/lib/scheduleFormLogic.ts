@@ -8,9 +8,9 @@
  *   - RunMode 三态("运行会话"概念,合并 persistentSession 与手绑会话):
  *       fresh      每次新建会话(persistentSession=false, targetSessionId='')
  *       persistent 持续会话·自动创建(persistentSession=true;首次 fire 后
- *                  runner 回写 targetSessionId,归档自动重建续绑)
+ *                  runner 回写 targetSessionId,归档后恢复原任务)
  *       bound      绑定已有会话(targetSessionId=<id>, persistentSession=false;
- *                  会话不可用时 runner 自动 pause)
+ *                  归档后恢复原任务，删除/丢失时 runner 自动 pause)
  *   - buildScheduleInput:表单 → CreateScheduleInput(原 toInput 迁入)
  */
 
@@ -140,6 +140,7 @@ export interface ScheduleFormState {
   manual: boolean;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentDeviceId?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
@@ -149,9 +150,14 @@ export interface ScheduleFormState {
    * `form.providerId || nativeDefaultSourceId(agentKind)` 算出当前高亮的来源。
    */
   providerId: string;
+  /**
+   * 每次新建任务时 Agent 在哪台电脑运行(同账号另一台电脑或分享来的供应商);'' / 缺省 = 本机。
+   * 与 providerId 成对:来源属于那台电脑的目录。绑定已有任务时运行位置跟随任务,不保存。
+   */
+  agentDeviceId?: string;
   effort: EffortValue | '';
   /** Codex Fast 模式开关。仅 Codex 有意义;切到 Claude / 不支持 fast 的模型时自动清为 false。 */
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   workspaceKind: ScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -159,7 +165,7 @@ export interface ScheduleFormState {
   targetSessionId: string;
   /**
    * 持续会话:true → runner 首次 fire 完把新建 sessionId 回写 targetSessionId,
-   * 后续每次 fire 都在同一 session 中接着跑;会话被归档后自动重建续绑。
+   * 后续每次 fire 都在同一 session 中接着跑;归档后恢复原任务，删除/丢失后重建续绑。
    * RunMode 三态中它是 persistent 与 bound 的判别器(bound 恒为 false)。
    */
   persistentSession: boolean;
@@ -294,10 +300,12 @@ export interface RememberedBinding {
   targetSessionId: string;
   model: string;
   providerId: string;
+  agentDeviceId?: string;
   effort: EffortValue | '';
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   agentKind: ScheduleFormState['agentKind'];
   modelAgentKind?: ScheduleFormState['modelAgentKind'];
+  modelAgentDeviceId?: string;
   boundAgent?: ScheduleFormState['boundAgent'];
 }
 
@@ -308,10 +316,12 @@ export function captureBinding(form: ScheduleFormState): RememberedBinding | nul
     targetSessionId: form.targetSessionId,
     model: form.model,
     providerId: form.providerId,
+    agentDeviceId: form.agentDeviceId,
     effort: form.effort,
     fastMode: form.fastMode,
     agentKind: form.agentKind,
     modelAgentKind: form.modelAgentKind,
+    modelAgentDeviceId: form.modelAgentDeviceId,
     boundAgent: form.boundAgent,
   };
 }
@@ -343,10 +353,12 @@ export function applyRunMode(
           targetSessionId: remembered.targetSessionId,
           model: remembered.model,
           providerId: remembered.providerId,
+          agentDeviceId: remembered.agentDeviceId,
           effort: remembered.effort,
           fastMode: remembered.fastMode,
           agentKind: remembered.agentKind,
           modelAgentKind: remembered.modelAgentKind,
+          modelAgentDeviceId: remembered.modelAgentDeviceId,
           boundAgent: remembered.boundAgent,
         }
       : f;
@@ -400,31 +412,36 @@ export function resolveTemplateAgentFields(
   form: ScheduleFormState,
   template: Pick<ScheduleTemplate, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>,
   defaults: TemplateAgentDefaults,
-): Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> {
+): Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'modelAgentDeviceId'> {
   const agentKind = template.agentKind ?? form.agentKind;
   const agentChanged = agentKind !== form.agentKind;
-  const agentPrefs = agentChanged ? defaults.getAgentPrefs(agentKind) : null;
   const templateModel = typeof template.model === 'string' ? template.model.trim() : '';
   const templateProviderId = typeof template.providerId === 'string' ? template.providerId.trim() : undefined;
+  const selectsLocalRoute = agentChanged || !!templateModel || templateProviderId !== undefined;
+  // Retaining a route also retains its location. An explicit local template must
+  // resolve missing fields from local defaults, never from the previous share.
+  const useLocalDefaults = agentChanged || (!!(form.modelAgentDeviceId ?? form.agentDeviceId) && selectsLocalRoute);
+  const agentPrefs = useLocalDefaults ? defaults.getAgentPrefs(agentKind) : null;
   const templateEffort = template.effort && isEffortValue(template.effort) ? template.effort : undefined;
-  // 模板没给模型、换了 agent 时用默认路由:限定在模板 / 任务记忆的来源内,模型与来源整对应用。
+  // 模板没给模型、切换引擎或回到本机时用本机默认路由,模型与来源整对应用。
   const defaultRoute =
-    agentChanged && !templateModel
+    useLocalDefaults && !templateModel
       ? defaults.getDefaultRoute(agentKind, templateProviderId ?? (agentPrefs?.providerId || null))
       : null;
 
   return {
     agentKind,
-    model: templateModel || (agentChanged ? (defaultRoute?.model ?? '') : form.model),
+    modelAgentDeviceId: selectsLocalRoute ? '' : form.modelAgentDeviceId,
+    model: templateModel || (useLocalDefaults ? (defaultRoute?.model ?? '') : form.model),
     providerId:
       templateProviderId ??
-      (agentChanged
+      (useLocalDefaults
         ? defaultRoute
           ? (defaultRoute.providerId ?? '')
           : (agentPrefs?.providerId ?? '')
         : form.providerId),
-    effort: templateEffort ?? (agentChanged ? (agentPrefs?.effort ?? '') : form.effort),
-    fastMode: template.fastMode ?? (agentChanged ? (agentPrefs?.fastMode ?? false) : form.fastMode),
+    effort: templateEffort ?? (useLocalDefaults ? (agentPrefs?.effort ?? '') : form.effort),
+    fastMode: template.fastMode ?? (useLocalDefaults ? (agentPrefs?.fastMode ?? false) : form.fastMode),
   };
 }
 
@@ -565,7 +582,14 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     // 相对间隔任务则原样保留权威值，不能从可能陈旧的 cronExpr 重新推导。
     intervalMs: form.intervalMs,
     agentKind: scheduleAgentKindForForm(form),
-    modelAgentKind: !isScript && form.model.trim() ? form.modelAgentKind : undefined,
+    modelAgentKind: !isScript ? form.modelAgentKind : undefined,
+    modelAgentDeviceId: !isScript && (form.model.trim() || form.modelAgentKind) ? form.modelAgentDeviceId : undefined,
+    // 恒带 key:运行位置与模型 / 来源成对,update 时 undefined 清回本机。只有每次新建任务
+    // (含持续会话首次与重建)才用它;绑定任务的运行位置跟随任务本身。
+    agentDeviceId:
+      !isScript && form.model.trim() && (!isHeartbeat || form.persistentSession)
+        ? form.agentDeviceId?.trim() || undefined
+        : undefined,
     workspaceKind: form.workspaceKind,
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,
     persistentSession: !isScript && form.persistentSession,
@@ -583,6 +607,16 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     base.workspaceKind = 'project';
     base.workingDir = form.workingDir.trim();
     base.useWorktree = false;
+    // Preserve the complete route so host validation rejects the unsupported
+    // combination without silently turning a remote provider into a local one.
+    if (form.modelAgentDeviceId !== undefined) {
+      base.modelAgentDeviceId = form.modelAgentDeviceId;
+      base.modelAgentKind = form.modelAgentKind;
+      base.model = form.model.trim();
+      base.providerId = form.providerId.trim();
+      base.effort = form.effort && isEffortValue(form.effort) ? form.effort : undefined;
+      base.fastMode = form.fastMode;
+    }
     // Preserve installed script gates when editing; hidden controls must not erase them.
     return base;
   }
@@ -603,6 +637,9 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // 让 update patch 按「key 在 + undefined」把旧 provider_id 清成 NULL。
   base.providerId = form.providerId.trim() || undefined;
   if (form.effort && isEffortValue(form.effort)) base.effort = form.effort;
+  // An explicit model choice replaces all its axes, including no effort. Keep
+  // the own key so updating an unbound automation clears the previous route's tier.
+  else if (form.modelAgentKind && form.model.trim()) base.effort = undefined;
   // fastMode 对 Codex / Pi 都生效(runner.ts:665 明确 claude-code 忽略此字段);只序列化
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
@@ -626,8 +663,10 @@ export function scheduleToUserCreateInput(
     intervalMs: schedule.intervalMs,
     agentKind: schedule.modelAgentKind ?? schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
+    modelAgentDeviceId: schedule.modelAgentDeviceId,
     model: schedule.model,
     providerId: schedule.providerId,
+    agentDeviceId: schedule.agentDeviceId,
     fastMode: schedule.fastMode,
     effort: schedule.effort,
     workspaceKind: schedule.workspaceKind,

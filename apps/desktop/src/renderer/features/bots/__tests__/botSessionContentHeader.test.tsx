@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * 伙伴对话头部:名字/头像 + 设置齿轮,两个入口都跳设置页。
+ * 伙伴对话头部:名字/头像 + 设置齿轮,两个入口都跳设置页;电脑与切换都收进近况浮层,头部不再单列。
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -30,8 +30,11 @@ vi.mock('react-router-dom', () => ({
 }));
 vi.mock('../feature-context', () => ({ useRegisterContentHeader: () => undefined }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
-const openWorkbench = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock('@/features/right-sidebar/lib/openBotWorkbenchTab', () => ({ openBotWorkbenchTab: openWorkbench }));
+vi.mock('../BotGlancePopover', () => ({
+  BotGlanceButton: ({ cloudHome }: { cloudHome: boolean }) => (
+    <button type="button" data-cloud-home={String(cloudHome)}>bots.glance.open</button>
+  ),
+}));
 
 const { BotSessionContentHeader } = await import('../BotSessionContentHeader');
 const { resetCompanionCloudStoreForTests } = await import('../companionCloudStore');
@@ -57,22 +60,21 @@ afterEach(() => {
 });
 
 describe('BotSessionContentHeader', () => {
-  it('preserves the local header until a second Cindy is available and restores it when removed', () => {
+  it('keeps voice startup in the composer and configuration behind settings', () => {
+    render(<BotSessionContentHeader bot={bot} />);
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.title' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settings' }));
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
+  });
+
+  it('keeps computers out of the header even when Cindy runs on several computers', () => {
     deviceData.local = [localCindy];
-    const view = render(<BotSessionContentHeader bot={localCindy} />);
-    const originalHeader = view.container.innerHTML;
-    expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
-    expect(screen.queryByText('bots.devicePicker.local')).toBeNull();
-    expect(screen.getAllByRole('button')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
-
     deviceData.remote = [remoteCindy];
-    view.rerender(<BotSessionContentHeader bot={localCindy} />);
-    expect(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeTruthy();
-
-    deviceData.remote = [];
-    view.rerender(<BotSessionContentHeader bot={localCindy} />);
-    expect(view.container.innerHTML).toBe(originalHeader);
+    render(<BotSessionContentHeader bot={localCindy} />);
+    expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
+    expect(screen.queryByText('Cloud')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
   it('offers add-to-group only in an active local teammate’s canonical private chat', () => {
@@ -86,28 +88,15 @@ describe('BotSessionContentHeader', () => {
     expect(screen.queryByRole('button', { name: 'bots.groupChat.addFromChat.triggerFor' })).toBeNull();
   });
 
-  it('keeps the device label, opens settings and keeps the workbench entry for a sole remote Cindy', () => {
+  it('opens settings and offers 近况 for a remote teammate with a live main task', () => {
     deviceData.remote = [remoteCindy];
     deviceData.pathname = '/bots/remote/cloud/cindy-default';
     render(<BotSessionContentHeader bot={remoteCindy} />);
-    expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
-    expect(screen.getByText('Cloud')).toBeTruthy();
+    expect(screen.queryByText('Cloud')).toBeNull();
     expect(screen.getAllByRole('button')).toHaveLength(3);
     fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
     expect(navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default?settings=1');
-    // 工作台只自动打开一次；别的电脑上的伙伴也要能从头部随时打开（伙伴自主跟进方案）。
-    fireEvent.click(screen.getByRole('button', { name: 'bots.workbench.open' }));
-    expect(openWorkbench).toHaveBeenCalledWith('remote-chat', 'cindy-default');
-  });
-
-  it('offers the same device switch in a remote Cindy header and returns to the local route', async () => {
-    deviceData.local = [localCindy];
-    deviceData.remote = [remoteCindy];
-    render(<BotSessionContentHeader bot={deviceData.remote[0]} />);
-    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' }), { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('option', { name: /bots.devicePicker.local/ }));
-    expect(navigate).toHaveBeenCalledWith('/bots/local-cindy');
+    expect(screen.getByRole('button', { name: 'bots.glance.open' }).dataset.cloudHome).toBe('false');
   });
 
   it('leaves the header whitespace in the native window drag region', () => {
@@ -134,7 +123,7 @@ describe('BotSessionContentHeader', () => {
     expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
-  it('opens settings on the remote route from both entry points while retaining the device label', () => {
+  it('opens settings on the remote route from both entry points', () => {
     deviceData.pathname = '/bots/remote/remote-1/bot-1';
     render(<BotSessionContentHeader bot={{ ...bot, deviceId: 'remote-1', deviceName: 'Office' }} />);
     fireEvent.click(screen.getByRole('button', { name: '小可' }));
@@ -145,7 +134,7 @@ describe('BotSessionContentHeader', () => {
       ['/bots/remote/remote-1/bot-1?settings=1'],
     ]);
     expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
-    expect(screen.getByText('Office')).toBeTruthy();
+    expect(screen.queryByText('Office')).toBeNull();
   });
 
   it('keeps every colour on semantic tokens so both modes come out right', () => {
@@ -158,14 +147,14 @@ describe('BotSessionContentHeader', () => {
     expect(className).toMatch(/rounded-full/);
   });
 
-  it('names the main computer of a cloud companion instead of listing per-computer copies', () => {
+  it('hands a cloud companion to 近况 as one teammate instead of listing per-computer copies', () => {
     resetCompanionCloudStoreForTests({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
       actors: [{ id: 'a-cindy', externalId: 'cindy-default', name: 'Cindy', avatar: null, homeDeviceId: 'cloud',
         homeDevice: { deviceId: 'cloud', name: 'Cloud', online: true, isSelf: false } }] });
     deviceData.local = [localCindy];
     deviceData.remote = [remoteCindy];
     render(<BotSessionContentHeader bot={remoteCindy} />);
-    expect(screen.getByTestId('bot-home-computer-chip').textContent).toContain('bots.cloud.runsOn');
+    expect(screen.getByRole('button', { name: 'bots.glance.open' }).dataset.cloudHome).toBe('true');
     expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
     expect(screen.queryByText('Cloud')).toBeNull();
   });

@@ -24,6 +24,8 @@
   Core 边界，以及 Agent、Skill、插件的产品分工。
 - [`agent-user-parity.md`](agent-user-parity.md)：Agent 的工具能力与用户本人一致（含跨电脑），
   限制由权限档与自动审核承担；跨电脑的统一口径与能力现状台账。
+- [`teammate-authority.md`](teammate-authority.md)：伙伴每轮代表谁（主人代办 / 受托 / 自主），
+  自主轮能做的范围，以及转达主人原话的核实凭证。
 - [`review-product-direction.md`](review-product-direction.md)：Cindy Review 的北极星、
   通用成果复核定义、运行与证据原则、当前边界、后续路线和待确认事项。
 - [`region-and-editions.md`](region-and-editions.md)：Global 与中国大陆版的关系、
@@ -36,3 +38,5 @@
   授权、未知选项）交给主人逐步完成，值不留痕；兜底、提醒、结束判定与已知边界。
 - [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、
   推理强度与 Fast 的统一控制面，baseline/effective/pending 状态和自动降级边界。
+- [`archive-pauses-automations.md`](archive-pauses-automations.md)：运行中的自动化会恢复已归档的
+  原普通任务并保持激活（包括持续会话），归档前提示；暂停自动化和托管任务保留原生命周期。

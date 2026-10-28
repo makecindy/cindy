@@ -29,7 +29,7 @@ interface TaskConfig {
   agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string;
   permissionMode?: 'ask' | 'plan' | 'acceptEdits' | 'auto';
   workingDir?: string;

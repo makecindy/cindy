@@ -36,7 +36,7 @@ describe('materializeCompanion', () => {
     expect(local.host.writeSystemPrompt).toHaveBeenCalledWith('bot_mia', 'custom', expect.anything());
     expect(local.memories.get('user_tea.md')).toContain('likes tea');
     expect(local.skills.get('brew')).toContain('steps');
-    expect(result).toEqual({ created: true, inserted: 0, rebuild: 'skipped' });
+    expect(result).toEqual({ created: true, inserted: 0, rebuild: 'skipped', notices: ['permissions'] });
     expect(state.bot('bot_mia')?.demoted).toBeUndefined();
     expect(local.host.rebuildContext).not.toHaveBeenCalled();
   });
@@ -377,6 +377,73 @@ describe('materializeCompanion', () => {
     const { state } = memoryState();
     await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM })).rejects.toThrow('RESTORE_INCOMPLETE');
     expect(state.bot('bot_mia')?.demoted).toBe(true);
+  });
+
+  describe('capability setup', () => {
+    const capabilitiesPref = (value: unknown) => ({ key: 'companion.capabilities.v1', value });
+    const setup = (overrides: Parameters<typeof fakeLocal>[0] = {}) => {
+      const local = fakeLocal({ applyCapabilities: vi.fn(async () => []), ...overrides });
+      return { local, state: memoryState().state };
+    };
+
+    it('applies the cloud setup to a new copy, which gets the default permission level and says so', async () => {
+      const { api } = cloud([{ ...profilePref, value: { ...profilePref.value, templateId: 'cindy' } },
+        capabilitiesPref({ skills: ['a'], skillMode: 'allowlist', mcpServers: ['gone-here'], mcpMode: 'allowlist', memory: false, permissions: 'trusted' })]);
+      const { local, state } = setup();
+      const result = await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      expect(local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ templateId: 'cindy' }), expect.anything());
+      // Whatever the cloud holds is handed over as read; the permission level is not part of it.
+      expect(local.host.applyCapabilities).toHaveBeenCalledWith('bot_mia',
+        { skills: ['a'], skillMode: 'allowlist', mcpServers: ['gone-here'], mcpMode: 'allowlist', memory: false }, expect.anything());
+      expect(result.notices).toEqual(['permissions']);
+      expect(state.bot('bot_mia')?.arrivalNotices).toEqual(['permissions']);
+      expect(state.bot('bot_mia')?.prefs['companion.capabilities.v1']).toMatchObject({ local: true });
+    });
+
+    it('also tells when a saved model could not be kept, but not about permissions of a copy that already existed', async () => {
+      const { api } = cloud([profilePref, capabilitiesPref({ modelChain: [{ harness: 'codex', model: 'gpt-x', providerId: 'p', effort: '', fastMode: false }] })]);
+      const { local, state } = setup({ applyCapabilities: vi.fn(async () => ['model' as const]) });
+      local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+      const result = await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      expect(result.notices).toEqual(['model']);
+      expect(state.bot('bot_mia')?.arrivalNotices).toEqual(['model']);
+    });
+
+    it('keeps the copy as it is when the home predates the setup (no key), or the value is not an object', async () => {
+      for (const prefs of [[profilePref], [profilePref, capabilitiesPref('nope')], [profilePref, capabilitiesPref(null)]]) {
+        const { api } = cloud(prefs);
+        const { local, state } = setup();
+        local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+        const result = await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+        expect(local.host.applyCapabilities).not.toHaveBeenCalled();
+        expect(result.notices).toEqual([]);
+        expect(state.bot('bot_mia')?.arrivalNotices).toBeUndefined();
+      }
+    });
+
+    it('stays demoted when the setup cannot be applied, and still remembers the permission reset on the retry', async () => {
+      const { api } = cloud([profilePref, capabilitiesPref({ memory: true })]);
+      let fail = true;
+      const { local, state } = setup({ applyCapabilities: vi.fn(async () => { if (fail) throw new Error('DB_BUSY'); return []; }) });
+      await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM })).rejects.toThrow('RESTORE_INCOMPLETE');
+      expect(state.bot('bot_mia')?.demoted).toBe(true);
+      // The copy exists now, so the retry no longer sees it as new.
+      fail = false;
+      const result = await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
+      expect(result.notices).toEqual(['permissions']);
+      expect(state.bot('bot_mia')?.demoted).toBeUndefined();
+    });
+  });
+
+  it('brings the files a companion reply refers to, written into the reply on this computer', async () => {
+    const answer = { ...roomMessage('m2', 2, 'actor-1', '做好了 documents/report.docx', 2_000), content: [{ type: 'text', text: '做好了 documents/report.docx' },
+      { type: 'media', mediaId: 'media-9', caption: 'report.docx' }] };
+    const { api } = cloud([profilePref], [answer]);
+    const local = fakeLocal();
+    const download = vi.fn(async () => ({ name: 'report.docx', category: 'file', mimeType: 'application/octet-stream', size: 3, url: null, path: '/attachments/media-9/report.docx' }));
+    await materializeCompanion({ api, state: memoryState().state, host: local.host, actor, roomId: async () => ROOM, download });
+    expect(local.host.insertHistory).toHaveBeenCalledWith('session-1', expect.objectContaining({
+      role: 'assistant', attachments: [expect.objectContaining({ path: '/attachments/media-9/report.docx' })] }), expect.anything());
   });
 });
 

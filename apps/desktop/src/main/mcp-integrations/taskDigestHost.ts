@@ -68,7 +68,7 @@ function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestR
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,
-    fast: profile.fastMode === true,
+    fast: (profile.fastMode === 'ultrafast' ? 'ultrafast' : profile.fastMode === true),
   };
 }
 

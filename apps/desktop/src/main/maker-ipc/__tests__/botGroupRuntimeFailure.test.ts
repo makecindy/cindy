@@ -4,6 +4,10 @@ import { botGroupRuntimeFailureCode, readBotGroupRuntimeFailureDetail, settleUnd
 describe('group runtime failure diagnostics', () => {
   it.each([
     ['NO_MODEL', 'MODEL_UNAVAILABLE'],
+    ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details', 'REMOTE_DEVICE_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details', 'REMOTE_TOTAL_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] private preparation details', 'RUNTIME_ERROR'],
+    ['[DEVICE_LIMIT] private preparation details', 'RUNTIME_ERROR'],
     ['Selected model is at capacity. Please try a different model.', 'UPSTREAM_OVERLOADED'],
     ['overloaded_error', 'UPSTREAM_OVERLOADED'],
     ['the private queue is overloaded', 'RUNTIME_ERROR'],
@@ -44,6 +48,10 @@ describe('group runtime failure diagnostics', () => {
     [{ sdkError: 'rate_limit', message: 'ExceededBudget', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
     [{ sdkError: 'model_not_found' }, 'MODEL_UNAVAILABLE'],
     [{ code: 'NO_MODEL', message: 'private preparation details' }, 'MODEL_UNAVAILABLE'],
+    // #6835: unit classification must recover wrapped capacity reasons without publishing diagnostics.
+    [{ code: 'LAZY_CREATE_FAILED', message: '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details' }, 'REMOTE_DEVICE_LIMIT'],
+    [{ code: 'LAZY_CREATE_FAILED', message: '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details' }, 'REMOTE_TOTAL_LIMIT'],
+    [{ code: 'LAZY_CREATE_FAILED', message: '[REMOTE_AGENT_BUSY] private preparation details' }, 'RUNTIME_ERROR'],
     [{ codexErrorInfo: 'serverOverloaded', message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],
     [{ reason: 'upstream-overload', message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],
     [{ errorStatus: 529, message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],

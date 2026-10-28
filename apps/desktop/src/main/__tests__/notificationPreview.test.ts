@@ -8,12 +8,23 @@ describe('notification plain text', () => {
     ['# 标题\n\n**加粗 _斜体_** [报告 **完成**](https://example.com)', '标题 加粗 斜体 报告 完成'],
     ['`a_b * 2`\n\n```ts\nconst a_b = 2 * 3;\n```', 'a_b * 2 const a_b = 2 * 3;'],
     ['> 已完成\n\n- 第一项\n- 第二项\n\n~~旧内容~~', '已完成 第一项 第二项 旧内容'],
-    ['![private filename](/private/file.png)', ''],
-    ['![private filename][image]\n\n[image]: https://example.com/image.png', ''],
-    ['<img src="https://example.com/image.png" alt="private filename">', ''],
+    ['![private filename](/private/file.png)', 'private filename'],
+    ['![private filename][image]\n\n[image]: https://example.com/image.png', 'private filename'],
+    ['<img src="https://example.com/image.png" alt="private filename">', 'private filename'],
     ['&amp; &#x1f600; &lt;tag&gt;', '& 😀 <tag>'],
     ['**日本語** / _한국어_ / [繁體中文](url)', '日本語 / 한국어 / 繁體中文'],
   ])('converts %s', (markdown, expected) => expect(notificationPreview(markdown)).toBe(expected));
+  // Reported notification bug: a rich reply leaked renderer operations instead of visible text.
+  // Existing plain Markdown cases did not exercise the real cindy-ui stream (unit tier).
+  it('projects the final rich reply instead of component JSON', () => {
+    expect(notificationPreview('```cindy-ui\n' + [
+      { version: 1, seq: 1, op: 'create', id: 'answer', kind: 'text', props: { text: '会议' } },
+      { seq: 2, op: 'append', id: 'answer', text: '改到十点' },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n```')).toBe('会议改到十点');
+  });
+  it('names an image without a caption in the receiving locale', () => {
+    expect(notificationPreview('![](https://example.com/image.png)', 240, '图片')).toBe('图片');
+  });
   it('does not stall on bracketed repeated code spans', () => {
     const markdown = '[' + '`````a`````'.repeat(15) + ']';
     expect(notificationPreview(markdown)).toBe('[' + ('a' + '`'.repeat(10)).repeat(14) + 'a]');

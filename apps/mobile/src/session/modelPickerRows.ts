@@ -36,6 +36,7 @@ export interface PickerRowModel {
   defaultEffort: string | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
 }
 
 /** 上下文窗口 tokens → 紧凑展示("1M" / "272K" / "8192")。移植桌面 formatContextWindow。 */
@@ -333,11 +334,11 @@ export function rowFastOn(args: {
   model: PickerRowModel;
   providerId: string | null;
   selected: boolean;
-  liveFastMode: boolean;
+  liveFastMode: boolean | 'ultrafast';
   agentKind: AgentKind | null;
   fastEditable: boolean;
   memory?: MobileModelMemoryAccessors;
-}): boolean {
+}): boolean | 'ultrafast' {
   if (!args.fastEditable) return false;
   if (args.selected) return args.liveFastMode;
   if (!args.agentKind || !args.providerId) return false;

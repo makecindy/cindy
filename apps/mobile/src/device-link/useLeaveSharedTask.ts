@@ -10,6 +10,7 @@ import { useSharedTaskApi } from './useSharedTaskApi';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { markDeviceAccessRevoked } from './accessRevoked';
 import { revokedDevicesStore } from './revokedDevicesStore';
+import { notifySharedTaskMembershipChanged } from './sharedTaskMembershipSignal';
 
 /** Exit directly from task details; cancelling never navigates or reloads the task. */
 export function useLeaveSharedTask({ deviceId, enabled, onLeft, onError }: {
@@ -45,6 +46,8 @@ export function useLeaveSharedTask({ deviceId, enabled, onLeft, onError }: {
       if (!accepted || !current() || revokedDevicesStore.has(deviceId)) return;
       setBusy(true);
       await api.leave(peer.sharedTaskId);
+      // A directory read already in flight may still list it; reread after.
+      notifySharedTaskMembershipChanged();
       if (!current()) return;
       markDeviceAccessRevoked(deviceId);
       closeLink(deviceId);

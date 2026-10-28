@@ -949,6 +949,7 @@ async function buildGhostPackage(
     }
     if (manifest.panel?.html) mustExist.push(manifest.panel.html);
     if (manifest.mainView?.html) mustExist.push(manifest.mainView.html);
+    if (manifest.taskView?.html) mustExist.push(manifest.taskView.html);
     if (manifest.settingsHtml) mustExist.push(manifest.settingsHtml);
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     if (iconPng === undefined && manifest.icon) mustExist.push(manifest.icon);
