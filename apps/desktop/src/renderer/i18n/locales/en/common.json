@@ -9325,7 +9325,44 @@
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
     },
+    "hostDaemons": {
+      "scanning": "Scanning background items…",
+      "refresh": "Refresh",
+      "loadFailed": "Couldn't read background items",
+      "unsupported": "Background items are only available on Windows",
+      "empty": "No background items created by tasks yet",
+      "owner": "Created by: {{title}}",
+      "ownerUnknown": "Unknown",
+      "state": {
+        "running": "Running",
+        "ready": "Idle",
+        "disabled": "Disabled",
+        "unknown": "Unknown"
+      },
+      "trigger": {
+        "logon": "At sign-in",
+        "startup": "At startup",
+        "schedule": "On schedule",
+        "other": "Other trigger"
+      },
+      "stop": "Stop",
+      "delete": "Delete",
+      "stopTitle": "Stop “{{name}}”?",
+      "stopBody": "Ends the current run only. The task will start again on its schedule.",
+      "deleteTitle": "Delete “{{name}}”?",
+      "deleteBody": "Removes this scheduled task from this computer permanently, so it no longer starts automatically. Task records in Cindy are unaffected.",
+      "stopped": "Stopped {{name}}",
+      "deleted": "Deleted {{name}}",
+      "actionFailed": "Action failed. Try again.",
+      "unrelated_one": "{{count}} unrelated background item is hidden",
+      "unrelated_other": "{{count}} unrelated background items are hidden"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "Resource view",
+        "processes": "Processes",
+        "hostDaemons": "Background items"
+      },
       "sections": {
         "agents": "Agent Processes",
         "app": "App Processes"

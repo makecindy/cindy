@@ -9293,7 +9293,44 @@
       "tokens": "{{value}} tokens",
       "noProgress": "暫無進度詳情"
     },
+    "hostDaemons": {
+      "scanning": "正在掃描本機常駐…",
+      "refresh": "重新整理",
+      "loadFailed": "讀取本機常駐失敗",
+      "unsupported": "本機常駐清單目前只支援 Windows",
+      "empty": "還沒有由任務建立的本機常駐項目",
+      "owner": "建立任務：{{title}}",
+      "ownerUnknown": "未知",
+      "state": {
+        "running": "執行中",
+        "ready": "待執行",
+        "disabled": "已停用",
+        "unknown": "未知"
+      },
+      "trigger": {
+        "logon": "登入時啟動",
+        "startup": "開機啟動",
+        "schedule": "依排程啟動",
+        "other": "其他觸發方式"
+      },
+      "stop": "停止",
+      "delete": "刪除",
+      "stopTitle": "停止「{{name}}」？",
+      "stopBody": "只結束這一次執行，任務仍會依原排程再次啟動。",
+      "deleteTitle": "刪除「{{name}}」？",
+      "deleteBody": "會從這台電腦徹底刪除這項排程工作，之後不會再自動啟動；Cindy 裡的任務記錄不受影響。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已刪除 {{name}}",
+      "actionFailed": "操作失敗，請重試",
+      "unrelated_one": "另有 {{count}} 項與本機任務無關的常駐項目未顯示",
+      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "資源檢視",
+        "processes": "處理程序",
+        "hostDaemons": "本機常駐"
+      },
       "sections": {
         "agents": "Agent 處理程序",
         "app": "應用程式"

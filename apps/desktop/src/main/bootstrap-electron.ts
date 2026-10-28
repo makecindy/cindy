@@ -557,6 +557,15 @@ import {
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
+import { registerHostDaemonsIpc } from './host-daemons/ipc.js';
+import { createHostDaemonLedger } from './host-daemons/ledger.js';
+import {
+  deleteScheduledTask,
+  scanScheduledTasks,
+  stopScheduledTask,
+} from './host-daemons/scheduledTasks.js';
+import { createHostDaemonsService, type HostDaemonsService } from './host-daemons/service.js';
+import { readToolMessages } from './host-daemons/toolHistory.js';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
@@ -2520,6 +2529,23 @@ registerMenubarIpc();
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
 // 本产品 spawn 的 agent 根进程。见 main/process-monitor/。
+// ── 本机常驻清单 IPC ─────────────────────────────────────────────────
+// 与资源监视器共用「本机、可信 renderer」边界；只有带 Cindy 归属证据的计划任务
+// 会出现在清单里（判定见 host-daemons/service.ts），停止/删除在 main 重新校验。
+let hostDaemonsService: HostDaemonsService | null = null;
+registerHostDaemonsIpc({
+  getService: () => {
+    hostDaemonsService ??= createHostDaemonsService({
+      scanTasks: scanScheduledTasks,
+      readToolMessages,
+      ledger: createHostDaemonLedger(path.join(app.getPath('userData'), 'host-daemons.v1.json')),
+      stopTask: stopScheduledTask,
+      deleteTask: deleteScheduledTask,
+    });
+    return hostDaemonsService;
+  },
+});
+
 registerProcessMonitorIpc({
   allowsSampling: (sender) => resourceUsageWindowController.allowsProcessMonitorSampling(sender),
   // agent 行显示承载任务标题。标题查询由采样器后台缓存，不阻塞采样帧；

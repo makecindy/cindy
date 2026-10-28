@@ -9293,7 +9293,44 @@
       "tokens": "{{value}} tokens",
       "noProgress": "進行状況の詳細はまだありません"
     },
+    "hostDaemons": {
+      "scanning": "常駐タスクをスキャンしています…",
+      "refresh": "更新",
+      "loadFailed": "常駐タスクを読み込めませんでした",
+      "unsupported": "常駐タスクの一覧は現在 Windows のみ対応しています",
+      "empty": "タスクが作成した常駐タスクはまだありません",
+      "owner": "作成したタスク：{{title}}",
+      "ownerUnknown": "不明",
+      "state": {
+        "running": "実行中",
+        "ready": "待機",
+        "disabled": "無効",
+        "unknown": "不明"
+      },
+      "trigger": {
+        "logon": "サインイン時",
+        "startup": "起動時",
+        "schedule": "スケジュール",
+        "other": "その他"
+      },
+      "stop": "停止",
+      "delete": "削除",
+      "stopTitle": "「{{name}}」を停止しますか？",
+      "stopBody": "今回の実行だけを終了します。タスクは予定どおり再び起動します。",
+      "deleteTitle": "「{{name}}」を削除しますか？",
+      "deleteBody": "このパソコンから予定されたタスクを完全に削除し、以後は自動起動しません。Cindy のタスク記録には影響しません。",
+      "stopped": "{{name}} を停止しました",
+      "deleted": "{{name}} を削除しました",
+      "actionFailed": "操作に失敗しました。もう一度お試しください",
+      "unrelated_one": "無関係な常駐タスク {{count}} 件は表示していません",
+      "unrelated_other": "無関係な常駐タスク {{count}} 件は表示していません"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "リソース表示",
+        "processes": "プロセス",
+        "hostDaemons": "常駐タスク"
+      },
       "sections": {
         "agents": "Agent プロセス",
         "app": "アプリプロセス"

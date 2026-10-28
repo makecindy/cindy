@@ -168,6 +168,13 @@ import {
   type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
+import {
+  HOST_DAEMONS_DELETE_CHANNEL,
+  HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_STOP_CHANNEL,
+  type HostDaemonActionRequest,
+  type HostDaemonsSnapshot,
+} from '../shared/hostDaemons';
 import { RESOURCE_USAGE_WINDOW_OPEN_CHANNEL } from '../shared/resourceUsageWindow';
 import {
   APP_ATTENTION_COUNT_CHANNEL,
@@ -6241,6 +6248,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * 订阅期间 main 才采样(面板关闭零开销);onSample 回调只收业务 payload。
    * terminate 只对本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
    */
+  hostDaemons: {
+    list: (): Promise<HostDaemonsSnapshot> => ipcRenderer.invoke(HOST_DAEMONS_LIST_CHANNEL),
+    stop: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_STOP_CHANNEL, request),
+    remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
+  },
+
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),
     unsubscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL),

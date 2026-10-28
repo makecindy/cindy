@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
 import type {
@@ -24,6 +25,7 @@ import type {
   ProcessUsageEntry,
 } from '../../../../../shared/processMonitor';
 import type { TabKindHostContext } from '../../types';
+import { HostDaemonsView } from './HostDaemonsView';
 import type { ResourceUsageState } from './index';
 import {
   acquireProcessMonitorSubscription,
@@ -33,6 +35,8 @@ import './resource-usage.css';
 
 type SortKey = 'name' | 'cpu' | 'memory' | 'pid';
 type SortDirection = 'asc' | 'desc';
+/** 进程表 / 本机常驻清单。常驻清单是全局数据，与当前会话无关。 */
+type ViewKind = 'processes' | 'hostDaemons';
 
 const KIND_ICON: Record<ProcessUsageEntry['kind'], LucideIcon> = {
   main: AppWindow,
@@ -240,9 +244,12 @@ function LocalResourceUsageBody({
     key: 'cpu',
     direction: 'desc',
   });
+  const [view, setView] = useState<ViewKind>('processes');
+  // 切到常驻清单就放开进程采样订阅：看不到的列表不需要继续 2s 一次采样。
+  const processVisible = visible && view === 'processes';
 
   useEffect(() => {
-    if (!visible) return;
+    if (!processVisible) return;
     let disposed = false;
     const offSample = window.electronAPI.processMonitor.onSample((next) => {
       if (!disposed) setSample(next);
@@ -253,7 +260,7 @@ function LocalResourceUsageBody({
       offSample();
       releaseProcessMonitorSubscription();
     };
-  }, [visible]);
+  }, [processVisible]);
 
   useEffect(() => {
     if (visible) return;
@@ -319,7 +326,25 @@ function LocalResourceUsageBody({
       : t('rightSidebar.resourceUsage.readOnlyHint');
 
   return (
-    <div className="resource-usage-root">
+    <div className="resource-usage-root" data-view={view}>
+      <div className="resource-usage-switch">
+        <SegmentedControl<ViewKind>
+          aria-label={t('rightSidebar.resourceUsage.tabs.label')}
+          role="tablist"
+          height={26}
+          optionHeight={22}
+          value={view}
+          options={[
+            { value: 'processes', label: t('rightSidebar.resourceUsage.tabs.processes') },
+            { value: 'hostDaemons', label: t('rightSidebar.resourceUsage.tabs.hostDaemons') },
+          ]}
+          onValueChange={setView}
+        />
+      </div>
+      {view === 'hostDaemons' ? (
+        <HostDaemonsView />
+      ) : (
+        <>
       <div
         className="resource-usage-table"
         role="table"
@@ -413,6 +438,8 @@ function LocalResourceUsageBody({
           {t('rightSidebar.resourceUsage.terminate')}
         </Button>
       </div>
+        </>
+      )}
 
       <ConfirmDialog
         open={pendingKill !== null}

@@ -9293,7 +9293,44 @@
       "tokens": "{{value}} tokens",
       "noProgress": "진행 상황 정보가 아직 없습니다"
     },
+    "hostDaemons": {
+      "scanning": "상주 작업을 스캔하는 중…",
+      "refresh": "새로 고침",
+      "loadFailed": "상주 작업을 읽지 못했습니다",
+      "unsupported": "상주 작업 목록은 현재 Windows만 지원합니다",
+      "empty": "작업이 만든 상주 작업이 아직 없습니다",
+      "owner": "만든 작업: {{title}}",
+      "ownerUnknown": "알 수 없음",
+      "state": {
+        "running": "실행 중",
+        "ready": "대기",
+        "disabled": "사용 안 함",
+        "unknown": "알 수 없음"
+      },
+      "trigger": {
+        "logon": "로그인 시",
+        "startup": "시작 시",
+        "schedule": "예약",
+        "other": "기타"
+      },
+      "stop": "중지",
+      "delete": "삭제",
+      "stopTitle": "“{{name}}”을(를) 중지할까요?",
+      "stopBody": "이번 실행만 끝냅니다. 작업은 예정대로 다시 시작됩니다.",
+      "deleteTitle": "“{{name}}”을(를) 삭제할까요?",
+      "deleteBody": "이 컴퓨터에서 예약 작업을 완전히 삭제하며 더 이상 자동으로 시작되지 않습니다. Cindy의 작업 기록은 영향을 받지 않습니다.",
+      "stopped": "{{name}}을(를) 중지했습니다",
+      "deleted": "{{name}}을(를) 삭제했습니다",
+      "actionFailed": "작업을 수행하지 못했습니다. 다시 시도하세요",
+      "unrelated_one": "관련 없는 상주 작업 {{count}}개는 표시하지 않습니다",
+      "unrelated_other": "관련 없는 상주 작업 {{count}}개는 표시하지 않습니다"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "리소스 보기",
+        "processes": "프로세스",
+        "hostDaemons": "상주 작업"
+      },
       "sections": {
         "agents": "Agent 프로세스",
         "app": "앱 프로세스"
