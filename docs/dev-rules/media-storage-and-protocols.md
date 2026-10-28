@@ -168,6 +168,20 @@
 异步入仓捕获账号与数据库，预览失效或账号变化时不发起剪贴板写入；操作不把仓内路径暴露给 Renderer。
 Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按文件复制以保留完整内容。
 
+## 3D 模型的识别与存放
+
+- 3D 模型文件的识别只有一个来源：`packages/maker-shared/src/model3d.ts`
+  （`getModel3DFormat`、`isManagedModel3DUrl`、`canPreviewModel3DInApp`）。Desktop 与 Mobile
+  不再各写扩展名正则；要支持新格式，先改这里并补测试。ZIP 不是 3D 模型，不按模型处理。
+- 存放分两条通道，规则不同：
+  - **媒体总仓**只收 GLB。总仓格式必须由 `sniffMediaMime` 按字节核验，GLB 有可靠文件头；
+    OBJ、二进制 STL 没有魔数，扩展名又不能单独作为可信依据，因此不进总仓。`sniffMediaMime` 与
+    `supportedMime` 被插件媒体、IM 入站附件、会话导入、用户附件和远程文件缓存等多处共用，
+    新增总仓格式会同时改变这些流程的行为，必须逐一评估后再加，不能为 3D 预览顺手扩白名单。
+  - **用户磁盘上的原始 3D 文件**就地读取（`xdt-file`），不复制进总仓。
+- 「能识别」与「应用内能预览」分开表达：预览范围由 `IN_APP_PREVIEW_MODEL3D_FORMATS` 决定，
+  目前只有 glTF 系。识别范围变大不会自动把没法渲染的格式路由进查看器。
+
 ## 读取、协议与边界
 
 - 持久地址统一使用 `cindy-media://blobs/<sha256>.<ext>`。路径解析必须走

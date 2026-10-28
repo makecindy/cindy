@@ -1,4 +1,5 @@
 import { piEditReplacements } from './toolUseDescriptor.js';
+import { isManagedModel3DUrl } from './model3d.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
@@ -605,7 +606,7 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
   if (parsed?._xdt_render_image === false) return [];
   const files: PayloadToolFile[] = [];
   const add = (url: unknown, title?: unknown) => {
-    if (typeof url !== 'string' || !/^(?:xdt-file:\/\/[^\s]+|cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb)$/.test(url)) return;
+    if (typeof url !== 'string' || !(/^xdt-file:\/\/[^\s]+$/.test(url) || isManagedModel3DUrl(url))) return;
     let name = url.split('/').pop()!;
     if (url.startsWith('xdt-file://')) {
       const path = absoluteToolFilePath(url);
