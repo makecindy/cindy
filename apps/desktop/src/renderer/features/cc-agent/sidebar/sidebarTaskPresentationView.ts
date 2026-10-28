@@ -97,6 +97,10 @@ interface Runtime {
   isOwnerCurrent(owner: Owner): boolean;
   useLanguage(): string;
   readSession(id: string): Promise<Session | null | undefined>;
+  subscribeSession?(
+    id: string,
+    listener: (patch: Partial<Session>, row: Session | null) => void,
+  ): () => void;
 }
 
 interface TaskRowProps {
@@ -111,6 +115,7 @@ type SectionProps = SidebarTaskInput &
     pinnedEntries?: readonly PresentationPinnedEntry[];
     notifications?: ReadonlySet<string>;
     runningSessionIds?: ReadonlySet<string>;
+    filter?: { projects: unknown };
   };
 
 type PinnedProps = Record<string, unknown> & {
@@ -131,6 +136,8 @@ export function createSidebarTaskPresentation(R: typeof React, runtime: Runtime)
       messages.en
     );
   };
+  // Share only reads that are still in flight. A reopened row must observe the
+  // actual parent again, and mounted rows receive its rename/delete patches.
   const parentReads = new WeakMap<Owner, Map<string, Promise<Session | null | undefined>>>();
 
   function Row({ original, rowProps }: { original: React.ReactNode; rowProps: TaskRowProps }) {
@@ -154,22 +161,51 @@ export function createSidebarTaskPresentation(R: typeof React, runtime: Runtime)
     R.useEffect(() => {
       if (!parentId || bot) return;
       let active = true;
+      let revision = 0;
       let reads = parentReads.get(snapshot.owner);
       if (!reads) {
         reads = new Map();
         parentReads.set(snapshot.owner, reads);
       }
-      let pending = reads.get(parentId);
-      if (!pending) {
-        pending = runtime.readSession(parentId).catch(() => null);
-        reads.set(parentId, pending);
-      }
-      void pending.then((row) => {
-        if (active && runtime.isOwnerCurrent(snapshot.owner))
-          setParent({ owner, id: parentId, row });
+      const current = () => active && runtime.isOwnerCurrent(snapshot.owner);
+      const apply = (row: Session | null | undefined) => {
+        if (current())
+          setParent({ owner, id: parentId, row: row?.status === 'deleted' ? null : row });
+      };
+      const read = () => {
+        const requestRevision = ++revision;
+        let pending = reads.get(parentId);
+        if (!pending) {
+          pending = runtime.readSession(parentId).catch(() => null);
+          reads.set(parentId, pending);
+          const request = pending;
+          void request.then(() => {
+            if (reads.get(parentId) === request) reads.delete(parentId);
+          });
+        }
+        void pending.then((row) => {
+          if (requestRevision === revision) apply(row);
+        });
+      };
+      const unsubscribe = runtime.subscribeSession?.(parentId, (patch, row) => {
+        if (!current() || (!('title' in patch) && !('status' in patch))) return;
+        ++revision;
+        // Every committed parent update invalidates the shared in-flight read,
+        // including for sibling rows mounted after this patch.
+        reads.delete(parentId);
+        if (patch.status === 'deleted') apply(null);
+        else if (row) apply(row);
+        else {
+          // The parent may be outside all loaded list buckets. Do not reuse a
+          // read started before this committed update.
+          read();
+        }
       });
+      read();
       return () => {
         active = false;
+        ++revision;
+        unsubscribe?.();
       };
     }, [parentId, bot, snapshot.owner, owner]);
     const loaded = parent?.owner === owner && parent.id === parentId ? parent : null;
@@ -259,8 +295,22 @@ export function createSidebarTaskPresentation(R: typeof React, runtime: Runtime)
     const running = partition.collected.filter((session) =>
       props.runningSessionIds?.has(session.id),
     ).length;
+    const pinnedIds = new Set(
+      (props.pinnedEntries ?? []).flatMap((entry) =>
+        entry.session
+          ? [entry.session.id]
+          : (entry.displaySessions ?? entry.project?.sessions ?? []).map((session) => session.id),
+      ),
+    );
     const internalProps = {
       ...partition.internal,
+      // Preserve project filtering for ordinary unclassified tasks, while
+      // keeping the original pinned-section reachability of collected pins.
+      unclassified:
+        props.filter && props.filter.projects !== 'all'
+          ? partition.internal.unclassified.filter((session) => pinnedIds.has(session.id))
+          : partition.internal.unclassified,
+      showUnclassified: true,
       collapsed: innerCollapsed,
       onToggleProject: (id: string) =>
         setInnerCollapsed((previous) => {

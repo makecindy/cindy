@@ -6,7 +6,13 @@ export default {
   real: 'Production sidebar task presentation factory, partition policy and styles',
   notCovered:
     'Native sidebar tree, database, app deployment and navigation (verified separately in installed Desktop)',
-  cases: { default: { about: 'Normal project above collapsed internal tasks' } },
+  cases: {
+    default: { about: 'Normal project above collapsed internal tasks' },
+    'pinned-project': {
+      about: 'Project and child both pinned under a specific project filter',
+      data: { pinnedProject: true },
+    },
+  },
   async check(page, ui) {
     const header = page.locator('[data-sidebar-internal-tasks] > button');
     assert.equal(await header.getAttribute('aria-expanded'), 'false');

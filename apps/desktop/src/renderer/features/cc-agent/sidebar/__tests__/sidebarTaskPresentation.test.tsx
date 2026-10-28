@@ -5,7 +5,7 @@
  * Minimal input: one real project, one diagnostic directory and one exact child ID.
  * Tier: in-process unit; no filesystem, network or runtime creation. */
 import * as React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import type { ProjectNode } from '../../lib/projectGrouping';
@@ -125,6 +125,41 @@ describe('task identity and workspace partition', () => {
       expect(input.projects[0]).toBe(internalProject);
     }
   });
+
+  it('recovers a separately pinned child from the full catalogue when its project is also pinned', () => {
+    const child = session('child', '/work/project', { parentSessionId: 'parent' });
+    const pinnedProject = project('/work/project', []);
+    const input = { projects: [], dialogues: [], allKnownProjects: [pinnedProject] };
+    const entries = [
+      { kind: 'session', session: child },
+      { kind: 'project', project: pinnedProject, displaySessions: [] },
+    ];
+    const internal = partitionSidebarTaskInput(
+      includeCollectedPinnedTasks(input, entries, scopes),
+      scopes,
+    ).internal;
+    expect(internal.projects.map((p) => p.projectKey)).toEqual([pinnedProject.projectKey]);
+    expect(internal.projects[0].sessions).toEqual([child]);
+    expect(internal.unclassified).toEqual([]);
+    expect(pinnedProject.sessions).toEqual([]);
+  });
+
+  it.each([
+    ['/work/project', '/work/project/.cindy-worktrees/feature/src'],
+    ['/work/project', '/work/project/'],
+    ['C:/Work/Project', 'c:\\work\\project\\.cindy-worktrees\\feature'],
+  ])('preserves grouping identity for a pinned child cwd %s / %s', (directory, cwd) => {
+    const registered = project(directory, []);
+    const child = session('child', cwd);
+    const enriched = includeCollectedPinnedTasks(
+      { projects: [], dialogues: [], allKnownProjects: [registered] },
+      [{ kind: 'session', session: child }],
+      scopes,
+    );
+    expect(enriched.projects[0].projectKey).toBe(registered.projectKey);
+    expect(enriched.projects[0].workingDir).toBe(registered.workingDir);
+    expect(enriched.projects[0].sessions).toEqual([child]);
+  });
 });
 
 function fixture(overrides: Partial<SidebarPresentationSnapshot> = {}) {
@@ -136,11 +171,24 @@ function fixture(overrides: Partial<SidebarPresentationSnapshot> = {}) {
     ...overrides,
   };
   const readSession = vi.fn().mockResolvedValue(null);
+  const listeners = new Map<string, Set<(patch: Partial<Session>, row: Session | null) => void>>();
+  const subscribeSession = (
+    id: string,
+    listener: (patch: Partial<Session>, row: Session | null) => void,
+  ) => {
+    const subscriptions = listeners.get(id) ?? new Set();
+    subscriptions.add(listener);
+    listeners.set(id, subscriptions);
+    return () => {
+      subscriptions.delete(listener);
+    };
+  };
   const view = createSidebarTaskPresentation(React, {
     useSnapshot: () => snapshot,
     useLanguage: () => 'zh-CN',
     isOwnerCurrent: (owner) => owner === snapshot.owner,
     readSession,
+    subscribeSession,
   });
   const Original = ({ projects, dialogues = [], unclassified = [] }: SidebarTaskInput) => (
     <div>
@@ -179,6 +227,9 @@ function fixture(overrides: Partial<SidebarPresentationSnapshot> = {}) {
     props,
     navigate,
     readSession,
+    emitParent: (id: string, patch: Partial<Session>, row: Session | null) => {
+      for (const listener of listeners.get(id) ?? []) listener(patch, row);
+    },
     setSnapshot: (next: SidebarPresentationSnapshot) => {
       snapshot = next;
     },
@@ -187,6 +238,40 @@ function fixture(overrides: Partial<SidebarPresentationSnapshot> = {}) {
 }
 
 describe('folded internal tasks and parent links', () => {
+  it('keeps collected pins reachable under a project filter without exposing other unclassified tasks', () => {
+    const f = fixture();
+    const child = session('child', '/work/unregistered');
+    const extra = session('unclassified-probe', diagnostic);
+    const Original = ({
+      unclassified = [],
+      filter,
+      showUnclassified,
+    }: SidebarTaskInput & {
+      filter?: { projects: unknown };
+      showUnclassified?: boolean;
+    }) =>
+      filter?.projects !== 'all' && !showUnclassified ? null : (
+        <>
+          {unclassified.map((s) => (
+            <button key={s.id}>{s.title}</button>
+          ))}
+        </>
+      );
+    render(
+      <f.view.Section
+        projects={[]}
+        dialogues={[]}
+        unclassified={[extra]}
+        pinnedEntries={[{ kind: 'session', session: child }]}
+        filter={{ projects: ['local:/work/selected'] }}
+        Original={Original}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '内部任务 · 2' }));
+    expect(screen.getByRole('button', { name: 'child' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'unclassified-probe' })).toBeNull();
+  });
+
   it('defaults closed, keeps normal projects first, and exposes exact task types and canonical parent navigation', () => {
     const { view, Original, props, navigate, readSession } = fixture();
     render(<view.Section {...props} Original={Original} />);
@@ -271,4 +356,168 @@ describe('folded internal tasks and parent links', () => {
     fireEvent.click(screen.getByRole('button', { name: '父任务不可用' }));
     expect(f.navigate).not.toHaveBeenCalled();
   });
+
+  it('refreshes a visible local parent after rename and disables it immediately after deletion', async () => {
+    const f = fixture({ profiles: [] });
+    f.readSession.mockResolvedValue(session('parent', '/work/project', { title: 'Before rename' }));
+    render(
+      f.view.wrapRow(<button>child</button>, {
+        session: session('child', diagnostic, { parentSessionId: 'parent' }),
+        navigate: f.navigate,
+      }),
+    );
+    await screen.findByRole('button', { name: '父任务: Before rename' });
+    const renamed = session('parent', '/work/project', { title: 'After rename' });
+    act(() => f.emitParent('parent', { title: renamed.title }, renamed));
+    fireEvent.click(await screen.findByRole('button', { name: '父任务: After rename' }));
+    expect(f.navigate).toHaveBeenCalledWith('/cc-agent/parent');
+    act(() => f.emitParent('parent', { status: 'deleted' }, { ...renamed, status: 'deleted' }));
+    const missing = await screen.findByRole('button', { name: '父任务不可用' });
+    expect(missing.hasAttribute('disabled')).toBe(true);
+    f.navigate.mockClear();
+    fireEvent.click(missing);
+    expect(f.navigate).not.toHaveBeenCalled();
+  });
+
+  it('rereads a local parent after remount instead of reusing a completed cached record', async () => {
+    const f = fixture({ profiles: [] });
+    f.readSession.mockResolvedValue(
+      session('parent', '/work/project', { title: 'Initial parent' }),
+    );
+    const row = () =>
+      f.view.wrapRow(<button>child</button>, {
+        session: session('child', diagnostic, { parentSessionId: 'parent' }),
+        navigate: f.navigate,
+      });
+    const first = render(row());
+    await screen.findByRole('button', { name: '父任务: Initial parent' });
+    first.unmount();
+    f.readSession.mockResolvedValue(null);
+    render(row());
+    await screen.findByRole('button', { name: '父任务不可用' });
+    expect(f.readSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes an uncached parent from a committed patch without falling back to the old read', async () => {
+    const f = fixture({ profiles: [] });
+    f.readSession
+      .mockResolvedValueOnce(session('parent', '/work/project', { title: 'Before' }))
+      .mockResolvedValueOnce(session('parent', '/work/project', { title: 'After' }));
+    render(
+      f.view.wrapRow(<button>child</button>, {
+        session: session('child', diagnostic, { parentSessionId: 'parent' }),
+        navigate: f.navigate,
+      }),
+    );
+    await screen.findByRole('button', { name: '父任务: Before' });
+    act(() => f.emitParent('parent', { title: 'After' }, null));
+    await screen.findByRole('button', { name: '父任务: After' });
+    expect(f.readSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a read completed before a newer parent patch and after an owner change', async () => {
+    const f = fixture({ profiles: [] });
+    let finish: (row: Session) => void = () => {};
+    f.readSession.mockImplementationOnce(
+      () =>
+        new Promise<Session>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const row = () =>
+      f.view.wrapRow(<button>child</button>, {
+        session: session('child', diagnostic, { parentSessionId: 'parent' }),
+        navigate: f.navigate,
+      });
+    const mounted = render(row());
+    const renamed = session('parent', '/work/project', { title: 'Latest' });
+    act(() => f.emitParent('parent', { title: 'Latest' }, renamed));
+    await screen.findByRole('button', { name: '父任务: Latest' });
+    f.setSnapshot({ ...f.getSnapshot(), owner: { dataOwnerId: 'other-owner', generation: 2 } });
+    f.readSession.mockResolvedValue(session('parent', '/work/project', { title: 'Other owner' }));
+    mounted.rerender(row());
+    await screen.findByRole('button', { name: '父任务: Other owner' });
+    await act(async () => {
+      finish(session('parent', '/work/project', { title: 'Stale' }));
+    });
+    expect(screen.queryByRole('button', { name: '父任务: Stale' })).toBeNull();
+    expect(screen.getByRole('button', { name: '父任务: Other owner' })).toBeTruthy();
+  });
+
+  it('does not restore a deleted parent when an older read completes late', async () => {
+    const f = fixture({ profiles: [] });
+    let finish: (row: Session) => void = () => {};
+    f.readSession.mockImplementationOnce(
+      () =>
+        new Promise<Session>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(
+      f.view.wrapRow(<button>child</button>, {
+        session: session('child', diagnostic, { parentSessionId: 'parent' }),
+        navigate: f.navigate,
+      }),
+    );
+    act(() => f.emitParent('parent', { status: 'deleted' }, null));
+    await screen.findByRole('button', { name: '父任务不可用' });
+    await act(async () => {
+      finish(session('parent', '/work/project', { title: 'Before delete' }));
+    });
+    expect(screen.getByRole('button', { name: '父任务不可用' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+    expect(screen.queryByRole('button', { name: '父任务: Before delete' })).toBeNull();
+  });
+  it.each(['rename', 'delete'] as const)(
+    'does not share an obsolete parent read with a newly mounted row after %s',
+    async (change) => {
+      const f = fixture({
+        profiles: [],
+        scopes: [
+          {
+            botId: 'cindy',
+            delegatedSessionIds: ['child-a', 'child-b'],
+          },
+        ],
+      });
+      let finish: (row: Session) => void = () => {};
+      const latest =
+        change === 'delete' ? null : session('parent', '/work/project', { title: 'Latest parent' });
+      f.readSession
+        .mockImplementationOnce(
+          () =>
+            new Promise<Session>((resolve) => {
+              finish = resolve;
+            }),
+        )
+        .mockResolvedValue(latest);
+      const row = (id: string) =>
+        f.view.wrapRow(<button>{id}</button>, {
+          session: session(id, diagnostic, { parentSessionId: 'parent' }),
+          navigate: f.navigate,
+        });
+      render(row('child-a'));
+      act(() =>
+        f.emitParent(
+          'parent',
+          change === 'delete' ? { status: 'deleted' } : { title: 'Latest parent' },
+          latest,
+        ),
+      );
+      render(row('child-b'));
+      await waitFor(() => expect(f.readSession).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        finish(session('parent', '/work/project', { title: 'Obsolete parent' }));
+      });
+      expect(screen.queryByRole('button', { name: '父任务: Obsolete parent' })).toBeNull();
+      const links = screen.getAllByRole('button', {
+        name: change === 'delete' ? '父任务不可用' : '父任务: Latest parent',
+      });
+      expect(links).toHaveLength(2);
+      expect(links.every((link) => link.hasAttribute('disabled') === (change === 'delete'))).toBe(
+        true,
+      );
+    },
+  );
 });

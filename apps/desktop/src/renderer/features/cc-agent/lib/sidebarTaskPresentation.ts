@@ -1,5 +1,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 import type { ProjectNode } from './projectGrouping';
+import { normalizeWorkingDirForComparison } from '../../../../shared/workingDir';
 
 export interface SidebarDelegationScope {
   botId: string;
@@ -42,6 +43,7 @@ export function shouldCollectSidebarTask(
 
 export interface SidebarTaskInput {
   projects: readonly ProjectNode[];
+  allKnownProjects?: readonly ProjectNode[];
   dialogues: readonly Session[];
   unclassified?: readonly Session[];
   bots?: readonly { botId: string; sessions: Session[] }[];
@@ -129,12 +131,19 @@ export function includeCollectedPinnedTasks<T extends SidebarTaskInput>(
   input: T,
   entries: readonly PresentationPinnedEntry[],
   scopes: readonly SidebarDelegationScope[],
-): T {
+): SidebarTaskInput &
+  Omit<T, 'projects' | 'unclassified'> & { projects: ProjectNode[]; unclassified: Session[] } {
   const projects = input.projects.map((project) => ({
     ...project,
     sessions: [...project.sessions],
   }));
   const unclassified = [...(input.unclassified ?? [])];
+  // Pinned projects are absent from the main-list input, and a separately
+  // pinned child can be absent from that project's displaySessions too.
+  const catalogue = [
+    ...(input.allKnownProjects ?? []),
+    ...entries.flatMap((entry) => (entry.project ? [entry.project] : [])),
+  ];
   const known = new Set(
     [
       ...projects.flatMap((project) => project.sessions),
@@ -150,15 +159,19 @@ export function includeCollectedPinnedTasks<T extends SidebarTaskInput>(
     for (const session of candidates) {
       if (known.has(session.id) || !shouldCollectSidebarTask(session, scopes)) continue;
       known.add(session.id);
-      const project = projects.find(
-        (project) =>
-          project.workingDir === session.workingDir &&
-          project.remoteHostId === (session.remoteHostId ?? null) &&
-          project.deviceLinkDeviceId === (session.deviceLinkDeviceId ?? null),
-      );
+      const directory = normalizeWorkingDirForComparison(session.workingDir);
+      const matchesWorkspace = (project: ProjectNode) =>
+        directory !== null &&
+        normalizeWorkingDirForComparison(project.workingDir) === directory &&
+        (project.remoteHostId ?? null) === (session.remoteHostId ?? null) &&
+        (project.deviceLinkDeviceId ?? null) === (session.deviceLinkDeviceId ?? null);
+      const project = projects.find(matchesWorkspace);
       if (project) project.sessions.push(session);
-      else if (entry.project) projects.push({ ...entry.project, sessions: [session] });
-      else unclassified.push(session);
+      else {
+        const registered = catalogue.find(matchesWorkspace);
+        if (registered) projects.push({ ...registered, sessions: [session] });
+        else unclassified.push(session);
+      }
     }
   }
   return { ...input, projects, unclassified };

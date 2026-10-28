@@ -69,27 +69,39 @@ function List(p: SidebarTaskInput) {
 }
 mountPage({
   host: () => ({}),
-  render: () => (
-    <div
-      style={{
-        width: 260,
-        maxWidth: '100%',
-        padding: 8,
-        background: 'var(--bg-sidebar)',
-        color: 'var(--text-primary)',
-        height: '100vh',
-      }}
-    >
-      <div style={{ padding: 12 }}>全部任务</div>
-      <v.Section
-        Original={List}
-        projects={[
-          project('Product', normal.workingDir, [normal]),
-          project('2026-10-27-terra', manual.workingDir, [manual, child]),
-        ]}
-        dialogues={[]}
-        unclassified={[]}
-      />
-    </div>
-  ),
+  render: ({ data }) => {
+    const normalProject = project('Product', normal.workingDir, [normal]);
+    const diagnosticProject = project('2026-10-27-terra', manual.workingDir, [manual, child]);
+    const pinnedProject = data.pinnedProject === true;
+    return (
+      <div
+        style={{
+          width: 260,
+          maxWidth: '100%',
+          padding: 8,
+          background: 'var(--bg-sidebar)',
+          color: 'var(--text-primary)',
+          height: '100vh',
+        }}
+      >
+        <div style={{ padding: 12 }}>全部任务</div>
+        <v.Section
+          Original={List}
+          projects={pinnedProject ? [normalProject] : [normalProject, diagnosticProject]}
+          allKnownProjects={[normalProject, diagnosticProject]}
+          pinnedEntries={
+            pinnedProject
+              ? [
+                  { kind: 'session', session: child },
+                  { kind: 'project', project: diagnosticProject, displaySessions: [manual] },
+                ]
+              : []
+          }
+          filter={{ projects: pinnedProject ? [diagnosticProject.projectKey] : 'all' }}
+          dialogues={[]}
+          unclassified={[]}
+        />
+      </div>
+    );
+  },
 });

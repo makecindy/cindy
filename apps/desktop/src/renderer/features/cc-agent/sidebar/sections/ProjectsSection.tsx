@@ -192,6 +192,8 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 }
 
 export interface ProjectsSectionProps {
+  /** Internal collected pins remain reachable under a specific project filter. */
+  showUnclassified?: boolean;
   pinnedEntries?: readonly PresentationPinnedEntry[];
   unclassified: Session[];
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
@@ -304,6 +306,7 @@ export function ProjectsSection(props: ProjectsSectionProps) {
 
 function ProjectsSectionContent({
   unclassified,
+  showUnclassified = false,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -633,7 +636,7 @@ function ProjectsSectionContent({
   const deviceGroupingAvailable = hasRemoteDevices;
   const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;
   // F-PJ-10：未分类区在 projects 为具体多选状态时不渲染（spec 验收第 14 条）
-  const unclassifiedHidden = filter.projects !== 'all';
+  const unclassifiedHidden = filter.projects !== 'all' && !showUnclassified;
 
   // 混排模型(D 期):项目行 / 散排对话 / 对话组统一为顶层条目并按同一口径排序。
   // 这有意推翻旧「Dialogue 固定段在 Projects 之后」的裁决(mainListModel.ts 文件头)。
