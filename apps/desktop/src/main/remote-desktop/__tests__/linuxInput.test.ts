@@ -18,7 +18,9 @@ import { linuxInputBackend, linuxX11Geometry, readLinuxDesktopInputSupport } fro
 // cannot catch XWayland admission, unavailable XTEST, or selection of the wrong
 // packaged helper. Minimal input: Linux + DISPLAY + ready helper. Unit tier uses
 // fake subprocess replies only; native injection belongs to explicit Xvfb tests.
-// Standalone Vitest duration on Windows: 0.492 s (15 tests).
+// Regression: startx/SSH may inherit XDG_SESSION_TYPE=tty despite reachable X11;
+// DISPLAY must reach the native probe unless the environment identifies Wayland.
+// Standalone Vitest duration on Windows: 0.402 s (17 tests).
 beforeEach(() => {
   vi.stubGlobal('process', {
     ...process,
@@ -43,16 +45,22 @@ it.each([
   ['linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'wayland' }, null],
   ['linux', { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' }, null],
   ['linux', { WAYLAND_DISPLAY: 'wayland-0', HYPRLAND_INSTANCE_SIGNATURE: 'fixture' }, 'wayland'],
-  ['linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'tty' }, null],
+  ['linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'tty' }, 'x11'],
+  ['linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'tty', WAYLAND_DISPLAY: 'wayland-0' }, null],
   ['linux', {}, null],
   ['win32', { DISPLAY: ':0' }, null],
 ] as const)('selects only a native supported desktop: %s %j', (platform, env, expected) => {
   expect(linuxInputBackend(platform, env)).toBe(expected);
 });
 
-it.each(['x11', 'wayland'] as const)(
-  'probes the packaged %s helper without input arguments',
-  async (backend) => {
+it.each([
+  ['x11', 'x11'],
+  ['x11', 'tty'],
+  ['wayland', 'wayland'],
+] as const)(
+  'probes the packaged %s helper in a %s session without input arguments',
+  async (backend, sessionType) => {
+    vi.stubEnv('XDG_SESSION_TYPE', sessionType);
     if (backend === 'wayland') {
       vi.stubEnv('WAYLAND_DISPLAY', 'wayland-0');
       vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', 'fixture');

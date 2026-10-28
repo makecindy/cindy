@@ -7,11 +7,15 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 // Explicit native integration check: requires build dependencies, never connects
-// to the compositor or injects input. Unit tests cover the main-process adapter.
+// to the user's compositor or injects input. A private Wayland connection checks
+// that idle dispatch returns without waiting and still delivers available events.
+// Standalone Linux duration: 0.64 s including compilation; the old dispatch
+// fails with SIGALRM because no server loop services its unnecessary roundtrip.
+// Unit tests cover the main-process adapter.
 // Raw Chinese/emoji must survive parsing (regression: json-c 0.18 strict mode
 // rejected signed non-ASCII bytes); malformed, overlong and surrogate encodings must
 // still fail at the production protocol boundary.
-test('native input rejects invalid batches before applying any event', () => {
+test('native input dispatches available events and rejects invalid batches', () => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-input-test-'));
   try {
     const build = spawnSync(
@@ -20,6 +24,36 @@ test('native input rejects invalid batches before applying any event', () => {
       { encoding: 'utf8', timeout: 60000 },
     );
     assert.equal(build.status, 0, build.stderr);
+    const flags = spawnSync(
+      'pkg-config',
+      ['--cflags', '--libs', 'wayland-client', 'wayland-server', 'xkbcommon', 'json-c'],
+      { encoding: 'utf8', timeout: 10000 },
+    );
+    assert.equal(flags.status, 0, flags.stderr);
+    const dispatchTest = path.join(output, 'wayland-dispatch-test');
+    const compile = spawnSync(
+      'cc',
+      [
+        '-std=c11',
+        '-Wall',
+        '-Wextra',
+        '-Werror',
+        '-O2',
+        '-ffunction-sections',
+        '-fdata-sections',
+        fileURLToPath(new URL('./wayland-test-client.c', import.meta.url)),
+        '-I',
+        output,
+        ...flags.stdout.trim().split(/\s+/),
+        '-Wl,--gc-sections',
+        '-o',
+        dispatchTest,
+      ],
+      { encoding: 'utf8', timeout: 60000 },
+    );
+    assert.equal(compile.status, 0, compile.stderr);
+    const dispatched = spawnSync(dispatchTest, [], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(dispatched.status, 0, dispatched.stderr || String(dispatched.signal));
     const run = (input) =>
       spawnSync(path.join(output, 'cindy-linux-desktop-input'), ['--validate'], {
         input,

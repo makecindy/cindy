@@ -216,9 +216,14 @@ bool backend_open(bool check, const struct geometry *geometry) {
 }
 int backend_fd(void) { return wl_display_get_fd(display); }
 bool backend_dispatch(void) {
-  // Roundtrip reads the compositor and dispatches queued events even when the
-  // fd was not readable. Never call blocking wl_display_dispatch unconditionally.
-  return wl_display_roundtrip(display) >= 0;
+  // This helper is the only reader. Drain queued events, then read only if the
+  // socket is ready; an unconditional roundtrip adds a wait before every batch.
+  if (wl_display_dispatch_pending(display) < 0) return false;
+  struct pollfd fd = {wl_display_get_fd(display), POLLIN, 0};
+  int ready = poll(&fd, 1, 0);
+  if (ready < 0) return errno == EINTR;
+  if (fd.revents & (POLLERR | POLLHUP | POLLNVAL)) return false;
+  return !(fd.revents & POLLIN) || wl_display_dispatch(display) >= 0;
 }
 bool backend_sync(void) { return wl_display_roundtrip(display) >= 0; }
 bool backend_key_available(uint32_t code) { return code < 256; }

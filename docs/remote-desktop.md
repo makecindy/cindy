@@ -531,6 +531,8 @@ user-session virtual devices; no root service, uinput permission change or shell
 command injection is involved. Selected-output mouse coordinates are mapped into
 the full logical layout, including negative origins and mixed scales. Layout
 changes release input before its coordinate mapping can become stale.
+The helper processes available Wayland events without a roundtrip before each
+batch; the final roundtrip still confirms injection before acknowledging completion.
 The existing native-helper handshake, serialized acknowledgements,
 input ownership and disconnect teardown apply. EOF releases held buttons/keys;
 a six-second watchdog releases input if its parent stops responding (with a
@@ -618,11 +620,11 @@ the host advertises control. Existing opt-ins, controller authorization, leases,
 input ownership, acknowledgements and disconnect release remain unchanged.
 
 When starting Cindy over SSH, use the actual graphical session's environment,
-including its `DISPLAY`, `XAUTHORITY`, session bus and `XDG_SESSION_TYPE`.
-Forwarding only `DISPLAY` can leave `XDG_SESSION_TYPE=tty` inherited from SSH:
-the native helper's `--check` may report `ready`, but the host correctly refuses
-to advertise X11 input for that session type. Restore `x11` only after confirming
-the target is a native X11 session; do not force it for Wayland/XWayland.
+including its `DISPLAY`, `XAUTHORITY` and session bus. `XDG_SESSION_TYPE=tty`
+inherited from SSH or startx does not rule out X11: when `DISPLAY` is present and
+neither `XDG_SESSION_TYPE=wayland` nor `WAYLAND_DISPLAY` identifies Wayland, the
+host tries the native helper's read-only `--check`. Control is advertised only if
+that probe succeeds. Do not force X11 detection for Wayland/XWayland.
 
 The selected monitor's Electron bounds are converted into an X root pixel
 rectangle. The helper validates that rectangle against the live root; pointer

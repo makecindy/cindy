@@ -11,7 +11,7 @@ extern volatile sig_atomic_t stopping;
 uint32_t codepoint(const unsigned char **cursor);
 bool backend_open(bool check, const struct geometry *geometry);
 int backend_fd(void);
-// Safe without a readable fd: synchronize and drain only queued events.
+// Safe without a readable fd: process available events and refresh backend state.
 bool backend_dispatch(void);
 bool backend_sync(void);
 bool backend_key_available(uint32_t code);

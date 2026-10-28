@@ -15,7 +15,8 @@ export function linuxInputBackend(
 ): LinuxInputBackend | null {
   if (platform !== 'linux') return null;
   if (isWaylandDesktop(platform, env)) return env.HYPRLAND_INSTANCE_SIGNATURE ? 'wayland' : null;
-  if (env.XDG_SESSION_TYPE && env.XDG_SESSION_TYPE !== 'x11') return null;
+  // startx and SSH-launched processes may inherit "tty" despite reachable X11.
+  // Let the native probe verify XTEST and reject XWayland.
   return env.DISPLAY ? 'x11' : null;
 }
 
