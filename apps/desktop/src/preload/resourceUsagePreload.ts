@@ -1,8 +1,15 @@
-/** 资源用量窗口专用 preload：只暴露窗口 chrome、外观、快捷键和进程采样能力。 */
+/** 资源用量窗口专用 preload：只暴露窗口 chrome、外观、快捷键、进程采样与本机常驻清单能力。 */
 
 import { contextBridge, ipcRenderer } from 'electron';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
+import {
+  HOST_DAEMONS_DELETE_CHANNEL,
+  HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_STOP_CHANNEL,
+  type HostDaemonActionRequest,
+  type HostDaemonsSnapshot,
+} from '../shared/hostDaemons';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
@@ -107,6 +114,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL, cb),
     onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
       onPayload(RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
+  },
+  // 「本机常驻」页签：归属判定与停止/删除授权都在 main，这里只转发 id。
+  hostDaemons: {
+    list: (): Promise<HostDaemonsSnapshot> => ipcRenderer.invoke(HOST_DAEMONS_LIST_CHANNEL),
+    stop: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_STOP_CHANNEL, request),
+    remove: (request: HostDaemonActionRequest): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(HOST_DAEMONS_DELETE_CHANNEL, request),
   },
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),

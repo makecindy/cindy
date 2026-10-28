@@ -245,6 +245,8 @@ function LocalResourceUsageBody({
     direction: 'desc',
   });
   const [view, setView] = useState<ViewKind>('processes');
+  // 旧右侧栏页签窗口的 preload 没有常驻清单桥（面板正式入口是独立资源监视器窗口）。
+  const hostDaemonsAvailable = typeof window.electronAPI.hostDaemons?.list === 'function';
   // 切到常驻清单就放开进程采样订阅：看不到的列表不需要继续 2s 一次采样。
   const processVisible = visible && view === 'processes';
 
@@ -336,7 +338,9 @@ function LocalResourceUsageBody({
           value={view}
           options={[
             { value: 'processes', label: t('rightSidebar.resourceUsage.tabs.processes') },
-            { value: 'hostDaemons', label: t('rightSidebar.resourceUsage.tabs.hostDaemons') },
+            ...(hostDaemonsAvailable
+              ? [{ value: 'hostDaemons' as const, label: t('rightSidebar.resourceUsage.tabs.hostDaemons') }]
+              : []),
           ]}
           onValueChange={setView}
         />
