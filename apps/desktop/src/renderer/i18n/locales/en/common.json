@@ -9347,7 +9347,7 @@
       },
       "stop": "Stop",
       "delete": "Delete",
-      "run": "Run now",
+      "run": "Start",
       "started": "Started {{name}}",
       "stopTitle": "Stop “{{name}}”?",
       "stopBody": "Ends the current run only. The task will start again on its schedule.",

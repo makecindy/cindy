@@ -250,6 +250,13 @@ function LocalResourceUsageBody({
   // 切到常驻清单就放开进程采样订阅：看不到的列表不需要继续 2s 一次采样。
   const processVisible = visible && view === 'processes';
 
+  // 「本机常驻」不需要进程快照，界面一挂上就能展示：用它当作首屏，否则窗口要等
+  // 一份永远不来的进程采样，打开时白白空等主进程的兜底超时。
+  useEffect(() => {
+    if (view !== 'hostDaemons' || !visible) return;
+    onFirstSample?.();
+  }, [view, visible, onFirstSample]);
+
   useEffect(() => {
     if (!processVisible) return;
     let disposed = false;

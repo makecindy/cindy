@@ -143,21 +143,22 @@ export function HostDaemonsView() {
                 </div>
               </div>
               <div className="host-daemons-actions">
+                {/* 启动/停止合一个按钮：同一条任务只有「当前在跑」与「没在跑」两种意图。 */}
                 <Button
                   variant="secondary"
                   size="xs"
-                  disabled={busy || entry.state === 'running' || entry.state === 'disabled'}
-                  onClick={() => void runNow(entry)}
+                  disabled={busy || entry.state === 'disabled'}
+                  onClick={() =>
+                    entry.state === 'running'
+                      ? setPending({ entry, action: 'stop' })
+                      : void runNow(entry)
+                  }
                 >
-                  {t('rightSidebar.hostDaemons.run')}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="xs"
-                  disabled={busy}
-                  onClick={() => setPending({ entry, action: 'stop' })}
-                >
-                  {t('rightSidebar.hostDaemons.stop')}
+                  {t(
+                    entry.state === 'running'
+                      ? 'rightSidebar.hostDaemons.stop'
+                      : 'rightSidebar.hostDaemons.run',
+                  )}
                 </Button>
                 <Button
                   variant="secondary"

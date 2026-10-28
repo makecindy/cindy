@@ -16,7 +16,10 @@ import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');
-const DEFAULT_OPEN_TIMEOUT_MS = 5000;
+// 到点先展示 React 壳（面板自带加载态），不等首份采样：实测冷启动时等待 5s
+// 才出现窗口，用户感知就是「打开很慢」。只有在 renderer 完全没挂载时才会
+// 走到重建，这条兜底仍然保留。
+const DEFAULT_OPEN_TIMEOUT_MS = 1500;
 const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const DEFAULT_LEAVE_TIMEOUT_MS = 2000;
