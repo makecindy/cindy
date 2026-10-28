@@ -9293,7 +9293,47 @@
       "tokens": "{{value}} tokens",
       "noProgress": "暂无进度详情"
     },
+    "hostDaemons": {
+      "scanning": "正在扫描本机常驻…",
+      "refresh": "刷新",
+      "loadFailed": "读取本机常驻失败",
+      "refreshFailed": "刷新失败，列表可能不是最新的",
+      "unsupported": "本机常驻清单目前只支持 Windows",
+      "empty": "还没有由任务创建的本机常驻项",
+      "owner": "创建任务：{{title}}",
+      "ownerUnknown": "未知",
+      "state": {
+        "running": "运行中",
+        "ready": "待运行",
+        "disabled": "已停用",
+        "unknown": "未知"
+      },
+      "trigger": {
+        "logon": "登录时启动",
+        "startup": "开机启动",
+        "schedule": "按计划启动",
+        "other": "其他触发方式"
+      },
+      "stop": "停止",
+      "delete": "删除",
+      "run": "启动",
+      "started": "已启动 {{name}}",
+      "stopTitle": "停止「{{name}}」？",
+      "stopBody": "只结束这一次运行，任务仍会按原计划再次启动。",
+      "deleteTitle": "删除「{{name}}」？",
+      "deleteBody": "会从这台电脑彻底删除这条计划任务，之后不会再自动启动；Cindy 里的任务记录不受影响。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已删除 {{name}}",
+      "actionFailed": "操作失败，请重试",
+      "unrelated_one": "另有 {{count}} 项与本机任务无关的常驻项没有显示",
+      "unrelated_other": "另有 {{count}} 项与本机任务无关的常驻项没有显示"
+    },
     "resourceUsage": {
+      "tabs": {
+        "label": "资源视图",
+        "processes": "进程",
+        "hostDaemons": "本机常驻"
+      },
       "sections": {
         "agents": "Agent 进程",
         "app": "应用进程"

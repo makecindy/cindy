@@ -110,6 +110,7 @@ function makeHarness(
   recoveryStabilityMs = 30_000,
   platform: NodeJS.Platform = 'linux',
   leaveTimeoutMs = 2000,
+  showTimeoutMs = 1500,
 ) {
   const windows: FakeWindow[] = [];
   const mainSender = { id: 100 } as WebContents;
@@ -121,6 +122,7 @@ function makeHarness(
     },
     isOpenSender: (sender) => sender === mainSender,
     openTimeoutMs: timeoutMs,
+    showTimeoutMs,
     prewarmTimeoutMs,
     recoveryStabilityMs,
     leaveTimeoutMs,
@@ -138,6 +140,37 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('ResourceUsageWindowController', () => {
+  // 「提前显示」与「认定启动失败」必须分开：慢机器上 React 挂载慢于显示时限时，
+  // 旧实现会在这个时限上直接销毁窗口，用户就打不开监视器了。
+  it('shows the loading shell without destroying a slow but mounting window', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'win32');
+
+    controller.prewarm();
+    controller.markRendererReady(windows[0]!.webContents);
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+
+    // 壳已挂载、首份采样未到：先露加载态
+    vi.advanceTimersByTime(1500);
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+
+    // 到「启动失败」时限也不重建（窗口已经挂上了）
+    vi.advanceTimersByTime(5000);
+    expect(windows).toHaveLength(1);
+  });
+
+  it('still destroys a window that never mounts at the open timeout', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'win32');
+
+    controller.prewarm();
+    expect(controller.open(mainSender)).toBe(true);
+    // 只有打开时限会去判定「从没挂载」；提前显示时限对它不生效
+    vi.advanceTimersByTime(1500);
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(3500);
+    expect(windows.length).toBeGreaterThan(1);
+  });
+
   it('keeps Windows prewarm sampling paused until the user explicitly opens the window', () => {
     const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'win32');
 
@@ -803,17 +836,19 @@ describe('ResourceUsageWindowController', () => {
   it('shows a loading fallback only after the renderer shell has mounted', () => {
     const { controller, windows, mainSender } = makeHarness(2500);
     controller.open(mainSender);
+    // 壳没挂上前不显示：这时还不能确定窗口能不能起来。
+    vi.advanceTimersByTime(1500);
+    expect(windows[0]?.show).not.toHaveBeenCalled();
     controller.markRendererReady(windows[0]!.webContents);
 
-    vi.advanceTimersByTime(2499);
-    expect(windows[0]?.show).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
+    // 挂上之后：首份采样还没到也先把加载态露出来（提前显示时限 1500ms）。
+    vi.advanceTimersByTime(1500);
     expect(windows[0]?.show).toHaveBeenCalledOnce();
 
     controller.close(windows[0]!.webContents);
     vi.clearAllMocks();
     controller.open(mainSender);
-    vi.advanceTimersByTime(2499);
+    vi.advanceTimersByTime(1499);
     expect(windows[0]?.show).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(windows[0]?.show).toHaveBeenCalledOnce();
