@@ -45,7 +45,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('never silently downgrades an explicit worktree request to a normal session', () => {
-    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
+    // The snapshot folds Worktree-OFF + another local branch into a checkout worktree,
+    // so that intent passes through the same creation gates below.
+    const selected = source.indexOf('const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });');
     const guard = source.indexOf(
       '&& selectedWorktree.confirmedIneligible !== true',
       selected,
@@ -117,7 +119,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('uses the shared Cindy branch helper and adopts the authoritative created branch', () => {
-    const previewBranch = source.indexOf('let branchName = getBranchName(name);');
+    const previewBranch = source.indexOf(
+      'let branchName = wt.checkoutSourceBranch ? wt.sourceBranch.trim() : getBranchName(name);',
+    );
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate', previewBranch);
     const authoritativeBranch = source.indexOf('branchName = resp.meta.branch;', worktreeCreate);
     const creatingStateRefresh = source.indexOf("status: 'creating'", authoritativeBranch);
