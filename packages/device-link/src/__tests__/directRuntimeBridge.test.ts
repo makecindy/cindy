@@ -3,6 +3,7 @@ import { createDirectRuntimeBridge, type DirectRuntimeCommand } from '../directR
 import { DirectLinkNegotiator, parseDirectSignal, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { createDirectRuntimeHost } from '../directRuntimeBridge.js';
 import { createDirectRtcRuntime } from '../directRtcRuntime.js';
+import { MAX_FRAME_BYTES } from '../protocol.js';
 
 // Production bridge/negotiator lifetimes absent from #6825: native queue pressure,
 // stale callbacks, pending handshake cancellation and authenticated stream binding.
@@ -133,4 +134,125 @@ it.each(['small-then-large', 'progress-under-pressure'])('reports native RTC dra
       expect(session.bufferedAmount).toBe(0);
     }
   } finally { detach(); host.dispose(); }
+});
+
+// Receive contract: protocol-compatibility.md, “Device Link 局域网优先直连”.
+// Existing bridge tests exercise send-buffer draining, not RTC message reassembly.
+// Unit fixtures replace only the browser channel; framing, UTF-8 decoding and
+// timeout/close behavior run through the production runtime without sockets.
+async function rtcReceiveFixture() {
+  const frames: ArrayBuffer[] = [];
+  const channel = {
+    label: 'device-link-v1', ordered: true, maxRetransmits: null, maxPacketLifeTime: null,
+    readyState: 'open', bufferedAmount: 0, bufferedAmountLowThreshold: 0,
+    onopen: undefined as (() => void) | undefined,
+    onclose: undefined as (() => void) | undefined,
+    onmessage: undefined as ((event: { data: unknown }) => void) | undefined,
+    send: (data: ArrayBuffer) => { frames.push(data); },
+    close: vi.fn(),
+  };
+  const closePeer = vi.fn();
+  vi.stubGlobal('RTCPeerConnection', class {
+    iceGatheringState = 'complete';
+    localDescription?: unknown;
+    createDataChannel() { return channel; }
+    async createOffer() { return { type: 'offer', sdp: 'fixture' }; }
+    async setLocalDescription(value: unknown) { this.localDescription = value; }
+    close = closePeer;
+  });
+  const events = observers();
+  const session = createDirectRtcRuntime().create('receive', events);
+  await session.offer();
+  channel.onopen?.();
+  const receive = (data: unknown) => channel.onmessage?.({ data });
+  return { session, events, frames, receive, channel, closePeer };
+}
+
+it.each([16_382, 16_383, 16_384, 16_386, MAX_FRAME_BYTES])('reassembles %i UTF-8 bytes across RTC fragment boundaries', async size => {
+  vi.useFakeTimers();
+  const fixture = await rtcReceiveFixture();
+  // Place the emoji's first byte at offset 16,382, crossing the 16,383-byte payload boundary.
+  const text = size >= 16_386 ? '你'.repeat(5_460) + 'xx😀' + 'x'.repeat(size - 16_386) : 'x'.repeat(size);
+  try {
+    fixture.session.send(text);
+    expect(fixture.frames.length).toBe(Math.ceil(size / 16_383));
+    for (const frame of fixture.frames.slice(0, -1)) fixture.receive(frame);
+    expect(fixture.events.message).not.toHaveBeenCalled();
+    fixture.receive(fixture.frames.at(-1));
+    expect(fixture.events.message).toHaveBeenCalledExactlyOnceWith(text);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fixture.events.closed).not.toHaveBeenCalled();
+  } finally { fixture.session.close(); }
+});
+
+it.each([
+  ['non-binary data', 'text'],
+  ['empty fragment', new ArrayBuffer(0)],
+  ['missing payload', Uint8Array.of(1).buffer],
+  ['oversized fragment', new ArrayBuffer(16 * 1024 + 1)],
+  ['unknown marker', Uint8Array.of(2, 65).buffer],
+  ['invalid UTF-8', Uint8Array.of(1, 0xc3, 0x28).buffer],
+])('closes RTC on %s without delivering a message', async (_name, data) => {
+  const fixture = await rtcReceiveFixture();
+  try {
+    fixture.receive(data);
+    expect(fixture.events.message).not.toHaveBeenCalled();
+    expect(fixture.events.closed).toHaveBeenCalledOnce();
+    expect(fixture.channel.close).toHaveBeenCalledOnce();
+    expect(fixture.closePeer).toHaveBeenCalledOnce();
+    fixture.receive(Uint8Array.of(1, 65).buffer);
+    fixture.session.close();
+    expect(fixture.events.message).not.toHaveBeenCalled();
+    expect(fixture.events.closed).toHaveBeenCalledOnce();
+  } finally { fixture.session.close(); }
+});
+
+it.each(['bytes', 'fragments'] as const)('bounds incomplete RTC messages by %s', async limit => {
+  vi.useFakeTimers();
+  const fixture = await rtcReceiveFixture();
+  try {
+    if (limit === 'bytes') {
+      const fragment = new Uint8Array(16 * 1024);
+      fragment.fill(65, 1);
+      for (let i = 0; i < 128; i++) fixture.receive(fragment.buffer);
+      expect(fixture.events.closed).not.toHaveBeenCalled();
+      fixture.receive(new Uint8Array(130).buffer);
+    } else {
+      for (let i = 0; i < 256; i++) fixture.receive(Uint8Array.of(0, 65).buffer);
+      expect(fixture.events.closed).not.toHaveBeenCalled();
+      fixture.receive(Uint8Array.of(1, 65).buffer);
+    }
+    expect(fixture.events.message).not.toHaveBeenCalled();
+    expect(fixture.events.closed).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { fixture.session.close(); }
+});
+
+it('closes an incomplete RTC message ten seconds after its last fragment', async () => {
+  vi.useFakeTimers();
+  const fixture = await rtcReceiveFixture();
+  try {
+    fixture.receive(Uint8Array.of(0, 65).buffer);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(fixture.events.closed).not.toHaveBeenCalled();
+    fixture.receive(Uint8Array.of(0, 66).buffer);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(fixture.events.closed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.events.closed).toHaveBeenCalledOnce();
+    fixture.receive(Uint8Array.of(1, 67).buffer);
+    expect(fixture.events.message).not.toHaveBeenCalled();
+  } finally { fixture.session.close(); }
+});
+
+it('discards incomplete RTC data and its deadline on explicit close', async () => {
+  vi.useFakeTimers();
+  const fixture = await rtcReceiveFixture();
+  fixture.receive(Uint8Array.of(0, 65).buffer);
+  fixture.session.close();
+  fixture.receive(Uint8Array.of(1, 66).buffer);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(fixture.events.message).not.toHaveBeenCalled();
+  expect(fixture.events.closed).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
 });
