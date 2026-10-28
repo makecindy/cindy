@@ -233,6 +233,7 @@ import {
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownInlineImageSize,
+  parseMobileMarkdown,
   parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   type MobileMarkdownParseResult,
@@ -5809,6 +5810,7 @@ function MarkdownBodyBase({
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
+  lightweightTableCells: lightweightTableCellsOverride,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -5825,6 +5827,11 @@ function MarkdownBodyBase({
   allowIosUITextView?: boolean;
   /** Reuse bounded native text runs for expanded companion messages on iOS. */
   boundTextRuns?: boolean;
+  /**
+   * Whole-message table-cell budget decision, set by MarkdownBody when rich content
+   * splits one reply into several bodies; omitted = decide from this body's own tables.
+   */
+  lightweightTableCells?: boolean;
   /** 本地 Markdown 图片的稳定消息身份,避免后续消息复用同一路径的旧媒体缓存。 */
   markdownImageCacheKey?: string;
   layout: MessageContentLayout;
@@ -5887,8 +5894,9 @@ function MarkdownBodyBase({
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
   const lightweightTableCells = useMemo(
-    () => mobileMarkdownTableCellCount(blocks) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
-    [blocks],
+    () => lightweightTableCellsOverride
+      ?? mobileMarkdownTableCellCount(blocks) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
+    [blocks, lightweightTableCellsOverride],
   );
   const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
@@ -9989,12 +9997,18 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const origin = useContext(ChatFilePathContext);
   const renderMedia = (node: RichNode) => <RichAnswerMedia node={node} body={props} />;
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
+  // Rich content splits one reply into several bodies; apply the table-cell budget to the
+  // whole reply so separated tables still switch to lightweight cells together.
+  const lightweightTableCells = useMemo(() => parts.some(part => part.kind === 'rich')
+    ? parts.reduce((count, part) => part.kind === 'rich' ? count
+      : count + mobileMarkdownTableCellCount(parseMobileMarkdown(part.source)), 0) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD
+    : undefined, [parts]);
+  if (lightweightTableCells === undefined) return <MarkdownBodyBase {...props} />;
   return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
-    : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
+        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} lightweightTableCells={lightweightTableCells || undefined} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
+    : <MarkdownBodyBase {...props} lightweightTableCells={lightweightTableCells || undefined} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
 }
 
 /** Each composed column supplies its actual width; media never assumes a full message row. */

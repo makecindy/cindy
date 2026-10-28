@@ -108,8 +108,9 @@ export function mobileMarkdownTableCellCount(blocks: readonly MobileMarkdownBloc
   let count = 0;
   for (const block of blocks) {
     if (block.type !== 'table') continue;
-    count += block.header.length;
-    for (const row of block.rows) count += row.cells.length;
+    // Rendering pads every row to the widest row, so count the grid, not the source cells.
+    const columns = Math.max(block.header.length, ...block.rows.map((row) => row.cells.length));
+    count += columns * (block.rows.length + 1);
   }
   return count;
 }

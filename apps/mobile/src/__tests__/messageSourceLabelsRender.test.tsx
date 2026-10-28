@@ -72,6 +72,7 @@ vi.mock("react-native", async () => {
       loop: () => ({ start() {}, stop() {} }),
       sequence: () => ({ start() {}, stop() {} }),
     },
+    AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
     Platform: { OS: "ios", select: (s: any) => s.ios ?? s.default },
     StyleSheet: {
       create: (s: any) => s,
@@ -730,6 +731,30 @@ describe("companion text selection and actions", () => {
 });
 
 describe("table-heavy assistant replies", () => {
+  const nativeCellTables = (markdown: string) => {
+    const h = mount([{ ...msg("tables", markdown, { turnCompleted: true }), role: "assistant" }]);
+    try {
+      return [...h.host.querySelectorAll('[data-testid="message.markdownTable"]')]
+        .map(table => table.querySelector('[data-native-text-view]') !== null);
+    } finally { h.unmount(); }
+  };
+  const table = (rows: number) => ["| a | b | c |", "| --- | --- | --- |",
+    ...Array.from({ length: rows }, (_, i) => `| r${i} | x | y |`)].join("\n");
+
+  // Short rows are padded to the header width when rendered: 10 x 31 grid cells.
+  it("counts padded cells of ragged rows toward the budget", () => {
+    const ragged = ["| " + Array.from({ length: 10 }, (_, i) => `h${i}`).join(" | ") + " |",
+      "|" + " --- |".repeat(10), ...Array.from({ length: 30 }, (_, i) => `| r${i} | x |`)].join("\n");
+    expect(nativeCellTables(ragged)).toEqual([false]);
+  });
+
+  // A cindy-ui block splits the reply into separate bodies; the budget is per reply.
+  it("applies the budget across rich content that splits the reply", () => {
+    const rich = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "h", kind: "heading", props: { text: "Mid" } }) + "\n```";
+    expect(nativeCellTables([table(20), rich, table(20)].join("\n\n"))).toEqual([false, false]);
+    expect(nativeCellTables([table(3), rich, table(3)].join("\n\n"))).toEqual([true, true]);
+  });
+
   // Table-heavy replies (a translated report: 15 tables, ~470 cells) mounted one native
   // selectable view per cell and stuttered while scrolling. Past the cell budget, cells
   // are plain selectable RN Text; small tables keep per-cell native selection.
