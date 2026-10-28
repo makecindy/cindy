@@ -110,6 +110,14 @@ runtime 下载在 Xcode 完成。机器上的实际安装位置、选中的设�
 和用户 gem 目录都没有。先修复回执中失败的工具，
 用原来的 region / UDID / `--mock` 参数重试，不通过换区域、清缓存或换真机掩盖环境故障。
 
+## Windows：深层 worktree 的 native 构建
+
+Windows 可以读取长路径，但子进程使用过长的工作目录仍可能返回 `spawn ENOENT`，
+随后被 electron-rebuild 的管道错误 `read ENOTCONN` 掩盖。`ensure-deps.mjs` 在
+better-sqlite3 的构建目录达到 240 字符时，自动复制 native 缓存到独立的短临时目录，
+完成编译后才回填产物并清理临时目录。最终缓存位置、Electron 版本与 Node ABI 校验不变。
+这只复制当前 checkout 的依赖缓存，不复制账号、数据库或凭证。无需移动工作树或修改正式版。
+
 ## Linux：Electron SUID sandbox 权限
 
 较新的 Ubuntu（23.10+ 默认用 AppArmor 限制非特权 user namespace）上，Electron 会退回
