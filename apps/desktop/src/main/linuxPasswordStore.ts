@@ -19,7 +19,7 @@ export function configureLinuxPasswordStore({
 }): void {
   if (platform !== 'linux' || commandLine.hasSwitch('password-store')) return;
 
-  // Chromium does not recognize Hyprland (including Omarchy) as a desktop
+  // Chromium does not recognize Hyprland (including Omarchy) or labwc as desktops
   // with a secret store. Prefer the active desktop over legacy session hints
   // so a stale DESKTOP_SESSION cannot override GNOME/KDE's native selection.
   const desktop =
@@ -27,7 +27,7 @@ export function configureLinuxPasswordStore({
     env.XDG_SESSION_DESKTOP?.trim() ||
     env.DESKTOP_SESSION?.trim() ||
     '';
-  if (desktop.split(':').some((name) => name.trim().toLowerCase() === 'hyprland')) {
+  if (desktop.split(':').some((name) => ['hyprland', 'labwc'].includes(name.trim().toLowerCase()))) {
     commandLine.appendSwitch('password-store', 'gnome-libsecret');
   }
 }

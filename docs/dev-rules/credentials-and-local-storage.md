@@ -101,11 +101,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   真实 CLI 的入口、项目设置、原生 / SDK hooks 与权限回归见
   [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs)。
 
-## Linux Hyprland / Omarchy 凭证后端
+## Linux Hyprland / Omarchy / labwc 凭证后端
 
-- Desktop 在 Electron `ready` 之前为 Hyprland 默认选择 `gnome-libsecret`，避免桌面
+- Desktop 在 Electron `ready` 之前为 Hyprland 和 labwc 默认选择 `gnome-libsecret`，避免桌面
   自动识别失败导致登录回调收到令牌后无法加密保存。桌面身份依次取非空的
-  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`；其他桌面保持
+  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`，按冒号分隔的完整名称匹配
+  （包括 `labwc:wlroots`，不把单独的 `wlroots` 当成 labwc）；其他桌面保持
   Electron 原有选择。实现见
   [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
   [linuxPasswordStore.test.ts](../../apps/desktop/src/main/__tests__/linuxPasswordStore.test.ts)。

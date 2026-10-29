@@ -26,7 +26,7 @@ function configure(
   return { switches, appendSwitch };
 }
 
-describe('Hyprland password store startup selection', () => {
+describe('Hyprland and labwc password store startup selection', () => {
   it.each([
     { XDG_CURRENT_DESKTOP: 'Hyprland' },
     { XDG_CURRENT_DESKTOP: 'Hyprland:wlroots' },
@@ -34,6 +34,11 @@ describe('Hyprland password store startup selection', () => {
     { XDG_SESSION_DESKTOP: 'Hyprland' },
     { DESKTOP_SESSION: 'hyprland' },
     { XDG_CURRENT_DESKTOP: ' ', XDG_SESSION_DESKTOP: 'Hyprland' },
+    { XDG_CURRENT_DESKTOP: 'labwc' },
+    { XDG_CURRENT_DESKTOP: 'labwc:wlroots' },
+    { XDG_CURRENT_DESKTOP: ' LaBwC : wlroots ' },
+    { XDG_SESSION_DESKTOP: 'labwc' },
+    { DESKTOP_SESSION: 'labwc' },
   ])('selects libsecret for %j', (env) => {
     const { switches, appendSwitch } = configure(env);
     expect(switches.get('password-store')).toBe('gnome-libsecret');
@@ -53,6 +58,16 @@ describe('Hyprland password store startup selection', () => {
     },
   );
 
+  it('preserves an explicit backend on labwc', () => {
+    const { switches, appendSwitch } = configure(
+      { XDG_CURRENT_DESKTOP: 'labwc:wlroots' },
+      'linux',
+      'kwallet6',
+    );
+    expect(switches.get('password-store')).toBe('kwallet6');
+    expect(appendSwitch).not.toHaveBeenCalled();
+  });
+
   it.each([
     {},
     { XDG_CURRENT_DESKTOP: 'GNOME', DESKTOP_SESSION: 'hyprland' },
@@ -60,6 +75,9 @@ describe('Hyprland password store startup selection', () => {
     { XDG_CURRENT_DESKTOP: 'sway' },
     { XDG_CURRENT_DESKTOP: 'niri' },
     { XDG_CURRENT_DESKTOP: 'not-hyprland' },
+    { XDG_CURRENT_DESKTOP: 'not-labwc' },
+    { XDG_CURRENT_DESKTOP: 'wlroots' },
+    { XDG_CURRENT_DESKTOP: 'GNOME', DESKTOP_SESSION: 'labwc' },
     { XDG_SESSION_TYPE: 'wayland' },
   ])('leaves other or unknown desktops to Electron: %j', (env) => {
     expect(configure(env).appendSwitch).not.toHaveBeenCalled();
@@ -67,7 +85,7 @@ describe('Hyprland password store startup selection', () => {
 
   it.each(['darwin', 'win32'] as const)('leaves %s unchanged', (platform) => {
     expect(
-      configure({ XDG_CURRENT_DESKTOP: 'Hyprland' }, platform).appendSwitch,
+      configure({ XDG_CURRENT_DESKTOP: 'Hyprland:labwc' }, platform).appendSwitch,
     ).not.toHaveBeenCalled();
   });
 });
