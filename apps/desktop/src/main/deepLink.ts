@@ -54,7 +54,7 @@ import {
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
-import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
+import { cancelProviderImport, createProviderImportDraftFromRest, ProviderImportSizeLimitError } from './provider-import/providerImport';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap';
 
 const log = createLogger('deepLink');
@@ -139,8 +139,24 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   }
   // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
   if (rest.startsWith('provider/')) {
-    const importId = createProviderImportDraftFromRest(rest);
-    return importId ? { type: 'provider-import', importId } : null;
+    try {
+      const importId = createProviderImportDraftFromRest(rest);
+      return importId ? { type: 'provider-import', importId } : null;
+    } catch (error) {
+      if (error instanceof ProviderImportSizeLimitError) {
+        // 超限反馈(issue #7760):此前超限被整条吞成 null,使用者只能靠删字段猜。
+        // 日志记数值与省略 models 的引导;链接可能携带 API Key,不记原文。
+        log.warn('provider import link rejected: exceeds size limit', {
+          scope: error.scope,
+          actualBytes: error.actualBytes,
+          limitBytes: error.limitBytes,
+          hint: 'omit the models field; Cindy discovers models automatically after import',
+        });
+      } else {
+        log.warn('provider import link rejected', { reason: 'invalid-payload' });
+      }
+      return null;
+    }
   }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;

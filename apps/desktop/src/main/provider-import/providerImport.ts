@@ -682,6 +682,27 @@ function parsePayload(value: unknown): ProviderImportDraft {
   };
 }
 
+/**
+ * 链接或解码后 JSON 超出大小上限。与其余解析错误分开成类型,让深链入口能把
+ * 「超限」从「格式错误」里区分出来,给出实际体积与省略 models 的引导
+ * (issue #7760:超限曾被整条吞成 null,使用者误以为必须删字段裁剪配置)。
+ * `scope` 标明命中的是 URL 上限还是解码数据上限——24 KB 解码数据 base64 后
+ * 必然超过 32 KB URL 上限,因此实际链接几乎都死在 URL 守卫上。
+ */
+export class ProviderImportSizeLimitError extends Error {
+  constructor(
+    readonly scope: 'url' | 'decoded-json',
+    readonly actualBytes: number,
+    readonly limitBytes: number,
+  ) {
+    super(
+      `${scope === 'url' ? 'encoded link' : 'decoded data'} is ${((actualBytes / 1024) || 0).toFixed(1)} KB, limit is ${(
+        limitBytes / 1024
+      ).toFixed(1)} KB; omit the models field — Cindy discovers models automatically after import`,
+    );
+  }
+}
+
 function decodeBase64Url(value: string): string {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) fail('data is not valid base64url');
   const bytes = Buffer.from(value, 'base64url');
@@ -689,8 +710,13 @@ function decodeBase64Url(value: string): string {
   if (canonical !== value.replace(/=+$/, '')) fail('data is not canonical base64url');
   const decoded = bytes.toString('utf8');
   if (Buffer.from(decoded, 'utf8').compare(bytes) !== 0) fail('data is not valid UTF-8');
-  if (decoded.length === 0 || decoded.length > MAX_JSON_LENGTH)
-    fail('decoded data exceeds the size limit');
+  // 按字节计,不用 UTF-16 length:模型名/备注含中文时字符数会低估真实体积,
+  // 而 24 KB 预算对应的正是 URL base64 膨胀后的 32 KB 传输上限。
+  const decodedBytes = Buffer.byteLength(decoded, 'utf8');
+  if (decoded.length === 0) fail('decoded data exceeds the size limit');
+  if (decodedBytes > MAX_JSON_LENGTH) {
+    throw new ProviderImportSizeLimitError('decoded-json', decodedBytes, MAX_JSON_LENGTH);
+  }
   return decoded;
 }
 
@@ -701,7 +727,13 @@ function pruneExpired(now = Date.now()): void {
 /** Parse the exact `provider/import` path and create a short-lived secret-bearing draft. */
 export function createProviderImportDraftFromRest(rest: string): string | null {
   if (!rest.startsWith('provider/')) return null;
-  if (rest.length > MAX_URL_LENGTH || rest.includes('#')) return null;
+  // 24 KB 解码数据 base64 后必然超过 32 KB URL 上限:超限链接几乎都命中的是
+  // 这里而不是 decodeBase64Url 的 JSON 检查,必须同样抛类型化错误才能给出反馈
+  // (issue #7760)。'#' 属格式错误,维持静默 null。
+  if (rest.length > MAX_URL_LENGTH) {
+    throw new ProviderImportSizeLimitError('url', rest.length, MAX_URL_LENGTH);
+  }
+  if (rest.includes('#')) return null;
   const queryIndex = rest.indexOf('?');
   if (queryIndex < 0 || rest.slice(0, queryIndex) !== 'provider/import') return null;
   const params = new URLSearchParams(rest.slice(queryIndex + 1));
@@ -730,7 +762,10 @@ export function createProviderImportDraftFromRest(rest: string): string | null {
     const importId = randomUUID();
     drafts.set(importId, { draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false });
     return importId;
-  } catch {
+  } catch (error) {
+    // 超限错误必须穿透给深链入口记录数值与引导;其余格式错误维持静默拒绝,
+    // 避免把可能含敏感内容的 payload 细节带进日志。
+    if (error instanceof ProviderImportSizeLimitError) throw error;
     return null;
   }
 }

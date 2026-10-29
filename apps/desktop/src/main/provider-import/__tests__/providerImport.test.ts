@@ -10,6 +10,7 @@ import {
   createProviderImportDraftFromRest,
   finishProviderImportConfirm,
   previewProviderImport,
+  ProviderImportSizeLimitError,
 } from '../providerImport.js';
 
 import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
@@ -595,14 +596,14 @@ describe('provider import URL parsing', () => {
   });
 
   it('enforces URL, decoded JSON, endpoint, model, header, and secret bounds', () => {
-    expect(
+    expect(() =>
       createProviderImportDraftFromRest(`provider/import?v=1&data=${'a'.repeat(32 * 1024)}`),
-    ).toBeNull();
-    expect(
+    ).toThrow(ProviderImportSizeLimitError);
+    expect(() =>
       createProviderImportDraftFromRest(
         importRest(customPayload({ padding: 'x'.repeat(24 * 1024) })),
       ),
-    ).toBeNull();
+    ).toThrow(ProviderImportSizeLimitError);
     expect(
       createProviderImportDraftFromRest(
         importRest(
@@ -653,6 +654,66 @@ describe('provider import URL parsing', () => {
         importRest(customPayload({ auth: { method: 'apiKey', apiKey: 'k'.repeat(4 * 1024 + 1) } })),
       ),
     ).toBeNull();
+  });
+
+  it('rejects an over-limit JSON with a typed error carrying sizes and the models-omission hint', () => {
+    let error: unknown;
+    try {
+      createProviderImportDraftFromRest(
+        importRest(
+          customPayload({
+            endpoints: [
+              {
+                protocol: 'openai-chat',
+                baseUrl: 'https://api.acme.test/v1',
+                models: Array.from({ length: 250 }, (_, index) => ({
+                  id: `acme-model-${index}`,
+                  name: `Acme Model ${index} ${'x'.repeat(120)}`,
+                })),
+              },
+            ],
+          }),
+        ),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ProviderImportSizeLimitError);
+    const sizeError = error as InstanceType<typeof ProviderImportSizeLimitError>;
+    // 24 KB 解码数据 base64 后必然超过 32 KB URL 上限,实际命中的是 URL 守卫。
+    expect(sizeError.scope).toBe('url');
+    expect(sizeError.actualBytes).toBeGreaterThan(sizeError.limitBytes);
+    expect(sizeError.message).toContain('encoded link is');
+    expect(sizeError.message).toContain('limit is 32.0 KB');
+    expect(sizeError.message).toContain('omit the models field');
+  });
+
+  it('rejects a link that only exceeds the limit after base64 expansion', () => {
+    // 中文字符 UTF-16 length 计 1、UTF-8 计 3 字节,再经 base64 4/3 膨胀:
+    // 这份 payload 解码后约 34 KB、字符数不高,但链接串已超过 32 KB URL 上限。
+    // 旧实现在 URL 守卫处静默返回 null,使用者拿不到任何体积反馈。
+    let error: unknown;
+    try {
+      createProviderImportDraftFromRest(
+        importRest(
+          customPayload({
+            endpoints: [
+              {
+                protocol: 'openai-chat',
+                baseUrl: 'https://api.acme.test/v1',
+                models: Array.from({ length: 150 }, (_, index) => ({
+                  id: `acme-model-${index}`,
+                  name: `模型显示名称${'中'.repeat(60)}`,
+                })),
+              },
+            ],
+          }),
+        ),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ProviderImportSizeLimitError);
   });
 });
 
