@@ -163,6 +163,36 @@ describe('PrimeAgentRpcProcess request/response correlation', () => {
     await expect(pending).rejects.toThrow(/command mismatch/);
   });
 
+  it('rejects when the response omits a command (malformed envelope)', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const pending = proc.request({ type: 'get_state' });
+    drain();
+    const sent = JSON.parse((transport.writeLine.mock.calls[0]![0]) as string) as { id: string };
+    // Prime Agent 的响应**总是**回带 command(protocol.rs:31/45)。缺失说明这帧
+    // 畸形, 不能当成合法响应 resolve 给调用方。
+    emitLine(JSON.stringify({
+      type: 'response', id: sent.id, success: true, data: {},
+    }));
+
+    await expect(pending).rejects.toThrow(/missing a string command/);
+  });
+
+  it('rejects when the response command is not a string', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const pending = proc.request({ type: 'get_state' });
+    drain();
+    const sent = JSON.parse((transport.writeLine.mock.calls[0]![0]) as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sent.id, command: 42, success: true, data: {},
+    }));
+
+    await expect(pending).rejects.toThrow(/missing a string command/);
+  });
+
   it('still resolves success:false with a string error (caller decides)', async () => {
     const { transport, emitLine, drain } = makeFakeTransport();
     const { proc } = makeProc({ transport });
@@ -206,6 +236,42 @@ describe('PrimeAgentRpcProcess request/response correlation', () => {
     const resp = await pending;
     expect(resp.error).not.toContain(FAKE_KEY);
     expect(resp.error).toContain('[REDACTED]');
+  });
+
+  it('redacts a Basic-scheme Authorization credential in a response error', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const pending = proc.request({ type: 'set_model', provider: 'p', modelId: 'm' });
+    drain();
+    const sent = JSON.parse((transport.writeLine.mock.calls[0]![0]) as string) as { id: string };
+    // `Authorization: Basic <base64>` 的 base64 部分不是已知的值形状, 只有
+    // maker-shared 的 redactSensitiveText(redactCredentialHeaderFields) 认识它。
+    emitLine(JSON.stringify({
+      type: 'response',
+      id: sent.id,
+      command: 'set_model',
+      success: false,
+      error: 'provider refused: Authorization: Basic dXNlcjpwYXNz',
+    }));
+
+    const resp = await pending;
+    expect(resp.error).not.toContain('dXNlcjpwYXNz');
+    expect(resp.error).toContain('[REDACTED]');
+  });
+
+  it('redacts a Basic-scheme Authorization credential in a non-JSON stdout line', () => {
+    const { transport, emitLine } = makeFakeTransport();
+    const { logger } = makeProc({ transport });
+
+    emitLine('Authorization: Basic dXNlcjpwYXNz');
+
+    const logged = logger.warn.mock.calls.find(
+      (call) => call[0] === 'prime-agent rpc: non-JSON stdout line dropped',
+    );
+    expect(logged, 'the non-JSON line is logged').toBeDefined();
+    const context = logged?.[1] as { line?: string } | undefined;
+    expect(context?.line).not.toContain('dXNlcjpwYXNz');
   });
 
   it('a parse-error frame without an id does not reject a live pending request', async () => {

@@ -319,9 +319,11 @@ export class PrimeAgentRpcProcess {
     try {
       frame = JSON.parse(line);
     } catch {
-      // 非 JSON stdout 也可能含凭证 —— 脱敏后记录。
+      // 非 JSON stdout 也可能含凭证 —— 脱敏后记录。两层脱敏: 先跑 maker-shared 的
+      // redactSensitiveText(它处理 `Authorization: Basic <base64>` 这类非 Bearer
+      // 方案), 再跑本文件的 key-aware 兜底。
       this.logger.warn('prime-agent rpc: non-JSON stdout line dropped', {
-        line: redactCredentialText(line).slice(0, 500),
+        line: redactCredentialText(redactSensitiveText(line)).slice(0, 500),
       });
       return;
     }
@@ -332,10 +334,15 @@ export class PrimeAgentRpcProcess {
       // 响应 error 字段集中脱敏 —— Prime Agent 的错误可能把 provider 报错 /
       // 内联密钥上下文 echo 进 error 文本。这里在进入日志/throw/UI 之前统一脱敏,
       // 下游拿到的就是已脱敏 error。
+      //
+      // 两层脱敏是必需的: maker-shared 的 redactSensitiveText 第一步就是
+      // redactCredentialHeaderFields(), 它专门处理 `Authorization: Basic <base64>`
+      // 这类非 Bearer 方案; 本文件的 redactCredentialText 只按 key 名与已知值形状
+      // 匹配, 单独用会留下 base64 凭证原文(见本文件 redaction 的注释)。
       const raw = obj as unknown as PrimeAgentRpcResponse;
       const resp: PrimeAgentRpcResponse =
         raw.error !== undefined && typeof raw.error === 'string'
-          ? { ...raw, error: redactCredentialText(raw.error) }
+          ? { ...raw, error: redactCredentialText(redactSensitiveText(raw.error)) }
           : raw;
       const id = typeof resp.id === 'string' ? resp.id : undefined;
       const entry = id ? this.pending.get(id) : undefined;
@@ -356,7 +363,20 @@ export class PrimeAgentRpcProcess {
           );
           return;
         }
-        if (typeof resp.command === 'string' && resp.command !== entry.commandType) {
+        if (typeof resp.command !== 'string') {
+          // `command` 缺失或非字符串 —— Prime Agent 的响应**总是**回带它
+          // (protocol.rs:31/45, 含 parse error 帧的 command:'parse')。缺失说明
+          // 这是一帧畸形响应, 不能当成合法响应 resolve 给调用方。
+          clearTimeout(entry.timer);
+          this.pending.delete(id);
+          entry.reject(
+            new Error(
+              `prime-agent rpc: response for ${entry.commandType} missing a string command`,
+            ),
+          );
+          return;
+        }
+        if (resp.command !== entry.commandType) {
           clearTimeout(entry.timer);
           this.pending.delete(id);
           entry.reject(
