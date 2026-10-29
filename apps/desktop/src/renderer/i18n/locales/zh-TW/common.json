@@ -3755,6 +3755,7 @@
             "hint": "占用達到所選比例時整理上下文。比例越低，越早壓縮；實際時機仍受引擎限制。",
             "defaultBadge": "預設",
             "sliderAria": "調整自動壓縮觸發閾值",
+            "restoreAria": "恢復自動壓縮比例的預設設定",
             "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
           },
           "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",

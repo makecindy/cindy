@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Slider } from '@/components/ui/slider';
@@ -8,6 +8,9 @@ import {
   type ModelContextLimitView,
 } from '../../../shared/modelContextLimit';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+
+/** 键盘连按会连续触发提交；沿用旧全局压缩设置的写盘去抖窗口。 */
+const COMMIT_DEBOUNCE_MS = 300;
 
 /** One supplier/model preference shared by every harness. */
 export function ModelCompactionSettings({
@@ -23,11 +26,34 @@ export function ModelCompactionSettings({
   const key = 'settings.providers.models.advanced.compaction';
   // Drag preview stays local; only the released value is persisted.
   const [draft, setDraft] = useState<number | null>(null);
+  const pending = useRef<{ pct: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const value = draft ?? policy.pct;
-  const commit = async (pct: number | null) => {
-    await onChange(pct);
-    // Fall back to whatever main committed (or rolled back to).
-    setDraft((current) => (current === pct ? null : current));
+
+  // 策略一变（保存落地、还原默认、换模型、外部改写）就丢弃本地预览：
+  // 共享 Slider 取消手势时会回放按下前的值，留着它会让界面显示值与落盘值脱钩。
+  useEffect(() => {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = null;
+    setDraft(null);
+  }, [policy.pct, policy.isCustomized]);
+
+  const commit = (pct: number) => {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = {
+      pct,
+      timer: setTimeout(async () => {
+        pending.current = null;
+        await onChange(pct);
+        // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
+        setDraft((current) => (current === pct ? null : current));
+      }, COMMIT_DEBOUNCE_MS),
+    };
+  };
+  const restoreDefault = () => {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = null;
+    setDraft(null);
+    void onChange(null);
   };
   return (
     <details
@@ -54,11 +80,13 @@ export function ModelCompactionSettings({
             disabled={disabled}
             onValueChange={(next: number[]) => {
               const pct = next[0];
-              if (typeof pct === 'number') setDraft(pct);
+              if (typeof pct !== 'number') return;
+              // 与策略相同的取值 = 共享 Slider 取消手势时回放的“按下前”值：丢弃预览。
+              setDraft(pct === policy.pct ? null : pct);
             }}
             onValueCommit={(next: number[]) => {
               const pct = next[0];
-              if (typeof pct === 'number') void commit(pct);
+              if (typeof pct === 'number') commit(pct);
             }}
             aria-label={t(`${key}.sliderAria`)}
           />
@@ -76,7 +104,8 @@ export function ModelCompactionSettings({
           disabled={disabled}
           alwaysVisible
           showCustomizedBadge={false}
-          onReset={() => void commit(null)}
+          label={t(`${key}.restoreAria`)}
+          onReset={restoreDefault}
         />
       </div>
       <p className="mt-2 text-11 leading-relaxed text-[var(--text-secondary)]">

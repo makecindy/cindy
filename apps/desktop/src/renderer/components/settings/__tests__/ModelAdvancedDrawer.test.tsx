@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   reset: vi.fn(async () => {}),
   target: vi.fn(),
   limit: null as number | null,
+  compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
+  compactionEnabled: false,
+  setCompaction: vi.fn(async () => {}),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -27,6 +30,9 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
       error: false,
       setLimit: mocks.setLimit,
       reset: mocks.reset,
+      ...(mocks.compactionEnabled
+        ? { compaction: mocks.compaction, setCompaction: mocks.setCompaction }
+        : {}),
     };
   },
 }));
@@ -44,6 +50,30 @@ vi.mock('@/state/providerModelMemory', () => ({
   clearProviderModelEffort: vi.fn(),
 }));
 vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+// Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
+// 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
+vi.mock('@/components/ui/slider', () => ({
+  Slider: ({ value, min, max, step, onValueChange, onValueCommit, ...rest }: {
+    value?: number[];
+    min?: number;
+    max?: number;
+    step?: number;
+    onValueChange?: (next: number[]) => void;
+    onValueCommit?: (next: number[]) => void;
+    'aria-label'?: string;
+  }) => (
+    <input
+      type="range"
+      aria-label={rest['aria-label']}
+      value={value?.[0] ?? min}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(event) => onValueChange?.([Number(event.target.value)])}
+      onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
+    />
+  ),
+}));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -97,7 +127,19 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.limit = null;
+  mocks.compactionEnabled = false;
+  mocks.compaction = { pct: 90, isCustomized: false };
   vi.mocked(getProviderModelEffort).mockReset();
+  // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  // jsdom 没有指针捕获，手势取消路径（共享 Slider 的 cancel）要用到。
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.hasPointerCapture ??= () => false;
 });
 
 describe('model advanced editor', () => {
@@ -110,6 +152,46 @@ describe('model advanced editor', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.ultra' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', id, 'ultra');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', `chatgpt/${id}`, 'max');
+  });
+
+  // The compaction row only writes on release: a preview must not write, a release
+  // must collapse a keyboard burst into one write, and the shown ratio must always
+  // follow the saved policy.
+  it('commits the compaction ratio once per release and follows the saved policy', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      const view = render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      expect(ratio().value).toBe('89');
+      expect(mocks.setCompaction).not.toHaveBeenCalled();
+
+      // Saved policy moves on (write landed, model switched, external edit): the
+      // preview must not survive it.
+      mocks.compaction = { pct: 70, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('70');
+
+      // A release writes once; a burst collapses into the last value.
+      fireEvent.change(ratio(), { target: { value: '80' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '81' } });
+      fireEvent.blur(ratio());
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+      expect(mocks.setCompaction).toHaveBeenCalledWith(81);
+
+      fireEvent.click(screen.getByRole('button', {
+        name: 'settings.providers.models.advanced.compaction.restoreAria',
+      }));
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(null);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

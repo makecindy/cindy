@@ -3785,6 +3785,7 @@
             "hint": "Compact context at the selected usage percentage. Lower values compact earlier; engine limits still apply.",
             "defaultBadge": "Default",
             "sliderAria": "Adjust the automatic compaction threshold",
+            "restoreAria": "Restore the default automatic compaction ratio",
             "timing": "Applies to all available engines for this model and source on subsequent runs, without interrupting a response."
           },
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
