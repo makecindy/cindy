@@ -13,6 +13,68 @@ const REPO = path.resolve(__dirname, '../../../../../..');
 const CODEX = path.join(REPO, 'apps', 'codex-package-bin', process.platform + '-' + process.arch, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
 
 describe.skipIf(!fs.existsSync(CODEX))('native exec-server workspace projection', () => {
+  // 测试价值：既有原生测试没带 sandbox，无法复现 -32602。生产中继向固定 Codex
+  // 发送 POSIX managed/disabled 请求，验证读取成功且范围外写入仍被 OS 拒绝；e2e tier。
+  it('enforces a POSIX sandbox request on the executing computer', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-exec-sandbox-')));
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    const codexHome = path.join(root, 'codex-home');
+    fs.mkdirSync(codexHome);
+    fs.writeFileSync(path.join(project, 'input.txt'), 'read allowed');
+    const blocked = path.join(root, 'blocked.txt');
+    const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: '/agent/workspace', to: project }] });
+    workspace.setVirtualRoot('/agent');
+    const messages: Array<Record<string, any>> = [];
+    let parts = '';
+    const relay = new ExecServerRelay({
+      codexPath: CODEX, cwd: project, workspace,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      // 此处只测原生沙箱；中继授权拒绝另由 execServerRelayConsent.test.ts 覆盖。
+      authorize: () => ({ ok: true }),
+      push: async (frames) => {
+        for (const frame of frames) {
+          if (frame.kind !== 'message') continue;
+          parts += frame.data;
+          if (!frame.more) { messages.push(JSON.parse(parts)); parts = ''; }
+        }
+      },
+    });
+    const send = (message: unknown) => relay.handle({ t: 'ws', connId: 'sandbox', kind: 'message', data: JSON.stringify(message) });
+    try {
+      relay.handle({ t: 'ws', connId: 'sandbox', kind: 'open', path: '/ws/exec-server' });
+      send({ id: 1, method: 'initialize', params: { clientName: 'cindy-test', clientVersion: '1' } });
+      await expect.poll(() => messages.find((item) => item.id === 1), { timeout: 5000 }).toBeDefined();
+      expect(messages.find((item) => item.id === 1)?.error).toBeUndefined();
+      send({ method: 'initialized', params: {} });
+      send({ id: 2, method: 'process/start', params: {
+        processId: 'restricted', argv: [process.execPath, '-e',
+          'const fs = require("node:fs"); console.log(fs.readFileSync("input.txt", "utf8")); try { fs.writeFileSync(process.argv[1], "forbidden"); process.exitCode = 9; } catch (e) { if (!["EACCES", "EPERM"].includes(e.code)) throw e; console.log("write blocked"); }', blocked],
+        cwd: 'file:///agent/workspace', tty: false,
+        env: process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: os.tmpdir() } : {},
+        sandbox: {
+          cwd: 'file:///agent/workspace', workspaceRoots: ['file:///agent/workspace'], windowsSandboxLevel: 'disabled',
+          permissions: { type: 'managed', network: 'restricted', file_system: { type: 'restricted', entries: [
+            { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+            { path: { type: 'path', path: 'file:///agent/workspace' }, access: 'write' },
+          ] } },
+        },
+      } });
+      await expect.poll(() => messages.find((item) => item.id === 2), { timeout: 10000 }).toBeDefined();
+      expect(messages.find((item) => item.id === 2)?.error).toBeUndefined();
+      await expect.poll(() => messages.find((item) => item.method === 'process/exited'), { timeout: 10000 }).toBeDefined();
+      expect(messages.find((item) => item.method === 'process/exited')?.params.exitCode).toBe(0);
+      const output = messages.filter((item) => item.method === 'process/output')
+        .map((item) => Buffer.from(item.params.chunk, 'base64').toString()).join('');
+      expect(output).toContain('read allowed');
+      expect(output).toContain('write blocked');
+      expect(fs.existsSync(blocked)).toBe(false);
+    } finally {
+      relay.close();
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  }, 30000);
+
   // 测试价值：生产入口 ExecServerRelay → 原生 exec-server 必须能从含空格的别名目录
   // 启动程序。#6743 的旧实现把 argv[0] 当 Shell 文本引用，Windows 实际报 os error 123；
   // 现有 E2E 只使用未映射的 process.execPath。最小失败输入是一个程序目录别名，e2e tier。

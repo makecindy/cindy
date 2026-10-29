@@ -34,7 +34,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
   },
 }));
 
-import { ExecServerRelay } from '../controller/execServerRelay';
+import { ExecServerRelay, mapExecServerParams } from '../controller/execServerRelay';
 import { RemoteExecutor } from '../executor/executor';
 import { ExecutorGate, type ExecutorAction, type ExecutorGateDecision } from '../executor/gate';
 import { ExecutorWorkspace } from '../executor/workspace';
@@ -57,11 +57,13 @@ function setup(authorize?: (action: ExecutorAction) => ExecutorGateDecision) {
   const approved = new Set<string>();
   const pending: Array<{ action: ExecutorAction; answer(allowed: boolean): void }> = [];
   const replies: Array<Record<string, unknown>> = [];
+  const warn = vi.fn();
   const isSecret = (action: ExecutorAction) => action.kind !== 'fetch' && action.kind !== 'exec' && action.path.endsWith('.env');
   const relay = new ExecServerRelay({
     codexPath: 'codex',
     cwd: root,
     workspace,
+    log: { warn },
     authorize: authorize ?? ((action): ExecutorGateDecision => {
       if (!isSecret(action)) return { ok: true };
       const key = action.kind === 'exec' || action.kind === 'fetch' ? '' : action.path;
@@ -84,7 +86,7 @@ function setup(authorize?: (action: ExecutorAction) => ExecutorGateDecision) {
   const send = (message: Record<string, unknown>) =>
     relay.handle({ t: 'ws', connId: 'c1', kind: 'message', data: JSON.stringify(message) });
   const sentIds = () => spawned.lines.map((line) => (JSON.parse(line) as { id?: unknown }).id);
-  return { relay, workspace, pending, replies, send, sentIds };
+  return { relay, workspace, pending, replies, send, sentIds, warn };
 }
 
 // 测试价值：异步 realpath 后，真实 stdout 入口必须保序、背压，关闭/重连不能收到旧回复，退出不丢尾部。
@@ -294,6 +296,84 @@ describe('exec-server relay with confirmation on this computer', () => {
     pending[0].answer(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(sentIds()).toEqual([]);
+  });
+});
+
+// 测试价值：POSIX Agent 的 disabled Windows 档位不能使 Windows 执行端在启动前
+// 返回 -32602；既有路径映射用例没有验证后端选择。通过真实中继入口检查 wire 与授权，
+// 不模拟 OS 路径 API。最小输入为 managed sandbox + disabled，unit tier。
+describe('exec-server sandbox backend on the executing computer', () => {
+  const sandbox = {
+    cwd: 'file:///agent/workspace',
+    windowsSandboxLevel: 'disabled',
+    permissions: { type: 'managed', network: 'restricted', file_system: {
+      type: 'restricted', entries: [{ path: { type: 'glob_pattern', pattern: '**/*.key' }, access: 'deny' }],
+    } },
+  };
+
+  it('selects a restricted Windows backend for a POSIX request without changing its permissions', () => {
+    const { relay, workspace, send } = setup();
+    workspace.setAliases([{ from: '/agent/workspace', to: root }]);
+    workspace.setVirtualRoot('/agent');
+    try {
+      send({ id: 1, method: 'process/start', params: { processId: 'read', argv: ['hostname'], sandbox } });
+      const forwarded = JSON.parse(spawned.lines[0]).params.sandbox;
+      expect(forwarded.windowsSandboxLevel).toBe(process.platform === 'win32' ? 'restricted-token' : 'disabled');
+      expect(forwarded.permissions).toEqual(sandbox.permissions);
+      expect(sandbox.windowsSandboxLevel).toBe('disabled');
+    } finally { relay.close(); }
+  });
+
+  it.each(['elevated', 'restricted-token', 'mxc', 'future-backend', undefined])('preserves explicit or unknown selection %s', (selection) => {
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: '/agent/workspace', to: root }] });
+    workspace.setVirtualRoot('/agent');
+    const params = mapExecServerParams({ sandbox: { ...sandbox, windowsSandboxLevel: selection } }, workspace, 'process/start') as { sandbox: { windowsSandboxLevel?: string } };
+    expect(params.sandbox.windowsSandboxLevel).toBe(selection);
+  });
+
+  it('preserves a Windows agent selection and requests with no sandbox', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: 'C:\\Agent\\workspace', to: root }] });
+    workspace.setVirtualRoot('C:\\Agent');
+    const params = mapExecServerParams({ sandbox }, workspace, 'process/start') as { sandbox: { windowsSandboxLevel: string } };
+    expect(params.sandbox.windowsSandboxLevel).toBe('disabled');
+    expect(mapExecServerParams({ argv: ['hostname'] }, workspace, 'process/start')).not.toHaveProperty('sandbox');
+  });
+
+  it.each([{ type: 'disabled' }, { type: 'external', network: 'restricted' }])('does not reinterpret a $type permission profile', (permissions) => {
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: '/agent/workspace', to: root }] });
+    workspace.setVirtualRoot('/agent');
+    const params = mapExecServerParams({ sandbox: { ...sandbox, permissions } }, workspace, 'process/start') as { sandbox: { windowsSandboxLevel: string; permissions: unknown } };
+    expect(params.sandbox.windowsSandboxLevel).toBe('disabled');
+    expect(params.sandbox.permissions).toEqual(permissions);
+  });
+
+  it('still refuses an unauthorized write before it reaches the backend', async () => {
+    const { relay, workspace, send, pending, replies, sentIds } = setup(() => ({ ok: false, reason: 'write not authorized' }));
+    workspace.setAliases([{ from: '/agent/workspace', to: root }]);
+    workspace.setVirtualRoot('/agent');
+    try {
+      send({ id: 7, method: 'fs/writeFile', params: { path: path.join(root, 'blocked.txt'), dataBase64: 'eA==', sandbox } });
+      await vi.waitFor(() => expect(pending).toHaveLength(1));
+      pending[0].answer(false);
+      await vi.waitFor(() => expect(replies).toEqual([{ id: 7, error: { code: -32001, message: 'write not authorized' } }]));
+      expect(sentIds()).toEqual([]);
+      expect(fs.existsSync(path.join(root, 'blocked.txt'))).toBe(false);
+    } finally { relay.close(); }
+  });
+
+  it('explains an unsupported sandbox without retrying or hiding the native error', async () => {
+    const { relay, send, replies, sentIds, warn } = setup();
+    try {
+      send({ id: 8, method: 'process/start', params: { processId: 'unsupported', argv: ['hostname'], sandbox } });
+      spawned.outputs[0].write(JSON.stringify({ id: 8, error: { code: -32602, message: 'sandbox intent cannot be enforced on this executor', data: { reason: 'unsupported' } } }) + '\n');
+      await vi.waitFor(() => expect(replies).toHaveLength(1));
+      expect(replies[0]).toMatchObject({ id: 8, error: { code: -32602, data: { reason: 'unsupported' }, message: expect.stringContaining('computer that owns this task') } });
+      expect(sentIds()).toEqual([8]);
+      expect(warn).toHaveBeenCalledWith('remote agent: exec-server sandbox unavailable', { connId: 'c1', executorPlatform: process.platform, code: -32602 });
+      spawned.outputs[0].write(JSON.stringify({ id: 9, error: { code: -32001, message: 'confirmation required' } }) + '\n');
+      await vi.waitFor(() => expect(replies).toHaveLength(2));
+      expect(replies[1]).toEqual({ id: 9, error: { code: -32001, message: 'confirmation required' } });
+    } finally { relay.close(); }
   });
 });
 

@@ -1768,7 +1768,16 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   映射为本机路径(绝对 glob 里本机目录名按字面转义)；不在其中的是 B 自己的目录(如它的 Codex 记忆目录)，读写
   授权丢弃，只收不放；禁止规则不因转换失效：路径条目在 A 上也是合法绝对路径时原样保留，没映射上的禁止 glob
   一律原样保留；用户目录对不上时换成 A 本机的(Codex 缺了它会把 `~/…` 规则当解析失败、一律拒绝读取)；
-  `file:///C:/…` 是否为盘符按 B 的路径约定(虚拟工作区路径)判断；网络与 Windows 沙箱档位不动。原样转发时
+  `file:///C:/…` 是否为盘符按 B 的路径约定(虚拟工作区路径)判断；网络权限不动。
+  B 的映射根明确为 POSIX、A 为 Windows，且 managed 沙箱的 `windowsSandboxLevel` 为 `disabled` 时，
+  A 将该跨平台默认值换为 `restricted-token`（非提权后端）。否则固定 Codex 0.159.2 会选择 None，
+  在命令启动前返回 `-32602: sandbox intent cannot be enforced on this executor`。
+  不改权限条目，不移除 sandbox，不自动提权或重试；Windows B、显式后端、未知值及缺少映射的旧端保持原样。
+  本机审批仍先于执行；后端不支持的权限仍由原生执行器拒绝。原生同名错误保留 code/id/data，
+  补充检查任务所属电脑的沙箱支持与 Codex 版本的提示，日志仅关联连接、本机平台和错误码。
+  无新增 wire 字段、能力位、relay 路由或服务端依赖；旧 A 保持旧行为，新 A 可接受旧 B 的现有字段。
+  自建中转仍只传既有不透明帧，无需同步改服务端；完整原生执行验证另见 `execServerProjection.e2e.test.ts`。
+  原样转发路径时
   两端系统不同会被 A 的 exec-server 拒绝(`invalid sandbox permission path URI`)。
 - **影子目录与配置同步**：`open` 载荷除项目说明文件(含 `.claude/CLAUDE.md`、`.claude/rules`、
   `.codex/skills`)外还带 `ancestorFiles`(项目上级目录里的
