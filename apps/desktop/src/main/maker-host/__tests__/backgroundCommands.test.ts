@@ -11,11 +11,12 @@
  * - 现有覆盖缺口:新模块,无既有覆盖。
  * - 最小失败输入:退出码非 0 且带输出的短命令;启动参数缺失;不存在 cwd。
  * - tier:unit(真实短命子进程 + 临时目录,无网络/DB)。
- * - 最小失败输入还包括:单条输出超过 5MB 上限的命令(验文件截断 + 内存尾部)。
- * - 实测耗时:本机 < 2s(3 用例含 5MB 输出用例)。
+ * - 最小失败输入还包括:单条输出超过 5MB 上限的命令(验文件截断 + 内存尾部);
+ *   日志目录不可建(验拒绝启动不静默无日志);`&` 后代存活时名额不提前释放。
+ * - 实测耗时:本机 < 4s(4 用例,含 5MB 输出用例与名额释放等待)。
  */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -38,11 +39,11 @@ afterEach(async () => {
   await rm(logDir, { recursive: true, force: true });
 });
 
-function buildService(capture: ReturnType<typeof vi.fn>) {
+function buildService(capture: ReturnType<typeof vi.fn>, resolveLogDir?: () => string) {
   const deps: BackgroundCommandServiceDeps = {
     // 排队桥的最小形状:成功受理即返 clientId。
     enqueueReport: capture.mockImplementation(async () => ({ clientId: 'c1' })),
-    resolveLogDir: () => logDir,
+    resolveLogDir: resolveLogDir ?? (() => logDir),
     logger: noopLogger,
   };
   return createBackgroundCommandService(deps);
@@ -82,7 +83,11 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   // 日志文件真实存在且含命令输出。
   const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
   expect(logText).toContain('gate-output-line');
-  expect(service.runningCount()).toBe(0);
+  // 报告后名额不再立即释放:整棵树(含 `&` 后代)要等树死透(POSIX 进程组探测)
+  // 或硬顶。普通命令组在秒级退空,探测在 1s 后首次触发。
+  if (process.platform !== 'win32') {
+    await vi.waitFor(() => expect(service.runningCount()).toBe(0), { timeout: 10_000 });
+  }
 });
 
 it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
@@ -127,6 +132,29 @@ it('超上限的输出:文件截断到上限,完成报告仍带最后的输出(�
   // 头部保留 + 截断标记行,不能超过上限太多。
   expect(info.size).toBeLessThanOrEqual(BACKGROUND_COMMAND_LOG_CAP_BYTES + 256);
   const head = await readFile(logPath, 'utf8');
-  expect(head.startsWith('x')).toBe(true);
+  // 标记在原始输出之后、文件末尾,不插进正文。
+  const markerIdx = head.indexOf('[log truncated at');
+  expect(markerIdx).toBeGreaterThan(0);
+  expect(/^x*\s*$/.test(head.slice(0, markerIdx))).toBe(true);
+  expect(head.trimEnd().endsWith('discarded]')).toBe(true);
   expect(head).toContain('[log truncated at');
+});
+
+it('日志目录建不出来:拒绝启动且不回注', async () => {
+  const capture = vi.fn();
+  // resolveLogDir 指向一个已存在的「文件」:mkdirSync(recursive) 必抛,服务应拒绝
+  // 启动而不是静默跑一条无日志的命令。
+  const blocker = path.join(logDir, 'not-a-dir');
+  await writeFile(blocker, 'x');
+  const service = buildService(capture, () => blocker);
+
+  const result = service.start({
+    sessionId: 'sess-log-fail',
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    cwd: logDir,
+  });
+  expect(result).toMatchObject({ ok: false, errorCode: 'LOG_FAILED' });
+  // 拒绝路径不产生任何回注。
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(capture).not.toHaveBeenCalled();
 });

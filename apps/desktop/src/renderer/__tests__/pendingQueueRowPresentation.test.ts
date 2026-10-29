@@ -225,6 +225,22 @@ describe('getPendingQueueRowPresentation', () => {
     });
   });
 
+  it('never presents background-command callback rows (bgcmd:<runId> scheduler origins) as automation, but keeps them locked', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        origin: { kind: 'scheduler', scheduleId: 'bgcmd:bg-test', scheduleName: '后台命令' },
+      }),
+    );
+    expect(presentation).toMatchObject({
+      isScheduler: false,
+      isSession: false,
+      isPlugin: false,
+      senderLabel: null,
+      canEdit: false,
+      canSteer: false,
+    });
+  });
+
   it('keeps regular queued messages editable and steerable', () => {
     const presentation = getPendingQueueRowPresentation(queuedMessage());
 

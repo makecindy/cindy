@@ -1,4 +1,8 @@
-import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import {
+  forwardedRequestDisplayText,
+  isBackgroundCommandSchedulerOrigin,
+  isHookSchedulerOrigin,
+} from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -62,12 +66,15 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isOrca = origin?.kind === 'orca';
   // Hook 渠道消息复用 scheduler 形态,不是自动化:不显示自动化来源行(与历史气泡一致)。
   const isHookOrigin = isHookSchedulerOrigin(origin);
-  const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin;
+  // 后台命令完成回注(`bgcmd:<runId>`)同理:宿主回调且正文自述,不出自动化来源行。
+  const isBgcmdOrigin = isBackgroundCommandSchedulerOrigin(origin);
+  const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin && !isBgcmdOrigin;
   // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
   const isPlugin = !isOrca && origin?.kind !== 'scheduler' && Boolean(entry.sourcePlugin?.pluginId);
   const isSession = origin?.kind === 'session' && !isPlugin;
-  // Hook 渠道条目同属机器投递(渠道原话),不显示来源行但同样不可编辑/插话。
-  const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin || isHookOrigin;
+  // Hook 渠道/后台命令条目同属机器投递,不显示来源行但同样不可编辑/插话。
+  const isMachineGenerated =
+    isOrca || isScheduler || isSession || isPlugin || isHookOrigin || isBgcmdOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;

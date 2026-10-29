@@ -49,7 +49,11 @@ export interface BackgroundCommandStartInput {
 
 export type BackgroundCommandStartResult =
   | { ok: true; runId: string; logPath: string; pid: number | undefined }
-  | { ok: false; errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED'; message: string };
+  | {
+      ok: false;
+      errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED';
+      message: string;
+    };
 
 export interface BackgroundCommandServiceDeps {
   /** scheduler 撞忙排队桥的导出薄封装;会话忙则排队、空闲即派发。 */
@@ -89,6 +93,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     command: string;
     logPath: string;
     logTruncated: boolean;
+    logWriteFailed: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -113,7 +118,9 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
     const logLine = input.logTruncated
       ? `日志文件（前 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节，后续输出已丢弃）：${input.logPath}`
-      : `完整日志：${input.logPath}`;
+      : input.logWriteFailed
+        ? `日志文件（写入中断，可能不完整，例如磁盘已满）：${input.logPath}`
+        : `完整日志：${input.logPath}`;
     const text =
       `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。\n` +
       `命令：${head}\n状态：${status}\n耗时：${duration}\n` +
@@ -129,6 +136,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     command: string;
     logPath: string;
     logTruncated: boolean;
+    logWriteFailed: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -213,14 +221,24 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       let fileBytes = 0;
       let markerWritten = false;
       let tail = Buffer.alloc(0);
+      // 写入中途失败(磁盘满等)不算启动失败,但报告必须说明日志不完整;
+      // write-after-end(后代在命令退出后续写)不算失败。
+      let logWriteFailed = false;
+      let writerEnded = false;
       try {
         mkdirSync(logDir, { recursive: true });
         writer = createWriteStream(logPath, { flags: 'a' });
         writer.on('error', () => {
+          if (!writerEnded) logWriteFailed = true;
           writer = null;
         });
       } catch {
-        writer = null;
+        // 日志建不出来就兑现不了「完成时有日志可核对」:拒绝启动,不静默无日志。
+        return {
+          ok: false,
+          errorCode: 'LOG_FAILED',
+          message: `cannot create background command log (dir not writable?): ${logDir}`,
+        };
       }
       const attach = (stream: NodeJS.ReadableStream | null): void => {
         stream?.on('data', (chunk: Buffer) => {
@@ -237,20 +255,21 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
             }
             return;
           }
-          let piece = chunk;
-          if (fileBytes + piece.length > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
-            piece = piece.subarray(0, BACKGROUND_COMMAND_LOG_CAP_BYTES - fileBytes);
+          // 先写输出、后写标记:文件保持「原始头部 + 截断标记」顺序,标记不插进正文。
+          if (fileBytes + chunk.length > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
+            const piece = chunk.subarray(0, BACKGROUND_COMMAND_LOG_CAP_BYTES - fileBytes);
             fileBytes = BACKGROUND_COMMAND_LOG_CAP_BYTES;
+            writer.write(piece);
             if (!markerWritten) {
               markerWritten = true;
               writer.write(
                 `\n[log truncated at ${BACKGROUND_COMMAND_LOG_CAP_BYTES} bytes; later output discarded]\n`,
               );
             }
-          } else {
-            fileBytes += piece.length;
+            return;
           }
-          writer.write(piece);
+          fileBytes += chunk.length;
+          writer.write(chunk);
         });
         stream?.on('error', () => {});
       };
@@ -286,6 +305,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (reportSent) return;
         reportSent = true;
+        writerEnded = true;
         writer?.end();
         deliverReport({
           sessionId: input.sessionId,
@@ -293,22 +313,52 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           command,
           logPath,
           logTruncated: markerWritten,
+          logWriteFailed,
           durationMs: durationMs(),
           exit,
           tail: tail.length ? tail.toString('utf8') : '',
         });
       };
 
+      // 名额与硬顶治理整棵树(含 `&` 脱离的后代):报告按 exit 即时回注,但 24h 到点
+      // 仍会 killProcessTree 杀树并释放名额;树提前死透(POSIX 进程组探测)也释放。
+      let groupPoll: NodeJS.Timeout | null = null;
+      const releaseSlot = () => {
+        if (!running.has(runId)) return;
+        running.delete(runId);
+        clearTimeout(timeoutTimer);
+        if (groupPoll) clearInterval(groupPoll);
+      };
+      if (process.platform !== 'win32' && child.pid) {
+        // detached(setsid)后整棵树同组,组 id = shell pid;组空即树死透。
+        // Windows 无轻量等价探测,名额占用到硬顶。
+        const checkGroupGone = () => {
+          try {
+            process.kill(-child.pid!, 0);
+          } catch {
+            releaseSlot();
+          }
+        };
+        const firstCheck = setTimeout(checkGroupGone, 1_000);
+        firstCheck.unref?.();
+        groupPoll = setInterval(checkGroupGone, 30_000);
+        groupPoll.unref?.();
+      }
       let timedOut = false;
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         killProcessTree(child.pid, child, () => {});
+        deps.logger.warn?.('[background-command] killed after hard cap (descendants included)', {
+          runId,
+        });
+        releaseSlot();
       }, timeoutMs);
       timeoutTimer.unref?.();
 
       // 结算以 exit(进程退出)为准:stdio 转 pipe 后,'close' 要等两条 pipe EOF,
       // shell 留下的后代(如 `pnpm dev &`)持有 pipe 会让报告迟到甚至拖到超时。
-      // exit 后给 pipe 一个短宽限收尾部缓冲,不等于后代生命周期。
+      // exit 后给 pipe 一个短宽限收尾部缓冲。注意:结算只管报告,名额与硬顶
+      // 治理由上方的 releaseSlot/timeoutTimer 继续,不随后代一起结束。
       let settled = false;
       const settle = (exit: {
         code: number | null;
@@ -318,8 +368,6 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeoutTimer);
-        running.delete(runId);
         let pending = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0);
         if (pending === 0) {
           reportOnce(exit);
@@ -347,6 +395,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       });
       child.once('error', (error) => {
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });
+        // spawn 失败没有进程树,立即释放名额;kill 失败等后续 error 不影响已释放的幂等性。
+        releaseSlot();
         settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
       });
       return { ok: true, runId, logPath, pid: child.pid };
