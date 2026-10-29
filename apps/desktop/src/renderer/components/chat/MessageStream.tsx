@@ -440,6 +440,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  /** File origin for read-only history, without enabling message mutation actions. */
+  fileSessionId?: string;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   historyVisibleAfter?: number;
@@ -2993,6 +2995,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 });
 
 export function MessageStream({
+  fileSessionId,
   header,
   onAskInSideChat,
   historyVisibleAfter,
@@ -3085,7 +3088,7 @@ export function MessageStream({
   // 会话文件来源上下文(local / device-link / SSH):顶层构造一次,经
   // ChatSessionFileProvider 下发给整棵消息树;galleryDeviceId 也从这里同源取
   // (见 sessionImageSrcs 处注释)。
-  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
+  const sessionFileValue = useChatSessionFileValue(fileSessionId ?? sessionId, workingDir, remoteHostId);
 
   /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
   const shareSelectionActive = useShareSelectionActive(sessionId);

@@ -159,6 +159,7 @@ export async function readChatHistoryMessages(
     agentKind: args.agentKind,
     roles: args.roles,
     includeRewound: args.includeRewound,
+    teammateId: args.teammateId,
     limit: args.limit,
     cursor: args.cursor,
     order: args.order,
@@ -189,6 +190,9 @@ export async function readChatHistoryMessages(
   }
   if (!isHistoryPage(response.result)) {
     return errorResult('INTERNAL', 'remote history returned a malformed page');
+  }
+  if (args.teammateId && (response.result as { teammateIdApplied?: string }).teammateIdApplied !== args.teammateId) {
+    return errorResult('REMOTE_UNSUPPORTED_QUERY', 'Source companion history requires an updated source computer');
   }
 
   return {

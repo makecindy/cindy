@@ -98,7 +98,7 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -1075,10 +1075,26 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
+        create: async ({ callerSessionId, name, description, identitySource, sourceSessionId }) => {
           const dbClient = tryGetDbClient();
           if (!dbClient) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
+          }
+          if (sourceSessionId?.includes('::')) {
+            const parts = sourceSessionId.split('::');
+            if (parts.length !== 2 || !parts[0] || !parts[1]) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Invalid source task' };
+            try {
+              await assertTaskActionCurrent();
+              const response = await deps.invokeRemote(parts[0], 'maker:task-companion',
+                [{ action: 'create', sourceSessionId: parts[1], name, description }], { preSend: captureTaskActionSyncGuard() });
+              if (!response.ok) return { ok: false, errorCode: response.error.code, message: response.error.message };
+              const result = response.result as { version?: number; botId?: string; name?: string; description?: string };
+              if (result.version !== 1 || !result.botId || typeof result.name !== 'string')
+                return { ok: false, errorCode: 'REMOTE_UNAVAILABLE', message: 'Source computer did not return a creation receipt' };
+              return { ok: true, bot: { id: `${parts[0]}::${result.botId}`, name: result.name, description: result.description ?? '' } };
+            } catch {
+              return { ok: false, errorCode: 'REMOTE_UNAVAILABLE', message: 'No creation receipt received. Creation may have succeeded; retry the same source task to recover it.' };
+            }
           }
           const [owned] = await dbClient.drizzle
             .select({ botId: botSessionLinks.botId })
@@ -1092,16 +1108,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               ),
             )
             .limit(1);
-          if (!owned) {
+          if (!owned && !sourceSessionId) {
             return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
           }
           try {
             const profile = await createBotProfile({
+              sourceSessionId,
               name,
               description,
               identitySource,
               prepareInvitation: true,
-            });
+            }, undefined, sourceSessionId ? assertTaskActionCurrent : undefined);
             return {
               ok: true,
               bot: { id: profile.id, name: profile.name, description: profile.description },

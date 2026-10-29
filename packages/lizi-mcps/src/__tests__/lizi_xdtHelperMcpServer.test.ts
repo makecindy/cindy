@@ -235,6 +235,27 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+  // Task-to-companion §6: ordinary Agents discover the same creation service as the UI.
+  // The existing creation test covers Bot-only visibility, not the control category or source identity.
+  it('discovers and creates from a source task on the ordinary helper surface', async () => {
+    const create = vi.fn(async () => ({ ok: true as const, bot: { id: 'editor', name: 'Editor', description: '' } }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'default', botProfiles: { create } },
+      { agentKind: 'codex', workingDir: '/repo', sessionId: 'caller' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'source-task-create', version: '1' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const index = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect(JSON.stringify(index)).toContain('create_teammate_from_task');
+      const result = await client.callTool({ name: 'call_tool', arguments: {
+        name: 'create_teammate_from_task', args: { source_session_id: 'computer::source', name: 'Editor' },
+      } });
+      expect(parsePayload(result)).toMatchObject({ ok: true, bot: { id: 'editor' } });
+      expect(create).toHaveBeenCalledWith({ callerSessionId: 'caller', sourceSessionId: 'computer::source',
+        name: 'Editor', description: '', identitySource: '', welcomeMessage: '' });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("creates a teammate through the scoped helper entry", async () => {
     const create = vi.fn(async () => ({
       ok: true as const,

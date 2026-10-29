@@ -179,6 +179,7 @@ export interface BotSessionProjection {
 }
 
 export interface BotProfile {
+  sourceTask?: { sourceSessionId: string; title: string; createdAt: number; workingDir: string | null };
   templateId?: string;
   invitation?: BotInvitationProgress;
   id: string;
@@ -477,6 +478,7 @@ function defaultCapabilities(
 }
 
 export interface CreateBotProfileInput {
+  sourceSessionId?: string;
   creationDraftToken?: string;
   prepareInvitation?: boolean;
   /** Unsaved image bytes, validated and ingested by main on creation only. */
@@ -591,6 +593,7 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
         : legacyTools;
   return {
     invitation: botInvitationProgress(item.invitation),
+    sourceTask: item.sourceTask,
     id: item.id,
     name: item.name,
     description: typeof item.description === 'string' ? item.description : '',
@@ -962,6 +965,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
   try {
     const created = normalizeDbProfile(
       await api.create({
+        ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
         id: bot.id,
         name: bot.name,
         description: bot.description,

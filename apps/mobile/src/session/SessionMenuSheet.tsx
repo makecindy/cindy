@@ -118,6 +118,7 @@ export interface SessionMenuWorkerActions {
 }
 
 export interface SessionMenuSheetProps {
+  onCreateCompanion?: (name: string, description: string) => Promise<void>;
   tagDeviceId?: string;
   providerName?: string;
   /** 当前模型在模型目录里的用户可读展示名(用量卡显示;缺席时卡片自行兜底)。 */
@@ -180,6 +181,7 @@ export interface SessionMenuSheetProps {
 }
 
 export function SessionMenuSheet({
+  onCreateCompanion,
   tagDeviceId,
   providerName,
   modelLabel,
@@ -255,6 +257,9 @@ export function SessionMenuSheet({
   const [primarySnap, setPrimarySnap] = useState<ContextSheetSnap>('half');
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [renaming, setRenaming] = useState(false);
+  const [creatingCompanion, setCreatingCompanion] = useState(false);
+  const [companionDescription, setCompanionDescription] = useState('');
+  const [companionBusy, setCompanionBusy] = useState(false);
   // 双击标题直达的重命名:确定 / 取消后直接收起菜单,不退回一级菜单。
   const [renameOnly, setRenameOnly] = useState(false);
   const renameAllowed = sessionMenuAllowsRename(session, messageOnly);
@@ -302,6 +307,8 @@ export function SessionMenuSheet({
     renameSeqRef.current += 1;
     const startRenaming = initialView === 'rename' && renameAllowed && !busy;
     setRenaming(startRenaming);
+    setCreatingCompanion(false);
+    setCompanionDescription('');
     setRenameOnly(startRenaming);
     if (startRenaming) setTitleDraft(renamePrefill);
     setRenameGenerating(false);
@@ -421,6 +428,14 @@ export function SessionMenuSheet({
   });
 
   const submitRename = useCallback(() => {
+    if (creatingCompanion) {
+      if (!titleDraft.trim() || !onCreateCompanion || companionBusy) return;
+      setCompanionBusy(true);
+      void onCreateCompanion(titleDraft.trim(), companionDescription).then(() => {
+        setRenaming(false); setCreatingCompanion(false); onClose();
+      }).catch(() => setRenameError(t('session.fromTask.failed'))).finally(() => setCompanionBusy(false));
+      return;
+    }
     renameSeqRef.current += 1;
     const next = titleDraft.trim();
     setRenaming(false);
@@ -434,9 +449,10 @@ export function SessionMenuSheet({
       return;
     }
     onRename(next);
-  }, [onClose, onRename, renameOnly, renamePrefill, session.title, titleDraft]);
+  }, [onClose, onRename, renameOnly, renamePrefill, session.title, titleDraft, creatingCompanion, onCreateCompanion, companionBusy, companionDescription, t]);
 
   const cancelRename = useCallback(() => {
+    setCreatingCompanion(false);
     renameSeqRef.current += 1;
     setRenaming(false);
     setRenameGenerating(false);
@@ -642,8 +658,9 @@ export function SessionMenuSheet({
               style={styles.renameInput}
               testID="session.renameInput"
               value={titleDraft}
+              editable={!companionBusy}
             />
-            <Pressable
+            {!creatingCompanion && <Pressable
               accessibilityLabel={t('session.menu.aiRenameLabel')}
               accessibilityRole="button"
               accessibilityState={{ busy: renameGenerating }}
@@ -657,8 +674,14 @@ export function SessionMenuSheet({
               ) : (
                 <Sparkles color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
               )}
-            </Pressable>
+            </Pressable>}
           </View>
+          {creatingCompanion && <>
+            <Text style={styles.infoCaption}>{t('session.fromTask.explanation')}</Text>
+            <TextInput value={companionDescription} onChangeText={setCompanionDescription} maxLength={4000}
+              editable={!companionBusy} placeholder={t('session.fromTask.role')} accessibilityLabel={t('session.fromTask.role')}
+              placeholderTextColor={colors.textPlaceholder} style={styles.renameInput} />
+          </>}
           {renameError ? (
             <Text style={styles.renameErrorText} testID="session.renameError">{renameError}</Text>
           ) : null}
@@ -704,6 +727,14 @@ export function SessionMenuSheet({
               label: t('session.sideChat.title'), onPress: onOpenSideChats, testID: 'session.sideChat.entry',
             }]} /> : <View style={styles.actionGroup}>
               <MenuActionRow icon={MessageSquarePlus} label={t('session.sideChat.title')} onPress={onOpenSideChats} testID="session.sideChat.entry" />
+            </View>
+          ) : null}
+          {onCreateCompanion && !messageOnly ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('session.fromTask.create'), testID: 'session.fromTask.create', onPress: () => { setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); },
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Sparkles} label={t('session.fromTask.create')}
+                onPress={() => { setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); }} />
             </View>
           ) : null}
           {Platform.OS === 'ios' ? (
@@ -1004,13 +1035,15 @@ export function SessionMenuSheet({
   const renameFooter = renaming ? (
     <MainWindowActionGroup
       primaryActions={[{
-        accessibilityLabel: t('session.menu.confirmRename'),
-        label: t('session.menu.renameSubmit'),
+        accessibilityLabel: t(creatingCompanion ? 'session.fromTask.create' : 'session.menu.confirmRename'),
+        label: t(creatingCompanion ? 'session.fromTask.create' : 'session.menu.renameSubmit'),
+        disabled: companionBusy,
         onPress: submitRename,
         testID: 'session.renameButton',
         tone: 'primary',
       }]}
       cancelAction={{
+        disabled: companionBusy,
         accessibilityLabel: t('session.menu.cancelRename'),
         label: t('session.common.cancel'),
         onPress: cancelRename,

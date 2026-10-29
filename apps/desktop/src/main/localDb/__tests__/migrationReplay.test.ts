@@ -118,7 +118,7 @@ describeMigrationReplay('migration replay', () => {
         db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
-          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136,
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -233,7 +233,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136,
+        130, 131, 132, 133, 134, 135, 136, 137,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

@@ -39,6 +39,7 @@ import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider
 import type { McpProvider } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../../shared/customMcp';
 import { Session } from '@cindy/maker-core';
+import { agentHandoffPending } from '../../../maker-ipc/agentHandoffPendingSingleton';
 import { withSessionPermissionChange } from '../../../maker-ipc/sessionPermissionChange';
 import { getMaker, getPluginRegistry, isBotToolsetAvailable } from '../../../maker-host/index';
 import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry';
@@ -166,7 +167,11 @@ vi.mock('../../client/current', () => ({
       return current;
     };
   })(),
-  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  getDbClient: () => ({ drizzle: h.db, tx: h.tx,
+    queryOne: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).get(...args),
+    query: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).all(...args),
+    exec: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).run(...args),
+  }),
   tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
@@ -490,6 +495,10 @@ function createDb(filename = ':memory:'): void {
     );
   `);
   sqlite.exec(readFileSync(resolve(__dirname, '../../../../../drizzle/0070_woozy_harpoon.sql'), 'utf8'));
+  sqlite.exec(`CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY, source_session_id TEXT UNIQUE, created_at INTEGER, handoff_consumed_at INTEGER, prepared_at INTEGER);
+    CREATE TABLE bot_task_origin_messages (bot_id TEXT, message_id TEXT, PRIMARY KEY(bot_id,message_id));
+    CREATE TABLE IF NOT EXISTS shared_task_events (session_id TEXT);
+    CREATE TABLE IF NOT EXISTS agent_input_queue_snapshots (session_id TEXT, payload TEXT);`);
   h.sqlite = sqlite;
   const rawDb = drizzle(sqlite, {
     schema: {
@@ -1486,6 +1495,41 @@ describe('Bot canonical Session lifecycle', () => {
     } finally { queued.mockRestore(); }
   });
 
+  // Design §6: creation IPC -> real worker transaction -> profile read -> canonical creation.
+  // Prior integration tests only created empty companions. Minimal source includes a saved
+  // completed exchange. Unit fixture owns its in-memory DB and temporary Home; no real account.
+  it('creates from a source task through the shared service and retries into the same companion', async () => {
+    const before = h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get() as number;
+    h.sqlite!.prepare(`INSERT INTO sessions (id,title,model,effort,permission_mode,source,agent_kind,provider_id,created_at,updated_at)
+      VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask','desktop','pi','xd',1,1)`).run();
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
+    const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', name: 'Editor', description: 'Review prose', avatar: 'E' });
+    expect(created.sourceTask).toMatchObject({ sourceSessionId: 'novel-source', title: 'Novel' });
+    expect(created.invitation).toBeUndefined();
+    const retry = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', name: 'Another name', avatar: 'E' });
+    expect(retry.id).toBe(created.id);
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(canonical.canonicalSessionId).not.toBe('novel-source');
+    expect(await invoke('maker:task-companion', { action: 'capabilities' })).toEqual({ version: 1 });
+    expect(await invoke('maker:task-companion', { action: 'create', sourceSessionId: 'novel-source', name: 'Editor' }))
+      .toMatchObject({ version: 1, botId: created.id, sessionId: canonical.canonicalSessionId });
+    expect(h.sqlite!.prepare("SELECT source,permission_mode FROM sessions WHERE id='novel-source'").get())
+      .toEqual({ source: 'desktop', permission_mode: 'ask' });
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['novel-u']);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 1);
+    agentHandoffPending.set(canonical.canonicalSessionId, 'Existing engine-switch context');
+    const handoff = await agentHandoffPending.peek(canonical.canonicalSessionId);
+    expect(handoff).toContain('Existing engine-switch context');
+    expect(handoff).toContain('Use first person.');
+    h.sqlite!.prepare("UPDATE messages SET rewind_at=10 WHERE id='novel-u'").run();
+    expect(await agentHandoffPending.peek(canonical.canonicalSessionId)).not.toContain('Use first person.');
+    agentHandoffPending.consume(canonical.canonicalSessionId);
+    await vi.waitFor(() => expect(h.sqlite!.prepare('SELECT handoff_consumed_at FROM bot_task_origins').pluck().get()).toBeTypeOf('number'));
+  });
+
   it('creates a real gallery portrait when the shared tool entry receives only a name', async () => {
     const { createBotProfile } = await import('../bots');
     const created = await createBotProfile({ name: 'Name only' });
@@ -2042,7 +2086,7 @@ describe('Bot canonical Session lifecycle', () => {
         limit: 12,
         filters: expect.objectContaining({ sessionIds: [created.session.id] }),
       }),
-      { sessionSources: null },
+      { sessionSources: null, teammateId: 'bot-1' },
     );
   });
 
@@ -2090,7 +2134,7 @@ describe('Bot canonical Session lifecycle', () => {
     await invoke('local-db:bots:search-history', { botId: 'bot-1', query: 'release', limit: 5 });
     expect(h.searchConversations).toHaveBeenLastCalledWith(
       expect.objectContaining({ filters: expect.objectContaining({ sessionIds: [created.session.id] }) }),
-      { sessionSources: null },
+      { sessionSources: null, teammateId: 'bot-1' },
     );
 
     await expect(archiveBotChannelLanes({ routeKeyPrefix: 'im:telegram:777:' }))

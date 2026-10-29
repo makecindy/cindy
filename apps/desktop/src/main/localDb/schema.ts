@@ -438,6 +438,21 @@ export const botProfileVersions = sqliteTable(
  * Canonical, delegation-linked, group-lane and archived/history Session projections for a Bot.
  * A `group` link is the Bot's hidden lane in one Bot group (`route_key = group:<groupId>`).
  */
+/** A read-only source, never an ownership link or an executable session. */
+export const botTaskOrigins = sqliteTable('bot_task_origins', {
+  botId: text('bot_id').primaryKey().references(() => botProfiles.id, { onDelete: 'cascade' }),
+  sourceSessionId: text('source_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  createdAt: integer('created_at').notNull(),
+  handoffConsumedAt: integer('handoff_consumed_at'),
+  preparedAt: integer('prepared_at'),
+}, (t) => ({ uniqueSource: uniqueIndex('uniq_bot_task_origin_source').on(t.sourceSessionId) }));
+
+/** Membership, not message copies: later writes cannot enter the creation snapshot. */
+export const botTaskOriginMessages = sqliteTable('bot_task_origin_messages', {
+  botId: text('bot_id').notNull().references(() => botTaskOrigins.botId, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+}, (t) => ({ pk: primaryKey({ columns: [t.botId, t.messageId] }) }));
+
 export const botSessionLinks = sqliteTable(
   'bot_session_links',
   {

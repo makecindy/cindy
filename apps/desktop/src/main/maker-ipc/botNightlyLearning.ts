@@ -112,9 +112,10 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     inputId: string | null; inputContent: string | null; inputMeta: string | null;
   }>(
     `SELECT m.session_id AS sessionId, m.client_id AS id, m.content, m.agent_meta AS meta, m.created_at AS createdAt,
-       b.role, u.client_id AS inputId, u.content AS inputContent, u.agent_meta AS inputMeta
+       COALESCE(b.role,'source') AS role, u.client_id AS inputId, u.content AS inputContent, u.agent_meta AS inputMeta
      FROM messages m JOIN sessions s ON s.id=m.session_id
-     JOIN bot_session_links b ON b.session_id=s.id
+     LEFT JOIN bot_session_links b ON b.session_id=s.id
+     LEFT JOIN bot_task_origins origin ON origin.source_session_id=s.id
      -- 回复不一定带 replyToClientId：没有时取这条回复之前最近的一条用户消息作为它的输入。
      LEFT JOIN messages u ON u.session_id=m.session_id AND u.role='user'
        AND u.created_at > COALESCE(s.cleared_at, 0)
@@ -123,12 +124,17 @@ async function readTurns(botId: string, after: number, until: number, learned: R
            AND x.client_id=json_extract(m.agent_meta, '$.replyToClientId')),
          (SELECT x.rowid FROM messages x WHERE x.session_id=m.session_id AND x.role='user' AND x.rewind_at IS NULL
            AND x.rowid < m.rowid ORDER BY x.rowid DESC LIMIT 1))
-     WHERE b.bot_id=? AND b.role IN ('canonical','thread','channel') AND b.archived_at IS NULL
-       AND s.source='bot' AND s.status='active' AND s.remote_host_id IS NULL
+     WHERE ((b.bot_id=? AND b.role IN ('canonical','thread','channel') AND b.archived_at IS NULL
+       AND s.source='bot' AND s.status='active') OR
+       (origin.bot_id=? AND s.status IN ('active','archived')
+        AND (json_extract(m.agent_meta,'$.replyToClientId') IS NULL OR json_extract(m.agent_meta,'$.replyToClientId')=u.client_id)
+        AND EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.bot_id=origin.bot_id AND om.message_id=m.id)
+        AND EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.bot_id=origin.bot_id AND om.message_id=u.id)))
+       AND s.remote_host_id IS NULL
        AND m.role='assistant' AND m.rewind_at IS NULL AND m.created_at > ? AND m.created_at <= ?
        AND m.created_at > COALESCE(s.cleared_at, 0)
      ORDER BY m.created_at ASC LIMIT ${MAX_REPLIES + 1} /* nightly-learning-turns */`,
-    [botId, after, until],
+    [botId, botId, after, until],
   );
   const turns: Turn[] = [];
   let holdAt = Infinity;

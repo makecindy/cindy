@@ -56,6 +56,7 @@ type SessionRow = typeof sessions.$inferSelect & {
 };
 
 export interface ConversationSearchHostScope {
+  teammateId?: string;
   /**
    * Optional host-owned source restriction. Global owner search includes every
    * task source, including records omitted from the default sidebar.
@@ -148,6 +149,7 @@ export async function searchConversations(
     .sort((a, b) => b.score - a.score || activityMs(b.session) - activityMs(a.session) || a.index - b.index);
 
   const content = await searchContentUntilUniqueSessions({
+    teammateId: hostScope.teammateId,
     query,
     limit,
     allowedSessionIds,
@@ -214,6 +216,7 @@ export async function searchConversations(
 }
 
 async function searchContentUntilUniqueSessions({
+  teammateId,
   query,
   limit,
   allowedSessionIds,
@@ -222,6 +225,7 @@ async function searchContentUntilUniqueSessions({
   skipVector,
   sessionSources,
 }: {
+  teammateId?: string;
   query: string;
   limit: number;
   allowedSessionIds: string[];
@@ -238,6 +242,7 @@ async function searchContentUntilUniqueSessions({
     pageLimit: CONTENT_PAGE_LIMIT,
     targetUniqueSessions,
     fetchPage: ({ limit: pageLimit, offset }) => searchChatHistoryHybrid({
+      teammateId,
       query,
       sessionIds: allowedSessionIds,
       workdir: null,

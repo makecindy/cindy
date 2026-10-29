@@ -272,6 +272,14 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
 
 export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false, outline = false) {
     const sid = requireString(sessionId, 'sessionId');
+    const originBotId = (opts as { originBotId?: unknown } | undefined)?.originBotId;
+    if (originBotId !== undefined) {
+      const botId = requireString(originBotId, 'originBotId');
+      const origin = await getDbClient().queryOne(`SELECT 1 FROM bot_task_origins o JOIN sessions s ON s.id=o.source_session_id
+        WHERE o.bot_id=? AND s.id=? AND s.status != 'deleted'`, [botId, sid]);
+      if (!origin) throwIpcError('NOT_FOUND', 'Source history unavailable');
+      skipImport = true;
+    }
     const limit = outline ? 1000 : clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
@@ -330,6 +338,8 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
       eq(messages.sessionId, sid),
       isNull(messages.rewindAt),
     ];
+    if (typeof originBotId === 'string') conds.push(sql`EXISTS (SELECT 1 FROM bot_task_origin_messages om
+      WHERE om.bot_id=${originBotId} AND om.message_id=${messages.id})`);
     if (beforeCursor) {
       conds.push(
         or(

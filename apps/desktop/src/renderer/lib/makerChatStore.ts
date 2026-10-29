@@ -19234,7 +19234,7 @@ function historyToolName(m: Message): string | undefined {
   return typeof toolName === 'string' ? toolName : undefined;
 }
 
-function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
+export function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // Build per-clientId createdAt lookup so we can patch it onto every
   // mapped ChatMessage uniformly (each branch below builds a different
   // shape, easier to attach the timestamp once at the end).

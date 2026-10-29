@@ -74,6 +74,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行核心会话链路', () => {
     for (const ch of [
       'maker:create-session',
+      'maker:task-companion',
       'maker:send',
       'maker:abort-session',
       'maker:resolve-interaction',

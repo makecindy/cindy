@@ -7,6 +7,7 @@ import { errorPayload, okPayload } from './_payload.js';
 export interface CreateTeammateCallbacks {
   create(params: {
     callerSessionId: string;
+    sourceSessionId?: string;
     name: string;
     description: string;
     identitySource: string;
@@ -21,6 +22,22 @@ export function registerCreateTeammateTool(
     callbacks: CreateTeammateCallbacks;
   },
 ): void {
+  registry.register({
+    name: 'create_teammate_from_task', category: 'control',
+    description: 'Create a companion from a stopped ordinary task. Default: this computer; deviceId::sessionId targets the authorized source computer. Keeps source messages and attachments, links visible history, and resumes working context without replaying old actions. Repeating the source returns the same companion.',
+    inputShape: {
+      source_session_id: z.string().min(1).max(128),
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().max(4000).optional(),
+    },
+    handler: async ({ source_session_id, name, description }: { source_session_id: string; name?: string; description?: string }) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_FOUND', 'Caller task unavailable');
+      const result = await deps.callbacks.create({ callerSessionId, sourceSessionId: source_session_id,
+        name: name?.trim() ?? '', description: description?.trim() ?? '', identitySource: '', welcomeMessage: '' });
+      return result.ok ? okPayload({ action: 'created', bot: result.bot }) : errorPayload(result.errorCode, result.message);
+    },
+  });
   registry.register({
     name: 'create_teammate',
     category: 'bots',

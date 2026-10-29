@@ -38,6 +38,7 @@ import type {
 } from '@cindy/mcps';
 
 import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
+import { botOriginMessageFilter } from './botTaskOrigin.js';
 import { getDbClient } from './client/current';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
@@ -218,6 +219,7 @@ export async function searchChatHistoryHybrid(
             meta.createdAt,
             args.roles,
             args.contextRadius,
+            args.teammateId,
           ));
     hits.push({
       messageId: fe.messageId,
@@ -458,8 +460,10 @@ function buildFilterClause(
   if (args.remoteVisibleOnly) conds.push(remoteVisibleSessionSql('s'));
   const params: unknown[] = [];
   if (args.teammateId) {
-    conds.push('EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)');
-    params.push(args.teammateId);
+    conds.push(`(EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)
+      OR (EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.message_id=m.id AND om.bot_id=?)
+        AND s.status != 'deleted' AND m.created_at > COALESCE(s.cleared_at,0)))`);
+    params.push(args.teammateId, args.teammateId);
   }
   if (args.source) {
     conds.push('s.source = ?');
@@ -528,6 +532,7 @@ async function fetchContextWindow(
   anchorCreatedAt: number,
   roles: HistoryRole[] | null,
   radius: number,
+  teammateId?: string,
 ): Promise<SearchChatHistoryContextMessage[]> {
   const db = getDbClient().drizzle;
 
@@ -542,6 +547,11 @@ async function fetchContextWindow(
 
   const roleCond =
     roles && roles.length > 0 ? [inArray(messagesTable.role, roles)] : [];
+  if (teammateId) roleCond.push(sql`(EXISTS (SELECT 1 FROM bot_session_links b
+    WHERE b.session_id=${messagesTable.sessionId} AND b.bot_id=${teammateId})
+    OR (${botOriginMessageFilter(sql`${messagesTable.id}`, teammateId)} AND EXISTS
+      (SELECT 1 FROM sessions source WHERE source.id=${messagesTable.sessionId} AND source.status != 'deleted'
+        AND ${messagesTable.createdAt} > COALESCE(source.cleared_at,0))))`);
 
   // 命中之前(更早): created_at < anchor 或 (= anchor 且 id < anchorId), 倒序取 radius
   const before = await db

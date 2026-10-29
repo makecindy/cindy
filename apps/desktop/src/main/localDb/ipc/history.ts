@@ -35,6 +35,7 @@ const VALID_ROLES: readonly HistoryRole[] = [
 
 /** Wire payload accepted by the remote history channel. */
 export interface RemoteHistoryMessagesRequest {
+  teammateId?: string;
   sessionId: string;
   workdir: string | null;
   fromMs: number | null;
@@ -143,6 +144,7 @@ export function parseRemoteHistoryMessagesRequest(value: unknown): RemoteHistory
 
   return {
     sessionId,
+    ...(input.teammateId === undefined ? {} : { teammateId: requireString(input.teammateId, 'teammateId') }),
     workdir: nullableString(input.workdir, 'workdir'),
     fromMs: nullableFiniteNumber(input.fromMs, 'fromMs'),
     toMs: nullableFiniteNumber(input.toMs, 'toMs'),
@@ -289,6 +291,7 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       throwIpcError('NOT_FOUND', 'Session does not exist');
     }
     const page = await deps.getMessages({
+      teammateId: request.teammateId,
       sessionIds: [request.sessionId],
       workdir: request.workdir,
       fromMs: request.fromMs,
@@ -314,6 +317,7 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       request.roles.some((role) => role !== 'user' && role !== 'assistant');
     return {
       ...capReferenceHistoryPage(page, request.contentCharLimit, preserveStructuredRoles),
+      ...(request.teammateId ? { teammateIdApplied: request.teammateId } : {}),
       terminal: terminal ?? null,
     };
   });

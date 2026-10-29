@@ -40,6 +40,15 @@ const remoteMessage: HistoryMessage = {
 };
 
 describe('readChatHistoryMessages', () => {
+  // New optional source-snapshot scope must not silently become an unbounded old-host read.
+  it.each([undefined, 'editor'])('requires the source host to acknowledge companion scope: %s', async applied => {
+    const result = await readChatHistoryMessages({ ...baseArgs, sessionIds: ['computer::source'], teammateId: 'editor' }, {
+      readLocal: vi.fn(), invokeRemote: async () => ({ ok: true, result: { items: [], nextCursor: null,
+        hasMore: false, ...(applied ? { teammateIdApplied: applied } : {}) } }),
+    });
+    expect(result.ok).toBe(Boolean(applied));
+    if (!applied) expect(result).toMatchObject({ errorCode: 'REMOTE_UNSUPPORTED_QUERY' });
+  });
   it('keeps ordinary session ids on the local reader', async () => {
     const readLocal = vi.fn(async () => ({ items: [], nextCursor: null, hasMore: false }));
     const invokeRemote = vi.fn();

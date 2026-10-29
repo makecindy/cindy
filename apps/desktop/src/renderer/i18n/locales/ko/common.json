@@ -9767,6 +9767,7 @@
     }
   },
   "bots": {
+    "fromTask": {"create":"동료 만들기","explanation":"“{{title}}”의 기존 대화를 유지하고 동료와 계속합니다. 프로젝트 파일은 원래 위치에 유지됩니다.","role":"역할 (선택)","history":"원본 세션: {{title}}","openSource":"원본 세션 열기","loadMore":"기록 더 불러오기"},
     "workbench": {
       "ownedMark": "담당: {{names}}",
       "createdMark": "{{names}} 님이 생성",
