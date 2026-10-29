@@ -1817,7 +1817,8 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     }
     const [source] = await client.drizzle.select().from(sessions).where(eq(sessions.id, sourceSessionId)).limit(1);
     owner.assertCurrent();
-    if (!source || source.source !== 'desktop' || source.remoteHostId || source.agentDeviceId
+    // `shared` is a locally imported task; live shared tasks are excluded below.
+    if (!source || !['desktop', 'shared'].includes(source.source) || source.remoteHostId || source.agentDeviceId
       || source.orcaRole || !['active', 'archived'].includes(source.status)) {
       throwIpcError('PRECONDITION_FAILED', '请选择本机普通任务');
     }

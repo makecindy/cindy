@@ -13,7 +13,7 @@ export function useTaskCompanionCreation(options: {
   const { visible, deviceId, session, invoke } = options;
   const [available, setAvailable] = useState(false);
   const generation = useRef(0);
-  const eligible = !!session && session.source === 'desktop' && !session.remoteHostId
+  const eligible = !!session && (session.source === 'desktop' || session.source === 'shared') && !session.remoteHostId
     && !session.agentDeviceId && !session.orcaRole && !isSharedTaskPeer(deviceId);
   useEffect(() => {
     generation.current++;

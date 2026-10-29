@@ -340,7 +340,7 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
   db.transaction(() => {
     const sourceSessionId = p.sourceSessionId === undefined ? null : expectString(p.sourceSessionId, 'sourceSessionId');
     if (sourceSessionId) {
-      const source = db.prepare(`SELECT id FROM sessions WHERE id = ? AND source = 'desktop'
+      const source = db.prepare(`SELECT id FROM sessions WHERE id = ? AND source IN ('desktop', 'shared')
         AND status IN ('active', 'archived') AND remote_host_id IS NULL
         AND agent_device_id IS NULL AND orca_role IS NULL
         AND NOT EXISTS (SELECT 1 FROM shared_task_events WHERE session_id = sessions.id)

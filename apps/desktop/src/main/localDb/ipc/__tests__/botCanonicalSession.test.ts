@@ -1498,10 +1498,11 @@ describe('Bot canonical Session lifecycle', () => {
   // Design §6: creation IPC -> real worker transaction -> profile read -> canonical creation.
   // Prior integration tests only created empty companions. Minimal source includes a saved
   // completed exchange. Unit fixture owns its in-memory DB and temporary Home; no real account.
-  it('creates from a source task through the shared service and retries into the same companion', async () => {
+  // Imported local tasks carry source=shared; they must retain history without restoring old authorization.
+  it.each(['desktop', 'shared'])('creates from a %s source task through the shared service and retries into the same companion', async (source) => {
     const before = h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get() as number;
     h.sqlite!.prepare(`INSERT INTO sessions (id,title,model,effort,permission_mode,source,agent_kind,provider_id,created_at,updated_at)
-      VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask','desktop','pi','xd',1,1)`).run();
+      VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask',?,'pi','xd',1,1)`).run(source);
     h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
       VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
     const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', name: 'Editor', description: 'Review prose', avatar: 'E' });
@@ -1517,7 +1518,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(await invoke('maker:task-companion', { action: 'create', sourceSessionId: 'novel-source', name: 'Editor' }))
       .toMatchObject({ version: 1, botId: created.id, sessionId: canonical.canonicalSessionId });
     expect(h.sqlite!.prepare("SELECT source,permission_mode FROM sessions WHERE id='novel-source'").get())
-      .toEqual({ source: 'desktop', permission_mode: 'ask' });
+      .toEqual({ source, permission_mode: 'ask' });
     expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['novel-u']);
     expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 1);
     agentHandoffPending.set(canonical.canonicalSessionId, 'Existing engine-switch context');

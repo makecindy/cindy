@@ -243,7 +243,7 @@ function ActiveSessionTaskMenu({
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
             {item('rename', onRename, ownerActionsBlocked)}
-            {(!session.deviceLinkDeviceId || canCreateCompanionRemotely) && !session.remoteHostId && !session.agentDeviceId && !session.orcaRole && session.source === 'desktop' && !empty && !hosted && (
+            {(!session.deviceLinkDeviceId || canCreateCompanionRemotely) && !session.remoteHostId && !session.agentDeviceId && !session.orcaRole && (session.source === 'desktop' || session.source === 'shared') && !empty && !hosted && (
               <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={ownerActionsBlocked}
                 onSelect={() => setDialog({ kind: 'companion' })}>{t('bots.fromTask.create')}</DropdownMenuItem>
             )}
