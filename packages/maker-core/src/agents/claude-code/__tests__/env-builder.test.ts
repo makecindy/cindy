@@ -292,6 +292,22 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
   });
 
+
+  // 回归:host 不再注入 ENABLE_TOOL_SEARCH(issue #7524),改由用户 ~/.claude/settings.json
+  // 的 env 块决定。但进程 env 在 cc 设置体系里优先级高于用户级 settings,继承残留会以
+  // 最高优先级盖掉它 —— 与 CLAUDE_CODE_SUBAGENT_MODEL 同一条泄漏路径(终端里的 cc 会话
+  // 跑 dev,Electron 从 process.env 继承外层会话的值),SDK 的
+  // `{...process.env, ...userEnv}` 合并只能覆盖、删不掉。故必须进 strip 名单:
+  // 子进程 env 里完全没有这个键,用户的 settings 才真的说得上话。
+  it('ENABLE_TOOL_SEARCH 在 strip 名单里,继承值不漏给子进程(用户 settings 才生效)', async () => {
+    expect(SENSITIVE_ANTHROPIC_ENV_KEYS).toContain('ENABLE_TOOL_SEARCH');
+
+    process.env.ENABLE_TOOL_SEARCH = 'false';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {});
+
+    expect(env.ENABLE_TOOL_SEARCH).toBeUndefined();
+  });
   it('null 决定要**删掉** behaviorFlags 带进来的同名键(只跳过赋值不够)', async () => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
 

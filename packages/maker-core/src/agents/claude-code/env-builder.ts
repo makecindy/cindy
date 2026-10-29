@@ -170,6 +170,14 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   // process.env 继承外层会话的值 —— 那时 host 判定的「不要设」在 SDK 的
   // `{...process.env, ...userEnv}` 合并里根本不生效(我们只能覆盖,删不掉)。
   'CLAUDE_CODE_SUBAGENT_MODEL',
+  // Tool Search 开关:host 不再注入(见 claude-behavior-flags.ts),交由用户
+  // ~/.claude/settings.json 的 env 块决定。但 local spawn 的 env 起自
+  // cleanProcessEnv(),继承残留会以最高优先级盖掉 settings —— 与
+  // CLAUDE_CODE_SUBAGENT_MODEL 同一条泄漏路径(终端里的 cc 会话跑 dev),
+  // SDK 的 `{...process.env, ...userEnv}` 合并只能覆盖、删不掉。故进本清单:
+  // boot 期 strip + buildClaudeEnv 的 cleanProcessEnv 双保险后,子进程 env 里
+  // 完全没有这个键,用户的 settings 才真的说得上话。
+  'ENABLE_TOOL_SEARCH',
 ] as const;
 
 /**

@@ -8,7 +8,6 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
       nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
     expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
-    expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');
     expect(claudeToolSearchMode('grok-work', 'provider-oauth', 'xai')).toBe('false');
   });
 
@@ -26,10 +25,10 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     // oauth-bearer / 未显式指定:CLI 可能用本机登录直连 api.anthropic.com,归因块必须保留,
     // 否则分类器子请求被上游 429。
     const cases = [
-      { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'auto' },
-      { credentialMode: undefined, providerId: undefined, toolSearch: 'auto' },
+      { credentialMode: 'oauth-bearer', providerId: 'anthropic' },
+      { credentialMode: undefined, providerId: undefined },
     ] as const;
-    for (const { credentialMode, providerId, toolSearch } of cases) {
+    for (const { credentialMode, providerId } of cases) {
       const flags = claudeBehaviorFlagsForSpawn({
         credentialMode,
         providerId,
@@ -39,7 +38,6 @@ describe('claudeBehaviorFlagsForSpawn', () => {
       // CLAUDE_CODE_ATTRIBUTION_HEADER=0 时,缺席的 key 压不住继承值(#758 复现)。
       expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
       expect(flags.CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS).toBe('1');
-      expect(flags.ENABLE_TOOL_SEARCH).toBe(toolSearch);
     }
   });
 
@@ -51,7 +49,6 @@ describe('claudeBehaviorFlagsForSpawn', () => {
         oauthConnected: () => oauthConnected,
       });
       expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
-      expect(flags.ENABLE_TOOL_SEARCH).toBe('false');
     }
   });
 
@@ -80,14 +77,17 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     expect(claudeToolSearchMode(null, 'provider-oauth')).toBe('false');
   });
 
-  it('writes the custom-provider Tool Search override into the spawn flags', () => {
-    const flags = claudeBehaviorFlagsForSpawn({
-      credentialMode: 'provider-oauth',
-      providerId: 'openrouter-custom',
-      oauthConnected: () => false,
-    });
-
-    expect(flags.ENABLE_TOOL_SEARCH).toBe('false');
+  it("never injects ENABLE_TOOL_SEARCH - the user settings.json decides (issue #7524)", () => {
+    // 进程 env 在 cc 设置体系里优先级高于用户级 settings.json,注入即静默盖掉用户配置。
+    // 键必须**缺席**(不是 'auto' 也不是 'false'),否则用户的 env 块仍然说不成话。
+    for (const ctx of [
+      { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', oauthConnected: () => false },
+      { credentialMode: 'oauth-bearer', providerId: 'anthropic', oauthConnected: () => true },
+      { credentialMode: 'gateway-key', providerId: 'xd', oauthConnected: () => true },
+      { credentialMode: undefined, providerId: undefined, oauthConnected: () => false },
+    ]) {
+      expect('ENABLE_TOOL_SEARCH' in claudeBehaviorFlagsForSpawn(ctx)).toBe(false);
+    }
   });
 
   it('recreates local Claude sessions when Tool Search support changes', () => {

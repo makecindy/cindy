@@ -159,12 +159,16 @@ it('never treats a retired independent Claude account as a connected subscriptio
     const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
     const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
     if (typeof flags !== 'function') throw new Error('expected spawn flags');
-    expect(flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never))
-      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ENABLE_TOOL_SEARCH: 'auto' });
+    // 每次调用只求值一次:下面的 in 断言复用同一个对象,不多打一次 spawn。
+    const providerOauthFlags = flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never);
+    expect(providerOauthFlags).toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' });
+    // ENABLE_TOOL_SEARCH 不再注入:用户 settings.json 决定(#7524)。
+    expect('ENABLE_TOOL_SEARCH' in providerOauthFlags).toBe(false);
     // 独立账号不借用本机 Claude Code 登录的连接态。
     expect(readBuiltin).not.toHaveBeenCalled();
-    expect(flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never))
-      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
+    const bearerFlags = flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never);
+    expect(bearerFlags).toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1' });
+    expect('ENABLE_TOOL_SEARCH' in bearerFlags).toBe(false);
     expect(readBuiltin).toHaveBeenCalledTimes(1);
   } finally {
     vi.doUnmock('../active-catalog.js');
