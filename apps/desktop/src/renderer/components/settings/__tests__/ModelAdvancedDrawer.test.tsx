@@ -306,11 +306,19 @@ describe('model advanced editor', () => {
     view.rerender(drawer());
 
     // Cancel replays the press-time value (90 ≠ saved 70); the preview must
-    // follow the saved policy, not the replay.
+    // follow the saved policy, not the replay. A canceled gesture gets no
+    // pointerup — the replay itself is what clears the press value.
     fireEvent.change(ratio(), { target: { value: '90' } });
     expect(mocks.sliderValue).toBe(70);
     expect(mocks.setCompaction).not.toHaveBeenCalled();
-    fireEvent.pointerUp(ratio(), { pointerId: 1 });
+
+    // Keyboard after the cancel must not be mistaken for another replay:
+    // End-to-95 and back to 90 must both show immediately.
+    fireEvent.change(ratio(), { target: { value: '95' } });
+    expect(mocks.sliderValue).toBe(95);
+    fireEvent.change(ratio(), { target: { value: '90' } });
+    expect(mocks.sliderValue).toBe(90);
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
   });
 
   it.each([

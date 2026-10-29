@@ -131,7 +131,14 @@ export function ModelCompactionSettings({
               if (typeof pct !== 'number') return;
               // 取消回放与拖回起点都等于“按下时”的值：丢弃预览，跟住落盘值。
               // 不能拿当前 policy.pct 比对——拖动期间策略被外部改掉时两者不同。
-              setDraft(pct === pressValue.current ? null : pct);
+              // 命中后顺手清掉：取消回放自身必命中，等于自动清了，
+              // 否则取消后键盘恰好调回该值会被误当成又一次回放。
+              if (pct === pressValue.current) {
+                pressValue.current = null;
+                setDraft(null);
+                return;
+              }
+              setDraft(pct);
             }}
             onValueCommit={(next: number[]) => {
               const pct = next[0];
