@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { Slider } from '@/components/ui/slider';
 import {
   MAX_MODEL_COMPACTION_PCT,
@@ -26,21 +30,42 @@ export function ModelCompactionSettings({
   const key = 'settings.providers.models.advanced.compaction';
   // Drag preview stays local; only the released value is persisted.
   const [draft, setDraft] = useState<number | null>(null);
-  const pending = useRef<{ pct: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const pending = useRef<{
+    pct: number;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const writing = useRef<number | null>(null);
   const lastWriteAt = useRef(0);
+  // 共享 Slider 取消手势会把“按下时”的值回放一遍；记下按下时的值来识别它。
+  const pressValue = useRef<number | null>(null);
   const value = draft ?? policy.pct;
 
-  // 策略一变（保存落地、还原默认、换模型、外部改写）就丢弃本地预览：
-  // 共享 Slider 取消手势时会回放按下前的值，留着它会让界面显示值与落盘值脱钩。
+  // 策略变化（自己写入的确认、还原、换模型、外部改写）→ 预览跟住落盘值；
+  // 但属于还没发送的尾部提交或在途写入的预览要留住，否则连按的最后一格会被确认吃掉。
   useEffect(() => {
-    if (pending.current) clearTimeout(pending.current.timer);
-    pending.current = null;
-    setDraft(null);
+    setDraft((current) =>
+      current !== null && (pending.current?.pct === current || writing.current === current)
+        ? current
+        : null,
+    );
   }, [policy.pct, policy.isCustomized]);
 
+  // 卸载或换模型（onChange 换了）时，作废还没发送的尾部提交。
+  useEffect(
+    () => () => {
+      if (pending.current) clearTimeout(pending.current.timer);
+      pending.current = null;
+      setDraft(null);
+    },
+    [onChange],
+  );
+
   const write = async (pct: number) => {
+    writing.current = pct;
     lastWriteAt.current = Date.now();
     await onChange(pct);
+    if (writing.current === pct) writing.current = null;
     // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
     setDraft((current) => (current === pct ? null : current));
   };
@@ -53,11 +78,15 @@ export function ModelCompactionSettings({
       void write(pct);
       return;
     }
-    // 窗口内的连续提交（键盘连按）：合并成窗口末尾的一次写入。
+    // 窗口内的连续提交（键盘连按）：合并成窗口末尾的一次写入；
+    // 绑定提交时的账号代次，账号已切换就作废，不把旧值写进新账号。
+    const owner = getDataOwnerGeneration();
     pending.current = {
       pct,
+      owner,
       timer: setTimeout(() => {
         pending.current = null;
+        if (!isDataOwnerGenerationCurrent(owner)) return;
         void write(pct);
       }, COMMIT_DEBOUNCE_MS - since),
     };
@@ -91,11 +120,18 @@ export function ModelCompactionSettings({
             max={MAX_MODEL_COMPACTION_PCT}
             step={1}
             disabled={disabled}
+            onPointerDown={() => {
+              pressValue.current = value;
+            }}
+            onPointerUp={() => {
+              pressValue.current = null;
+            }}
             onValueChange={(next: number[]) => {
               const pct = next[0];
               if (typeof pct !== 'number') return;
-              // 与策略相同的取值 = 共享 Slider 取消手势时回放的“按下前”值：丢弃预览。
-              setDraft(pct === policy.pct ? null : pct);
+              // 取消回放与拖回起点都等于“按下时”的值：丢弃预览，跟住落盘值。
+              // 不能拿当前 policy.pct 比对——拖动期间策略被外部改掉时两者不同。
+              setDraft(pct === pressValue.current ? null : pct);
             }}
             onValueCommit={(next: number[]) => {
               const pct = next[0];

@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
   compactionEnabled: false,
   setCompaction: vi.fn(async () => {}),
+  ownerGeneration: 1,
+  sliderValue: null as number | null,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -36,6 +38,11 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
     };
   },
 }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) =>
+    owner.generation === mocks.ownerGeneration,
+}));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
   isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
@@ -53,15 +60,20 @@ vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => 
 // Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
 // 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
 vi.mock('@/components/ui/slider', () => ({
-  Slider: ({ value, min, max, step, onValueChange, onValueCommit, ...rest }: {
+  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onPointerDown, onPointerUp, ...rest }: {
     value?: number[];
     min?: number;
     max?: number;
     step?: number;
     onValueChange?: (next: number[]) => void;
     onValueCommit?: (next: number[]) => void;
+    onPointerDown?: (event: unknown) => void;
+    onPointerUp?: (event: unknown) => void;
     'aria-label'?: string;
-  }) => (
+  }) => {
+    // 受控 input 在 jsdom 里不回写未变化的 DOM value，断言直接读收到的 value prop。
+    mocks.sliderValue = value?.[0] ?? min ?? null;
+    return (
     <input
       type="range"
       aria-label={rest['aria-label']}
@@ -69,10 +81,13 @@ vi.mock('@/components/ui/slider', () => ({
       min={min}
       max={max}
       step={step}
+      onPointerDown={(event) => onPointerDown?.(event)}
+      onPointerUp={(event) => onPointerUp?.(event)}
       onChange={(event) => onValueChange?.([Number(event.target.value)])}
       onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
     />
-  ),
+    );
+  },
 }));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
@@ -129,6 +144,8 @@ beforeEach(() => {
   mocks.limit = null;
   mocks.compactionEnabled = false;
   mocks.compaction = { pct: 90, isCustomized: false };
+  mocks.ownerGeneration = 1;
+  mocks.sliderValue = null;
   vi.mocked(getProviderModelEffort).mockReset();
   // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
   vi.stubGlobal('ResizeObserver', class {
@@ -198,6 +215,102 @@ describe('model advanced editor', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The trailing burst write must survive the first write's confirmation: the
+  // policy moving to 89 is our own write landing, not a reason to drop 87.
+  it('keeps the trailing burst write alive across the first write confirmation', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      const view = render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      let releaseFirst!: () => void;
+      mocks.setCompaction.mockImplementationOnce(
+        async () => new Promise<void>((resolve) => { releaseFirst = resolve; }),
+      );
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      fireEvent.blur(ratio());
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(ratio(), { target: { value: '88' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '87' } });
+      fireEvent.blur(ratio());
+
+      // The first write confirms (policy moves to 89) before the trailing timer.
+      await act(async () => {
+        releaseFirst();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      mocks.compaction = { pct: 89, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('87');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(87);
+      mocks.compaction = { pct: 87, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('87');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A trailing write binds to the account generation at commit time; an account
+  // switch while it waits must retire it instead of writing the old value into
+  // the new account.
+  it('retires the trailing burst write when the account generation moved on', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '88' } });
+      fireEvent.blur(ratio());
+      mocks.ownerGeneration += 1;
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+      expect(mocks.setCompaction).toHaveBeenCalledWith(89);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The shared Slider cancels by replaying the press-time value. That value can
+  // differ from the saved policy (an external edit landed mid-drag); the replay
+  // must still drop the preview instead of keeping it as one.
+  it('drops the drag preview on cancel replay even when the saved value changed mid-drag', () => {
+    mocks.compactionEnabled = true;
+    const view = render(drawer());
+    const ratio = () => screen.getByRole('slider', {
+      name: 'settings.providers.models.advanced.compaction.sliderAria',
+    }) as HTMLInputElement;
+
+    fireEvent.pointerDown(ratio(), { pointerId: 1, button: 0 });
+    fireEvent.change(ratio(), { target: { value: '80' } });
+    expect(ratio().value).toBe('80');
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
+
+    // Another window saves 70 while the drag is in the air.
+    mocks.compaction = { pct: 70, isCustomized: true };
+    view.rerender(drawer());
+
+    // Cancel replays the press-time value (90 ≠ saved 70); the preview must
+    // follow the saved policy, not the replay.
+    fireEvent.change(ratio(), { target: { value: '90' } });
+    expect(mocks.sliderValue).toBe(70);
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
+    fireEvent.pointerUp(ratio(), { pointerId: 1 });
   });
 
   it.each([
