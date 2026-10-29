@@ -10525,6 +10525,8 @@
     "cancel": "キャンセル",
     "save": "保存",
     "autosave": {
+      "remoteUnconfirmed": "接続先での保存を確認できません",
+      "remoteUnsavedDescription": "この画面を離れると編集中の内容は破棄されますが、接続先ですでに保存された可能性のある変更は元に戻りません。設定を開き直して確認してください。",
       "saving": "保存中…",
       "saved": "保存しました",
       "retry": "再保存",

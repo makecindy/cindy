@@ -159,6 +159,8 @@ vi.mock('../voice/CompanionVoiceSettings', () => ({
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
 import { readBotSettingsPatch } from '../../../../main/localDb/ipc/botRemoteSettingsOps';
 import { normalizeBotProfileModelChain } from '../../../../shared/botModelChain';
+import { BotSettingsTargetContext } from '../botSettingsTarget';
+import { localBotSettingsTarget } from '../localBotSettingsTarget';
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
@@ -706,6 +708,64 @@ describe('Bot settings profile consolidation', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.discard' }));
     expect(await leaving).toBe(true);
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe(bot().name));
+  });
+
+  // Real shared settings page, remote target boundary: no silent navigation retry after
+  // a rejected/timeout write, no saved indicator, and no detached re-send after discard.
+  // A classified failure shows its own message; anything else stays "not confirmed".
+  it.each([
+    ['DEVICE_LINK_TIMEOUT', 'bots.remoteSettings.saveFailed'],
+    ['DEVICE_LINK_DEVICE_OFFLINE', 'bots.profileSaveOffline'],
+    ['PRECONDITION_FAILED', 'ipcError.PRECONDITION_FAILED'],
+    ['INVALID_PARAMS', 'ipcError.INVALID_PARAMS'],
+  ] as const)(
+    'lets a remote %s failure leave without waiting for another save', async (code, message) => {
+      let rejectSave!: (error: unknown) => void;
+      const update = vi.fn().mockImplementation(() => new Promise((_, reject) => { rejectSave = reject; }));
+      const target = { ...localBotSettingsTarget, kind: 'remote' as const, deviceId: 'fixture-linux',
+        profile: { ...localBotSettingsTarget.profile, update } };
+      const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+      const view = render(<BotSettingsTargetContext.Provider value={target}>
+        <BotSettings bot={bot()} initialPage="model" onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />
+      </BotSettingsTargetContext.Provider>);
+      fireEvent.click(screen.getAllByTestId('current-model')[0]);
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText('bots.autosave.saved')).toBeNull();
+      await act(async () => { rejectSave(createIpcError(code, 'fixture failure')); });
+      await screen.findByRole('button', { name: 'bots.autosave.retry' });
+      expect(screen.getByText(message)).toBeTruthy();
+      fireEvent.blur(screen.getByLabelText('bots.nameLabel'));
+      expect(update).toHaveBeenCalledTimes(1);
+      let leaving!: Promise<boolean>;
+      act(() => { leaving = beforeCloseRef.current!(); });
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.continueEditing' }));
+      expect(await leaving).toBe(false);
+      expect(update).toHaveBeenCalledTimes(1);
+      act(() => { leaving = beforeCloseRef.current!(); });
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.discard' }));
+      expect(await leaving).toBe(true);
+      view.unmount();
+      await act(async () => {});
+      expect(update).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('flushes a fresh edit after a failed save before leaving', async () => {
+    mocks.updateBotProfile.mockRejectedValueOnce(new Error('offline'));
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+    fireEvent.change(name, { target: { value: 'First draft' } });
+    fireEvent.blur(name);
+    await screen.findByRole('button', { name: 'bots.autosave.retry' });
+    fireEvent.change(name, { target: { value: 'Corrected draft' } });
+    let leaving!: Promise<boolean>;
+    act(() => { leaving = beforeCloseRef.current!(); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2));
+    await act(async () => { expect(await leaving).toBe(true); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({ name: 'Corrected draft' }));
+    expect(screen.queryByRole('button', { name: 'bots.autosave.discard' })).toBeNull();
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {

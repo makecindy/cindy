@@ -10570,6 +10570,8 @@
     "cancel": "Cancel",
     "save": "Save",
     "autosave": {
+      "remoteUnconfirmed": "Remote save not confirmed",
+      "remoteUnsavedDescription": "Leaving discards this page’s draft. It does not undo changes that may already be saved on the other computer. Reopen settings to check.",
       "saving": "Saving…",
       "saved": "Saved",
       "retry": "Save Again",

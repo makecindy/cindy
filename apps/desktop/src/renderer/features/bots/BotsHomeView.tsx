@@ -236,14 +236,16 @@ export function BotSettings({
   /** Leaving with `allowDiscard` offers to drop a draft the host keeps rejecting; staying flows never discard. */
   const canLeave = useCallback(async (allowDiscard = true) => {
     if (avatarInFlight.current) return false;
-    await autosave.flush();
+    // Leaving is not a retry: a settled failure must offer an exit immediately.
+    // Explicit retry and a fresh edit still use the normal save path.
+    if (!allowDiscard || !autosave.failed()) await autosave.flush();
     if (autosave.isDirty()) {
       // A save the host keeps rejecting must not trap the user in settings.
       if (!allowDiscard || !autosave.failed()) return false;
       const discard = await confirm({
         presentation: 'standard',
-        title: t('bots.autosave.unsavedTitle'),
-        description: t('bots.autosave.unsavedDescription'),
+        title: t(isRemote ? 'bots.autosave.remoteUnconfirmed' : 'bots.autosave.unsavedTitle'),
+        description: t(isRemote ? 'bots.autosave.remoteUnsavedDescription' : 'bots.autosave.unsavedDescription'),
         confirmText: t('bots.autosave.discard'),
         cancelText: t('bots.autosave.continueEditing'),
       });
@@ -262,7 +264,7 @@ export function BotSettings({
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await capabilityLeaveRef.current?.()) ?? true;
-  }, [autosave, confirm, t]);
+  }, [autosave, confirm, isRemote, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = () => canLeave();
@@ -360,12 +362,12 @@ export function BotSettings({
   const displayName = name.trim() || savedSettingsRef.current.name;
   const handleNameBlur = () => {
     if (name !== displayName) setName(displayName);
-    void autosave.flush();
+    if (!autosave.failed()) void autosave.flush();
   };
   const handleDescriptionBlur = () => {
     const trimmed = description.trim();
     if (trimmed !== description) setDescription(trimmed);
-    void autosave.flush();
+    if (!autosave.failed()) void autosave.flush();
   };
 
   if (bot.status === 'archived') {
@@ -505,7 +507,7 @@ export function BotSettings({
             </span>
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
+              {t(autosave.errorKey ?? (isRemote ? 'bots.autosave.remoteUnconfirmed' : 'bots.profileSaveFailed'))}
               <button
                 type="button"
                 onClick={() => void autosave.retry()}
@@ -623,7 +625,7 @@ export function BotSettings({
               setIdentitySource(next);
               autosave.onEdit('text');
             }}
-            onBlur={() => void autosave.flush()}
+            onBlur={() => { if (!autosave.failed()) void autosave.flush(); }}
             {...autosave.composition}
             rows={6}
             className="min-h-40 resize-none p-3 leading-6 [field-sizing:content]"

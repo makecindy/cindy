@@ -10525,6 +10525,8 @@
     "cancel": "取消",
     "save": "儲存",
     "autosave": {
+      "remoteUnconfirmed": "尚未確認遠端儲存結果",
+      "remoteUnsavedDescription": "離開會捨棄本頁草稿，但不會復原遠端可能已儲存的變更。重新開啟設定即可核對結果。",
       "saving": "正在儲存…",
       "saved": "已儲存",
       "retry": "重新儲存",

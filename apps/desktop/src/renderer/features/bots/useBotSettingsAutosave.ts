@@ -54,7 +54,7 @@ export interface BotSettingsAutosaveController {
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   hasPendingModelSelection: () => boolean;
-  /** 最近一次提交是否失败(同步读 ref,flush 之后即可信)。 */
+  /** 当前草稿的提交是否失败；新编辑恢复正常保存(同步读 ref)。 */
   failed: () => boolean;
   /** 放弃无法保存的草稿:取消待发保存,卸载冲刷与脱离判定都按上次成功保存的基线处理。 */
   discard: () => void;
@@ -147,6 +147,8 @@ export function useBotSettingsAutosave(
       if (!enabledRef.current) return;
       discardedRef.current = false;
       if (trigger === 'text' && composingRef.current) return;
+      // A fresh draft must flush normally when leaving, even after an older failure.
+      failedRef.current = false;
       autosave.schedule(trigger);
     },
     [autosave],
@@ -159,7 +161,11 @@ export function useBotSettingsAutosave(
       onCompositionEnd: () => {
         composingRef.current = false;
         committablePayloadRef.current = payloadRef.current;
-        if (enabledRef.current) autosave.schedule('text');
+        if (enabledRef.current) {
+          discardedRef.current = false;
+          failedRef.current = false;
+          autosave.schedule('text');
+        }
       },
     }),
     [autosave],
