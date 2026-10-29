@@ -45,13 +45,14 @@ export function botGroupMenuActions(sections: readonly BotGroupMenuSection[]): N
     : section.options.map(toAction));
 }
 
-export function BotGroupMenu({ title, sections, onSelect, accessibilityLabel, disabled = false, testID, children }: {
+export function BotGroupMenu({ title, sections, onSelect, accessibilityLabel, disabled = false, longPress = false, testID, children }: {
   /** Fallback sheet title. */
   title: string;
   sections: readonly BotGroupMenuSection[];
   onSelect(id: string): void;
   accessibilityLabel?: string;
   disabled?: boolean;
+  longPress?: boolean;
   testID?: string;
   /** The trigger. `open` is set only when the fallback sheet has to be opened by the trigger itself. */
   children(open: (() => void) | undefined): ReactElement;
@@ -63,7 +64,7 @@ export function BotGroupMenu({ title, sections, onSelect, accessibilityLabel, di
   const known = new Set(sections.flatMap((section) => section.options.filter((option) => !option.disabled).map((option) => option.id)));
   const select = (id: string) => { if (known.has(id)) onSelect(id); };
   if (usesNativePullDownMenu()) {
-    return <NativePullDownMenu actions={botGroupMenuActions(sections)} onAction={select} disabled={disabled}
+    return <NativePullDownMenu actions={botGroupMenuActions(sections)} onAction={select} disabled={disabled} longPress={longPress}
       accessibilityLabel={accessibilityLabel} testID={testID}>
       {children(undefined)}
     </NativePullDownMenu>;

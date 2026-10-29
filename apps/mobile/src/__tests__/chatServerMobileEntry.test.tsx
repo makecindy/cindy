@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn(async () => 'fixture') },
   link: { status: 'offline', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
@@ -46,7 +46,7 @@ import { createChatServerClient } from '@/chat/chatServerClient';
 import { forgetChatMessages } from '@/chat/chatMessageCache';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
-import { peekChatMessages } from '@/chat/chatMessageCache';
+import { peekChatMessages, readChatMessages } from '@/chat/chatMessageCache';
 import { isRemoteResourceUnread, clearRemoteResourceCache, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
@@ -57,7 +57,8 @@ let root: Root | undefined;
 let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : ''); return null; }
+let threadRootId: string | undefined;
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
@@ -72,7 +73,7 @@ beforeEach(async () => {
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
-  vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
+  vi.clearAllMocks(); h.foreground.clear(); showChat = false; threadRootId = undefined; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
@@ -92,15 +93,25 @@ beforeEach(async () => {
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
-  await act(async () => { root!.unmount(); root = undefined; });
+  expect(chat.isHistoryFresh?.()).toBe(true);
+  const renderedHistoryCheck = chat.isHistoryFresh;
   h.auth.apiFetch.mockImplementation(() => new Promise(() => {}));
+  await act(async () => {
+    for (const onForeground of h.foreground) onForeground('active');
+    // The previous render must see the pending foreground read immediately.
+    expect(renderedHistoryCheck?.()).toBe(false);
+  });
+  expect(chat.state.kind).toBe('ready');
+  await act(async () => { root!.unmount(); root = undefined; });
   await render();
   expect(chat.state.kind).toBe('ready');
+  expect(chat.isHistoryFresh?.()).toBe(false);
   await act(async () => { root!.unmount(); root = undefined; });
   // A new account generation drops the JS cache; the same account can still read its disk.
   setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
   await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  expect(chat.isHistoryFresh?.()).toBe(false);
   h.auth.apiFetch.mockRejectedValue({ status: 403 });
   // Restart the mounted request too, since its earlier HTTP read intentionally never resolves.
   await act(async () => { root!.unmount(); root = undefined; });
@@ -750,4 +761,175 @@ it('keeps an uncertain send frozen and uncancellable when a later attempt is rej
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
   expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
   await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
+});
+
+
+// D2 root-404 regression: real mobile entry -> HTTP client -> memory/disk cache.
+// Existing membership tests only reject the whole room, not an authorized reply
+// page followed by a missing root. This integration-tier fixture distinguishes
+// the exact thread lookup exception from room-wide access loss.
+it('keeps main history in memory and on disk when only the thread root is missing', async () => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const replyId = '00000000-0000-4000-8000-000000000003';
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith(`/messages/${self}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [{
+      id: replyId, seq: '9007199254740994', authorId: self, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'Still authorized reply' }], createdAt: '2026-10-09', deleted: false, threadRootId: self,
+    }];
+    return original(path, options);
+  });
+  threadRootId = self; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ id: replyId, content: 'Still authorized reply' }] } });
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  expect(peekChatMessages(id, self)?.page.messages.map(message => message.id)).toEqual([replyId]);
+  await act(async () => { root!.unmount(); root = undefined; });
+  // Discard JS memory without deleting this account's persisted conversations.
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect((await readChatMessages(id))?.page.messages[0]?.id).toBe(self);
+});
+
+it.each([
+  { thread: true, status: 403, code: 'MESSAGE_NOT_FOUND' },
+  { thread: true, status: 404, code: 'CONVERSATION_NOT_FOUND' },
+  { thread: true, status: 404, code: 'OTHER_NOT_FOUND' },
+  { thread: false, status: 404, code: 'MESSAGE_NOT_FOUND' },
+])('still clears room history for $status/$code outside an exact missing thread root (thread=$thread)', async ({ thread, status, code }) => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)).not.toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (thread ? path.endsWith(`/messages/${self}`) : path.startsWith('/v1/changes?')) throw { status, code };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [];
+    return original(path, options);
+  });
+  threadRootId = thread ? self : undefined; await render();
+  expect(chat.state.kind).toBe('missing');
+  expect(peekChatMessages(id)).toBeNull();
+  expect(peekChatMessages(id, self)).toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect(await readChatMessages(id)).toBeNull();
+});
+
+// PC parity delivery, integration: the real durable ledger and account runner.
+// A confirmed reply plus a failed second POST must survive page settlement and
+// restart without ever re-sending the reply; prior media tests lack this second stage.
+it('restores a failed share after restart, keeps its body, and does not block later replies', async () => {
+  const { settleChatOutbox } = await import('@/chat/chatOutbox');
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  const replyId = '00000000-0000-4000-8000-000000000020';
+  const shareId = '00000000-0000-4000-8000-000000000021';
+  const bodies: unknown[] = [];
+  let fail = true;
+  const client = { personalList: { hidden: () => false }, syncListState: async () => {},
+    members: async () => [], me: async () => self, actors: async () => [],
+    send: vi.fn(async (_room, input, durable) => { await durable.save({ operationId: input.clientId, content: [], mentions: [] }); return { id: replyId }; }),
+    shareToMain: vi.fn(async (_room, source, root, durable) => {
+      expect(source).toBe(replyId); expect(root).toBe(self);
+      const body = durable.body ?? { operationId: `thread-share:${source}`, content: [], mentions: [self] };
+      if (!durable.body) await durable.save(body);
+      bodies.push(body); if (fail) throw new Error('offline'); return { messageId: shareId, alreadyShared: false };
+    }),
+    load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+  } as any;
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  await enqueueChatMessage(store, account, id, { clientId: 'topic-and-main', text: 'reply', threadRootId: self,
+    mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+  await runner().run();
+  expect(client.shareToMain).not.toHaveBeenCalled();
+  await runner().run();
+  await settleChatOutbox(store, id, new Set([replyId]));
+  expect(store.getSnapshot()[0].chat).toMatchObject({ messageId: replyId, shareToMain: { state: 'failed' } });
+  await enqueueChatMessage(store, account, id, { clientId: 'later-reply', text: 'later', threadRootId: self, mentions: { all: false, botIds: [] } }, 1);
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  store = createDurableOutbox(storage); await store.activate(account);
+  const row = store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')!;
+  await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!, state: 'pending' } } });
+  fail = false;
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')?.chat?.shareToMain)
+    .toMatchObject({ state: 'sent', messageId: shareId });
+});
+
+// The existing runner is the authority across account switches and crash windows.
+// These are ordering/persistence regressions, not a parallel UI failure queue.
+describe('two-stage topic delivery boundaries', () => {
+  const reply = '00000000-0000-4000-8000-000000000031';
+  const shared = '00000000-0000-4000-8000-000000000032';
+  async function setup() {
+    const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+      setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+    const account = getMobileAuthOwner().accountKey;
+    const store = createDurableOutbox(storage); await store.activate(account);
+    const client = { personalList: { hidden: () => false }, syncListState: async () => {}, members: async () => [], me: async () => self, actors: async () => [],
+      send: vi.fn(async (_room, input, durable) => { await durable.save(durable.body ?? { operationId: input.clientId, content: [], mentions: [] }); return { id: reply }; }),
+      shareToMain: vi.fn(async (_room, _reply, _root, durable) => {
+        await durable.save(durable.body ?? { operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+        return { messageId: shared, alreadyShared: false };
+      }), load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+    } as any;
+    const accessLost = vi.fn(async () => {});
+    const runner = createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost });
+    await enqueueChatMessage(store, account, id, { clientId: 'both', text: 'reply', threadRootId: self,
+      mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+    return { storage, account, store, client, runner, accessLost };
+  }
+  it('never starts the share from an unknown reply outcome and coalesces duplicate wakeups', async () => {
+    const { store, client, runner } = await setup();
+    const send = client.send.getMockImplementation();
+    client.send.mockImplementationOnce(async (...args: unknown[]) => { await send(...args); throw new Error('lost response'); });
+    await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain).not.toHaveBeenCalled();
+    expect(store.getSnapshot()[0].chat?.messageId).toBeUndefined();
+    await runner.run(); await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    expect(client.send.mock.calls[1][2].body).toEqual(client.send.mock.calls[0][2].body ?? { operationId: 'both', content: [], mentions: [] });
+  });
+  it('recovers the persisted post body after a process stops before its receipt, and settles only once represented', async () => {
+    const { storage, account, store, client, runner } = await setup();
+    await runner.run();
+    const row = store.getSnapshot()[0];
+    const body = { operationId: `thread-share:${reply}`, content: [], mentions: [self] };
+    await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } });
+    const restored = createDurableOutbox(storage); await restored.activate(account);
+    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+    await resumed.run();
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain.mock.calls[0][3].body).toEqual(body);
+    const { settleChatOutbox } = await import('@/chat/chatOutbox');
+    await settleChatOutbox(restored, id, new Set([reply])); expect(restored.getSnapshot()).toHaveLength(1);
+    await settleChatOutbox(restored, id, new Set([reply]), new Set([reply])); expect(restored.getSnapshot()).toHaveLength(0);
+  });
+  it('does not adopt a late share receipt into another account', async () => {
+    const { store, client, runner } = await setup(); await runner.run();
+    client.shareToMain.mockImplementationOnce(async (_room: string, _reply: string, _root: string, durable: any) => {
+      await durable.save({ operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+      await store.activate('global:other'); return { messageId: shared, alreadyShared: false };
+    });
+    await runner.run(); expect(store.getSnapshot()).toEqual([]);
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])('keeps source unavailability local but permanently stops room revocation (room=%s)', async roomLost => {
+    const { store, client, runner, accessLost } = await setup(); await runner.run();
+    client.shareToMain.mockRejectedValue(roomLost ? Object.assign(new Error('CONVERSATION_NOT_FOUND'), { status: 403 }) : new Error('SHARE_UNAVAILABLE'));
+    await runner.run(); const row = store.getSnapshot()[0];
+    if (roomLost) { expect(row.suspended).toBe(true); expect(accessLost).toHaveBeenCalledWith(id); }
+    else { expect(row.chat?.shareToMain?.state).toBe('unavailable'); expect(accessLost).not.toHaveBeenCalled(); }
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    if (roomLost) {
+      await enqueueChatMessage(store, store.getAccountId(), id, { clientId: 'after-rejoin', text: 'Explicit new reply', threadRootId: self,
+        mentions: { all: false, botIds: [] } }, 0);
+      await runner.run(); expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    }
+  });
 });

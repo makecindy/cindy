@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Keyboard, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Stack } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,7 +58,7 @@ export function ChatIdentityHeader({
       accessibilityLabel={identityLabel} accessibilityHint={identityAction ? identityHint : undefined}
       accessibilityState={identityAction ? { disabled: !controlsReady } : undefined}
       disabled={!controlsReady || !identityAction} onPress={openIdentity} testID={`${testIDPrefix}.identity`}>
-      <View style={styles.mark}>{mark}</View>
+      {mark ? <View style={styles.mark}>{mark}</View> : null}
       <View style={styles.identityText}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}
@@ -80,8 +80,12 @@ function NativeChatHeader({ identity, back, actions, actionCount }: {
   const { colors } = useTheme();
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const [actionsWidth, setActionsWidth] = useState(0);
+  // A text action (Follow/Following) is wider than an icon. Reserve its measured
+  // width so UIKit keeps the custom view on the bar instead of an inert overflow item.
+  const trailingWidth = Math.max(navigationChrome.target * Math.max(1, actionCount), actionsWidth);
   const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right
-    - (navigationChrome.target * Math.max(1, actionCount) + spacing.lg * 2 + spacing.md) * 2));
+    - (trailingWidth + spacing.lg * 2 + spacing.md) * 2));
   const options = useMemo(() => ({ headerShown: true, headerTransparent: true, headerShadowVisible: false,
     headerBackVisible: false, headerTintColor: colors.textPrimary,
     headerStyle: { backgroundColor: 'transparent' }, headerTitle: '',
@@ -94,7 +98,9 @@ function NativeChatHeader({ identity, back, actions, actionCount }: {
       </View>
     </Stack.Toolbar.View></Stack.Toolbar>
     {actionCount > 0 ? <Stack.Toolbar placement="right"><Stack.Toolbar.View hidesSharedBackground>
-      <View style={{ flexDirection: 'row', gap: spacing.md }}>{actions}</View>
+      <View style={{ flexDirection: 'row', gap: spacing.md }} onLayout={({ nativeEvent }) => {
+        setActionsWidth(Math.ceil(nativeEvent.layout.width));
+      }}>{actions}</View>
     </Stack.Toolbar.View></Stack.Toolbar> : null}
   </>;
 }

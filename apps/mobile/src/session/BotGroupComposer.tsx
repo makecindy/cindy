@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
 import { randomUUID } from 'expo-crypto';
-import { Camera, Folder, Image as ImageIcon, Plus, Square, Users, X } from 'lucide-react-native';
+import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
@@ -68,6 +68,7 @@ export interface BotGroupSendInput {
   division: boolean;
   /** Uploaded attachments, in the same shape the task composer sends; empty when none. */
   attachments: RemoteSerializedAttachment[];
+  alsoSendToMain?: true;
 }
 
 type MentionOption =
@@ -75,7 +76,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, quoteMessageId, focusRequest, onSend, onStop,
+  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride,
 }: {
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
@@ -86,6 +87,8 @@ export function BotGroupComposer({
   /** The computer takes attachments on `send` (`BotGroupRemoteChatData.supportsAttachments`). */
   attachmentsSupported: boolean;
   divisionSupported?: boolean;
+  topic?: boolean;
+  placeholder?: string;
   /** The message being replied to; part of the send intent. */
   quoteMessageId?: string;
   /** Bumped on every reply tap, so replying to the same message again still focuses the input. */
@@ -103,6 +106,7 @@ export function BotGroupComposer({
   const [focused, setFocused] = useState(false);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
   const [division, setDivision] = useState(false);
+  const [alsoSendToMain, setAlsoSendToMain] = useState(false);
   const [sending, setSending] = useState(false);
   const [waitingUploads, setWaitingUploads] = useState(false);
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(waitingUploads);
@@ -162,7 +166,7 @@ export function BotGroupComposer({
   const showStop = running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
   // Same as the task composer: the tray shows inside the focused card, a badge otherwise.
-  const cardActive = focused && hasAttachments;
+  const cardActive = topic || (focused && hasAttachments);
 
   const choose = (option: MentionOption) => {
     if (!query) return;
@@ -226,8 +230,10 @@ export function BotGroupComposer({
       const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions, quoteMessageId);
       attemptRef.current = attempt;
       release = tray.holdForSend(attachmentIds);
-      await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments });
+      await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments,
+        ...(topic && alsoSendToMain ? { alsoSendToMain: true as const } : {}) });
       attemptRef.current = null;
+      setAlsoSendToMain(false);
       tray.clearSent(attachmentIds);
     } catch {
       restoreDraft();
@@ -251,7 +257,7 @@ export function BotGroupComposer({
   const hint = !hasMembers
     ? t('groupChat.composer.noMembers')
     : tooLong ? t('groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS }) : tray.error;
-  const placeholder = !hasMembers
+  const placeholder = placeholderOverride ?? (!hasMembers
     ? t('groupChat.composer.noMembers')
     : division
       ? t('groupChat.composer.placeholderDivision')
@@ -261,7 +267,7 @@ export function BotGroupComposer({
           ? t('groupChat.composer.placeholderPlanRunning', { name: planState.botName })
           : planState?.kind === 'waiting' && planState.stepDone && planState.botName
             ? t('groupChat.composer.placeholderPlanWaiting', { name: planState.botName })
-            : t('groupChat.composer.placeholder');
+            : t('groupChat.composer.placeholder'));
 
   const moreLabel = t('groupChat.composer.more');
   const plusButton = (onPress: (() => void) | undefined) => <Pressable accessibilityRole="button" accessibilityLabel={moreLabel}
@@ -378,11 +384,17 @@ export function BotGroupComposer({
         onPreview={setPreviewId} onRemove={tray.removeAttachment} onRemovePending={tray.removePendingUpload}
         onRetryPending={tray.retryPendingUpload} removeDisabled={sending} testIDPrefix="botGroup" /> : null}
       toolbar={cardActive ? <>
-        <ComposerToolbarLeftGroup>{plus}</ComposerToolbarLeftGroup>
+        <ComposerToolbarLeftGroup>{topic ? <Pressable accessibilityRole="checkbox"
+          accessibilityState={{ checked: alsoSendToMain, disabled: sending || !online }} disabled={sending || !online}
+          onPress={() => { setAlsoSendToMain(value => !value); attemptRef.current = null; }}
+          style={styles.topicOption} testID="botGroup.thread.alsoSend">
+          {alsoSendToMain ? <CircleCheck size={iconSize.lg} color={colors.textPrimary} /> : <Circle size={iconSize.lg} color={colors.textSecondary} />}
+          <Text style={styles.topicOptionText}>{t('groupChat.thread.alsoSend')}</Text>
+        </Pressable> : plus}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}
-      leading={leading}
+      leading={topic ? undefined : leading}
       trailing={trailing}
       testID="botGroup.composer.row"
     />
@@ -424,6 +436,8 @@ export function BotGroupComposer({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  topicOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  topicOptionText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm },
   // The badge brings its own trailing margin (shared with the task composer).
   leading: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },

@@ -157,7 +157,7 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口、分隔线的未读提示,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
   /**

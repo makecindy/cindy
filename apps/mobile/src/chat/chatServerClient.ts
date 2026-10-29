@@ -8,6 +8,7 @@ import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 import i18next from 'i18next';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/locale';
 import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
+import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView, type ChatReactor } from '@cindy/maker-shared/botGroupChat';
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
@@ -23,6 +24,8 @@ export interface ChatMember {
 export interface ChatMessage {
   id: string; seq: string; authorId: string; author: { kind: string; name: string };
   createdAt: string; deleted: boolean; threadRootId: string | null; origin?: string; mentions?: string[];
+  replyCount?: number; revision?: number;
+  reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
@@ -32,7 +35,10 @@ export interface ChatExecutionFailure {
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
 export interface ChatExecution extends ChatExecutionFailure { requester_id?: string; created_at?: string; status: string }
-export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; executions?: ChatExecution[]; historyRevision?: string }
+export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[]; executions?: ChatExecution[]; historyRevision?: string;
+  /** Authorized enrichments only; raw card fallback is never a resolved source. */
+  threadSources?: Record<string, ChatMessage | null>; threadRoots?: Record<string, ChatMessage | null>; threadRetryAt?: number; previewMessages?: ChatMessage[];
+}
 /** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string, signal?: AbortSignal) => Promise<T>;
 /** An actor the account owns; a companion's `externalId` is its bot id on every computer. */
@@ -56,6 +62,8 @@ export interface ChatSendInput {
   conversationKind?: 'direct';
   clientId: string; text: string; mentions: { all: boolean; botIds: string[] };
   quote?: { messageId: string }; threadRootId?: string;
+  /** Local delivery intent; never sent as a new server protocol field. */
+  alsoSendToMain?: true;
 }
 export interface ChatSendBody {
   operationId: string; content: ChatMessage['content']; mentions: string[]; threadRootId?: string;
@@ -90,7 +98,7 @@ const taskCardOf = (message: ChatMessage) => message.author.kind === 'bot' ? mes
 const bodyBlocks = (message: ChatMessage) => message.deleted || readImportedBotGroupRuntimeFailureCode(message) ? []
   : message.content.filter(block => !readBotGroupQuoteCard(block) && !(message.author.kind === 'bot' && readBotGroupTaskCard(block)));
 // Media blocks are the message's attachments; only the list preview falls back to their names.
-const contentText = (message: ChatMessage) => bodyBlocks(message)
+const contentText = (message: ChatMessage) => readBotGroupThreadShareCard(message) ? '' : bodyBlocks(message)
   .flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? '']).join('\n');
 // The cloud companion transcript draws the same attachment strip as the group chat, so its text leaves media out too.
 export const chatMessageText = contentText;
@@ -111,6 +119,13 @@ function joinedMemberName(message: ChatMessage): string | undefined {
   return joined && typeof joined.data?.displayName === 'string' && joined.data.displayName.trim() ? joined.data.displayName : undefined;
 }
 
+function sharedReplyPreview(message: ChatMessage, members: ChatMember[], selfId?: string): string | undefined {
+  if (!readBotGroupThreadShareCard(message)) return;
+  const member = members.find(member => member.id === message.authorId);
+  return i18next.t(message.authorId === selfId ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther',
+    { name: member ? memberName(member, members) : message.author.name });
+}
+
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
 export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: string): HostedRemoteCollectionItem {
   const members = snapshot?.members.filter(member => member.state === 'joined') ?? [];
@@ -125,7 +140,7 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const ownerMembers = room.kind === 'direct' ? [] : members;
   const subtitle = members.map(member => memberName(member, ownerMembers)).join(' · ');
   const preview = joinedPreview ?? (last
-    ? mobileMarkdownPreviewText(botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
+    ? mobileMarkdownPreviewText(sharedReplyPreview(last, members, selfId) || botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
     : '');
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
     lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
@@ -173,6 +188,34 @@ export function chatLastReplySequence(messages: readonly ChatMessage[], selfId: 
 
 export function chatReadSequence(snapshot: ChatSnapshot): string {
   return chatCursor(snapshot.reads?.find(read => read.thread_key === 'main')?.read_seq ?? '0');
+}
+
+/** Decimal cursors stay lossless, including the dismissed-hint watermark. */
+export function chatThreadMetadata(page: ChatPage, selfId: string) {
+  const known = new Map([...page.snapshot.messages, ...(page.previewMessages ?? []), ...page.messages].map(message => [message.id, message]));
+  const rootIds = new Set([...known.values()].flatMap(message => message.threadRootId ? [message.threadRootId] : message.replyCount ? [message.id] : []));
+  const threads = [...rootIds].map(rootId => {
+    const root = page.threadRoots && Object.hasOwn(page.threadRoots, rootId) ? page.threadRoots[rootId] : known.get(rootId);
+    const read = page.snapshot.reads?.find(read => read.thread_key === rootId);
+    const replies = page.snapshot.messages.filter(message => message.threadRootId === rootId && !message.deleted && message.origin !== 'system');
+    const unread = page.snapshot.reads ? replies.filter(message => message.authorId !== selfId && message.origin !== 'import'
+      && BigInt(chatCursor(message.seq)) > BigInt(chatCursor(read?.read_seq ?? '0'))) : [];
+    const latest = unread.reduce((seq, message) => BigInt(message.seq) > BigInt(seq) ? message.seq : seq, '0');
+    const member = root && page.snapshot.members.find(member => member.id === root.authorId);
+    return { rootId, status: root === undefined ? 'loading' as const : root === null || root.deleted ? 'unavailable' as const : 'available' as const, text: root && !root.deleted ? mobileMarkdownPreviewText(contentText(root)) || mediaNames(root) : '',
+      authorName: root ? member ? memberName(member, page.snapshot.members) : root.author.name : '',
+      replyCount: root?.replyCount, unread: unread.length, mentioned: unread.some(message => message.mentions?.includes(selfId)),
+      following: page.snapshot.reads ? read?.following === true : undefined, latest };
+  }).sort((a, b) => Number(b.unread > 0) - Number(a.unread > 0) || (BigInt(a.latest) < BigInt(b.latest) ? 1 : -1)).slice(0, 50);
+  const shares: Record<string, { messageId: string; bySelf: boolean }> = {};
+  for (const message of known.values()) {
+    const card = message.deleted ? null : readBotGroupThreadShareCard(message);
+    if (!card || shares[card.messageId]?.bySelf) continue;
+    shares[card.messageId] = { messageId: message.id, bySelf: message.authorId === selfId };
+  }
+  const read = page.snapshot.reads?.find(read => read.thread_key === page.threadRootId);
+  return { threads, shares, reactionRevision: page.snapshot.cursor, readSeq: page.snapshot.reads ? read?.read_seq ?? '0' : undefined,
+    following: page.snapshot.reads && page.threadRootId ? read?.following === true : undefined };
 }
 
 /** Import only the server's acknowledged position, never mark an unseen reply as read. */
@@ -225,7 +268,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const quote = message.origin === 'system' ? null : readBotGroupQuote(message.content);
     const task = message.origin === 'system' ? null : taskCardOf(message);
     return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: message.origin === 'system' ? 'notice' : 'message',
-      ...(task ? { task } : {}), threadRootId: message.threadRootId,
+      ...(task ? { task } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
@@ -234,6 +277,41 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: null, files: [],
       attachments: chatMessageAttachments(message), createdAt: Date.parse(message.createdAt) };
   });
+  const known = new Map([...page.snapshot.messages, ...(page.previewMessages ?? []), ...page.messages].map(message => [message.id, message]));
+  const authorName = (message: ChatMessage) => {
+    const member = members.find(member => member.id === message.authorId);
+    return member ? memberName(member, ownerMembers) : message.author.name;
+  };
+  const preview = (message: ChatMessage) => ({ id: message.id, authorKind: message.author.kind === 'human' ? 'user' as const : 'bot' as const,
+    authorBotId: message.authorId, authorName: authorName(message), isSelf: message.authorId === selfId,
+    text: mobileMarkdownPreviewText(contentText(message)), attachments: chatMessageAttachments(message).map(({ name, category }) => ({ name, category })),
+    createdAt: Date.parse(message.createdAt) });
+  for (const view of messages) {
+    const message = known.get(view.id)!;
+    if (!message.threadRootId && message.replyCount) {
+      const replies = [...known.values()].filter(reply => reply.threadRootId === message.id && !reply.deleted && reply.origin !== 'system')
+        .sort((a, b) => BigInt(a.seq) > BigInt(b.seq) ? -1 : 1);
+      const authors = new Set<string>();
+      if (replies.length) view.threadPreview = { replies: replies.slice(0, 2).reverse().map(preview),
+        responders: replies.filter(reply => { if (authors.has(reply.authorId)) return false; authors.add(reply.authorId); return true; }).slice(0, 3).reverse().map(preview) };
+    }
+    if (!message.threadRootId && page.snapshot.reads) {
+      const read = page.snapshot.reads.find(read => read.thread_key === message.id)?.read_seq ?? '0';
+      const unread = page.snapshot.messages.filter(reply => reply.threadRootId === message.id && !reply.deleted && reply.origin !== 'system'
+        && reply.origin !== 'import' && reply.authorId !== selfId && BigInt(chatCursor(reply.seq)) > BigInt(chatCursor(read)));
+      view.threadUnread = { count: unread.length, mentioned: unread.some(reply => reply.mentions?.includes(selfId)) };
+    }
+    const card = readBotGroupThreadShareCard(message);
+    if (card) {
+      const source = page.threadSources && Object.hasOwn(page.threadSources, card.messageId) ? page.threadSources[card.messageId] : known.get(card.messageId);
+      const available = source && source.id === card.messageId && source.threadRootId === card.threadRootId && !source.deleted && source.origin !== 'system';
+      view.threadShare = { ...card, status: source === undefined ? 'loading' : available ? 'available' : 'unavailable',
+        authorKind: available && source.author.kind !== 'human' ? 'bot' : 'user', authorBotId: available ? source.authorId : null,
+        authorName: available ? authorName(source) : '', sharedByAuthor: !!available && source.authorId === message.authorId,
+        content: available ? contentText(source) : '', attachments: available ? chatMessageAttachments(source) : [],
+        createdAt: available ? Date.parse(source.createdAt) : null, edited: !!available && (source.revision ?? 1) > 1 } satisfies BotGroupThreadShareView;
+    }
+  }
   const last = messages.at(-1);
   const failures = (page.failures ?? []).flatMap(row => {
     const failure = readBotGroupExecutionFailure(row, room.id);
@@ -254,13 +332,15 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
-    lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
+    lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
     speakingBotIds: speakers.map(speaker => speaker.botId), planningBotId: null, openPlan: null, plans: [], messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false }, supportsAttachments: false };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
   openHistory?: (human: string) => Promise<ChatHistory>) {
+  const threadFailures = new Map<string, { attempts: number; at: number }>();
+  const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
   const cache = () => openHistory ? historyCache ??= identity().then(openHistory).catch(error => { historyCache = undefined; throw error; }) : undefined;
   async function messagePage(room: string, query: string) {
@@ -320,7 +400,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     })().finally(() => { readingIdentity = undefined; });
   }
   return {
-    invalidateHistory(room: string, metadata = false) { void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+    invalidateHistory(room: string, metadata = false) {
+      if (metadata) for (const key of threadFailures.keys()) if (key.startsWith(`${room}:`)) threadFailures.delete(key);
+      void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
     async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
     personalList,
     lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker }),
@@ -486,9 +568,20 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         messages.push(...batch); before = next;
       }
       if (threadRootId) {
-        const root = stored ? await stored.message<ChatMessage>(room, chatId(threadRootId))
-          : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(threadRootId)}`);
-        messages.push(root);
+        try {
+          const root = stored ? await stored.message<ChatMessage>(room, chatId(threadRootId))
+            : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(threadRootId)}`);
+          // The single-message endpoint omits reply counts and reactions. Read the
+          // root's bounded main-timeline page, which the cache invalidates on replies.
+          const aggregate = root.deleted ? undefined : (await messagePage(room, `limit=1&before=${BigInt(chatCursor(root.seq)) + 1n}`))
+            .find(message => message.id === root.id);
+          messages.push(aggregate ?? root);
+        } catch (error) {
+          // Replies were authorized above. A missing root is not room-wide access
+          // loss: retain these replies, but let the UI disable further sends.
+          // Other 404s and permission failures must still clear unauthorized history.
+          if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
+        }
       }
       // Use the same execution snapshot for running status and stop controls.
       const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
@@ -546,6 +639,147 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (!Number.isSafeInteger(size) || size < 0) throw new Error('INVALID_MEDIA_SIZE');
       return { id: mediaId, name: media.name, mimeType: media.type, size, category: media.type.startsWith('image/') ? 'image' : 'file',
         url: chatHttpsUrl(media.url), path: null };
+    },
+    /** Enrich the already visible page without holding its first paint behind extra reads. */
+    async hydrateThreads(roomId: string, page: ChatPage): Promise<ChatPage> {
+      const room = chatId(roomId);
+      const threadSources: Record<string, ChatMessage | null> = {};
+      const threadRoots: Record<string, ChatMessage | null> = {};
+      const previewMessages: ChatMessage[] = [];
+      const known = new Map([...page.snapshot.messages, ...page.messages].map(message => [message.id, message]));
+      const work: Array<() => Promise<void>> = [];
+      let threadRetryAt: number | undefined;
+      const schedule = (at: number) => { if (Number.isFinite(at)) threadRetryAt = Math.min(threadRetryAt ?? at, at); };
+      const read = (id: string, task: () => Promise<void>) => {
+        const key = `${room}:${id}`, failed = threadFailures.get(key);
+        if (failed && failed.at > Date.now()) { schedule(failed.at); return; }
+        work.push(async () => {
+          try { await task(); threadFailures.delete(key); }
+          catch {
+            const attempts = (failed?.attempts ?? 0) + 1;
+            const at = attempts <= retryDelays.length ? Date.now() + retryDelays[attempts - 1]! : Infinity;
+            threadFailures.set(key, { attempts, at }); schedule(at);
+          }
+        });
+      };
+      for (const sourceId of new Set(page.messages.flatMap(message => readBotGroupThreadShareCard(message)?.messageId ?? []))) {
+        if (known.has(sourceId)) { threadSources[sourceId] = known.get(sourceId)!; continue; }
+        read(`source:${sourceId}`, async () => {
+          try {
+            const stored = await cache();
+            threadSources[sourceId] = stored ? await stored.message<ChatMessage>(room, chatId(sourceId))
+              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(sourceId)}`);
+          } catch (error) {
+            // Source-level denial hides this reference, never the entire room.
+            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadSources[sourceId] = null;
+            else throw error;
+          }
+        });
+      }
+      // A recent reply does not prove that its root is in the current window.
+      // Resolve roots independently; a transient failure stays loading, never deleted.
+      for (const rootId of new Set(page.snapshot.messages.flatMap(message => message.threadRootId ?? []))) {
+        if (known.has(rootId)) continue;
+        read(`root:${rootId}`, async () => {
+          try {
+            const stored = await cache();
+            threadRoots[rootId] = stored ? await stored.message<ChatMessage>(room, chatId(rootId))
+              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(rootId)}`);
+          } catch (error) {
+            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadRoots[rootId] = null;
+            else throw error;
+          }
+        });
+      }
+      if (!page.threadRootId) for (const root of page.messages) {
+        if (root.threadRootId || root.deleted || !root.replyCount) continue;
+        const latest = page.snapshot.messages.filter(message => message.threadRootId === root.id && !message.deleted);
+        if (page.snapshot.messages.length < 100 || latest.length >= Math.min(root.replyCount, 2)) continue;
+        read(`preview:${root.id}`, async () => {
+          let before: string | undefined;
+          const found: ChatMessage[] = [];
+          for (let count = 0; count < 4 && found.length < Math.min(root.replyCount!, 2); count++) {
+            const batch = await messagePage(room, `limit=6&threadRootId=${chatId(root.id)}${before ? `&before=${before}` : ''}`);
+            found.push(...batch.filter(message => !message.deleted && message.threadRootId === root.id));
+            if (batch.length < 6) break;
+            const next = batch.reduce((min, message) => BigInt(chatCursor(message.seq)) < BigInt(min) ? message.seq : min, batch[0]!.seq);
+            if (before && BigInt(next) >= BigInt(before)) break;
+            before = next;
+          }
+          previewMessages.push(...found);
+        });
+      }
+      let index = 0;
+      await Promise.all(Array.from({ length: Math.min(4, work.length) }, async () => {
+        while (index < work.length) await work[index++]!();
+      }));
+      return { ...page, threadSources, threadRoots, previewMessages, threadRetryAt };
+    },
+    async followThread(roomId: string, rootId: string, following: boolean, operationId: string) {
+      const room = chatId(roomId);
+      const snapshot = await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
+      if (!snapshot.reads) throw new Error('THREAD_FOLLOW_UNSUPPORTED');
+      const readSeq = chatCursor(snapshot.reads.find(read => read.thread_key === rootId)?.read_seq ?? '0');
+      return request<{ following: boolean }>(`/conversations/${room}/read`, 'POST', {
+        operationId, threadRootId: chatId(rootId), readSeq, following,
+      });
+    },
+    async shareToMain(roomId: string, messageId: string, threadRootId: string, durable?: { body?: ChatSendBody; save(body: ChatSendBody): Promise<void> }) {
+      const room = chatId(roomId);
+      let body = durable?.body;
+      if (body) {
+        const self = await identity();
+        const card = readBotGroupThreadShareCard({ content: body.content });
+        if (body.operationId !== botGroupThreadShareOperationId(messageId) || card?.messageId !== messageId
+          || card.threadRootId !== threadRootId || body.threadRootId || body.mentions.length !== 1 || body.mentions[0] !== self) throw new Error('SHARE_UNAVAILABLE');
+      }
+      if (!body) {
+        let source: ChatMessage;
+        try { source = await request<ChatMessage>(`/conversations/${room}/messages/${chatId(messageId)}`); }
+        catch (error) {
+          if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) throw new Error('SHARE_UNAVAILABLE');
+          throw error;
+        }
+        if (source.id !== messageId || source.threadRootId !== chatId(threadRootId) || source.deleted || source.origin === 'system') throw new Error('SHARE_UNAVAILABLE');
+        const [members, self] = await Promise.all([request<ChatMember[]>(`/conversations/${room}/members`), identity()]);
+        const author = members.find(member => member.id === source.authorId);
+        body = { operationId: botGroupThreadShareOperationId(source.id), mentions: [self], content: [buildBotGroupThreadShareCard({
+          messageId: source.id, threadRootId: source.threadRootId,
+          authorName: author ? memberName(author, members) : source.author.name,
+          text: mobileMarkdownPreviewText(contentText(source)) || mediaNames(source),
+        })] };
+        await durable?.save(body);
+      }
+      try {
+        const result = await request<{ id: string }>(`/conversations/${room}/messages`, 'POST', body);
+        return { messageId: chatId(result.id), alreadyShared: false };
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'OPERATION_CONFLICT' || (error instanceof Error && error.message === 'OPERATION_CONFLICT')) {
+          return { messageId: null, alreadyShared: true };
+        }
+        throw error;
+      }
+    },
+    async reactors(roomId: string, messageId: string, emoji: string): Promise<ChatReactor[]> {
+      const room = chatId(roomId), message = chatId(messageId);
+      const [members, self] = await Promise.all([request<ChatMember[]>(`/conversations/${room}/members`), identity()]);
+      const actors = new Set<string>();
+      for (let after = ''; ;) {
+        const query = new URLSearchParams({ emoji, limit: '100', ...(after ? { after } : {}) });
+        const rows = await request<Array<{ actor_id: string }>>(`/conversations/${room}/messages/${message}/reactions?${query}`);
+        const before = actors.size;
+        for (const row of rows) actors.add(chatId(row.actor_id));
+        if (rows.length < 100) break;
+        if (actors.size === before) throw new Error('INVALID_CHAT_PAGE');
+        after = rows.at(-1)!.actor_id;
+      }
+      return [...actors].map(actorId => {
+        const member = members.find(member => member.id === actorId);
+        return { actorId, name: member ? memberName(member, members) : null, isSelf: actorId === self, formerMember: !!member && member.state !== 'joined' };
+      });
+    },
+    async react(roomId: string, messageId: string, emoji: string, present: boolean, operationId: string) {
+      return request(`/conversations/${chatId(roomId)}/messages/${chatId(messageId)}/reactions`, 'POST', { operationId, emoji, present });
     },
     async markRead(roomId: string, page: ChatPage, messageIds: readonly string[]) {
       // Old servers omit reads. Never infer a read position from a presentation index.
