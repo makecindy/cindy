@@ -95,6 +95,23 @@ describe('model context limit store', () => {
     expect(readModelCompactionPct('openai', 'other')).toBe(73);
   });
 
+  // The default ratio is not an override: setting it back must read as "not customized".
+  it('treats the default ratio as no override', async () => {
+    const targets = [{ providerId: 'openai', modelId: 'gpt' }];
+    await writeModelCompactionWithRefresh(targets, 73, async () => {}, async () => {});
+    expect(readModelCompactionPct('openai', 'gpt')).toBe(73);
+    await writeModelCompactionWithRefresh(targets, 90, async () => {}, async () => {});
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+    // 删掉最后一条覆盖后偏好文件会被重置（不再残留 compactionPcts）。
+    const stored = fs.existsSync(PREFS)
+      ? JSON.parse(fs.readFileSync(PREFS, 'utf8')).compactionPcts
+      : undefined;
+    expect(stored?.['["openai","gpt"]']).toBeUndefined();
+    // A stored default left by an older build reads as no override too.
+    writeRawPrefs({ limits: {}, compactionPcts: { '["openai","gpt"]': 90 } });
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+  });
+
   beforeEach(() => {
     ownerId = 'test-owner';
     fs.mkdirSync(path.dirname(PREFS), { recursive: true });
