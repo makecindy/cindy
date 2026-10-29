@@ -20,6 +20,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import {
+  BACKGROUND_COMMAND_LOG_CAP_BYTES,
   createBackgroundCommandService,
   type BackgroundCommandServiceDeps,
 } from '../background-commands.js';
@@ -40,7 +41,7 @@ function buildService(capture: ReturnType<typeof vi.fn>) {
   const deps: BackgroundCommandServiceDeps = {
     // 排队桥的最小形状:成功受理即返 clientId。
     enqueueReport: capture.mockImplementation(async () => ({ clientId: 'c1' })),
-    logDir,
+    resolveLogDir: () => logDir,
     logger: noopLogger,
   };
   return createBackgroundCommandService(deps);
@@ -103,3 +104,28 @@ it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
   // 拒绝路径不产生任何回注。
   expect(capture).toHaveBeenCalledTimes(1);
 });
+
+it('超上限的输出:文件截断到上限,完成报告仍带最后的输出(内存尾部)', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const overshoot = BACKGROUND_COMMAND_LOG_CAP_BYTES + 1024;
+  const result = service.start({
+    sessionId: 'sess-3',
+    // 分两段写:先写满超限的垃圾,再写结论行 —— 验证内存尾部保留的是最后的输出。
+    command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(${overshoot})); console.log('final-line-after-cap')"`,
+    cwd: logDir,
+  });
+  expect(result.ok).toBe(true);
+
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 30_000 });
+  const report = firstReport(capture);
+  expect(report.text).toContain('final-line-after-cap');
+  const logPath = (result as { ok: true; logPath: string }).logPath;
+  const { stat: statFile } = await import('node:fs/promises');
+  const info = await statFile(logPath);
+  // 头部保留 + 截断标记行,不能超过上限太多。
+  expect(info.size).toBeLessThanOrEqual(BACKGROUND_COMMAND_LOG_CAP_BYTES + 256);
+  const head = await readFile(logPath, 'utf8');
+  expect(head.startsWith('x')).toBe(true);
+  expect(head).toContain('[log truncated at');
+}, 60_000);

@@ -15,7 +15,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { createWriteStream, mkdirSync } from 'node:fs';
 import { open, readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -26,11 +26,15 @@ import type { SchedulerQueuedPromptRequest } from '../maker-ipc/register.js';
 export const BACKGROUND_COMMAND_MAX_MS = 24 * 60 * 60 * 1000;
 /** 同一应用实例内并发后台命令上限;超出直接拒绝,逼模型先收敛。 */
 export const BACKGROUND_COMMAND_MAX_CONCURRENT = 8;
+/** 单条日志文件上限(保头部,超出丢弃并写截断标记);报告用内存尾部不受此限。 */
+export const BACKGROUND_COMMAND_LOG_CAP_BYTES = 5 * 1024 * 1024;
+/** 报告附带的内存日志尾部(保留最后的输出,不受文件截断影响)。 */
+const TAIL_CAP_BYTES = 64 * 1024;
 /** 完成报告注入撞上排队暂停/快照未恢复时的重试间隔与次数(与 runner 顺延同量级)。 */
 const REPORT_RETRY_DELAY_MS = 60_000;
 const REPORT_RETRY_MAX = 10;
-/** 报告附带的日志尾部字节预算;完整日志模型可按 log_path 自读。 */
-const TAIL_BYTES = 4000;
+/** 日志保留天数;过期文件在服务使用时清理(报告可能已消费,磁盘不应无限涨)。 */
+const LOG_RETENTION_DAYS = 14;
 
 export interface BackgroundCommandStartInput {
   sessionId: string;
@@ -50,30 +54,25 @@ export interface BackgroundCommandServiceDeps {
   enqueueReport: (
     req: SchedulerQueuedPromptRequest,
   ) => Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
-  /** 日志目录(userData 下的 background-commands);由宿主注入,测试可指临时目录。 */
-  logDir: string;
+  /** 日志目录按当前账号解析(owner 隔离);每次 start 时现取,账号切换后落到新目录。 */
+  resolveLogDir: () => string;
   logger: {
     info?(message: string, data?: unknown): void;
     warn?(message: string, data?: unknown): void;
   };
 }
 
-/** 日志保留天数;过期文件在服务首次使用时清理(报告可能已消费,磁盘不应无限涨)。 */
-const LOG_RETENTION_DAYS = 14;
-
 export function createBackgroundCommandService(deps: BackgroundCommandServiceDeps) {
-  const running = new Map<
-    string,
-    { child: ChildProcess; startedAt: number; timeoutTimer: NodeJS.Timeout }
-  >();
+  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout }>();
 
   function pruneOldLogs(): void {
+    const logDir = deps.resolveLogDir();
     const cutoff = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    void readdir(deps.logDir)
+    void readdir(logDir)
       .then((entries) => {
         for (const entry of entries) {
           if (!entry.startsWith('bg-') || !entry.endsWith('.log')) continue;
-          const full = path.join(deps.logDir, entry);
+          const full = path.join(logDir, entry);
           stat(full)
             .then((info) => {
               if (info.mtimeMs < cutoff) return unlink(full);
@@ -84,28 +83,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       .catch(() => {});
   }
 
-  async function readTail(logPath: string): Promise<string> {
-    try {
-      const size = (await stat(logPath)).size;
-      if (size === 0) return '';
-      const handle = await open(logPath, 'r');
-      try {
-        const length = Math.min(size, TAIL_BYTES);
-        const buffer = Buffer.alloc(length);
-        await handle.read(buffer, 0, length, size - length);
-        return buffer.toString('utf8');
-      } finally {
-        await handle.close();
-      }
-    } catch {
-      return '';
-    }
-  }
-
   function buildReport(input: {
     command: string;
     logPath: string;
-    startedAt: number;
+    durationMs: number;
     exit: {
       code: number | null;
       signal: NodeJS.Signals | null;
@@ -114,7 +95,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     };
     tail: string;
   }): { text: string; persistedContent: string } {
-    const seconds = Math.max(0, Math.round((Date.now() - input.startedAt) / 1000));
+    const seconds = Math.max(0, Math.round(input.durationMs / 1000));
     const duration =
       seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
     const status = input.exit.spawnError
@@ -141,19 +122,19 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     runId: string;
     command: string;
     logPath: string;
-    startedAt: number;
+    durationMs: number;
     exit: {
       code: number | null;
       signal: NodeJS.Signals | null;
       timedOut: boolean;
       spawnError?: string;
     };
+    tail: string;
   }): void {
     let attempts = 0;
     const attempt = async (): Promise<void> => {
       attempts += 1;
-      const tail = await readTail(params.logPath);
-      const { text, persistedContent } = buildReport({ ...params, tail });
+      const { text, persistedContent } = buildReport(params);
       let result: Awaited<ReturnType<typeof deps.enqueueReport>>;
       try {
         result = await deps.enqueueReport({
@@ -176,21 +157,19 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         });
         return;
       }
-      if (result && 'retry' in result && attempts <= REPORT_RETRY_MAX) {
+      if (result && 'retry' in result) {
+        if (attempts > REPORT_RETRY_MAX) {
+          deps.logger.warn?.('[background-command] report delivery gave up after retries', {
+            runId: params.runId,
+            attempts,
+          });
+          return;
+        }
         const timer = setTimeout(() => void attempt(), REPORT_RETRY_DELAY_MS);
         timer.unref?.();
       }
     };
     void attempt();
-  }
-
-  function openLogFd(logPath: string): number | 'ignore' {
-    try {
-      mkdirSync(path.dirname(logPath), { recursive: true });
-      return openSync(logPath, 'a');
-    } catch {
-      return 'ignore';
-    }
   }
 
   return {
@@ -215,39 +194,82 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         BACKGROUND_COMMAND_MAX_MS,
       );
       const runId = `bg-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-      const logPath = path.join(deps.logDir, `${runId}.log`);
+      const logDir = deps.resolveLogDir();
+      const logPath = path.join(logDir, `${runId}.log`);
       const startedAt = Date.now();
       pruneOldLogs();
-      const logFd = openLogFd(logPath);
+
+      // 日志:stdio 走 pipe 由宿主转写,文件保头部(5MB 上限),内存保尾部(64KB)供
+      // 完成报告用 —— 长命令的结论都在最后,文件截断不能让报告丢结论。
+      // 同步建目录+流:attach 在下一行就要接住首批 data,不能让初始化输给第一个 chunk。
+      let writer: ReturnType<typeof createWriteStream> | null = null;
+      let fileBytes = 0;
+      let markerWritten = false;
+      let tail = Buffer.alloc(0);
+      try {
+        mkdirSync(logDir, { recursive: true });
+        writer = createWriteStream(logPath, { flags: 'a' });
+        writer.on('error', () => {
+          writer = null;
+        });
+      } catch {
+        writer = null;
+      }
+      const attach = (stream: NodeJS.ReadableStream | null): void => {
+        stream?.on('data', (chunk: Buffer) => {
+          tail = Buffer.concat([tail, chunk]);
+          if (tail.length > TAIL_CAP_BYTES) tail = tail.subarray(tail.length - TAIL_CAP_BYTES);
+          if (!writer || writer.destroyed) return;
+          if (fileBytes >= BACKGROUND_COMMAND_LOG_CAP_BYTES) {
+            // 恰好按 chunk 边界对齐到上限时走这里;标记不能只写在跨越分支。
+            if (!markerWritten) {
+              markerWritten = true;
+              writer.write(
+                `\n[log truncated at ${BACKGROUND_COMMAND_LOG_CAP_BYTES} bytes; later output discarded]\n`,
+              );
+            }
+            return;
+          }
+          let piece = chunk;
+          if (fileBytes + piece.length > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
+            piece = piece.subarray(0, BACKGROUND_COMMAND_LOG_CAP_BYTES - fileBytes);
+            fileBytes = BACKGROUND_COMMAND_LOG_CAP_BYTES;
+            if (!markerWritten) {
+              markerWritten = true;
+              writer.write(
+                `\n[log truncated at ${BACKGROUND_COMMAND_LOG_CAP_BYTES} bytes; later output discarded]\n`,
+              );
+            }
+          } else {
+            fileBytes += piece.length;
+          }
+          writer.write(piece);
+        });
+        stream?.on('error', () => {});
+      };
+
       let child: ChildProcess;
       try {
         child = spawn(command, {
           shell: true,
           cwd: input.cwd,
           windowsHide: true,
-          stdio: ['ignore', logFd, logFd],
+          stdio: ['ignore', 'pipe', 'pipe'],
           detached: process.platform !== 'win32',
         });
       } catch (error) {
-        if (typeof logFd === 'number') closeSync(logFd);
         return {
           ok: false,
           errorCode: 'SPAWN_FAILED',
           message: error instanceof Error ? error.message : String(error),
         };
       }
-      // stdio 传 fd 后子进程持有副本,父进程这份在 spawn 返回后即可关闭。
-      if (typeof logFd === 'number') closeSync(logFd);
+      attach(child.stdout);
+      attach(child.stderr);
 
-      let timedOut = false;
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        killProcessTree(child.pid, child, () => {});
-      }, timeoutMs);
-      timeoutTimer.unref?.();
-
-      running.set(runId, { child, startedAt, timeoutTimer });
-      // spawn error 与 close 在个别路径可能都到达;同一次 run 只回注一份报告。
+      // spawn error 与 close 在个别路径可能都到达;同一次 run 只回注一份报告,
+      // 且时长在退出时刻定格(不含排队/重试等待),报告各次重试内容一致。
+      const durationMs = () => Date.now() - startedAt;
       let reportSent = false;
       const reportOnce = (exit: {
         code: number | null;
@@ -257,8 +279,41 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (reportSent) return;
         reportSent = true;
-        deliverReport({ sessionId: input.sessionId, runId, command, logPath, startedAt, exit });
+        const settledDurationMs = durationMs();
+        const reportTail = () => (tail.length ? tail.toString('utf8') : '');
+        if (writer && !writer.destroyed) {
+          writer.end(() =>
+            deliverReport({
+              sessionId: input.sessionId,
+              runId,
+              command,
+              logPath,
+              durationMs: settledDurationMs,
+              exit,
+              tail: reportTail(),
+            }),
+          );
+        } else {
+          deliverReport({
+            sessionId: input.sessionId,
+            runId,
+            command,
+            logPath,
+            durationMs: settledDurationMs,
+            exit,
+            tail: reportTail(),
+          });
+        }
       };
+
+      let timedOut = false;
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        killProcessTree(child.pid, child, () => {});
+      }, timeoutMs);
+      timeoutTimer.unref?.();
+
+      running.set(runId, { startedAt, timeoutTimer });
       child.once('close', (code, signal) => {
         clearTimeout(timeoutTimer);
         running.delete(runId);

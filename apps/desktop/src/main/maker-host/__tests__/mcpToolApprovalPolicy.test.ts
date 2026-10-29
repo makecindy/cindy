@@ -364,6 +364,25 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
   });
 
+  // run_command_background 是任意 shell 执行面:任何调用形态漏进 TRUSTED_MCP_SERVERS
+  // 的静默放行都等于免审批跑 shell,三种 payload 形态全部锁死在 prompt-each-time。
+  it('reviews each background command invocation across payload representations', () => {
+    const input = { command: 'pnpm test', timeout_seconds: 600 };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('run_command_background', args)).toBe('prompt-each-time');
+      for (const name of ['run_command_background', ' run_command_background ']) {
+        const params = { name, args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain(
+      'mcp__cindy_helper__run_command_background',
+    );
+  });
+
   it('reviews each move across progressive payload representations', () => {
     for (const working_dir of ['/project', null]) {
       for (const args of [
