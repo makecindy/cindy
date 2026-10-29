@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
-import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from '../historyViewOutline';
+import { messageToCamel } from '../../mapper';
+import { historyOutlineAgentMeta, historyOutlineContent, historyOutlineContentStamp,
+  withHistoryArtifacts } from '../historyViewOutline';
 
 function outline(role: string, content: unknown, agentMeta: unknown = null, raw = false) {
   const db = new DatabaseSync(':memory:');
@@ -24,6 +26,29 @@ function stamp(content: string) {
   } finally { db.close(); }
 }
 
+function projectAgentMeta(agentMeta: string | Uint8Array | null) {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE messages (agent_meta)');
+    db.prepare('INSERT INTO messages VALUES (?)').run(agentMeta);
+    const query = new SQLiteSyncDialect().sqlToQuery(historyOutlineAgentMeta());
+    return db.prepare(`SELECT ${query.sql} AS agentMeta FROM messages`).get(...query.params as string[])!.agentMeta;
+  } finally { db.close(); }
+}
+
+function mappedAgentMeta(agentMeta: unknown) {
+  return withHistoryArtifacts(messageToCamel({ id: '1', clientId: '1', sessionId: 's', role: 'thinking',
+    content: '""', toolUseId: null, agentMeta, agentKind: null, createdAt: 0, rewindAt: null } as never)).agentMeta;
+}
+
+function agentMetaAtByteLength(byteLength: number): string {
+  const prefix = '{"parentUuid":"agent","usage":{"details":"';
+  const suffix = '"}}';
+  const padding = byteLength - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+  if (padding < 0) throw new Error(`agent metadata target is too small: ${byteLength}`);
+  return `${prefix}${'x'.repeat(padding)}${suffix}`;
+}
+
 describe('SQLite history outline', () => {
   // 2026-10-25: repeated SDK bookkeeping exhausted the 8 MiB scan before
   // a long child-agent range could reach its header. This is an outline only;
@@ -39,6 +64,38 @@ describe('SQLite history outline', () => {
       turnCompleted: true, turnUsageDetails: { totalTokens: 12 }, unknown: 'keep' });
     expect(source.agentMeta).toBe(agentMeta);
     expect(source.agentMeta.usage.details).toHaveLength(20000);
+  });
+  it('projects only top-level bookkeeping from valid TEXT objects with mapper-equivalent fallbacks', () => {
+    const cases: Array<[string, string | Uint8Array | null]> = [
+      ['object', '{"parentUuid":"agent","usage":{"details":"large"},"unknown":"é","number":9007199254740993,"nested":{"usage":1}}'],
+      ['array', '[{"usage":1},"é",9007199254740993]'], ['scalar', '"é"'], ['null JSON', 'null'],
+      ['invalid JSON', '{broken'], ['empty JSON', ''],
+      ['duplicate key', `{"usage":1,"usage":{"details":"${'x'.repeat(9000)}"},"unknown":2}`],
+      ['unicode escape', '{"usage":1,"unknown":"\\u0065\\u0301"}'],
+      ['non-TEXT JSON', new TextEncoder().encode('{"usage":1,"unknown":"blob"}')], ['SQL NULL', null],
+    ];
+    for (const [label, source] of cases) {
+      const projected = projectAgentMeta(source);
+      expect(mappedAgentMeta(projected), label).toEqual(mappedAgentMeta(source));
+      if (label === 'non-TEXT JSON') expect(projected).toBeInstanceOf(Uint8Array);
+    }
+    const projected = projectAgentMeta(cases[0][1]);
+    expect(projected).toBe(cases[0][1]);
+    expect(mappedAgentMeta(projected)).toEqual({ parentUuid: 'agent', unknown: 'é',
+      number: 9007199254740992, nested: { usage: 1 } });
+    const duplicate = projectAgentMeta(cases[6][1]);
+    expect(duplicate).not.toContain('large');
+    expect(JSON.parse(duplicate as string)).toEqual({ unknown: 2 });
+  });
+  it('bypasses SQLite JSON parsing through 8KiB and projects values above the byte threshold', () => {
+    const atThreshold = agentMetaAtByteLength(8192);
+    const aboveThreshold = agentMetaAtByteLength(8193);
+    expect(Buffer.byteLength(atThreshold)).toBe(8192);
+    expect(Buffer.byteLength(aboveThreshold)).toBe(8193);
+    expect(projectAgentMeta(atThreshold)).toBe(atThreshold);
+    const projected = projectAgentMeta(aboveThreshold);
+    expect(Buffer.byteLength(projected as string)).toBeLessThan(Buffer.byteLength(aboveThreshold));
+    expect(mappedAgentMeta(projected)).toEqual(mappedAgentMeta(aboveThreshold));
   });
   it('stamps a body with a short fact that changes when it is rewritten in place', () => {
     const summary = JSON.stringify('build summary');

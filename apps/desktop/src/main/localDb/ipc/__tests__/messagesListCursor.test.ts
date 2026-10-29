@@ -184,9 +184,13 @@ describe('local-db:messages:list cursor', () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
     const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const usageDetails = 'u'.repeat(20000);
     const add = (id: string, role: string, content: unknown, parent?: string) => insert.run(id, id, 's1', role,
       JSON.stringify(content), role === 'tool_use' ? 'agent' : null,
-      parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model' }) : null, Number(id));
+      parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model', delivery: 'steer',
+        turnCompleted: true, turnUsageDetails: { totalTokens: 12 }, mcpApp: false, unknown: 'keep',
+        uuid: `sdk-${id}`, sdkSessionId: 'sdk', requestId: 'request', replyToClientId: 'reply',
+        usage: { details: usageDetails } }) : null, Number(id));
     add('0', 'user', 'Visible question');
     add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
     for (let n = 2; n < 103; n++) add(String(n), 'thinking', { text: 'hidden '.repeat(1000), durationMs: 10 }, 'agent');
@@ -200,13 +204,27 @@ describe('local-db:messages:list cursor', () => {
     const card = page.items.find((item) => item.type === 'messages' && item.deferred);
     if (card?.type !== 'messages' || !card.deferred) throw new Error('Missing subagent');
     expect(card.deferred).toMatchObject({ messageCount: 101, model: 'actual-child-model' });
+    expect(JSON.stringify(page)).not.toContain('sdkSessionId');
+    expect(JSON.stringify(page)).not.toContain(usageDetails);
     const detail = await invoke('local-db:messages:work-details', card.deferred, {}) as HistoryDetailPage<HistoryMessageSource>;
     expect(detail.messages.length).toBeGreaterThan(0);
     expect(detail.messages.every((row) => (row.agentMeta as { parentUuid?: string })?.parentUuid === 'agent')).toBe(true);
+    expect(detail.messages.every((row) => (row.agentMeta as { usage?: { details?: string } })?.usage?.details === usageDetails)).toBe(true);
+    expect(detail.messages.every((row) => (row.agentMeta as { sdkSessionId?: string })?.sdkSessionId === 'sdk')).toBe(true);
+    expect(detail.messages.every((row) => (row.agentMeta as { unknown?: string })?.unknown === 'keep')).toBe(true);
+    expect(detail.messages.every((row) => (row.agentMeta as { mcpApp?: boolean })?.mcpApp === false)).toBe(true);
     expect(JSON.stringify(detail)).toContain('hidden ');
     expect(await invoke('local-db:messages:view', { lazyDetails: true })).toEqual(page);
+    const meta = JSON.parse((sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('2') as { agent_meta: string }).agent_meta);
+    meta.usage.details = 'changed '.repeat(2500);
+    sqlite.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?').run(JSON.stringify(meta), '2');
+    const usageChanged = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    const usageCard = usageChanged.items.find((item) => item.type === 'messages' && item.deferred);
+    if (usageCard?.type !== 'messages' || !usageCard.deferred) throw new Error('Missing changed subagent');
+    expect(usageCard.deferred.revision).not.toBe(card.deferred.revision);
+    expect({ ...usageCard.deferred, revision: card.deferred.revision }).toEqual(card.deferred);
     sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(page);
+    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(usageChanged);
   });
   it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
     const sqlite = createDb();

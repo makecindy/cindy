@@ -62,6 +62,40 @@ export function historyOutlineContent(): SQL<string> {
     ELSE ${body} END`;
 }
 
+/** Remove non-grouping SDK metadata before outline rows cross the SQLite worker boundary.
+ * Full list/detail hydration still selects the stored value. Restrict this to valid JSON
+ * objects stored as TEXT so legacy invalid JSON, arrays/scalars and non-TEXT values retain
+ * their exact mapper fallback; nested keys are intentionally untouched. Small TEXT values return
+ * before SQLite parses JSON because the existing mapper already strips these keys more cheaply.
+ * Large objects remove one copy of each key; only a still-large remainder is scanned and cleaned
+ * recursively, while a small remainder is cheaper for the existing mapper to finish. The
+ * recursion cap falls back to the original value so pathological legacy input cannot fail the
+ * whole outline query or change mapper semantics.
+ */
+export function historyOutlineAgentMeta(): SQL<string | null> {
+  const meta = messages.agentMeta;
+  return sql<string | null>`CASE
+    WHEN octet_length(${meta}) <= 8192 THEN ${meta}
+    WHEN typeof(${meta}) <> 'text' THEN ${meta}
+    WHEN substr(ltrim(${meta}, char(9) || char(10) || char(13) || ' '), 1, 1) <> '{' THEN ${meta}
+    WHEN NOT json_valid(${meta}) THEN ${meta}
+    ELSE (WITH first(value) AS MATERIALIZED (
+      SELECT json_remove(${meta}, '$.uuid', '$.sdkSessionId', '$.requestId', '$.replyToClientId', '$.usage')
+    ) SELECT CASE WHEN octet_length(first.value) <= 8192 OR NOT EXISTS (SELECT 1 FROM json_each(first.value)
+      WHERE key IN ('uuid', 'sdkSessionId', 'requestId', 'replyToClientId', 'usage'))
+      THEN value ELSE (WITH RECURSIVE projected(value, depth) AS (
+        SELECT jsonb(value), 1
+        UNION ALL
+        SELECT jsonb_remove(value, '$.uuid', '$.sdkSessionId', '$.requestId', '$.replyToClientId', '$.usage'), depth + 1
+        FROM projected WHERE depth < 64 AND EXISTS (SELECT 1 FROM json_each(projected.value)
+          WHERE key IN ('uuid', 'sdkSessionId', 'requestId', 'replyToClientId', 'usage'))
+      ), final(value, depth) AS (SELECT value, depth FROM projected ORDER BY depth DESC LIMIT 1)
+      SELECT CASE WHEN depth = 64 AND EXISTS (SELECT 1 FROM json_each(final.value)
+        WHERE key IN ('uuid', 'sdkSessionId', 'requestId', 'replyToClientId', 'usage'))
+        THEN ${meta} ELSE json(value) END FROM final) END FROM first)
+  END`;
+}
+
 
 /**
  * Command artifact inference is CPU work on the main thread, repeated for every

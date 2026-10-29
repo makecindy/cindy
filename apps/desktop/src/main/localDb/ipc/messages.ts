@@ -23,7 +23,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
+import { historyOutlineAgentMeta, historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
 
@@ -353,7 +353,8 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
     const rows = await db
       .select({
         ...getMessageSelectFields(),
-        ...(outline ? { content: historyOutlineContent(), historyContentStamp: historyOutlineContentStamp() } : {}),
+        ...(outline ? { content: historyOutlineContent(), agentMeta: historyOutlineAgentMeta(),
+          historyContentStamp: historyOutlineContentStamp() } : {}),
         rowid: messageRowid,
       })
       .from(messages)
