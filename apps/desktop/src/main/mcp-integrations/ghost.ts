@@ -1,3 +1,4 @@
+import { readPromptLocale } from './promptLocale.js';
 import * as community from '../plugin-contributions/host.js';
 import { contributionOwnerKey, assertContributionOwner, getPreparedContribution } from '../plugin-contributions/prepared.js';
 import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
@@ -1677,7 +1678,7 @@ function ghostRecall(ghost: InstalledGhost): string | undefined {
 }
 
 /** 供各 harness 会话装配 system/developer 段；每次调用按 workdir 取一次数据。 */
-export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): string {
+export function getGhostRosterPrompt({ workingDir, vendorOptions }: { workingDir?: string; vendorOptions?: Record<string, unknown> }): string {
   if (!workingDir) return '';
   const items = visibleChipGhosts(workingDir).map((ghost) => {
     const recall = ghostRecall(ghost);
@@ -1689,7 +1690,7 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
       ...(recall ? { recall } : {}),
     };
   });
-  return buildGhostRosterPrompt(items);
+  return buildGhostRosterPrompt(items, readPromptLocale(vendorOptions));
 }
 
 function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {

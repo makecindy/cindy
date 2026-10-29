@@ -1,5 +1,8 @@
 import type { SessionSendResult } from '@cindy/maker-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const mockState = vi.hoisted(() => ({
   userDataDir: 'collab-send-outcome-test-user-data',
@@ -53,6 +56,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 }));
 
 vi.mock('@cindy/mcps', () => ({
+  getLiziMcpSessionContext: () => undefined,
   setSessionPathAuthorizer: vi.fn(),
   createLiziMcpProviders: vi.fn((config: Record<string, unknown>) => {
     mockState.capturedProvidersConfig = config;
@@ -205,6 +209,33 @@ describe('collab send outcome semantics', () => {
     mockState.consumeLearnInvocationGrant.mockResolvedValue({ ok: true });
     mockState.capturedProvidersConfig = null;
     vi.clearAllMocks();
+  });
+
+  // Unit: #7515. Exercise the production Desktop provider, not just the Ghost
+  // constructor; dropping vendorOptions here silently restored Chinese in Claude.
+  it('passes the frozen locale into the production Ghost provider', async () => {
+    const providers = createDesktopMcpProviders({
+      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(),
+    });
+    const provider = providers.find(item => item.name === 'cindy')!;
+    for (const locale of ['en', 'zh-CN']) {
+      const config = provider.toClaudeSdkConfig!({
+        agentKind: 'claude-code', workingDir: '', vendorOptions: { cindyPromptLocale: locale },
+      }) as { instance: McpServer };
+      const client = new Client({ name: 'desktop-locale', version: '1' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await config.instance.connect(b);
+      await client.connect(a);
+      try {
+        const tools = JSON.stringify(await client.listTools());
+        expect(/\p{Script=Han}/u.test(tools)).toBe(locale === 'zh-CN');
+      } finally {
+        await client.close();
+        await config.instance.close();
+      }
+    }
   });
 
   it('keeps cindy_orca registered when project policy is disabled at session startup', () => {

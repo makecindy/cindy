@@ -17,6 +17,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createCindyGhostsMcpServer, type CindyGhostsMcpDeps } from 'cindy-tools';
+import { readPromptLocale } from '../promptLocale.js';
 import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 
@@ -163,6 +165,41 @@ async function readRpcText(resp: Response): Promise<unknown> {
 describe('piEnvironment per-session identity', () => {
   afterEach(async () => {
     await shutdownPiEnvironment();
+  });
+
+  // Unit: the shared bridge must use the Pi token's frozen locale, not the
+  // process-wide provider probe or a different session's language.
+  it('keeps English and Chinese Ghost schemas isolated by Pi session token', async () => {
+    const provider: McpProvider = {
+      name: 'cindy',
+      toClaudeSdkConfig: ctx => ({ type: 'sdk', instance: createCindyGhostsMcpServer({
+        listAwakeGhosts: async () => [],
+      } as unknown as CindyGhostsMcpDeps, readPromptLocale(ctx.vendorOptions)) }),
+    };
+    const configs = [];
+    const clients: Client[] = [];
+    try {
+      for (const locale of ['en', 'zh-CN']) {
+        const config = await getPiExtraSpawnConfig([provider], noopLogger(), {
+          sessionId: `locale-${locale}`, workingDir: '/workspace', vendorOptions: { cindyPromptLocale: locale },
+        });
+        configs.push(config);
+        const server = config!.mcpBridge!.servers.find(entry => entry.name === 'cindy')!;
+        const client = new Client({ name: 'locale-client', version: '1' });
+        clients.push(client);
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: { Authorization: `Bearer ${config!.mcpBridge!.token}` } },
+        }));
+      }
+      const first = await clients[0]!.listTools();
+      expect(JSON.stringify(first)).not.toMatch(/\p{Script=Han}/u);
+      expect(JSON.stringify(await clients[1]!.listTools())).toContain('列出用户');
+      await clients[0]!.callTool({ name: 'ghost_list', arguments: {} });
+      expect(await clients[0]!.listTools()).toEqual(first);
+    } finally {
+      await Promise.all(clients.map(client => client.close()));
+      for (const config of configs) config?.disposeSessionCtx?.();
+    }
   });
 
   it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {

@@ -3876,7 +3876,7 @@ export class PiAgent extends BaseAgent {
     // 受邀者(另一个账号)的托管会话不带本机的插件清单。
     const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile || hostedGuest
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir, ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}) }) ?? '');
     const appendSections = [
       reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim(),
       reviewMode ? undefined : opts.botProfilePrompt?.trim(),

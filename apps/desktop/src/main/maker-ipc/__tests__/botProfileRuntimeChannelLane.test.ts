@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ rows: [] as unknown[][] }));
+const state = vi.hoisted(() => ({
+  rows: [] as unknown[][],
+  snapshot: null as null | { profileVersion: number; resolvedJson: string },
+}));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: { select: () => {
   const q: Record<string, unknown> = {};
   for (const method of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy']) q[method] = () => q;
   q.limit = async () => state.rows.shift() ?? [];
   return q;
-} } }) }));
+} }, tx: async (_name: string, payload: { snapshot: typeof state.snapshot }) => {
+  state.snapshot = payload.snapshot;
+} }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
+import { capturePromptLocale, readPromptLocale } from '../../mcp-integrations/promptLocale';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../../shared/botImConnection';
 
@@ -31,6 +37,40 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // Unit: #7515. Hydration used to ignore the host's language. Keep the same
+  // snapshot on turn refresh while a newly started instance adopts the UI locale.
+  it('uses the instance locale on hydration and refresh without translating SOUL', async () => {
+    const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    capturePromptLocale(opts, 'en-US');
+    seed('canonical', null);
+    await hydrateBotProfileRuntime(opts);
+    const first = opts.botProfileContextPrompt;
+    expect(opts.botProfilePrompt).toBe(SOUL.trim());
+    expect(first?.replaceAll('小满', '')).not.toMatch(/\p{Script=Han}/u);
+    expect(first).toContain('Complete the work');
+
+    // Production preflight rebuilds opts without the live vendorOptions. Use the
+    // persisted snapshot, otherwise every English turn spuriously changes epoch.
+    const preflight = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    seed('canonical', null);
+    state.rows.push([state.snapshot]);
+    const preflightResult = await hydrateBotProfileRuntime(preflight, {}, { persistSnapshot: false });
+    expect(preflight.botProfileContextPrompt).toBe(first);
+    expect(readPromptLocale(preflight.vendorOptions)).toBe('en');
+    expect(preflightResult?.runtimeEpochChanged).toBe(false);
+
+    const replacement = { ...opts };
+    capturePromptLocale(replacement, 'zh-TW');
+    expect(readPromptLocale(opts.vendorOptions)).toBe('en');
+    seed('canonical', null);
+    await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+    expect(opts.botProfileContextPrompt).toBe(first);
+    seed('canonical', null);
+    await hydrateBotProfileRuntime(replacement, {}, { persistSnapshot: false });
+    expect(replacement.botProfileContextPrompt).toContain('把活干完');
+    expect(replacement.botProfilePrompt).toBe(opts.botProfilePrompt);
+  });
+
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

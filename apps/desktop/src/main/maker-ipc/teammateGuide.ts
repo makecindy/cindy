@@ -1,11 +1,12 @@
 import { TEAMMATE_CONTROL_GUIDANCE } from '@cindy/mcps';
+import { getBotPromptCopy } from './botSystemPromptCopy.js';
 
 /** Single host-owned baseline: preloaded text and native SKILL.md share this source. */
 export const TEAMMATE_GUIDE_NAME = 'teammate-guide';
 export const TEAMMATE_GUIDE_DESCRIPTION = 'Shared operating procedures for every teammate: maintain assigned and discovered Todo affairs, manage tasks, contact and create teammates, change model defaults, use tools, and maintain personal Skills and memory.';
 
 export function buildTeammateGuide(
-  options: { helperAvailable?: boolean; cindyAvailable?: boolean; ownSkillsEnabled?: boolean; pluginAuthorizationCardsEnabled?: boolean } = {},
+  options: { locale?: string; helperAvailable?: boolean; cindyAvailable?: boolean; ownSkillsEnabled?: boolean; pluginAuthorizationCardsEnabled?: boolean } = {},
 ): string {
   const helperAvailable = options.helperAvailable !== false;
   // Use the same capability signal as runtime Skill mounting and learning.
@@ -22,7 +23,7 @@ export function buildTeammateGuide(
     ? ' Installed plugins are a separate discovery surface from Skill/MCP/toolset references. An empty capability search does not mean no plugin can do the work. Before declaring a connected-service task unavailable, inspect the relevant installed plugin. Installed plugins are available on demand through the installed-plugin gateway (`ghost_list`, `ghost_info`, `ghost_call`) under their existing permissions. If installed plugins cannot meet the request, use ghost_market_search with short service or capability keywords to search Cindy’s own plugin marketplace, including the user’s configured markets. This applies to account connections, image creation and other plugin capabilities; never assume the service name is its plugin id, and never substitute OpenAI Apps or a Skill/MCP catalog. Inspect the live matches, reuse existing installations/connections, and use ghost_market_install with the returned plugin_id and release_id for only the relevant missing plugin under the task’s normal action authorization. Do not reinstall, re-enable a disabled plugin, replace its source, or install unrelated plugins. Search errors and incomplete sources are not proof that the capability does not exist. After installation, read ghost_info for its actual tools and setup, follow the runtime-specific connection guidance below, and then resume the original request. Installed does not mean connected, and connected does not mean the original work ran. If the live runtime lacks market tools, say so and guide the user to the trusted desktop’s Plugins page to search/install/connect; do not invent a marketplace result or an installed connector.' + pluginSetupGuidance
     : '';
   return [
-    '## teammate-guide — 伙伴使用指南',
+    getBotPromptCopy(options.locale).guideTitle,
     'This guide is preloaded for every teammate, regardless of name or personality. It describes the shared operating procedures, not a persona. Your identity, personal Skills and memory are independent of this guide.',
     'You are a teammate with a durable profile and a persistent chat. The application manages your runtime; independent tasks have their own execution and lifecycle.',
     'The application in this guide is the host providing teammate, task and settings tools, not the model provider or agent CLI. Use the host tools for these operations; provider documentation cannot tell you the application’s current settings or available controls.',

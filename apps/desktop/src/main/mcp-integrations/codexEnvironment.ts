@@ -1,3 +1,4 @@
+import { PROMPT_LOCALE_KEY } from './promptLocale.js';
 /**
  * codexEnvironment — 把 Cindy MCP providers 暴露成 codex spawn 时用的
  * extraArgs (-c flags) + extraEnv (LIZI_MCP_TOKEN)。
@@ -291,7 +292,7 @@ async function doStart(
   // Object.keys / Object.entries 里，于是在 Codex 侧静默消失，同一份配置却在 Claude 侧
   // 正常工作。registry 已从源头隔离这类 id，这里是对称的纵深防御（Claude 侧的
   // buildMcpServers 同样用 null-prototype）。
-  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverFactories: Record<string, (locale?: string) => McpServer> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteHttpServers: Record<
     string,
@@ -326,9 +327,12 @@ async function doStart(
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
-    const createServer = (): McpServer => {
+    const createServer = (locale?: string): McpServer => {
       // Class providers read instance state, including when creating later client facades.
-      const cfg = toClaudeSdkConfig.call(provider, ctx) as
+      const cfg = toClaudeSdkConfig.call(provider, {
+        ...ctx,
+        vendorOptions: { ...ctx.vendorOptions, [PROMPT_LOCALE_KEY]: locale },
+      }) as
         | { type?: string; name?: string; instance?: unknown }
         | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
@@ -350,13 +354,18 @@ async function doStart(
       continue;
     }
 
-    serverFactories[provider.name] = () => {
-      if (firstInstance) {
+    serverFactories[provider.name] = (locale) => {
+      // The probe has no session locale. Never reuse it for a bound instance.
+      if (firstInstance && locale === undefined) {
         const instance = firstInstance;
         firstInstance = null;
         return instance;
       }
-      return createServer();
+      if (firstInstance) {
+        void firstInstance.close().catch(() => undefined);
+        firstInstance = null;
+      }
+      return createServer(locale);
     };
     const pluginId = pluginIdForKnownProviderName(provider.name);
     if (pluginId) pluginIdByServerName[provider.name] = pluginId;

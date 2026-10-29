@@ -6907,7 +6907,7 @@ assertRouteCurrent();
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
     const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile || hostedGuest
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir, ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}) }) ?? '');
     const developerInstructions = buildCodexDeveloperInstructions({
       answerDeliveryPrompt: reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt,
       makerMemoryRules,

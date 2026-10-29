@@ -3363,13 +3363,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
     const agent = new PiAgent(deps);
+    const vendorOptions = { cindyPromptLocale: 'en' };
     const handle = await agent.startSession({
+      vendorOptions,
       sessionId: 'roster-session',
       workingDir: cwd,
       model: 'm',
     });
     expect(readAppendedSystemPrompt()).toContain('GHOST ROSTER PROMPT');
-    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd });
+    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd, vendorOptions });
     await handle.close();
   });
 

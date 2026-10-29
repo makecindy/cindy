@@ -1,3 +1,5 @@
+import { getResolvedMainLocale } from '../i18n.js';
+import { capturePromptLocale } from '../mcp-integrations/promptLocale.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
@@ -3038,6 +3040,7 @@ export function getMaker(): Maker {
           }
           const createOpts = opts as MakerSessionCreateOpts;
           createOpts.id ??= sessionId;
+          capturePromptLocale(createOpts, getResolvedMainLocale());
           await prepareBotWorkspaceRuntime(createOpts);
           if (!createOpts.remoteHostId && createOpts.workingDir) {
             const lease = await acquireWorktreeRuntimeLease(sessionId, createOpts.workingDir);

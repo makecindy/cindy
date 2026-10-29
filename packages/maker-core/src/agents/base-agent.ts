@@ -1332,7 +1332,7 @@ export interface AgentDeps {
   getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
 
   /** Session 装配时求值一次的插件花名册 system/developer 段；空清单返回空串。 */
-  getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
+  getGhostRosterPrompt?: (ctx: { workingDir?: string; vendorOptions?: Record<string, unknown> }) => string;
 
   /**
    * Host MCP risk classification shared by Claude Code, Codex and Pi.

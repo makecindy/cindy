@@ -1,3 +1,4 @@
+import { capturePromptLocale, readPromptLocale } from '../mcp-integrations/promptLocale.js';
 import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
@@ -933,7 +934,33 @@ export async function hydrateBotProfileRuntime(
       && promptCapabilities.partnerActionsEnabled && deps.listTeammates
       ? await deps.listTeammates({ excludeBotId: row.botId }).catch(() => [])
       : [];
+  const [previousSnapshot] = await db
+    .select({
+      profileVersion: botRuntimeSnapshots.profileVersion,
+      resolvedJson: botRuntimeSnapshots.resolvedJson,
+    })
+    .from(botRuntimeSnapshots)
+    .where(
+      and(
+        eq(botRuntimeSnapshots.sessionId, opts.id),
+        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
+      ),
+    )
+    .orderBy(desc(botRuntimeSnapshots.preparedAt))
+    .limit(1);
+  const previousResolved = previousSnapshot
+    ? parseObject(previousSnapshot.resolvedJson)
+    : null;
+  // Turn-boundary preflight rebuilds opts from the task record. Its missing
+  // vendor options must not turn an English live instance into a Chinese epoch.
+  // A real new instance already carries the current UI snapshot from the host.
+  const promptLocale = readPromptLocale(opts.vendorOptions)
+    ?? (typeof previousResolved?.promptLocale === 'string' ? previousResolved.promptLocale : 'zh-CN');
+  if (readPromptLocale(opts.vendorOptions) === undefined && typeof previousResolved?.promptLocale === 'string') {
+    capturePromptLocale(opts, promptLocale);
+  }
   const promptInput: BotSystemPromptInput = {
+    locale: promptLocale,
     displayName: profile.displayName,
     identity,
     capabilities: promptCapabilities,
@@ -952,7 +979,7 @@ export async function hydrateBotProfileRuntime(
       // Chat and its private topics). Delegation children keep Cindy's normal
       // Session prompt plus their narrow task context.
       ...(ownerChat
-        ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
+        ? [buildBotCapabilityContextPrompt({ locale: promptLocale, helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
@@ -1070,6 +1097,7 @@ export async function hydrateBotProfileRuntime(
   }), 'utf8').digest('hex');
   const resolvedJson = JSON.stringify({
     schemaVersion: 1,
+    promptLocale,
     profile: profileProvenance,
     execution: executionProvenance,
     skills: resolvedSkills,
@@ -1100,23 +1128,6 @@ export async function hydrateBotProfileRuntime(
     }),
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
-  const [previousSnapshot] = await db
-    .select({
-      profileVersion: botRuntimeSnapshots.profileVersion,
-      resolvedJson: botRuntimeSnapshots.resolvedJson,
-    })
-    .from(botRuntimeSnapshots)
-    .where(
-      and(
-        eq(botRuntimeSnapshots.sessionId, opts.id),
-        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
-      ),
-    )
-    .orderBy(desc(botRuntimeSnapshots.preparedAt))
-    .limit(1);
-  const previousResolved = previousSnapshot
-    ? parseObject(previousSnapshot.resolvedJson)
-    : null;
   const previousRuntimeEpoch = previousResolved
     ? parseObject(
         typeof previousResolved.runtimeEpoch === 'string'

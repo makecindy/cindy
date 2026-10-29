@@ -1,3 +1,4 @@
+import { readPromptLocale } from './promptLocale.js';
 /**
  * codexHttpBridge — 把 in-process Cindy MCP server 实例通过 streamable-HTTP
  * 暴露给 codex app-server 子进程。
@@ -191,7 +192,7 @@ export interface StartCodexHttpBridgeOptions {
    * MCP SDK 的 McpServer/Protocol 实例只能 connect 一个 transport，所以每个
    * streamable-http session 必须拿到独立实例。
    */
-  serverFactories: Record<string, () => McpServer>;
+  serverFactories: Record<string, (locale?: string) => McpServer>;
   /** Built-in plugin id for each policy-controlled MCP server. */
   pluginIdByServerName?: Record<string, string>;
   /**
@@ -597,7 +598,7 @@ function countTransports(
 interface DispatchOpts {
   req: http.IncomingMessage;
   res: http.ServerResponse;
-  createMcpServer: () => McpServer;
+  createMcpServer: (locale?: string) => McpServer;
   transports: Map<string, SessionTransport>;
   serverName: string;
   log: Logger;
@@ -808,7 +809,12 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
 
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
-  const mcpServer = createMcpServer();
+  // Resolve only from the trusted instance/token binding, never request metadata.
+  // Descriptions stay fixed for this transport; per-call authorization stays live.
+  const startupContext = sessionTokenCtx ?? (threadInstanceQuery === null ? undefined
+    : threadContextStore.getContextForSessionInstanceId(threadInstanceQuery)
+      ?? discoveryContexts.get(threadInstanceQuery));
+  const mcpServer = createMcpServer(readPromptLocale(startupContext?.vendorOptions));
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {

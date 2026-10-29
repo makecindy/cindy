@@ -1730,7 +1730,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 受邀者(另一个账号)的托管会话不带本机的插件清单(本机用户安装与启用的插件)。
     const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile || hosted?.guest
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir, ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}) }) ?? '');
 
     // mutable closure — setVendorOptions 在 handle 上对外暴露,**原地合并** patch。
     // 关键: 不能用 `vo = {...vo, ...patch}` 重赋值 — Claude SDK 在 startSession 时

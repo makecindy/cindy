@@ -1,3 +1,4 @@
+import { readPromptLocale } from './promptLocale.js';
 import { reportTaskDelivery } from '../bot-autonomy/hub.js';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
@@ -1357,6 +1358,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),
+        readPromptLocale(ctx.vendorOptions),
       ),
     }),
   });

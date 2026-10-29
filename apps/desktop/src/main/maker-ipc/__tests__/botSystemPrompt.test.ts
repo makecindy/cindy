@@ -32,6 +32,55 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
   };
 }
 
+// Unit: #7515. An English Bot with every capability used to receive Chinese
+// host instructions. Exercise the assembled prompt, including conditional tiers.
+describe('localized Cindy instructions', () => {
+  const english = (): BotSystemPromptInput => input({
+    locale: 'en', displayName: 'Alex', identity: 'You are Alex.',
+    homeDir: '/workspace/bot',
+    capabilities: {
+      toolsets: ['docs'], memoryEnabled: true, partnerActionsEnabled: true,
+      ownSkillsEnabled: true, botModeEnabled: true, botCreationEnabled: true,
+      routinesEnabled: true, sessionControlEnabled: true, automationEnabled: true,
+    },
+    skillIndex: [{ name: 'Research', description: 'Read sources' }],
+    teammates: [{ id: 'writer', name: 'Writer', description: 'Writes reports' }],
+    contextSections: ['Current task context.'],
+  });
+
+  it.each(['en', 'en-US', 'fr', ''])('assembles English copy for %s without changing tier order', (locale) => {
+    const result = buildBotSystemPrompt({ ...english(), locale });
+    expect(result.full).not.toMatch(/\p{Script=Han}/u);
+    expect(result.full).toBe([result.stable, result.context, result.volatile].join('\n\n'));
+    for (const tool of ['make_pptx', 'inspect_pdf', 'save_teammate_skill', 'start_session_task',
+      'send_to_agent', 'routine_save', 'create_teammate', 'NEEDS_OWNER_REQUEST', 'schedule_create']) {
+      expect(result.stable).toContain(tool);
+    }
+    const restricted = english();
+    restricted.capabilities = { toolsets: [], memoryEnabled: false, partnerActionsEnabled: false, ownSkillsEnabled: false, botModeEnabled: false };
+    const text = buildBotSystemPrompt({ ...restricted, locale }).full;
+    for (const tool of ['make_pptx', 'save_teammate_skill', 'start_session_task', 'send_to_agent', 'routine_save', 'create_teammate', 'schedule_create']) {
+      expect(text).not.toContain(tool);
+    }
+  });
+
+  it('retains Chinese user content and keeps the stable prefix across volatile changes', () => {
+    const opts = english();
+    opts.identity = '我是用户定义的伙伴';
+    opts.systemPromptOverride = '用户自定义说明';
+    opts.skillIndex = [{ name: '中文技能', description: '用户写的做法' }];
+    opts.teammates = [{ id: 'writer', name: '写作伙伴', description: '用户定义职责' }];
+    opts.memorySnapshot = '记忆原文';
+    opts.userProfile = '用户资料';
+    const first = buildBotSystemPrompt(opts);
+    for (const value of ['我是用户定义的伙伴', '用户自定义说明', '中文技能', '用户写的做法', '写作伙伴', '用户定义职责', '记忆原文', '用户资料']) expect(first.full).toContain(value);
+    const next = buildBotSystemPrompt({ ...opts, memorySnapshot: '更新后的记忆', skillIndex: [] });
+    expect(Buffer.from(next.stable)).toEqual(Buffer.from(first.stable));
+    expect(next.volatile).not.toBe(first.volatile);
+    expect(buildBotSystemPrompt({ ...opts, locale: 'zh-TW' }).stable).toBe(buildBotSystemPrompt({ ...opts, locale: 'zh-CN' }).stable);
+  });
+});
+
 describe('稳定层:能力必须写进提示词', () => {
   it('advertises native routines without an optional scheduler toolset only when mounted', () => {
     const enabled = input();

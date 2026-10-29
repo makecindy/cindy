@@ -1,3 +1,4 @@
+import { PROMPT_LOCALE_KEY } from './promptLocale.js';
 /**
  * piEnvironment —— pi agent 的 MCP 环境准备(desktop host 侧)。
  *
@@ -538,7 +539,7 @@ async function doStart(
     },
   };
 
-  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverFactories: Record<string, (locale?: string) => McpServer> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
   const mcpEnv: Record<string, string> = Object.create(null);
@@ -650,8 +651,11 @@ async function doStart(
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
-    const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
+    const createServer = (locale?: string): McpServer => {
+      const cfg = toClaudeSdkConfig.call(provider, {
+        ...ctx,
+        vendorOptions: { ...ctx.vendorOptions, [PROMPT_LOCALE_KEY]: locale },
+      }) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
@@ -668,13 +672,18 @@ async function doStart(
       });
       continue;
     }
-    serverFactories[provider.name] = () => {
-      if (firstInstance) {
+    serverFactories[provider.name] = (locale) => {
+      // The probe has no session locale. Never reuse it for a bound instance.
+      if (firstInstance && locale === undefined) {
         const instance = firstInstance;
         firstInstance = null;
         return instance;
       }
-      return createServer();
+      if (firstInstance) {
+        void firstInstance.close().catch(() => undefined);
+        firstInstance = null;
+      }
+      return createServer(locale);
     };
     // 首方内置 provider 才带 plugin 策略;自定义 MCP 不继承(pluginIdForKnownProviderName 返 null)。
     const pluginId = pluginIdForKnownProviderName(provider.name);

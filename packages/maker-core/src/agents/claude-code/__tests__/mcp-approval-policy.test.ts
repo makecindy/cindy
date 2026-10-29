@@ -1090,7 +1090,9 @@ describe('a custom server cannot take over a builtin name', () => {
     sdkMock.query.mockReturnValue(createFakeQuery());
     const deps = createDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
+    const vendorOptions = { cindyPromptLocale: 'en' };
     const handle = await new ClaudeCodeAgent(deps).startSession({
+      vendorOptions,
       sessionId: 'session-roster-prompt',
       model: 'claude-opus-4-6',
       workingDir,
@@ -1100,7 +1102,7 @@ describe('a custom server cannot take over a builtin name', () => {
       systemPrompt?: { append?: string };
     };
     expect(options.systemPrompt?.append).toContain('GHOST ROSTER PROMPT');
-    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });
+    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir, vendorOptions });
     await handle.close();
   });
 

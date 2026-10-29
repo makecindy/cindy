@@ -3,6 +3,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createCindyGhostsMcpServer, type CindyGhostsMcpDeps } from 'cindy-tools';
+import { capturePromptLocale, readPromptLocale } from '../promptLocale.js';
 
 import type { Logger, McpProvider, McpProviderContext } from '@cindy/maker-core';
 import type { AppServerConfig } from '../../mcp-apps/connection.js';
@@ -79,6 +81,49 @@ describe('codexEnvironment', () => {
     setCodexEnvironmentShutdownHook(null);
     await shutdownCodexEnvironment();
     clearAppServerConfigs();
+  });
+
+  // Unit with real local MCP transport: #7515. A process-wide factory must not
+  // lend the first client's language to another instance or a resumed transport.
+  it('binds Ghost descriptions to the instance during discovery and reconnect', async () => {
+    const provider: McpProvider = {
+      name: 'cindy',
+      toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy', instance: createCindyGhostsMcpServer({
+        listAwakeGhosts: async () => [],
+      } as unknown as CindyGhostsMcpDeps, readPromptLocale(ctx.vendorOptions)) }),
+    };
+    const config = await getCodexExtraSpawnConfig({ mcpProviders: [provider], logger: noopLogger() });
+    const en = { agentKind: 'codex' as const, workingDir: '/workspace', sessionId: 'locale-en', sessionInstanceId: 'locale-en-instance', vendorOptions: {} };
+    const zh = { ...en, sessionId: 'locale-zh', sessionInstanceId: 'locale-zh-instance' };
+    capturePromptLocale(en, 'en');
+    capturePromptLocale(zh, 'zh-CN');
+    const clients: Client[] = [];
+    const connect = async (instance: string) => {
+      const client = new Client({ name: 'locale-client', version: '1' });
+      clients.push(client);
+      await client.connect(new StreamableHTTPClientTransport(
+        new URL(config.buildSessionMcpConfig!(instance)['mcp_servers.cindy.url'] as string),
+        { requestInit: { headers: { Authorization: `Bearer ${config.bridge!.token}` } } },
+      ));
+      return client;
+    };
+    try {
+      const english = await config.bridge!.withDiscoveryContext(en, () => connect(en.sessionInstanceId));
+      const first = await config.bridge!.withDiscoveryContext(en, () => english.listTools());
+      registerCodexMcpThreadContext('locale-en-thread', en);
+      registerCodexMcpThreadContext('locale-zh-thread', zh);
+      const chinese = await connect(zh.sessionInstanceId);
+      expect(JSON.stringify(first)).not.toMatch(/\p{Script=Han}/u);
+      expect(JSON.stringify(await chinese.listTools())).toContain('列出用户');
+      await english.callTool({ name: 'ghost_list', arguments: {} });
+      expect(await english.listTools()).toEqual(first);
+      const reconnected = await connect(en.sessionInstanceId);
+      expect(await reconnected.listTools()).toEqual(first);
+    } finally {
+      await Promise.all(clients.map(client => client.close()));
+      unregisterCodexMcpThreadContext('locale-en-thread');
+      unregisterCodexMcpThreadContext('locale-zh-thread');
+    }
   });
 
   it('reuses one bridge and exposes unbound MCP server URLs', async () => {

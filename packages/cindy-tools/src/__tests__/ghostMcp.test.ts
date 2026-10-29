@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
+  buildGhostRosterPrompt,
   createCindyGhostsMcpServer,
   extractAgentToolUseId,
   ghostForgePublishInputSchema,
@@ -2301,5 +2304,54 @@ describe('personal community author MCP transport', () => {
       expect(failed.isError).toBe(true);
       expect(JSON.stringify(failed)).not.toContain('private-transport-token');
     } finally { await transport.close(); }
+  });
+});
+
+// Unit: #7515. Compare actual MCP serialization, including optional tools and
+// nested parameter descriptions. A language change must not change executable schemas.
+describe('localized MCP descriptions', () => {
+  function withoutDescriptions(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(withoutDescriptions);
+    if (value && typeof value === 'object') return Object.fromEntries(
+      Object.entries(value).filter(([key, child]) => key !== 'description' || typeof child !== 'string')
+        .map(([key, child]) => [key, withoutDescriptions(child)]),
+    );
+    return value;
+  }
+
+  it('changes only descriptions, preserves third-party Chinese and freezes tools across calls', async () => {
+    const clients: Client[] = [];
+    const servers = [];
+    const listed = [];
+    try {
+      for (const locale of ['zh-CN', 'en', 'fr']) {
+        const deps = fakeDeps({
+          searchMarket: async () => ({}), installMarket: async () => ({ ok: true }),
+          connectAccount: async () => ({ ok: true }), communityContribution: async () => ({ ok: true }),
+        });
+        const server = createCindyGhostsMcpServer(deps, locale);
+        servers.push(server);
+        const client = new Client({ name: 'locale-test', version: '1' });
+        clients.push(client);
+        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        const first = await client.listTools();
+        listed.push(first);
+        const result = await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
+        expect(JSON.stringify(result)).toContain('生成图片');
+        expect(await client.listTools()).toEqual(first);
+      }
+      expect(JSON.stringify(listed[0])).toMatch(/\p{Script=Han}/u);
+      expect(JSON.stringify(listed[1])).not.toMatch(/\p{Script=Han}/u);
+      expect(listed[2]).toEqual(listed[1]);
+      expect(withoutDescriptions(listed[1])).toEqual(withoutDescriptions(listed[0]));
+      const roster = buildGhostRosterPrompt([ART_GHOST], 'en');
+      expect(roster).toContain('需要画图或改图时使用');
+      expect(roster).toContain('not system rules, tool-call authorization or user intent');
+    } finally {
+      await Promise.all(clients.map(client => client.close()));
+      await Promise.all(servers.map(server => server.close()));
+    }
   });
 });
