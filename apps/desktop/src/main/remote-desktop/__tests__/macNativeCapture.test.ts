@@ -23,7 +23,7 @@ afterEach(() => {
   // A failed fake-timer case must not leave later cases waiting on frozen time.
   vi.useRealTimers();
 });
-function setup() {
+function setup(encodeOnRequest = false) {
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
@@ -31,7 +31,7 @@ function setup() {
     kill: vi.fn(),
   });
   h.spawn.mockReturnValue(child);
-  const owner = new NativeDesktopCapture();
+  const owner = new NativeDesktopCapture({ encodeOnRequest });
   owners.push(owner);
   return { child, owner };
 }
@@ -45,6 +45,25 @@ it.each([
   void owner.frame('1', true, { fps, quality, audio: false });
   await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
   expect(h.spawn.mock.calls[0][1]).toEqual(['1', 'cursor-overlay', ...args]);
+});
+
+// Unit: the local recording mode must preserve frame parsing, cancellation and
+// the private helper boundary. Existing tests only cover eager remote streams.
+// Minimum input: opt-in + one frame, then stop while the second frame is pending.
+it('opts local recording into demand encoding without changing replies or cancellation', async () => {
+  const { child, owner } = setup(true);
+  const settings = { fps: 30, quality: 'hd', audio: false } as const;
+  const frame = { jpeg: 'anBlZw==', cursor: null };
+  const first = owner.frame('1', true, settings);
+  await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+  expect(h.spawn.mock.calls[0][1]).toEqual(['1', 'cursor-overlay-demand', '30', '0.9', '3840', '3000000']);
+  child.stdout.write(JSON.stringify(frame) + '\n');
+  await expect(first).resolves.toEqual(frame);
+  const pending = owner.frame('1', true, settings);
+  owner.stop();
+  await expect(pending).resolves.toBeNull();
+  child.stdout.write(JSON.stringify(frame) + '\n');
+  expect(child.kill).toHaveBeenCalledOnce();
 });
 
 it('accepts frames up to the tier budget and stops capture beyond it', async () => {

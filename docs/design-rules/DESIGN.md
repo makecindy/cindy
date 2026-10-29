@@ -539,6 +539,7 @@ input/text
 
 - **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 radius scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
 - **Existing settings inputs retain their local theme contract** through `SettingsTextInput`, a thin wrapper over `ui/input`. It supplies the historical `settings-input-text`, `settings-input-border`, `settings-input-border-focus`, and `settings-input-placeholder` aliases via `inputClassName`. Their defaults still resolve to Tier-1; explicit local overrides stay local. Generic `Input` keeps the Tier-1 defaults above. Standard error-state border/ring takes precedence over wrapper styles. Do not promote these legacy overrides into global semantic slots or rewrite user theme files. Existing placeholder load-time normalization remains unchanged.
+- **Composer-surface inputs keep the composer's local focus-border alias** — the composer input and the composer suggestion panel's own search field (the 「+」面板 in `AtMentionPanel`) take `focus:border-[var(--chat-input-border-focus)]`, a neutral 30% token, not the generic `--focus-ring-soft` ring (owner decision 2026-10-29: the blue frame read as off-style). The panel floats directly over the composer input, so it is focused by ordinary mouse flow, and §2 keeps Focus Blue out of the normal interaction flow; a text input matches `:focus-visible` whenever it is focused, so the blue ring cannot be reserved for keyboard-only use there. The generic `Input` and the settings family keep the Tier-1 focus ring above.
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
 
 **DS-6 form usage (approved 2026-09-08)**: use `FormField` for a real field's label, hint and inline validation error; pass its render-function props to `Input` / `SettingsTextInput`. `required` supplies assistive semantics only, never adds browser validation or changes the business rules. Reserve feedback space on fields that can fail and focus/scroll to the first invalid field; dynamic rows keep stable IDs when siblings are added or removed. Service failures remain Toasts. No new Textarea consumer is required.
@@ -743,9 +744,10 @@ The expanded teammate section previews five chats (local teammates, remote teamm
 
 ### Desktop and Mobile task creator filters (2026-10-27)
 
-The sidebar's existing Filter submenu adds Teammates. Any source (不限来源) is the default and includes personal tasks and all teammates' tasks;
+The sidebar's existing Filter submenu adds Teammates. All (全部) is the default and includes personal tasks and all teammates' tasks;
 choosing one teammate selects only its created tasks, then further choices add or remove teammates.
-Removing the last choice restores Any source. Reset Filters also clears this dimension, preserving task status,
+Hide all (都不显示) excludes teammate-created tasks and teammate routine/IM tasks while retaining personal tasks.
+Selecting a teammate from Hide all switches to that teammate; removing the last choice restores All. Reset Filters also clears this dimension, preserving task status,
 grouping and sorting. Pinned entries retain their existing exemption from content filters.
 Use the existing menu rows, avatar component and check marks; keep the menu open for multiple choices.
 Show a remote computer name only for device-scoped identities, to distinguish same-name teammates.
@@ -1252,9 +1254,11 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 > Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **ordinary UI fades, nudges, and resizes smoothly; overshoot is limited to the explicitly registered Done, Usage History chart and mobile new-task morph responses below**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
 
 **Desktop companion composer action (owner-approved prototype, 2026-10-22).** An idle
-one-to-one companion composer shows dictation and a call action. A sendable draft
-(including attachments or a visible prompt recommendation) replaces the call with Send
-in the same 30px circular target. Crossfade the icon layers and scale 55% ↔ 100% on
+one-to-one companion composer shows dictation and a call action. A visible prompt
+recommendation keeps the call action available (owner correction, 2026-10-29); its
+Tab/click acceptance and Enter send remain available. An accepted or typed draft,
+attachments or browser comments replace the call with Send in the same 30px circular
+target. Crossfade the icon layers and scale 55% ↔ 100% on
 `--motion-enter` (250ms) / `--motion-ease-move`; keep the shell, hit target and dictation
 position fixed, with no bounce. CSS transitions retarget from their current values.
 Respect reduced motion, retain keyboard focus, and reject a press whose action changes

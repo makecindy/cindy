@@ -776,6 +776,34 @@ describe('screenshot window lifecycle', () => {
     }
   });
 
+  // Performance regression: a cold/unresponsive first display delayed creation
+  // of every later shell by up to 4s. Existing coverage prewarmed both shells.
+  // Unit: two cold displays; the healthy second display must open within one
+  // shared timeout, and cancellation must never send a late BEGIN.
+  it.each([false, true])('prepares cold displays together (cancel=%s)', async (cancel) => {
+    const second = { ...display, id: display.id + 1 };
+    const session = new RegionScreenshotSession({ pool, captures: [{ display, image }, { display: second, image }], helper: {} as SnapshotHelper, windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    const opening = session.open();
+    try {
+      expect(windows).toHaveLength(2);
+      const owner = pool.ensure(second)!.window.webContents;
+      pool.markShellReady(owner, owner.mainFrame);
+      if (cancel) session.close();
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(await opening).toBe(!cancel);
+      const begins = windows[1].webContents.send.mock.calls.filter(([channel]) => channel === 'region-screenshot:begin');
+      expect(begins).toHaveLength(cancel ? 0 : 1);
+      if (!cancel) {
+        session.painted(owner, owner.mainFrame, session.token);
+        expect(windows[1].setOpacity).toHaveBeenLastCalledWith(1);
+      }
+    } finally {
+      session.close();
+      await vi.advanceTimersByTimeAsync(8000);
+      await opening;
+    }
+  });
+
   it('keeps screenshots on workArea changes but closes on scale changes', async () => {
     const overlay = pool.ensure(display)!;
     pool.markShellReady(overlay.window.webContents, overlay.window.webContents.mainFrame);

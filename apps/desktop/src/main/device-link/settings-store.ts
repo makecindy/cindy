@@ -205,6 +205,11 @@ async function acquireWriteLock(file: string): Promise<(() => void) | null> {
 
 /** 进程内写序列化:异步 acquire 之间可能交错,同进程写者先排队再抢跨进程锁 */
 let writeChain: Promise<unknown> = Promise.resolve();
+const settingsChangeListeners = new Set<(key: keyof DeviceLinkSettings) => void>();
+export function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
+  settingsChangeListeners.add(listener);
+  return () => { settingsChangeListeners.delete(listener); };
+}
 
 /**
  * 锁内单次写:取盘上最新基线 → 在最新值上跑 updater → 整文件写回。
@@ -263,6 +268,10 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
       unlock();
     }
     log.info('device-link setting written', { key, value: written });
+    for (const listener of settingsChangeListeners) {
+      try { listener(key); }
+      catch (error) { log.warn('device-link setting listener failed', { error: String(error) }); }
+    }
     return written;
   });
   writeChain = task.catch(() => undefined); // 队列不因单次失败断链

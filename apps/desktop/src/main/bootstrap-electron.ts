@@ -627,6 +627,7 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
+import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
@@ -1161,6 +1162,7 @@ import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
 import { registerPluginMarketIpc, syncDefaultMarketPlugins, refreshForegroundMarketPlugins } from './plugin-market/registerIpc.js';
 import { getPluginMarketService } from './plugin-market/service.js';
+import { installLocalPluginShare } from './plugin-market/localSharing.js';
 import { StableOwnerPostCommitStep } from './stableOwnerPostCommit.js';
 import { registerPluginContributionsIpc } from './plugin-contributions/registerIpc.js';
 import { registerPluginPublisherIpc } from './plugin-publisher/registerIpc.js';
@@ -2551,6 +2553,9 @@ setCodexImageAuthBinding({
 configureMailAttachmentHost({ writeTempFile, materializeDirectSendOssAttachments });
 setRemotePluginManagementServices({
   isRelayOnline: () => getDeviceLinkStatus() === 'online',
+  installShare: async (snapshot, prompt, assertScope) => {
+    await installLocalPluginShare(snapshot.snapshotId, snapshot, prompt, assertScope);
+  },
   listProjects: listRecentWorkdirs,
   sidebar: {
     read: id => !loadSidebarSettingsSnapshot().hiddenMainViewGhostIds.includes(id),
@@ -3131,11 +3136,17 @@ ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
 ipcMain.handle('deep-link:take-pending', takePendingDeepLinkFromRenderer);
 
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
+  const previousLocale = currentApplicationMenuLocale;
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
     typeof locale === 'string' ? locale : null,
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  if (previousLocale !== currentApplicationMenuLocale) {
+    // Identity names are localized on the source host; refresh its cached views
+    // and linked devices through the existing provider-change notification.
+    refreshSelectableModelsAndBroadcast({ providerId: 'xd' });
+  }
   refreshWindowsAppBadge();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
@@ -9965,6 +9976,8 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerProviderShareIpc();
+  // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
+  registerSelfHostedRelayIpc();
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();

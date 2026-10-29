@@ -40,6 +40,9 @@ describe('homeViewPreferenceStore', () => {
     await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: ['cindy', 'filo'] }, projectFilter: { owner: OWNER, value: ['project'] } });
     expect((await readHomeViewPreferences(OWNER)).teammateFilter).toEqual(['cindy', 'filo']);
     expect((await readHomeViewPreferences('another-owner')).teammateFilter).toBe('all');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: 'none' } });
+    expect((await readHomeViewPreferences(OWNER)).teammateFilter).toBe('none');
+    expect((await readHomeViewPreferences('another-owner')).teammateFilter).toBe('all');
     await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: 'all' } });
     expect(await readHomeViewPreferences(OWNER)).toMatchObject({ teammateFilter: 'all', projectFilter: ['project'] });
   });

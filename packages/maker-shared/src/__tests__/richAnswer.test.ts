@@ -32,6 +32,81 @@ describe('streaming answer documents', () => {
     expect(new RichAnswerStream().update(create + append).nodes).toEqual(next.nodes);
     expect(parser.update(create).nodes.get('a')?.props.text).toBe('one');
   });
+  it.each([false, true])('recovers a prematurely finalized partial operation when the full snapshot arrives (newline=%s)', (newline) => {
+    const heading = line(1, { op: 'create', id: 'title', kind: 'heading', props: { text: 'Results' } });
+    const answer = line(2, { op: 'create', id: 'answer', kind: 'markdown', props: { text: 'Complete findings' } });
+    const full = heading + (newline ? answer : answer.trimEnd());
+    const parser = new RichAnswerStream();
+    const partial = parser.update(heading + answer.slice(0, -8), true);
+    expect(partial.roots).toEqual(['title']);
+    expect(partial.issues).toBe(1);
+    // Identical snapshots must not count the unfinished tail as another error.
+    expect(parser.update(heading + answer.slice(0, -8), true).issues).toBe(1);
+    const recovered = parser.update(full, true);
+    expect(recovered.roots).toEqual(['title', 'answer']);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Complete findings');
+    expect(recovered.issues).toBe(0);
+    expect(recovered.nodes).toEqual(new RichAnswerStream().update(full, true).nodes);
+    expect(partial.roots).toEqual(['title']);
+    expect(partial.nodes.has('answer')).toBe(false);
+  });
+  it('preserves a valid finalized tail and applies later operations exactly once', () => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'one' } }).trimEnd();
+    const append = line(2, { op: 'append', id: 'answer', text: ' two' });
+    const parser = new RichAnswerStream();
+    const first = parser.update(create, true);
+    const full = create + String.fromCharCode(10) + append;
+    const next = parser.update(full, true);
+    expect(next.nodes.get('answer')?.props.text).toBe('one two');
+    expect(next.issues).toBe(0);
+    expect(parser.update(full, true).nodes.get('answer')?.props.text).toBe('one two');
+    expect(first.nodes.get('answer')?.props.text).toBe('one');
+  });
+  it.each(['create', 'append', 'patch'])('preserves a committed %s tail when malformed suffixes keep growing', (operation) => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'one' } });
+    const update = operation === 'create' ? create.trimEnd() : create + line(2, operation === 'append'
+      ? { op: 'append', id: 'answer', text: ' two' }
+      : { op: 'patch', id: 'answer', props: { text: 'one two' } }).trimEnd();
+    const expected = operation === 'create' ? 'one' : 'one two';
+    const parser = new RichAnswerStream();
+    const committed = parser.update(update, true);
+    for (const suffix of ['{', '{"seq":', '{"seq":3']) {
+      const next = parser.update(update + suffix, true);
+      expect(next.nodes.get('answer')?.props.text).toBe(expected);
+      expect(next.roots).toEqual(['answer']);
+      expect(next.issues).toBeGreaterThan(0);
+    }
+    const prefix = update + '{"seq":3' + String.fromCharCode(10);
+    const beforeRecovery = parser.update(prefix, true);
+    const later = line(operation === 'create' ? 2 : 3, { op: 'create', id: 'later', kind: 'text', props: { text: 'Later' } });
+    parser.update(prefix + later.slice(0, -8), true);
+    const recovered = parser.update(prefix + later, true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe(expected);
+    expect(recovered.nodes.get('later')?.props.text).toBe('Later');
+    expect(recovered.issues).toBe(beforeRecovery.issues);
+    expect(committed.nodes.get('answer')?.props.text).toBe(expected);
+  });
+  it('preserves committed content when an extended finalized tail exceeds the source limit', () => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'Readable' } }).trimEnd();
+    const parser = new RichAnswerStream();
+    parser.update(create, true);
+    const rejected = parser.update(create + ' '.repeat(2_000_001), true);
+    expect(rejected.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(rejected.issues).toBe(1);
+    const recovered = parser.update(create + String.fromCharCode(10), true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(recovered.issues).toBe(0);
+  });
+  it('retains genuine malformed-line issues after an unfinished tail recovers', () => {
+    const prefix = 'invalid' + String.fromCharCode(10);
+    const answer = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'Readable' } });
+    const parser = new RichAnswerStream();
+    expect(parser.update(prefix + answer.slice(0, -8), true).issues).toBe(2);
+    expect(parser.update(prefix + answer.slice(0, -8) + ' '.repeat(2_000_001), true).issues).toBe(2);
+    const recovered = parser.update(prefix + answer, true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(recovered.issues).toBe(1);
+  });
   it('keeps user-edited state while model defaults and calculated data change', () => {
     const parser = new RichAnswerStream(), memory = new RichInteractionMemory();
     const source = line(1, { op: 'create', id: 'months', kind: 'range', props: { default: 6 } }) + line(2, { op: 'create', id: 'cost', kind: 'stat', props: { value: { op: 'mul', args: [{ ref: 'months' }, 10] } } });
@@ -298,4 +373,134 @@ it('lets the user retry a refused submission without consuming field values', as
   expect(memory.get('fields')).toEqual({ choice: 'Park' });
   await controller.submit('receipt', 'Park', async () => true);
   expect(controller.status('receipt', 'Park')).toBe('sent');
+});
+
+
+// #7627: two near-miss drafts models keep writing. Both used to drop the whole
+// node (or all of its text) and leave only the "part of this content was hidden" line.
+describe('malformed node drafts stay readable', () => {
+  it('keeps the text of a node whose props is a plain string', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'b', kind: 'text', props: '这一行会消失' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('b')?.props.text).toBe('这一行会消失');
+  });
+  it('turns inline children of a details node into child nodes', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: { label: '折叠块', children: [{ kind: 'markdown', text: '正文' }] },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(doc.issues).toBe(0);
+    expect(details?.props.children).toBeUndefined();
+    expect(details?.children).toHaveLength(1);
+    const child = doc.nodes.get(details?.children[0] ?? '');
+    expect(child?.kind).toBe('markdown');
+    expect(child?.props.text).toBe('正文');
+  });
+});
+describe('inline draft limits', () => {
+  it('caps nested inline drafts at the depth limit', () => {
+    let nested: Record<string, unknown> = { kind: 'markdown', text: 'deepest' };
+    for (let level = 0; level < 40; level++) nested = { kind: 'stack', children: [nested] };
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: { label: '折叠块', children: [nested] } }),
+    );
+    expect(doc.nodes.size).toBeLessThanOrEqual(32);
+    expect(doc.nodes.get('d')?.children).toHaveLength(1);
+    // 被深度上限截掉的子树属于「没能显示出来的内容」, 不能让 issues 保持 0。
+    expect(doc.issues).toBeGreaterThan(0);
+  });
+  it('skips one unreadable inline draft without losing its siblings', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: {
+          label: '折叠块',
+          children: [
+            { kind: 'markdown', text: '第一段' },
+            { kind: 'text', props: 123 },
+            { kind: 'markdown', text: '第二段' },
+          ],
+        },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(details?.children).toHaveLength(2);
+    const texts = (details?.children ?? []).map((id) => doc.nodes.get(id)?.props.text);
+    expect(texts).toEqual(['第一段', '第二段']);
+    expect(doc.issues).toBe(1);
+  });
+});
+describe('inline draft ids', () => {
+  it('limits string props by the size of the node it becomes', () => {
+    const quoted = '"'.repeat(65_535);
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'q', kind: 'text', props: quoted }),
+    );
+    // 原始字符串没超限, 但存下来的是 {text: ...}, 序列化后翻倍越过上限。
+    expect(doc.nodes.get('q')).toBeUndefined();
+    expect(doc.issues).toBe(1);
+    const plain = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'p', kind: 'text', props: 'a'.repeat(30_000) }),
+    );
+    expect(plain.nodes.get('p')?.props.text).toHaveLength(30_000);
+  });
+  it('keeps generated ids inside the eighty character grammar', () => {
+    const parentId = 'p'.repeat(79);
+    const drafts = Array.from({ length: 1001 }, (_, i) => ({ kind: 'markdown', text: `第${i}段` }));
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: parentId, kind: 'details', props: { label: '折叠块', children: drafts } }),
+    );
+    const children = doc.nodes.get(parentId)?.children ?? [];
+    expect(children).toHaveLength(1001);
+    expect(new Set(children).size).toBe(1001);
+    for (const id of children) expect(id.length).toBeLessThanOrEqual(80);
+    expect(doc.issues).toBe(0);
+  });
+});
+
+// #7627 review: a draft that names itself keeps that id, and a bare string only
+// counts as text for the kinds that render `props.text`.
+describe('inline draft ids and text-only props', () => {
+  it('keeps an inline child id that the draft declares', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'tabs',
+        kind: 'details',
+        props: {
+          label: 'x',
+          children: [
+            { id: 'second', kind: 'markdown', text: 'two' },
+            { kind: 'markdown', text: 'three' },
+          ],
+        },
+      }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('tabs')?.children[0]).toBe('second');
+  });
+
+  it('keeps a string props on the kinds that render text from it', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'm', kind: 'math', props: 'E = mc^2' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('m')?.props.text).toBe('E = mc^2');
+  });
+  it('drops a string props on a kind that never reads text', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: 'plain string' }),
+    );
+    expect(doc.nodes.has('d')).toBe(false);
+    expect(doc.issues).toBe(1);
+  });
 });

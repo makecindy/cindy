@@ -553,6 +553,58 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
   });
 
+  it('strips an inherited /v1 suffix for a model-level Anthropic route (#7258)', () => {
+    // Test value: the production launch mapper materializes models.json. Existing coverage only
+    // protects Google's endpoint rewrite; this same-provider cross-API route was missing.
+    // The minimum failure input is one Anthropic API override on an OpenAI provider /v1 URL;
+    // without a model baseUrl Pi appends /v1/messages to /v1 and gets /v1/v1/messages. Unit tier.
+    const baseUrl = 'http://127.0.0.1:8000/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-api',
+      name: 'Mixed API',
+      runtimes: {
+        pi: piRuntime({
+          baseUrl,
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'anthropic-api-override',
+              api: 'anthropic-messages',
+            },
+            {
+              id: 'anthropic-route-override',
+              route: { baseUrl, wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-custom-route',
+              route: { baseUrl: 'https://gateway.example/proxy/v1', wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-request-path',
+              api: 'anthropic-messages',
+              route: { baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages' },
+            },
+            { id: 'openai-model', name: 'OpenAI model' },
+          ],
+        }),
+      },
+    }], () => 'fixture-key');
+
+    expect(providers[0]).toMatchObject({
+      baseUrl,
+      api: 'openai-completions',
+      models: [
+        { id: 'anthropic-api-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-route-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-custom-route', api: 'anthropic-messages', baseUrl: 'https://gateway.example/proxy/v1' },
+        { id: 'anthropic-request-path', api: 'anthropic-messages' },
+        { id: 'openai-model' },
+      ],
+    });
+    expect(providers[0]?.models?.[3]).not.toHaveProperty('baseUrl');
+    expect(providers[0]?.models?.[4]).not.toHaveProperty('baseUrl');
+  });
+
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
     const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',
       'huggingface', 'nvidia', 'together', 'mistral', 'opencode', 'qwen-token-plan',

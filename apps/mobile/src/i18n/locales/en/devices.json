@@ -419,7 +419,8 @@
       "summarySeparator": ", ",
       "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
       "filterTeammatesHeading": "Teammates",
-      "filterAnySource": "Any source",
+      "filterAnySource": "All",
+      "filterHideAllTeammates": "Hide all",
       "filterSelectedTeammates": "{{count}} selected"
     },
     "search": {

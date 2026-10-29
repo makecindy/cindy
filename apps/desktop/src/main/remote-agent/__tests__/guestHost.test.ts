@@ -455,15 +455,12 @@ describe('shared-model native fork', () => {
     if (controller === GUEST) await expect(host.handle(controller, request)).rejects.toThrow('REMOTE_AGENT_INVALID');
     expect(forkHosted).not.toHaveBeenCalled();
     await host.handle(controller, { op: 'open', runId: RUN_1, agentKind, payload: { json: openPayload('task-1') } });
-    await vi.waitFor(async () => {
-      const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 });
-      expect(JSON.stringify(poll)).not.toContain('"runs":[]');
-      expect(started).toHaveLength(1);
-      if (controller === GUEST) {
-        const index = JSON.parse(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8'));
-        expect(JSON.stringify(index)).toContain('native-source');
-      }
-    });
+    await waitForStarted(host, controller, RUN_1);
+    expect(started).toHaveLength(1);
+    if (controller === GUEST) {
+      const index = JSON.parse(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8'));
+      expect(JSON.stringify(index)).toContain('native-source');
+    }
     await expect(host.handle(controller, { ...request, model: 'claude-sonnet' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
     expect(forkHosted).not.toHaveBeenCalled();
     await expect(host.handle(controller, request)).resolves.toEqual({ newSdkSessionId: 'native-child-1', uuidMap: [['a', 'b']] });
@@ -473,6 +470,8 @@ describe('shared-model native fork', () => {
     }));
     await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
     host.dispose();
+    // Windows CI ENOTEMPTY: dispose starts asynchronous removal; do not race afterEach's root cleanup.
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-1'))).toBe(false), { timeout: 10_000 });
     const restarted = makeHost([], { forkHosted, modelAllowed });
     try {
       await expect(restarted.handle(controller, { ...request, sourceSessionId: 'task-2', sourceSdkSessionId: 'native-child-1', newSessionId: 'task-3' }))
@@ -480,15 +479,17 @@ describe('shared-model native fork', () => {
       await restarted.handle(controller, { op: 'open', runId: RUN_2, agentKind, payload: { json: openPayload('task-3', {
         options: { model: 'claude-opus', resumeSessionId: 'native-child-2' },
       }) } });
-      await vi.waitFor(async () => {
-        const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
-        expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
-          path.join(sessionRoot(controller, 'task-1'), 'fs'), path.join(sessionRoot(controller, 'task-2'), 'fs'),
-        ]));
-      });
+      await waitForStarted(restarted, controller, RUN_2);
+      const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
+        path.join(sessionRoot(controller, 'task-1'), 'fs'), path.join(sessionRoot(controller, 'task-2'), 'fs'),
+      ]));
       await restarted.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
       await expect(restarted.handle(controller, { ...request, relay: 'a'.repeat(32) })).rejects.toThrow('REMOTE_AGENT_INVALID');
-    } finally { restarted.dispose(); }
+    } finally {
+      restarted.dispose();
+      await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-3'))).toBe(false), { timeout: 10_000 });
+    }
   });
 
   it.each(['account', 'provider', 'model'])('does not disclose a completed fork after %s access changes', async (revoked) => {
@@ -646,9 +647,9 @@ describe('guest provider access and usage', () => {
       samples: [{ model: 'claude-opus', turns: 1, inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0.02 }],
     };
     expect(recordGuestUsage).toHaveBeenCalledTimes(1);
-    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage);
+    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage, 'task-1');
     expect(recordOwnerUsage).toHaveBeenCalledTimes(1);
-    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage);
+    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage, 'task-2');
     expect(host.activeControllers().sort()).toEqual([GUEST, OWNER].sort());
     host.dispose();
   });
@@ -771,9 +772,11 @@ describe('#6479 bounded resume projection', () => {
       });
       try {
         await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'pi', payload: { json: payload() } });
-        await vi.waitFor(() => expect(started).toHaveLength(1));
+        // CI: open acknowledges before shadow setup/registration completes. Wait for the public handshake.
+        await waitForStarted(host, controller, RUN_1);
+        expect(started).toHaveLength(1);
         if (controller === GUEST) {
-          await vi.waitFor(() => expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId)));
+          expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId));
         }
         await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
         if (controller === GUEST) {
@@ -783,7 +786,8 @@ describe('#6479 bounded resume projection', () => {
           expect(started).toHaveLength(1);
         }
         await host.handle(controller, { op: 'open', runId: RUN_2, agentKind: 'pi', payload: { json: payload(nativeId) } });
-        await vi.waitFor(() => expect(started).toHaveLength(2));
+        await waitForStarted(host, controller, RUN_2);
+        expect(started).toHaveLength(2);
         const resumed = started[1].input;
         expect.soft(resumed.options.userPrompt).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
         expect.soft(resumed.personalInstructions).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
@@ -799,7 +803,9 @@ describe('#6479 bounded resume projection', () => {
           await host.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
         } finally {
           host.dispose();
-          tunnelSpy.mockRestore();
+          try {
+            await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-6479'))).toBe(false), { timeout: 10_000 });
+          } finally { tunnelSpy.mockRestore(); }
         }
       }
     });

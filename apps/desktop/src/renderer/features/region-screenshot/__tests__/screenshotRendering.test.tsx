@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScreenshotErrorBoundary } from '../ScreenshotErrorBoundary';
 import { Magnifier } from '../Magnifier';
-import { bitmapToImageData, imageDataToBitmap, type RegionScreenshotOverlayBridge } from '../bridge';
+import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, type RegionScreenshotOverlayBridge } from '../bridge';
 import { RegionScreenshotOverlay } from '../RegionScreenshotOverlay';
 import type { RegionScreenshotHit } from '../../../../shared/regionScreenshot';
 import type { RegionCaptureFrame } from '../../../../shared/regionCapture';
@@ -256,6 +256,30 @@ describe('screenshot rendering recovery', () => {
     expect(Array.from(data)).toEqual(bytes);
     expect(Array.from(imageDataToBitmap(image).data)).toEqual(bytes);
     expect(bitmapToImageData({ width: 1, height: 2, data }, image)).not.toBe(image);
+  });
+  // Unit: the unannotated export fast path must crop rows, swap channels and
+  // leave the source reusable for retries/colour picking. Existing conversion
+  // coverage has no crop or alpha fallback. Minimal input: offset 2-row crop.
+  // Real Canvas parity (alpha, DPI, annotations) is in benchmark-region-screenshot.
+  it('copies only the selected opaque pixels and preserves the frozen image for retries', () => {
+    const data = new Uint8ClampedArray(new ArrayBuffer(4 + 3 * 2 * 4), 4);
+    data.set([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255]);
+    const image = { width: 3, height: 2, data } as ImageData;
+    const before = data.slice();
+    const crop = { x: 1, y: 0, width: 2, height: 2 };
+    const result = cropOpaqueImageDataToBitmap(image, crop)!;
+    expect(result).toEqual({ width: 2, height: 2, data: new Uint8Array([6, 5, 4, 255, 9, 8, 7, 255, 15, 14, 13, 255, 18, 17, 16, 255]) });
+    expect(data).toEqual(before);
+    expect(cropOpaqueImageDataToBitmap(image, crop)).toEqual(result);
+    result.data.fill(0);
+    expect(data).toEqual(before);
+    // A transparent pixel outside the selection does not affect this export.
+    data[3] = 0;
+    expect(cropOpaqueImageDataToBitmap(image, crop)).not.toBeNull();
+    data[19] = 127;
+    expect(cropOpaqueImageDataToBitmap(image, crop)).toBeNull();
+    expect(cropOpaqueImageDataToBitmap(image, { ...crop, x: 0.5 })).toBeNull();
+    expect(cropOpaqueImageDataToBitmap(image, { ...crop, x: 2 })).toBeNull();
   });
   it('releases the screen when a child crashes instead of showing the application crash page', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});

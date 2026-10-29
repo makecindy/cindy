@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { snapshotDisabledSkillPaths } from './agents/shared/skill-activation.js';
-import { Maker, type CreateSessionOptions, type SessionStartFailureContext } from './maker.js';
+import { Maker, SessionCreationCleanupPendingError, type CreateSessionOptions, type SessionStartFailureContext } from './maker.js';
 import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import {
@@ -284,6 +284,43 @@ function createDeferred<T = void>(): {
 }
 
 describe('application-owned session lifecycle', () => {
+  // PR #7697 / 4401270741: visible apps enter createSession, not the already
+  // covered startLocalAgentSession. Unit: no local runtime, a remote handle,
+  // and an application capability must still produce a persisted usable task.
+  it.each(['device-one', 'share:one'])('creates a visible application task on %s without a local engine', async deviceId => {
+    const storage = createStorage(), handle = createHandle({ id: 'remote-visible' });
+    handle.send = vi.fn(async () => {});
+    handle.close = vi.fn(async () => {});
+    const startDeviceAgentSession = vi.fn(async () => handle);
+    const maker = new Maker({ agents: {}, storage, logger: createLogger(), startDeviceAgentSession });
+    try {
+      const session = await maker.createSession({ id: 'visible-client', agentKind: 'codex', workingDir: '/repo',
+        model: 'm', providerId: 'openai', agentDeviceId: deviceId,
+        [LOCAL_AGENT_CLIENT]: { agentDeviceId: deviceId, url: 'http://127.0.0.1:1/mcp/client',
+          token: 'fixture', hostToolsOnly: true } });
+      expect(session.sdkSessionId).toBe('remote-visible');
+      expect(await storage.get('visible-client')).toMatchObject({ agentDeviceId: deviceId, agentKind: 'codex' });
+      await session.send('hello');
+      expect(handle.send).toHaveBeenCalledOnce();
+      expect(startDeviceAgentSession).toHaveBeenCalledOnce();
+      await expect(maker.createSession({ id: 'local-client', agentKind: 'codex', workingDir: '/repo', model: 'm',
+        [LOCAL_AGENT_CLIENT]: { url: 'http://127.0.0.1:1/mcp/client', token: 'fixture', hostToolsOnly: true },
+      })).rejects.toThrow('not registered');
+    } finally { await maker.shutdown(); }
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
+  it('routes an application session to its selected device without requiring a local engine', async () => {
+    const storage = createStorage(), handle = createHandle({ id: 'remote-native' });
+    const startDeviceAgentSession = vi.fn(async () => handle);
+    const maker = new Maker({ agents: {}, storage, logger: createLogger(), startDeviceAgentSession });
+    const opts = { sessionId: 'remote-client', workingDir: '/repo', model: 'm', providerId: 'openai',
+      [LOCAL_AGENT_CLIENT]: { agentDeviceId: 'share:one', url: 'http://127.0.0.1:1/mcp/client', token: 'fixture', hostToolsOnly: true } };
+    const session = await maker.startLocalAgentSession('codex', opts);
+    expect(startDeviceAgentSession).toHaveBeenCalledWith({ agentKind: 'codex', deviceId: 'share:one', options: opts });
+    expect(session.sdkSessionId).toBe('remote-native');
+    expect(await storage.list()).toEqual([]);
+    await maker.shutdown();
+  });
   // Production entry: Maker.startLocalAgentSession. Core rules §1/§2 require the
   // existing Session lifecycle, without creating or enumerating private task rows.
   // Existing createSession tests exercise persistent tasks, not this entry (unit).
@@ -845,7 +882,9 @@ describe('Maker session creation singleflight', () => {
     };
 
     await expect(maker.createSession(options)).rejects.toThrow('db lock');
-    await expect(maker.createSession(options)).rejects.toThrow('termination unconfirmed');
+    const pendingCleanup = await maker.createSession(options).catch(error => error);
+    expect(pendingCleanup).toBeInstanceOf(SessionCreationCleanupPendingError);
+    expect(pendingCleanup.cause).toMatchObject({ message: 'termination unconfirmed' });
     expect(startSession).toHaveBeenCalledTimes(1);
 
     cleanupCanSucceed = true;
@@ -4468,3 +4507,175 @@ describe('Maker invalid-resume persistence bridge', () => {
     await maker.closeSession('session-1');
   });
 });
+
+// F6-A, unit: cancellation must fence real Maker dedup/publication, not only
+// Desktop's outer promise. Deferred native/storage boundaries are the inputs.
+describe('cancelled creation ownership', () => {
+  it.each(['prepare', 'native', 'storage', 'succeeded'] as const)(
+    'cleans a cancelled %s attempt before starting its replacement', async stage => {
+      const gate = createDeferred();
+      const entered = createDeferred();
+      const storage = createStorage();
+      const oldHandle = createHandle({ id: 'old-native' });
+      const newHandle = createHandle({ id: 'new-native' });
+      const closed = vi.spyOn(oldHandle, 'close');
+      let starts = 0;
+      const pause = async () => { entered.resolve(); await gate.promise; };
+      const write = storage.create.bind(storage);
+      if (stage === 'storage') storage.create = async input => {
+        const row = await write(input);
+        if (starts === 1) await pause();
+        return row;
+      };
+      let prepared = 0;
+      const maker = new Maker({
+        agents: { codex: createAgent(async () => {
+          starts++;
+          if (stage === 'native' && starts === 1) await pause();
+          return starts === 1 ? oldHandle : newHandle;
+        }) }, storage, logger: createLogger(),
+        lifecycleHooks: {
+          prepareStartOptions: async () => { if (stage === 'prepare' && prepared++ === 0) await pause(); },
+          onStartSucceeded: async () => { if (stage === 'succeeded' && starts === 1) await pause(); },
+        },
+      });
+      const created = vi.fn();
+      maker.on(e => { if (e.type === 'session:created') created(e.session); });
+      const opts: CreateSessionOptions = { id: 'cancelled-task', agentKind: 'codex', workingDir: '/repo', model: 'm' };
+      const signal = new AbortController();
+      const old = maker.createSession(opts, signal.signal).catch(e => e);
+      await entered.promise;
+      signal.abort(new Error('cancelled attempt'));
+      const replacement = maker.createSession(opts);
+      gate.resolve();
+      expect(String(await old)).toContain('cancelled attempt');
+      const current = await replacement;
+      expect(current.getStatus()).toBe('active');
+      expect(maker.getSession(opts.id!)).toBe(current);
+      expect(created).toHaveBeenCalledTimes(1);
+      expect(starts).toBe(stage === 'prepare' ? 1 : 2);
+      expect(closed).toHaveBeenCalledTimes(stage === 'prepare' ? 0 : 1);
+      if (stage === 'storage' || stage === 'succeeded') {
+        expect(await storage.get(opts.id!)).toMatchObject({ sdkSessionId: 'new-native' });
+      }
+      await maker.shutdown();
+    },
+  );
+
+  it('bounds replacement waits without losing the old cleanup barrier or another task', async () => {
+    vi.useFakeTimers();
+    const gate = createDeferred();
+    const oldHandle = createHandle({ id: 'old-native' });
+    const closed = vi.spyOn(oldHandle, 'close');
+    let starts = 0;
+    const maker = new Maker({ agents: { codex: createAgent(async () => {
+      if (++starts === 1) { await gate.promise; return oldHandle; }
+      return createHandle({ id: 'native-' + starts });
+    }) }, storage: createStorage(), logger: createLogger() });
+    const opts: CreateSessionOptions = { id: 'cancelled-task', agentKind: 'codex', workingDir: '/repo', model: 'm' };
+    const cancel = new AbortController();
+    const old = maker.createSession(opts, cancel.signal).catch(e => e);
+    cancel.abort(new Error('cancelled attempt'));
+    try {
+      const waiting = maker.createSession(opts).catch(e => e);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(String(await waiting)).toContain('cleanup is still pending; retry');
+      expect(starts).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      const sibling = await maker.createSession({ ...opts, id: 'sibling' });
+      expect(sibling.getStatus()).toBe('active');
+      const nextCancel = new AbortController();
+      const nextWait = maker.createSession(opts, nextCancel.signal).catch(e => e);
+      const abortReason = new Error('replacement cancelled');
+      nextCancel.abort(abortReason);
+      const aborted = await nextWait;
+      expect(aborted).toBe(abortReason);
+      expect(String(aborted)).toContain('replacement cancelled');
+      expect(vi.getTimerCount()).toBe(0);
+      gate.resolve();
+      expect(String(await old)).toContain('cancelled attempt');
+      expect(closed).toHaveBeenCalledTimes(1);
+      const replacement = await maker.createSession(opts);
+      expect(replacement.getStatus()).toBe('active');
+      expect(maker.getSession('sibling')).toBe(sibling);
+      await maker.shutdown();
+    } finally { gate.resolve(); vi.useRealTimers(); }
+  });
+
+  it('does not begin an already cancelled creation, including anonymous starts', async () => {
+    const start = vi.fn(async () => createHandle({ id: 'native' }));
+    const maker = new Maker({ agents: { codex: createAgent(start) }, storage: createStorage(), logger: createLogger() });
+    const abort = new AbortController(); abort.abort(new Error('cancelled attempt'));
+    await expect(maker.createSession({ agentKind: 'codex', workingDir: '/repo', model: 'm' }, abort.signal)).rejects.toThrow('cancelled attempt');
+    expect(start).not.toHaveBeenCalled();
+    const normal = await maker.createSession({ agentKind: 'codex', workingDir: '/repo', model: 'm' });
+    expect(normal.getStatus()).toBe('active');
+    await maker.shutdown();
+  });
+});
+
+// F6-A handoff: Maker may have published before Desktop's final role await.
+it('does not reuse a published session while cancelled creation cleanup is pending', async () => {
+  const gate = createDeferred();
+  const firstHandle = createHandle({ id: 'first-native' });
+  const close = vi.spyOn(firstHandle, 'close').mockImplementation(() => gate.promise);
+  const start = vi.fn().mockResolvedValueOnce(firstHandle).mockResolvedValueOnce(createHandle({ id: 'second-native' }));
+  const maker = new Maker({ agents: { codex: createAgent(start) }, storage: createStorage(), logger: createLogger() });
+  const opts: CreateSessionOptions = { id: 'cancelled-role-task', agentKind: 'codex', workingDir: '/repo', model: 'm' };
+  const first = await maker.createSession(opts);
+  const closing = maker.closeSessionIfCurrent(first);
+  const replacement = maker.createSession(opts);
+  expect(start).toHaveBeenCalledTimes(1);
+  gate.resolve(); await closing;
+  const second = await replacement;
+  expect(second).not.toBe(first);
+  expect(second.getStatus()).toBe('active');
+  expect(maker.getSession(opts.id!)).toBe(second);
+  expect(close).toHaveBeenCalledTimes(1);
+  await maker.shutdown();
+});
+
+// F6-C, unit: rejected cleanup (not only timeout) must remain distinguishable
+// from a failed native startup; otherwise hosts may relocate route/history.
+it.each(['unpublished', 'published'] as const)(
+  'classifies rejected %s cleanup without losing ownership or its cause', async publication => {
+    const gate = createDeferred();
+    const cleanupError = new Error('termination unconfirmed');
+    const oldHandle = createHandle({ id: 'old-native' });
+    let cleanupAllowed = false;
+    const close = vi.spyOn(oldHandle, 'close').mockImplementation(async () => {
+      if (!cleanupAllowed) throw cleanupError;
+    });
+    let starts = 0;
+    const storage = createStorage();
+    const maker = new Maker({ agents: { codex: createAgent(async () => {
+      if (++starts === 1) { await gate.promise; return oldHandle; }
+      return createHandle({ id: 'replacement-native' });
+    }) }, storage, logger: createLogger() });
+    const options: CreateSessionOptions = { id: 'cleanup-owner', agentKind: 'codex', workingDir: '/repo', model: 'm' };
+    const abort = new AbortController();
+    const starting = maker.createSession(options, abort.signal);
+    const settled = starting.catch(error => error);
+    if (publication === 'unpublished') abort.abort(new Error('cancelled startup'));
+    gate.resolve();
+    if (publication === 'published') {
+      const session = await starting;
+      await expect(maker.closeSessionIfCurrent(session)).rejects.toBe(cleanupError);
+    } else {
+      expect(String(await settled)).toContain('cancelled startup');
+    }
+    const beforeRetry = await storage.get(options.id!);
+    const failed = await maker.createSession(options).catch(error => error);
+    expect(failed).toBeInstanceOf(SessionCreationCleanupPendingError);
+    expect(failed.cause).toBe(cleanupError);
+    expect(starts).toBe(1);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(await storage.get(options.id!)).toEqual(beforeRetry);
+    cleanupAllowed = true;
+    const replacement = await maker.createSession(options);
+    expect(starts).toBe(2);
+    expect(replacement.getStatus()).toBe('active');
+    expect(maker.getSession(options.id!)).toBe(replacement);
+    await maker.shutdown();
+  },
+);

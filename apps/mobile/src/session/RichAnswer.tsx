@@ -62,6 +62,8 @@ import {
   type ThemeColors,
 } from "@/theme";
 import {
+  splitRichAnswer,
+  type RichValues,
   richVisualStyle,
   richColor,
   richVector,
@@ -85,6 +87,7 @@ import {
   type RichValue,
 } from "@cindy/maker-shared/rich-answer";
 import { useSessionQuickSend } from './SessionQuickSendContext';
+import type { ChatFilePathContextValue } from './chatFilePathContext';
 
 /** Answer colors are Cindy theme colors; the model only names a role. */
 const richPalette = (colors: ThemeColors): RichPalette => ({
@@ -120,6 +123,23 @@ const memory = new RichInteractionMemory({
     await AsyncStorage.setItem("cindy.richAnswer.viewState.v1", value);
   },
 });
+/** Click-time copy: an export never changes the conversation's local controls. */
+export function snapshotRichAnswerValues(
+  source: string,
+  scope: {
+    userId: string | undefined;
+    origin: Pick<ChatFilePathContextValue, 'deviceId' | 'sessionId'> | null;
+    messageKey: string;
+  },
+): Readonly<Record<number, RichValues>> {
+  const stateKey = `${scope.userId ?? 'signed-out'}:${scope.origin?.deviceId ?? ''}:${scope.origin?.sessionId ?? ''}:${scope.messageKey}`;
+  return Object.fromEntries(
+    splitRichAnswer(source)
+      .filter((part) => part.kind === "rich")
+      .map((part) => [part.key, { ...memory.get(`${stateKey}:${part.key}`) }]),
+  );
+}
+
 const submissions = new RichSubmissionController(memory);
 
 function RichSendAction({ node, text, receiptKey, ready, style, buttonTextStyle }: {

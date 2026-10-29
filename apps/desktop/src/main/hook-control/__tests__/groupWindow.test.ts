@@ -41,7 +41,7 @@ function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
-  return ['0083_', '0086_', '0087_', '0088_']
+  return ['0083_', '0086_', '0087_', '0088_', '0136_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);
@@ -348,7 +348,7 @@ describe('recordGroupMessage', () => {
     const baseDrizzle = holder.drizzle as object;
     let selectCalls = 0;
     holder.drizzle = new Proxy(baseDrizzle, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === 'select') {
           const select = Reflect.get(target, property, target) as (...args: unknown[]) => unknown;
           return (...args: unknown[]) => {

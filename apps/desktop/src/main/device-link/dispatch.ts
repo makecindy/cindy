@@ -51,6 +51,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  */
 
 import { RemoteInvokeTiming } from './remoteInvokeTiming.js';
+import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -392,6 +393,8 @@ export interface ProviderShareAccessPort {
   insights?(controller: string, request: unknown): Promise<unknown>;
   insightsCurrent?(controller: string, result: unknown): boolean;
   guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
+  /** Catalog invalidation comes only from the share owner, never a delegated executor. */
+  catalogGuestAccess?(controller: string): { shareId: string; memberId: string; providerId: string } | null;
   /** 不认识的受邀者连进来时按需刷新一次分享快照。 */
   ensureKnown(controller: string): Promise<void>;
   hasShares(): boolean;
@@ -411,7 +414,9 @@ function providerShareGuestAccess(controller: string): ReturnType<ProviderShareA
 /** Empty invalidation only, scoped to the currently authorized shared provider. Never subscribe guests to owner topics. */
 export function notifyProviderShareCatalogChanged(providerId: string): void {
   for (const peer of acceptedLinkControllers) {
-    if (!isProviderSharePeer(peer) || providerShareGuestAccess(peer)?.providerId !== providerId) continue;
+    const catalogAccess = providerShareAccess?.catalogGuestAccess
+      ? providerShareAccess.catalogGuestAccess(peer) : providerShareGuestAccess(peer);
+    if (!isProviderSharePeer(peer) || catalogAccess?.providerId !== providerId) continue;
     sendPushBestEffort(peer, 'maker:provider:changed', {});
   }
 }
@@ -2782,10 +2787,12 @@ function handleLinkOpen(
       });
       return;
     }
-    if (!providerShareGuestAccess(src)
-      || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
-      logProviderShareDenial(src, 'link-open', providerShareGuestAccess(src) ? 'missing-relay-capability' : undefined);
-      client.closeLink(src, 'revoked', 'inbound');
+    const guestAccess = providerShareGuestAccess(src);
+    if (!guestAccess || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
+      logProviderShareDenial(src, 'link-open', guestAccess ? 'missing-relay-capability' : undefined);
+      // A newly allocated M can see link-open before its delegated lease is
+      // installed. Lack of a lease is never a durable guest revocation.
+      client.closeLink(src, guestAccess ? 'revoked' : 'transport-timeout', 'inbound');
       return;
     }
     try {
@@ -4436,6 +4443,8 @@ async function runProviderShareInvoke(
     return PROVIDER_SHARE_ACCESS_FAILURE;
   }
   if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
+  // An executor's short lease authorizes only remote Agent execution, never the share owner's catalog or management reads.
+  if (delegatedProviderShareGuestAccess(src) && payload.channel !== REMOTE_AGENT_CHANNEL) return PROVIDER_SHARE_ACCESS_FAILURE;
   if (!PROVIDER_SHARE_CHANNELS.has(payload.channel)) {
     log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };

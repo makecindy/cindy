@@ -1500,6 +1500,29 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     expect(h.deps.fallback).toHaveBeenCalledWith('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
   });
 
+  it('requests an O-issued switch for a live direct executor failure', async () => {
+    const h = guestHarness();
+    const direct = { ownerRoute: SHARE_ROUTE, requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa') };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => direct });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    expect(service.mayHandleTurnError('s1', signals)).toBe(true);
+    await service.onTurnError('s1', signals, 7);
+    expect(direct.requestSwitch).toHaveBeenCalledTimes(1);
+    expect(h.guestSwitch.takeForOpen('s1')).toBe('token-direct-aaaaaaaaaaaa');
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the direct error back when O declines the switch', async () => {
+    const h = guestHarness();
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => ({ ownerRoute: SHARE_ROUTE, requestSwitch: async () => undefined }) });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    await service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();
     stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');

@@ -10,6 +10,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { AgentEvent, GeneratedImageEventData } from '@cindy/maker-core';
+import { providerShareHostPeer } from '@cindy/device-link';
 import type { DbClient } from '../../localDb/client/DbClient';
 import * as schema from '../../localDb/schema';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
@@ -21,7 +22,7 @@ import {
   prepareGeneratedImageTransport,
   readGeneratedImageEpoch,
 } from '../generatedImageStorage';
-import { generatedImageId } from '../generatedImageJournal';
+import { generatedImageId, initialGeneratedImageRecord } from '../generatedImageJournal';
 import { resolveSafe } from '../blobStore';
 import * as ledger from '../ledger';
 
@@ -161,6 +162,304 @@ function result() {
 }
 
 describe('native image delivery', () => {
+  // Legacy journals used share:<id> exclusively for O. A later clear/direct assignment
+  // must not reinterpret that historical source, including release-only cleanup receipts.
+  it.each(['cleanup', 'recover', 'reconcile'] as const)(
+    'keeps a legacy O alias on O after a later M assignment via %s',
+    async (entry) => {
+      raw.exec("UPDATE sessions SET agent_device_id = 'share:shared'");
+      await prepareTransport('remote:owner-task', event({ data: png.toString('base64') }));
+      const storage = captureGeneratedImageStorage();
+      if (entry === 'reconcile') {
+        raw.exec("UPDATE sessions SET status = 'deleted'");
+        const scope = 'cleanup:task:share:shared';
+        await storage.journal.updateCleanup(scope, () => ({
+          version: 1,
+          scope,
+          sessionId: 'task',
+          agentDeviceId: 'share:shared',
+          clearedAt: null,
+          deleted: true,
+        }));
+      } else {
+        await storage.journal.update('task:task', id, () => ({
+          ...initialGeneratedImageRecord('task:task', image),
+          agentDeviceId: 'share:shared',
+          clearedAt: null,
+        }));
+        if (entry === 'cleanup') raw.exec('UPDATE sessions SET cleared_at = 100');
+      }
+      const owner = providerShareHostPeer('shared', 'owner');
+      const member = providerShareHostPeer('shared', 'member');
+      let currentOwner = owner;
+      let releaseOffline = entry === 'recover';
+      const invoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
+        const request = args[0] as Parameters<typeof handleGeneratedImageArtifacts>[1];
+        if (
+          releaseOffline &&
+          device === owner &&
+          request.op === 'images' &&
+          request.action === 'release'
+        )
+          throw new Error('owner offline');
+        return {
+          ok: true,
+          result:
+            request.op === 'images'
+              ? await handleGeneratedImageArtifacts(
+                  device === owner ? 'owner-task' : 'empty-member-task',
+                  request,
+                )
+              : { imageRecovery: true },
+        };
+      });
+      const host = createGeneratedImageDelivery({
+        invoke,
+        publish: vi.fn(),
+        authorizeSharedTaskHistory: async () => member,
+        resolveSharedOwnerTarget: async () => currentOwner,
+      });
+      if (entry === 'reconcile') await host.reconcile();
+      else await host[entry]('task');
+      if (entry === 'recover') {
+        expect((await storage.journal.read('task:task', id))?.sourceReleased).not.toBe(true);
+        currentOwner = providerShareHostPeer('shared', 'replacement-owner');
+        invoke.mockClear();
+        await host.recover('task', id);
+        expect(invoke).not.toHaveBeenCalled();
+        expect((await storage.journal.read('task:task', id))?.sourceReleased).not.toBe(true);
+        currentOwner = owner;
+        releaseOffline = false;
+        await host.recover('task', id);
+      }
+      expect((await storage.journal.read('remote:owner-task', id))?.state).toBe('released');
+      const knownRequests = invoke.mock.calls.filter(
+        ([, , args]) => (args[0] as { imageId?: string }).imageId === id,
+      );
+      expect(knownRequests.length).toBeGreaterThan(0);
+      expect(knownRequests.every(([device]) => device === owner)).toBe(true);
+      if (entry !== 'reconcile')
+        expect(await storage.journal.read('task:task', id)).toMatchObject({
+          agentDeviceId: owner,
+          legacyOwnerRoute: 'share:shared',
+          sourceReleased: true,
+        });
+    },
+  );
+
+  it.each([false, true])(
+    'locates an early M event before creating its journal (initially offline=%s)',
+    async (offline) => {
+      raw.exec("UPDATE sessions SET agent_device_id = 'share:shared'");
+      const transported = await prepareTransport(
+        'remote:host-task',
+        event({ data: png.toString('base64') }),
+      );
+      const target = providerShareHostPeer('shared', 'member');
+      const original = controller();
+      let firstAuthorization = true;
+      const host = createGeneratedImageDelivery({
+        invoke: original.invoke,
+        publish: original.publish,
+        liveSharedTaskTarget: () => null,
+        authorizeSharedTaskHistory: async () => {
+          if (firstAuthorization)
+            expect(await captureGeneratedImageStorage().journal.read('task:task', id)).toBeNull();
+          if (offline) throw new Error('owner offline');
+          firstAuthorization = false;
+          return target;
+        },
+      });
+      if (offline) {
+        await expect(host.deliver('task', transported)).rejects.toThrow('owner offline');
+        expect(await captureGeneratedImageStorage().journal.read('task:task', id)).toBeNull();
+        expect(
+          (await captureGeneratedImageStorage().journal.read('remote:host-task', id))?.state,
+        ).not.toBe('released');
+        offline = false;
+      }
+      await host.deliver('task', transported);
+      expect(await captureGeneratedImageStorage().journal.read('task:task', id)).toMatchObject({
+        agentDeviceId: target,
+        sourceReleased: true,
+      });
+      expect(original.invoke.mock.calls.every(([device]) => device === target)).toBe(true);
+    },
+  );
+
+  // Direct sharing regression (unit): real delivery/journal/blob entry, with transport and
+  // task authorization at the boundary. Existing restart tests use one machine and cannot
+  // detect O's successful empty release ACK for an artifact that exists only on M.
+  it.each([true, false])(
+    'keeps the direct image source across an O outage and restart (inline=%s)',
+    async (inline) => {
+      raw.exec("UPDATE sessions SET agent_device_id = 'share:shared'");
+      const target = providerShareHostPeer('shared', 'member');
+      const transported = await prepareTransport(
+        'remote:member-task',
+        event({ data: png.toString('base64') }),
+      );
+      let online = false;
+      let live = true;
+      let leaseClock = Date.now();
+      let authorizedUntil = 0;
+      const authorizeSharedTaskHistory = vi.fn(async (sessionId: string, ownerRoute: string) => {
+        expect([sessionId, ownerRoute]).toEqual(['task', 'share:shared']);
+        if (!online) throw new Error('owner offline');
+        authorizedUntil = leaseClock + 60_000;
+        return target;
+      });
+      const invoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
+        const request = args[0] as Parameters<typeof handleGeneratedImageArtifacts>[1];
+        // O legitimately acknowledges release of its empty journal; it must never be selected.
+        if (device === 'share:shared')
+          return {
+            ok: true,
+            result:
+              request.op === 'images'
+                ? await handleGeneratedImageArtifacts('empty-owner-task', request)
+                : { imageRecovery: true },
+          };
+        expect(device).toBe(target);
+        expect(authorizedUntil).toBeGreaterThan(leaseClock);
+        return {
+          ok: true,
+          result:
+            request.op === 'images'
+              ? await handleGeneratedImageArtifacts('member-task', request)
+              : { imageRecovery: true },
+        };
+      });
+      const controller = () =>
+        createGeneratedImageDelivery({
+          invoke,
+          publish: vi.fn(),
+          authorizeSharedTaskHistory,
+          liveSharedTaskTarget: () => (live ? target : null),
+        });
+      await controller().deliver(
+        'task',
+        inline ? transported : event({ pathOrigin: 'remote-agent' }),
+      );
+      expect(await captureGeneratedImageStorage().journal.read('task:task', id)).toMatchObject({
+        agentDeviceId: target,
+        state: inline ? 'stored' : 'failed',
+      });
+      expect(
+        (await captureGeneratedImageStorage().journal.read('task:task', id))?.sourceReleased,
+      ).not.toBe(true);
+      expect(
+        (await captureGeneratedImageStorage().journal.read('remote:member-task', id))?.state,
+      ).not.toBe('released');
+      expect(invoke).not.toHaveBeenCalled();
+      live = false;
+      // Advance only the authorization clock: filesystem locks use actual file mtimes.
+      leaseClock += 31 * 60_000;
+      await controller().recover('task', id);
+      expect(
+        (await captureGeneratedImageStorage().journal.read('task:task', id))?.sourceReleased,
+      ).not.toBe(true);
+      online = true;
+      const unknown = { ...image, blockId: 'missing-after-restart' };
+      await prepareTransport(
+        'remote:member-task',
+        event({ ...unknown, data: png.toString('base64') }),
+      );
+      await controller().recover('task');
+      expect(
+        (await captureGeneratedImageStorage().journal.read('task:task', id))?.sourceReleased,
+      ).toBe(true);
+      expect(
+        (await captureGeneratedImageStorage().journal.read('remote:member-task', id))?.state,
+      ).toBe('released');
+      expect(
+        await captureGeneratedImageStorage().journal.read('task:task', generatedImageId(unknown)),
+      ).toMatchObject({
+        agentDeviceId: target,
+        state: 'stored',
+        sourceReleased: true,
+      });
+      expect(invoke.mock.calls.every(([device]) => device === target)).toBe(true);
+      expect(
+        invoke.mock.calls.map(([, , args]) => (args[0] as { action?: string }).action),
+      ).toEqual(expect.arrayContaining(['list', 'read', 'release']));
+      expect(authorizeSharedTaskHistory).toHaveBeenCalled();
+    },
+  );
+
+  it('retains a direct release receipt when historical authorization names a different source', async () => {
+    raw.exec("UPDATE sessions SET agent_device_id = 'share:shared'");
+    const target = providerShareHostPeer('shared', 'member');
+    const invoke = vi.fn(async () => ({ ok: true, result: { ok: true } }));
+    const controller = () =>
+      createGeneratedImageDelivery({
+        invoke,
+        publish: vi.fn(),
+        liveSharedTaskTarget: () => target,
+        authorizeSharedTaskHistory: async () => providerShareHostPeer('shared', 'different-member'),
+      });
+    await controller().deliver('task', event({ data: png.toString('base64') }));
+    await controller().recover('task', id);
+    expect(
+      (await captureGeneratedImageStorage().journal.read('task:task', id))?.sourceReleased,
+    ).not.toBe(true);
+    await expect(controller().recover('task')).rejects.toThrow('REMOTE_SOURCE_REQUIRED');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('continues to recover legacy shared images through their authorized owner route', async () => {
+    raw.exec("UPDATE sessions SET agent_device_id = 'share:shared'");
+    await prepareTransport('remote:host-task', event({ data: png.toString('base64') }));
+    const original = controller();
+    const owner = providerShareHostPeer('shared', 'owner');
+    const authorizeSharedTaskHistory = vi.fn(async () => owner);
+    const legacy = createGeneratedImageDelivery({
+      invoke: original.invoke,
+      publish: original.publish,
+      authorizeSharedTaskHistory,
+      liveSharedTaskTarget: () => null,
+    });
+    await legacy.recover('task');
+    expect(result().ok).toBe(true);
+    expect(authorizeSharedTaskHistory).toHaveBeenCalledWith('task', 'share:shared');
+    expect(original.invoke.mock.calls.every(([device]) => device === owner)).toBe(true);
+    expect(
+      (await captureGeneratedImageStorage().journal.read('task:task', id))?.agentDeviceId,
+    ).toBe(owner);
+    expect(
+      (await captureGeneratedImageStorage().journal.read('task:task', id))?.sourceReleased,
+    ).toBe(true);
+  });
+
+  it('reconciles a direct cleanup receipt after an offline deletion without contacting O for images', async () => {
+    raw.exec("UPDATE sessions SET agent_device_id = 'share:shared', status = 'deleted'");
+    await prepareTransport('remote:host-task', event({ data: png.toString('base64') }));
+    const target = providerShareHostPeer('shared', 'member');
+    let online = false;
+    const original = controller();
+    const authorizeSharedTaskHistory = vi.fn(async (sessionId: string, ownerRoute: string) => {
+      expect([sessionId, ownerRoute]).toEqual(['task', 'share:shared']);
+      if (!online) throw new Error('owner offline');
+      return target;
+    });
+    const deps = { invoke: original.invoke, publish: original.publish, authorizeSharedTaskHistory };
+    await createGeneratedImageDelivery({ ...deps, liveSharedTaskTarget: () => target }).cleanup(
+      'task',
+    );
+    expect(await captureGeneratedImageStorage().journal.listCleanups()).toEqual([
+      expect.objectContaining({ agentDeviceId: target, deleted: true }),
+    ]);
+    expect(original.invoke).not.toHaveBeenCalled();
+    online = true;
+    await createGeneratedImageDelivery(deps).reconcile();
+    expect(original.invoke.mock.calls.every(([device]) => device === target)).toBe(true);
+    expect((await captureGeneratedImageStorage().journal.read('remote:host-task', id))?.state).toBe(
+      'released',
+    );
+    expect(original.publish).not.toHaveBeenCalled();
+    expect(raw.prepare('SELECT * FROM messages').all()).toHaveLength(0);
+  });
+
   it('delivers bytes ahead of an unrelated remote path, persists one result and one attachment on duplicate completion', async () => {
     const host = controller();
     await Promise.all([

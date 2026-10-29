@@ -390,7 +390,7 @@ export class DesktopViewerController {
         if (this.scope === scope && !this.disposed) void this.connect();
       })();
   }
-  private cancel(preserveFrame = false): void {
+  private cancel(preserveFrame = false, preserveLease = false): void {
     this.epoch++;
     this.heartbeats = new DesktopHeartbeatHistory();
     this.lastRequestFailure = null;
@@ -414,7 +414,7 @@ export class DesktopViewerController {
     this.abandonChannelRequests();
     this.media.reset();
     this.runtime?.receive({ type: 'releaseInput' });
-    void this.session.stop().catch(() => {});
+    void this.session.stop(false, preserveLease).catch(() => {});
     this.runtime?.receive({ type: 'stop', preserveFrame });
     this.publish({
       controlling: false,
@@ -512,7 +512,13 @@ export class DesktopViewerController {
       (/DESKTOP_(VIEW_ONLY|INPUT_(BUSY|UNSUPPORTED|UNAVAILABLE|TIMEOUT))/.test(code)
         ? 'controlUnavailable'
         : null);
-    this.cancel(true);
+    this.cancel(
+      true,
+      !blocked &&
+        this.state.caps?.idleLock === true &&
+        this.state.caps.automaticReconnect === true &&
+        this.state.preferences.idleTimeoutMinutes > 0,
+    );
     this.publish({ status: 'reconnecting', error: blocked });
     this.retryAt = Date.now() + this.retryDelay;
     this.retryDelay = Math.min(15000, this.retryDelay * 2);

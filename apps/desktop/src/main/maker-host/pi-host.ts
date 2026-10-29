@@ -1440,17 +1440,27 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
+        // Bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
-        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
-        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        // the user's proxy. Keep explicit model routes, except for protocol-specific SDK roots:
+        // Google uses /v1beta instead of its discovery /v1beta/openai path, while Anthropic
+        // appends /v1/messages and needs an inherited trailing /v1 removed.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
+        const inheritedAnthropicBaseUrl = explicitRoute?.baseUrl ?? rt.baseUrl;
+        const nativeAnthropicBaseUrl =
+          authMethod !== 'oauth' &&
+          modelApi === 'anthropic-messages' &&
+          !m.route?.requestPath && !rt.requestPath &&
+          (!m.route || m.route.baseUrl === rt.baseUrl) &&
+          /\/v1\/?$/.test(inheritedAnthropicBaseUrl)
+            ? inheritedAnthropicBaseUrl.replace(/\/v1\/?$/, '')
+            : undefined;
         const modelBaseUrl =
-          m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
+          nativeAnthropicBaseUrl ??
+          (m.api && m.route ? m.route.baseUrl :
+            m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),

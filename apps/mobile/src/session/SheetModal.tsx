@@ -51,6 +51,7 @@ export interface SheetModalProps {
   keyboardAvoidingBehavior?: 'height' | 'padding' | undefined;
   /** 淡出动画完成、Modal 真正卸载后触发(如需在关闭后再开另一个 Modal)。 */
   onClosed?: () => void;
+  onShow?: () => void;
   children: ReactNode;
 }
 
@@ -72,6 +73,7 @@ function CompatibleSheetModal({
   keyboardAvoiding = false,
   keyboardAvoidingBehavior,
   onClosed,
+  onShow,
   children,
 }: SheetModalProps) {
   const styles = useThemedStyles(makeStyles);
@@ -149,7 +151,7 @@ function CompatibleSheetModal({
       supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]}
       animationType="none"
       onRequestClose={onRequestClose}
-      onShow={onShowStartIn}
+      onShow={() => { onShowStartIn(); if (visible) onShow?.(); }}
       presentationStyle="overFullScreen"
       transparent
       visible={mounted}
@@ -165,16 +167,13 @@ function CompatibleSheetModal({
           testID={backdropTestID}
         />
       </Animated.View>
-      {/* Android:windowSoftInputMode=adjustResize 已在原生层处理键盘避让,若再套
-          KeyboardAvoidingView(behavior='height')会与之对同一键盘反复调整高度,在 Modal 里
-          触发每帧 relayout 的布局回环 → 整窗持续重绘闪烁(用户 2026-07 报「+」/模型选择弹层
-          键盘开着时一直闪;logcat 实测键盘不开合、但 MainActivity 每帧重绘)。故 Android 直接
-          用 content、不套 KAV;iOS(adjustResize 不适用)仍需 KAV 走 padding 避让。 */}
+      {/* Android normally uses native resize. Form dialogs opt into padding when the
+          edge-to-edge window overlays the keyboard; height can cause a resize loop. */}
       <View pointerEvents="box-none" style={displaced ? {
         position: 'absolute', left: region.x, top: region.y, width: region.width, height: region.height,
       } : styles.keyboardLayer}>
         <KeyboardAvoidingView
-          enabled={keyboardAvoiding && !displaced && Platform.OS !== 'android'}
+          enabled={keyboardAvoiding && !displaced && (Platform.OS !== 'android' || keyboardAvoidingBehavior === 'padding')}
           behavior={keyboardAvoidingBehavior}
           keyboardVerticalOffset={displaced ? region.y : 0}
           pointerEvents="box-none"

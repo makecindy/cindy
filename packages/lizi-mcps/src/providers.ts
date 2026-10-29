@@ -323,6 +323,7 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_slack',
         instance: createSlackMcpGatewayServer({
+          compressInlineImage: opts.slackHook!.compressInlineImage,
           getBridge: opts.slackHook!.getBridge,
           withAccountDataAccess: opts.slackHook!.withAccountDataAccess,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),

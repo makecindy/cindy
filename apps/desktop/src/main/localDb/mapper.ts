@@ -140,6 +140,10 @@ export type SessionRowWithCount = SessionRow & {
 const PREVIEW_MAX_CHARS = 140;
 /** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
 const PREVIEW_CONTENT_BOUND_CHARS = 4096;
+// Cache only this pure projection, never a session row. Exact text/role keys
+// keep edits visible; both entry count and input size bound retained memory.
+const PREVIEW_CACHE_ENTRIES = 1024;
+const plainPreviewCache = new Map<string, string | null>();
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -153,6 +157,26 @@ export function finalizePlainPreview(
   role: string | null | undefined,
 ): string | null {
   if (!text) return null;
+  const key = text.length <= PREVIEW_CONTENT_BOUND_CHARS
+    ? `${role === 'assistant' ? 'assistant' : 'plain'}:${text}`
+    : null;
+  if (key !== null && plainPreviewCache.has(key)) {
+    const cached = plainPreviewCache.get(key)!;
+    plainPreviewCache.delete(key);
+    plainPreviewCache.set(key, cached);
+    return cached;
+  }
+  const preview = computePlainPreview(text, role);
+  if (key !== null) {
+    plainPreviewCache.set(key, preview);
+    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
+      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    }
+  }
+  return preview;
+}
+
+function computePlainPreview(text: string, role: string | null | undefined): string | null {
   let next = text;
   // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
   // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露

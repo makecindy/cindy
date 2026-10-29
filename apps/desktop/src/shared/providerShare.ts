@@ -206,6 +206,8 @@ export type ProviderShareCommand =
   | { action: 'reset-run-limits' }
   | { action: 'set-run-limits'; limits: Partial<RemoteAgentLimits> }
   | { action: 'owned'; range: ProviderShareUsageRange }
+  /** 设置页分区只读快照，不计算用量或延长快速拉取窗口。 */
+  | { action: 'shared-provider-ids' }
   /** 这个供应商按使用方的用量(本机与我的其他电脑)。不依赖分享服务。 */
   | { action: 'own-usage'; providerId: string; range: ProviderShareUsageRange }
   /** 这个供应商的用量按天明细(你自己、转来的与分享的人)，「用量」块据此按时间段、人与电脑筛选。 */
@@ -245,6 +247,7 @@ export interface ProviderShareCommandResult {
   'set-run-limits': RemoteAgentLimitsView;
   'reset-run-limits': RemoteAgentLimitsView;
   owned: ProviderShareOwnerState;
+  'shared-provider-ids': { ready: boolean; providerIds: string[] };
   'own-usage': ProviderOwnUsageView;
   'usage-history': ProviderUsageHistoryView;
   'create-link': ProviderShareLinkCreated;

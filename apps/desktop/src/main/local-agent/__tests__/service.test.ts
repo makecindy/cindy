@@ -6,6 +6,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../remoteCatalog.js', () => ({ remoteLocalAgentModels: vi.fn(async () => []) }));
 
 const mock = vi.hoisted(() => ({
   deps: undefined as any,

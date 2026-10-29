@@ -137,7 +137,8 @@ import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
@@ -2932,6 +2933,8 @@ export function getMaker(): Maker {
       startDeviceAgentSession: createDeviceAgentStarter({
         readImageDeliveryEpoch: readGeneratedImageEpoch,
         remoteInvoke: remoteBackgroundInvoke,
+        renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
+          ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),
         rgPath: getRipgrepBinaryPath,
         // 对方的 Codex 把本机当 exec-server 执行环境：用本机随包的同一个 codex。
         codexPath: () => getCachedBinaryStatus('codex').binaryPath ?? undefined,

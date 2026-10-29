@@ -30,6 +30,7 @@ import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shar
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { buildImReplyContextBlock } from '../shared/replyContext';
+import { receivedHistoryScope, recordReceivedImageMessage } from '../shared/receivedImageHistory';
 import { captureImContext } from '../../../shared/imMessageSource';
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
@@ -93,6 +94,7 @@ interface StoredWechatCredentials {
 
 interface WechatTaskPayload {
   text: string;
+  platformMessageId?: string;
   /** Optional for queued messages saved by older clients. */
   replyContext?: string;
   attachments: WechatTaskAttachment[];
@@ -1150,8 +1152,18 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     let dispatch;
     try {
       if (!signal || signal.aborted) throw new Error('WECHAT_CONNECTION_STOPPED');
+      const groupHistoryAccess = receivedHistoryScope('wechat', botContextId, task.peerId);
+      if (payload.platformMessageId) {
+        await recordReceivedImageMessage({
+          scope: groupHistoryAccess,
+          messageId: payload.platformMessageId,
+          text: payload.text,
+          attachments: payload.attachments,
+        }).catch(() => this.log.warn('wechat image history indexing failed'));
+      }
       dispatch = await runtime.runner.dispatchAgentTurn({
         botContextId,
+        groupHistoryAccess,
         userId: task.peerId,
         userMessageId: task.id,
         // 个人微信只有私聊；渠道说明、引用与投递事实只进模型，落库保留原文。
@@ -1705,6 +1717,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         conversationEpoch: epoch,
         payloadJson: JSON.stringify({
           text: message.text,
+          platformMessageId: message.messageId,
           ...(quote ? { replyContext: quote } : {}),
           attachments: staged.attachments,
           unsupportedMedia: staged.unsupportedMedia,
@@ -1844,6 +1857,9 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
   }
   return {
     text: value.text,
+    ...(typeof value.platformMessageId === 'string'
+      ? { platformMessageId: value.platformMessageId }
+      : {}),
     ...(value.replyContext !== undefined ? { replyContext: value.replyContext } : {}),
     attachments,
     unsupportedMedia: value.unsupportedMedia,

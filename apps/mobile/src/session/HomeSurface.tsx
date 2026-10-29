@@ -114,7 +114,7 @@ import {
   openHomeRemoteCollection,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
-import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
+import { HomeDisplayMenu } from '@/session/HomeDisplayMenu';
 import type { NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
 import {
   activeContentFilterCount,
@@ -123,6 +123,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from '@/session/homeDisplaySettings';
@@ -504,7 +505,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const preferenceOwnerRef = useRef(preferenceOwner);
   preferenceOwnerRef.current = preferenceOwner;
   const saveHomeViewPreferences = useCallback((
-    patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeProjectFilter },
+    patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeTeammateFilter },
   ) => {
     const owner = getMobileAuthOwner();
     const { projectFilter, teammateFilter, ...rest } = patch;
@@ -682,7 +683,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
-  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'teammateFilter', 'all');
+  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeTeammateFilter>(viewSession, 'teammateFilter', 'all');
   const [projectFilter, setProjectFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'projectFilter', 'all');
   const [vendorFilter, setVendorFilter] = useRetainedHomeState<HomeVendorFilter>(viewSession, 'vendorFilter', 'all');
   const [lastActivityFilter, setLastActivityFilter] = useRetainedHomeState<HomeLastActivityFilter>(viewSession, 'lastActivityFilter', 'all');
@@ -3340,15 +3341,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
             ) : null}
-            {/* 系统菜单不可用(未编进 MenuView 的旧 iOS 包)时退回同一份菜单模型的 Cindy 自绘菜单。 */}
-            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>
-              <HomeHeaderGlassButton accessibilityLabel={displayA11y} onPress={() => undefined} testID="home.displaySettingsButton">
-                <View>
-                  <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
-                  {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
-                </View>
-              </HomeHeaderGlassButton>
+            {/* 侧栏本地菜单完整保留分组和多层筛选;系统顶栏继续使用自己的原生菜单。 */}
+            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction} accessibilityLabel={displayA11y}>
+              <View>
+                <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+                {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
+                {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
+              </View>
             </HomeDisplayMenu>
           </View>
         )}
@@ -4900,26 +4899,6 @@ function AutomationGroupPreviewText({ item, sessionCount, style, testID }: {
 
 function pullDownActionsEqual(a: readonly NativePullDownAction[], b: readonly NativePullDownAction[]): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
-}
-
-/**
- * 显示菜单触发器:系统菜单可用时走 UIMenu / 安卓下拉;未编进 MenuView 的旧 iOS 包退回
- * 同一份菜单模型的 Cindy 自绘菜单,两条路径的选项与层级完全一致。
- */
-function HomeDisplayMenu({
-  actions,
-  children,
-  onAction,
-}: {
-  actions: readonly NativePullDownAction[];
-  children: ReactNode;
-  onAction(id: string): void;
-}) {
-  return usesNativePullDownMenu() ? (
-    <NativePullDownMenu actions={actions} onAction={onAction}>{children}</NativePullDownMenu>
-  ) : (
-    <AnchoredPullDownMenu actions={actions} onAction={onAction}>{children}</AnchoredPullDownMenu>
-  );
 }
 
 /** 该首页行是否以「块」呈现(上下全宽线):项目组,或自动化组行(顶层 asBlock)。 */

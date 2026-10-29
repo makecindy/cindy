@@ -2344,6 +2344,8 @@ export const hookGroupMessages = sqliteTable(
     text: text('text').notNull(),
     /** JSON string[];无附件为空。 */
     fileNames: text('file_names'),
+    /** JSON image locators received with this exact lane/message; no image bytes. */
+    imageRefs: text('image_refs'),
     /** IM 平台侧发送时刻(unix ms)。 */
     sentAt: integer('sent_at').notNull(),
     createdAt: integer('created_at').notNull(),
@@ -2365,6 +2367,7 @@ export const hookGroupMessages = sqliteTable(
 export const hookGroupMessageStats = sqliteTable('hook_group_message_stats', {
   provider: text('provider').primaryKey(),
   rowCount: integer('row_count').notNull(),
+  /** UTF-8 bytes of text + image_refs; retain the existing column/API name. */
   textBytes: integer('text_bytes').notNull(),
 });
 

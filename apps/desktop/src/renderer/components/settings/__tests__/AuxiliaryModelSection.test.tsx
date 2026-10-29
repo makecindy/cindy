@@ -9,6 +9,7 @@ import type {
 } from '../../../../shared/auxiliaryModelSettings';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../../shared/auxiliaryModelChain';
 import * as visibility from '@/state/modelVisibilityPrefs';
+import { beginProvidersRefresh, commitProvidersSnapshot, __testing as providerSnapshots } from '@/lib/providersSnapshotStore';
 
 const PREFERRED_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
@@ -66,7 +67,7 @@ vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
           {`${Boolean(groupByProvider)}:${options.map((option) => option.group).join(',')}`}
         </span>
         {options.map((option) => (
-          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} data-available={option.available} />
+          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} data-available={option.available} data-label={option.label} />
         ))}
         <button
           type="button"
@@ -182,6 +183,7 @@ async function selectMode(modeKey: string): Promise<void> {
 describe('AuxiliaryModelSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    providerSnapshots.reset();
     h.authMode = 'cloud';
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -209,6 +211,38 @@ describe('AuxiliaryModelSection', () => {
     expect(screen.getByText(/settings.auxiliaryModels.chain.cindyDeepseekV4Flash/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'settings.auxiliaryModels.customize' })).toBeNull();
     expect(screen.queryByText('settings.auxiliaryModels.preferred.label')).toBeNull();
+  });
+
+  // PR #7744: mounted auxiliary settings must follow the shared source-name snapshot.
+  // Old tests only read the initial GET. Interleave locale/membership changes with
+  // a draft and a pending save; names must update without reloading saved choices.
+  it('uses live identity names through locale changes, drafts and a late save response', async () => {
+    const publishName = (name: string) => {
+      commitProvidersSnapshot(beginProvidersRefresh(), {
+        dataOwnerId: null, ownerGeneration: 0, providerOrder: ['xd'],
+        providers: [{ id: 'xd', name } as import('@cindy/model-providers').ProviderView],
+      });
+    };
+    publishName('Cindy AI · 个人');
+    render(<AuxiliaryModelSection />);
+    await selectMode('settings.auxiliaryModels.customize');
+    const panel = () => screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:panel').textContent;
+    expect(panel()).toContain('Cindy AI · 个人');
+    await act(async () => publishName('Cindy AI · Personal'));
+    expect(panel()).toContain('Cindy AI · Personal');
+    expect(h.set).not.toHaveBeenCalled();
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(AUTO_AUXILIARY_MODEL_CHAIN[0]);
+
+    let finishSave!: (next: AuxiliaryModelSettingsState) => void;
+    h.set.mockImplementationOnce(() => new Promise<AuxiliaryModelSettingsState>(resolve => { finishSave = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.preferred.ariaLabel:select' }));
+    await act(async () => publishName('Cindy AI · 心动'));
+    expect(panel()).toContain('Cindy AI · 心动');
+    await act(async () => finishSave(state({ models: [PREFERRED_PIN], options: OPTIONS })));
+    expect(panel()).toContain('Cindy AI · 心动');
+    expect(screen.getByTestId(`settings.auxiliaryModels.preferred.ariaLabel:option:${AUTO_AUXILIARY_MODEL_CHAIN[0]}`).getAttribute('data-label')).toContain('Cindy AI · 心动');
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(PREFERRED_PIN);
+    expect(h.get).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])('keeps user visibility authoritative for a Pi HTTP choice (%s)', async (visible) => {

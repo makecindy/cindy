@@ -2,7 +2,7 @@ import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.
 import { formatForwardedRequest, captureAgentRequest, type CapturedAgentRequest } from './forwardedRequest.js';
 import { readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { openSession } from '../localDb/sessionOpening.js';
-import { approvedTaskDelegation, captureTaskActionGuard, captureTaskActionSyncGuard, runHostCompletionDelivery, TaskActionAuthorizationError } from './taskActionAuthorization.js';
+import { approvedTaskDelegation, captureTaskActionDeliveryGuard, captureTaskActionGuard, captureTaskActionSyncGuard, runHostCompletionDelivery, TaskActionAuthorizationError } from './taskActionAuthorization.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
@@ -62,7 +62,10 @@ import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
 import { readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
 import { validateTaskModel, resolveTaskModelSelection, type TaskModelSelection } from './appDefaultModelControl.js';
 
-type TaskMutationAuthority = Pick<Awaited<ReturnType<typeof authorizeGroupTool>>, 'refresh' | 'assertCurrent'>;
+type TaskMutationAuthority = Pick<Awaited<ReturnType<typeof authorizeGroupTool>>, 'refresh' | 'assertCurrent'> & {
+  /** Already-admitted queued input may outlive its source turn, but not its owner scope. */
+  refreshDelivery?: () => Promise<void>;
+};
 const isTaskAuthorityError = (error: unknown): error is GroupToolAuthorizationError | TaskActionAuthorizationError =>
   error instanceof GroupToolAuthorizationError || error instanceof TaskActionAuthorizationError;
 
@@ -593,7 +596,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     await groupAuthority?.refresh();
     const result = await deps.dispatch({ ...input, clientId, targetSessionId: row.childSessionId!,
       onAccepted: async persisted => {
-        await groupAuthority?.refresh();
+        // Admission checked the exact source input; delayed acceptance uses the
+        // existing delivery guard so a normally ended source turn is not revocation.
+        await (groupAuthority?.refreshDelivery?.() ?? groupAuthority?.refresh());
         if (persisted) { replayed = true; return; }
         await acceptExecution(row, clientId, input.clientId);
         acceptedThisAttempt = true;
@@ -1609,9 +1614,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       ? await authorizeGroupTool(callerSessionId, link.botId, 'owner-action') : null;
     const action = ownerUi ? undefined : captureTaskActionGuard();
     const actionSync = ownerUi ? undefined : captureTaskActionSyncGuard();
+    const delivery = ownerUi ? undefined : captureTaskActionDeliveryGuard();
     // Share the existing mutation checkpoints and rollback paths for every caller,
     // including private owner requests whose source can change while a call waits.
     const groupAuthority: TaskMutationAuthority | null = action ? {
+      refreshDelivery: async () => {
+        await group?.refresh();
+        try { await (delivery ?? action)(); } catch { throw new TaskActionAuthorizationError(); }
+      },
       refresh: async () => {
         await group?.refresh();
         try { await action(); } catch { throw new TaskActionAuthorizationError(); }

@@ -27,6 +27,7 @@ import { app } from 'electron';
 import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
+import { receivedHistoryScope } from '../shared/receivedImageHistory';
 import type { FeishuToolScope } from '../shared/channelToolScope';
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { readImDefaultSettings } from '../defaultSettingsStore';
@@ -368,6 +369,30 @@ export function buildFeishuAdapter(
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    groupHistoryAccessFor: (event) => {
+      const lane = event.groupContextLane ?? decodeFeishuLaneUserId(event.senderId);
+      const scope = receivedHistoryScope(
+        feishuIm.getService(),
+        event.contextId,
+        lane?.chatId ?? event.chatId,
+        lane?.threadId ?? '',
+      );
+      const botId = feishuIm.getBotAppId();
+      const service = feishuIm.getService();
+      scope.readMessageImages = async (messageId) => {
+        if (!botId || feishuIm.getBotAppId() !== botId || feishuIm.getService() !== service)
+          throw new Error('HISTORY_CONNECTION_CHANGED');
+        const images = await feishuIm.readHistoryImages(
+          messageId,
+          scope.lane!.chatId,
+          scope.lane!.threadId,
+        );
+        if (feishuIm.getBotAppId() !== botId || feishuIm.getService() !== service)
+          throw new Error('HISTORY_CONNECTION_CHANGED');
+        return images;
+      };
+      return scope;
+    },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
     // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放

@@ -131,13 +131,21 @@ export class RegionScreenshotSession {
     screen.on('display-metrics-changed', this.onDisplayMetricsChanged);
     const locale = getResolvedMainLocale();
     const cursor = screen.getCursorScreenPoint();
-    for (const capture of this.deps.captures) {
+    // Start all cold shells together: one slow display must not defer creation
+    // (or restart the timeout budget) of every subsequent display. Keep capture
+    // order when registering members, and retain the all-screens geometry barrier.
+    const prepared = await Promise.all(this.deps.captures.map(async (capture) => {
+      if (this.closed) return null;
       const overlay = this.deps.pool.ensure(capture.display);
-      if (!overlay || !(await this.deps.pool.waitForShell(overlay)) || this.closed) continue;
-      if (overlay.window.isDestroyed()) continue;
+      if (!overlay || !(await this.deps.pool.waitForShell(overlay))) return null;
+      return { overlay, capture };
+    }));
+    if (this.closed) return false;
+    for (const member of prepared) {
+      if (!member || member.overlay.window.isDestroyed()) continue;
+      const { overlay, capture } = member;
       this.members.set(overlay.window.webContents.id, { overlay, capture, painted: false });
     }
-    if (this.closed) return false;
     if (this.members.size === 0) {
       log.warn('no overlay became ready');
       this.close();

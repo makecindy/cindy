@@ -126,9 +126,14 @@ Desktop 设置页模型详情有 `displayPricing.summary` 时优先按输入、�
 所有角色报价段数，且每个 item 能按 unit、quantity、price 一一匹配不同的摘要报价，
 匹配报价没有 maxPrice 或 tier。其余情况保留在摘要下方。设置页列表对带 displayPricing 的
 模型不显示价格；选择器、浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
+摘要的可选 `component` 标明收费项类别，与计价单位独立。格式为 `^[a-z][a-z0-9_]{0,31}$`；
+格式不合法只丢该字段，报价与摘要保留。合法但未知的类别保留在数据中，界面按缺失处理。
+已知类别为 text / image / audio / video：同一角色类别一致时显示「类别 + 方向」，混合类别时
+保留方向名并在各条报价金额前显示已知类别名；不从单位推断类别。唯一键沿用
+unit + quantity + tier，不加入 component；旧端忽略新增字段，协议版本不变。
 摘要的 tier 单独一行使用次要文字，金额、原价区间和单位分别保持完整，同一角色的多段报价逐条换行、靠右对齐，不插入分隔点。
 `price` / `maxPrice` 为每 `quantity` 个 `unit` 的折扣前报价，只在展示时应用一次折扣，保留币种
-与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化，label、tier、notes 仅按纯文本呈现，未知单位不猜换算。
+与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化；已发布的 Text / Image / Audio / Video 输入输出、Text 缓存读写、Image 缓存读取及 Duration 输入输出明细 label 本地化，其他 label、tier、notes 原样按纯文本呈现，未知单位不猜换算。
 数量 1 省略，百万按语言简写，其余按本地数字格式显示。共享目录可传递这些可选展示字段，旧端
 缺字段仍合法，不新增能力声明；此 UI 仅覆盖 Desktop 设置页。解析与展示回归见
 `modelDisplayPricing.test.ts`、`DisplayPricingDetails.test.tsx` 与 `ModelAdvancedDrawer.test.tsx`。

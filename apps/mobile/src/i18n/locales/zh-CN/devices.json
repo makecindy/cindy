@@ -419,7 +419,8 @@
       "summarySeparator": "、",
       "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
       "filterTeammatesHeading": "伙伴",
-      "filterAnySource": "不限来源",
+      "filterAnySource": "全部",
+      "filterHideAllTeammates": "都不显示",
       "filterSelectedTeammates": "已选 {{count}} 位"
     },
     "search": {

@@ -3,6 +3,8 @@ import { ModelSelectorContent } from '../../../src/renderer/components/new-chat/
 import { recordRecentModel } from '../../../src/renderer/state/recentModels';
 import { addModelFavorite } from '../../../src/renderer/state/modelFavorites';
 import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
+import { useTranslation } from 'react-i18next';
+import { cindyAiAccountName } from '../../../src/shared/cindyAiPresentation';
 
 // 与 unifiedModelPanelRendering.test.tsx 同一套供应商夹具:归一化行 gpt-5.6 在 codex 上
 // 是 root 条目、在 cc 上是 `chatgpt/` bridge 壳;Opus 5 在 anthropic 上只有 cc。
@@ -77,12 +79,21 @@ recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'cc', effor
 recordRecentModel({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', effort: 'high' }, Date.now() - 10_000);
 addModelFavorite({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', effort: 'high' });
 
-function Fixture() {
+function Fixture({ scenario }: { scenario: string }) {
+  const { t } = useTranslation();
+  const gateway = scenario.startsWith('cindy-');
+  const accountName = cindyAiAccountName(scenario === 'cindy-personal'
+    ? { membershipKind: 'personal', orgSlug: null, orgName: null }
+    : { membershipKind: 'org', orgSlug: scenario === 'cindy-xd' ? 'xd' : 'example', orgName: 'Example International Game Studio' }, t);
+  const sourceProviders = gateway ? [...providers, {
+    ...providers[1], id: 'xd', name: accountName, auth: { method: 'managed' },
+    models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },
+  } as ProviderView] : providers;
   return (
     <main className="mx-auto w-full max-w-[720px] p-4">
       <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-primary)] p-3">
         <ModelSelectorContent
-          providersOverride={providers}
+          providersOverride={sourceProviders}
           providersOverrideState={{ status: 'ready', refresh: () => {} }}
           modelId="claude-opus-5"
           effort="medium"
@@ -114,5 +125,5 @@ void mountPage({
       permissionModes: [{ id: 'default', displayName: 'Default' }],
     }),
   } },
-  render: () => <Fixture />,
+  render: ctx => <Fixture scenario={ctx.case} />,
 });

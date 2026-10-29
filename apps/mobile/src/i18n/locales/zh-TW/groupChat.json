@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "新增群聊",
-    "description": "選幾位夥伴放進一個群聊。你說一句，它們會一起接話。",
     "nameLabel": "群聊名稱",
     "namePlaceholder": "例如：週末出遊",
     "nameRequired": "為群聊取個名字",
     "membersLabel": "選擇夥伴",
     "selectedCount_one": "已選 {{count}} 位，最多 {{max}} 位",
     "selectedCount_other": "已選 {{count}} 位，最多 {{max}} 位",
-    "minMembers": "至少選 {{min}} 位夥伴",
-    "notEnoughBots": "至少需要 {{min}} 位可用的夥伴才能建立群聊，先去新增夥伴吧。",
+    "close": "關閉",
+    "submitShort": "建立",
     "submit": "建立群聊",
-    "failed": "群聊沒能建立，請稍後重試",
-    "chooseComputer": "在哪台電腦上建群",
-    "computerNote": "群聊建在 {{deviceName}} 上，夥伴們在這台電腦上做事。"
+    "failed": "群聊沒能建立，請稍後重試"
   },
   "memberStatus": {
     "paused": "已暫停",
@@ -97,17 +94,61 @@
     "stepTimeout": "{{name}}太久沒做完，這一步先停下",
     "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
     "runtimeFailure": {
-      "REMOTE_DEVICE_LIMIT": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。\n請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
-      "REMOTE_TOTAL_LIMIT": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。\n請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
-      "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
-      "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
-      "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
-      "RATE_LIMITED": "{{name}}無法回覆：模型請求過於頻繁。\n請稍後重新傳送，或選擇其他可用模型。",
-      "UPSTREAM_OVERLOADED": "{{name}}無法回覆：模型服務暫時繁忙。\n請稍後重新傳送，或選擇其他可用模型。",
-      "QUOTA_EXCEEDED": "{{name}}無法回覆：模型用量已達上限。\n請檢查對應來源的配額，或選擇其他可用模型。",
-      "NETWORK_ERROR": "{{name}}無法回覆：網路連線失敗。\n請檢查網路或 Proxy 後重新傳送。",
-      "RUNTIME_TIMEOUT": "{{name}}本次回覆逾時。\n請重新傳送訊息，或選擇其他可用模型。",
-      "RUNTIME_ERROR": "{{name}}這次未能回覆。\n請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。",
+        "advice": "請夥伴的主人封存不用的任務。",
+        "details": "請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。"
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。",
+        "advice": "請遠端電腦的主人釋放不用的任務或提高上限。",
+        "details": "請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。"
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}無法回覆：目前模型不支援圖片。",
+        "advice": "請切換至支援圖片的模型。",
+        "details": "請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。"
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}無法回覆：目前沒有可用模型。",
+        "advice": "請在夥伴設定中選擇可用模型。",
+        "details": "請在夥伴設定中選擇已連線的可用模型後重新傳送。"
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}無法回覆：模型連線需要重新驗證。",
+        "advice": "請重新連接對應的模型來源。",
+        "details": "請在設定中重新連線對應的模型來源後重新傳送。"
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}無法回覆：模型請求過於頻繁。",
+        "advice": "請稍後重新傳送。",
+        "details": "請稍後重新傳送，或選擇其他可用模型。"
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}無法回覆：模型服務暫時繁忙。",
+        "advice": "請稍後重新傳送。",
+        "details": "請稍後重新傳送，或選擇其他可用模型。"
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}無法回覆：模型用量已達上限。",
+        "advice": "請檢查配額或選擇其他模型。",
+        "details": "請檢查對應來源的配額，或選擇其他可用模型。"
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}無法回覆：網路連線失敗。",
+        "advice": "請檢查網路或Proxy。",
+        "details": "請檢查網路或 Proxy 後重新傳送。"
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}本次回覆逾時。",
+        "advice": "請重新傳送訊息。",
+        "details": "請重新傳送訊息，或選擇其他可用模型。"
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}這次未能回覆。",
+        "advice": "請重新傳送訊息。",
+        "details": "請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+      }
     },
     "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。"
   },

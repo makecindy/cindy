@@ -23,7 +23,8 @@ import { leadingSlashInvocation, loadAllCommands, rewriteAgentSkillInvocationFor
 import { toast } from '@/lib/toast';
 import { getDraft as getWorkspaceDraft, patchDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
-const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost, catalog } = vi.hoisted(() => ({
+  catalog: { device: null as { deviceId: string; name: string } | null },
   pickAndUpdateGhost: vi.fn(),
   auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
   translation: {
@@ -31,6 +32,9 @@ const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
   },
 }));
+
+vi.mock('../useCatalogDevice', () => ({ CatalogDeviceScope: ({ children }: { children: (...args: unknown[]) => unknown }) =>
+  children(catalog.device, false, 1, { selected: catalog.device, onSelect: vi.fn(), directory: { candidates: [], online: false, relayOnline: false } }) }));
 
 vi.mock('../GhostPagePanelHost', () => ({
   GhostPagePanelHost: ({ ghost }: { ghost: { manifest: { id: string } } }) => (
@@ -95,6 +99,7 @@ const loadDetail = vi.fn<() => Promise<PluginMarketDetail>>();
 const listAgentSkills = vi.fn();
 
 beforeEach(() => {
+  catalog.device = null;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   auth.mode = 'local';
   auth.user.membershipKind = 'personal';
@@ -136,6 +141,13 @@ beforeEach(() => {
     },
     setApplicationMenuLocale: async () => {},
   });
+});
+
+it('opens a shared package before the selected remote plugin catalogue', async () => {
+  catalog.device = { deviceId: 'remote-computer', name: 'Remote Computer' };
+  render(<MemoryRouter initialEntries={['/plugins?share=' + 's'.repeat(32)]}><GhostPluginPage /></MemoryRouter>);
+  expect(await screen.findByRole('button', { name: 'sharing.localSignIn' })).toBeTruthy();
+  expect(loadDetail).not.toHaveBeenCalled();
 });
 
 afterEach(() => {

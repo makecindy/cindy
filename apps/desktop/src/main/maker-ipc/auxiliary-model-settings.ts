@@ -19,6 +19,7 @@ import {
 } from '../../shared/utilityModelProfiles.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { getCindyAiProviderName } from '../cindyAiProviderName.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import {
@@ -144,6 +145,7 @@ function settingsWire(): AuxiliaryModelSettingsState {
   const state = readAuxiliaryModelSettingsState();
   const models = Array.isArray(state.value.models) ? state.value.models : [];
   const settings = { models };
+  const catalog = getActiveCatalog();
   return {
     models,
     isCustomized: state.isCustomized,
@@ -151,7 +153,11 @@ function settingsWire(): AuxiliaryModelSettingsState {
     defaults: state.defaults ?? { models: [] },
     options: buildAuxiliaryModelOptions({
       settings,
-      catalog: getActiveCatalog(),
+      catalog: {
+        ...catalog,
+        providers: catalog.providers.map(provider => provider.id === 'xd'
+          ? { ...provider, name: getCindyAiProviderName() } : provider),
+      },
       overrides: readModelDisableOverrides(),
       providerOrder: readProviderOrder(),
       hasCredential: hasOneshotProviderCredential,

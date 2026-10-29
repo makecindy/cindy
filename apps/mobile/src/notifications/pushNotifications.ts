@@ -14,6 +14,7 @@ import {
   getDevServerEnvironment,
   type DevServerEnvironment,
 } from '@/config/devServerEnvironment';
+import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import Notifications from './nativeNotifications';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
@@ -191,8 +192,13 @@ function deviceLinkBaseForRealm(realm: ClientEndpointRegion): string {
   return getMobileEndpointForRealm(realm, 'deviceLinkApiBaseUrl');
 }
 
-function pushTargets(realm: ClientEndpointRegion) {
-  const targets = [{ baseUrl: deviceLinkBaseForRealm(realm), path: PUSH_TOKEN_PATH, optional: false }];
+function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DELETE') {
+  // 自建中转不转发系统推送(docs/self-hosted-relay-plan.md §5.3、§7):这时不在官方 device-link
+  // 登记 token;注销仍发往官方地址(realm 缓存,不受中转覆盖),清掉以前的登记。
+  const skipDeviceLink = method === 'PUT' && getActiveSelfHostedRelay() !== null;
+  const targets = skipDeviceLink
+    ? []
+    : [{ baseUrl: deviceLinkBaseForRealm(realm), path: PUSH_TOKEN_PATH, optional: false }];
   try {
     const baseUrl = getMobileEndpointForRealm(realm, 'chatApiBaseUrl');
     if (baseUrl) targets.push({ baseUrl, path: '/v1/push-token', optional: true });
@@ -200,7 +206,7 @@ function pushTargets(realm: ClientEndpointRegion) {
   return targets;
 }
 async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown) {
-  const results = await Promise.allSettled(pushTargets(realm).map(async target => {
+  const results = await Promise.allSettled(pushTargets(realm, method).map(async target => {
     try { await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) }); }
     catch (error) {
       // An older chat server can roll forward independently of existing task pushes.

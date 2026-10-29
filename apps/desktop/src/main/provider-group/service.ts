@@ -202,7 +202,12 @@ export interface ProviderGroupServiceDeps {
   /**
    * 分享的人这边的「需要换一台」凭证(guestSwitch.ts)；不提供 = 分享来的供应商出错时一律交回原有处理。
    */
-  guestSwitch?: Pick<ProviderGroupGuestSwitch, 'hasOffer' | 'claim' | 'release' | 'drop'>;
+  guestSwitch?: Pick<ProviderGroupGuestSwitch, 'offer' | 'hasOffer' | 'claim' | 'release' | 'drop'>;
+  /** A live G→M handle may ask O for a bounded switch token after a run failure. */
+  directGuestSession?(sessionId: string): {
+    ownerRoute: string;
+    requestSwitch(): Promise<string | undefined>;
+  } | null;
   /** 这个任务现在是否正在运行一轮。 */
   isTurnRunning(sessionId: string): boolean;
   /**
@@ -1408,7 +1413,16 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const shareRoute = row?.agentDeviceId;
     if (!row?.model || row.remoteHostId || !shareRoute || !isProviderShareAgentDeviceId(shareRoute)) return false;
     if (!(await deps.isFailoverEligible(sessionId))) return false;
-    if (!guestSwitch.claim(sessionId)) return false;
+    if (!guestSwitch.claim(sessionId)) {
+      const direct = deps.directGuestSession?.(sessionId);
+      if (!direct || direct.ownerRoute !== shareRoute || !lease || run.superseded
+        || !deps.isLeaseCurrent(sessionId, lease)) return false;
+      const offered = await direct.requestSwitch().catch(() => undefined);
+      if (!offered || run.superseded || !deps.isLeaseCurrent(sessionId, lease)
+        || deps.directGuestSession?.(sessionId) !== direct) return false;
+      guestSwitch.offer(sessionId, offered);
+      if (!guestSwitch.claim(sessionId)) return false;
+    }
     // 检查期间用户已接手或错误已被新的一轮接管：不换，作废刚登记给下一次打开的凭证。
     if (!lease || run.superseded || !deps.isLeaseCurrent(sessionId, lease)) {
       guestSwitch.release(sessionId);
@@ -1830,7 +1844,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     mayHandleTurnError(sessionId, signals) {
       if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
-      if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true;
+      if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true
+        || !!deps.directGuestSession?.(sessionId);
       if (binding.groupDeviceId) return deps.remote !== undefined;
       const config = deps.readGroup(binding.providerId);
       const current = config?.members.find((m) => m.key === binding.memberKey);

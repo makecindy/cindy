@@ -254,6 +254,22 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 **托管 Codex 启动的跨机往返与执行环境恢复**(2026-10-22 远程供应商调查：启动 277 次串行文件操作、每次跨机
 0.5–3s，启动几分钟、撞 5 分钟上限；握手失败后「能聊天但没有 Shell 与文件工具」)：
 
+- **POSIX Agent → Windows 执行端的沙箱实现**（2026-10-28 真机）：固定 Codex 0.159.2
+  从 macOS 发出受限权限时携带 `windowsSandboxLevel=disabled`，Windows 原生 exec-server
+  因无法落实沙箱意图拒绝所有命令。控制端只把这种跨平台、`permissions.type=managed` 的
+  disabled 选择映射为 Windows 原生 `restricted-token`；权限条目、网络设置、Cindy 本机授权
+  闸门均保持原值，显式 Windows 选择和非受限请求不改。原生实现不能落实 deny-read 等规则时
+  仍拒绝整个请求，不删规则、不转无沙箱、不重放命令，不安装 MXC、创建系统账号或改防火墙。
+  这是 Windows 原生受限令牌的边界，不声称其网络隔离等同 macOS：网络约束沿用该原生实现。
+  故障只影响这个任务的执行请求，不重启 device-link、不撤下其它 peer。回归见
+  `remote-agent/__tests__/execServerProjection.e2e.test.ts` 的真实原生进程及
+  `executor/__tests__/virtualWorkspace.test.ts`；临时文件和权限验证均限制在测试目录。
+  Windows 的 Store/MSIX PowerShell 无法在受限令牌下启动（真机 `CreateProcessAsUserW`
+  错误 `-1073283067`）。同一跨平台适配只在原生声明此类 Shell 时，优先宣告现存的
+  非 Store PowerShell 7，否则使用现存的系统 Windows PowerShell；先解析真实路径排除
+  指回 Store 的别名。没有替代时保留原声明并明确失败，不改系统 PATH、不下载或安装 Shell，
+  不改用户显式命令及其它 Agent 的 Shell。原生回归必须按 initialize 宣告的 Shell 真正执行。
+
 - **不可能存在的路径在 Agent 所在电脑直接回答**(`host/execServerShortcut.ts`)：Codex 沿工作目录逐级向上找
   `.git`、Skill 目录与插件清单。镜像根内的虚拟垫层(真实根目录以上的 `workspace/p/…`)及镜像根本身在任务电脑没有
   对应目录(已映射的工作区及真实上级、`home`、`tmp`、`additional` 除外，见 `controller/startRemote.ts` 的

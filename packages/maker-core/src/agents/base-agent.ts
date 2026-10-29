@@ -1889,6 +1889,10 @@ export const DEVICE_HOSTED_GUEST_ROUTE_HEADER = 'x-cindy-guest-route';
 export const LOCAL_AGENT_CLIENT = Symbol('local-agent-client');
 
 export interface LocalAgentClient {
+  /** Main-resolved remote supplier; never accepted from a client request. */
+  agentDeviceId?: string;
+  /** Main has already selected a member of the application's provider group. */
+  groupAssigned?: boolean;
   url: string;
   token: string;
   hostToolsOnly: boolean;

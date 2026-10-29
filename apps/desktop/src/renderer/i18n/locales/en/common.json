@@ -317,6 +317,9 @@
     "closeAllDescription": "Guests will lose access. Task history is kept."
   },
   "providerShare": {
+    "owned": {
+      "title": "Providers I Share"
+    },
     "memberBudget": {
       "recommended": "Recommended model",
       "none": "No recommendation",
@@ -1197,8 +1200,13 @@
     "clipboardSyncPermission": "Clipboard sync needs paste access. Allow it, then return to this window to resume.",
     "clipboardSyncWaiting": "The remote computer’s clipboard is not available right now (it may be locked). Sync resumes automatically.",
     "lockingOnExit": "Locking computer…",
+    "idleLock": "Disconnect and lock when idle",
+    "idleNever": "Never",
+    "idleMinutes_one": "{{count}} minute",
+    "idleMinutes_other": "{{count}} minutes",
+    "idleDisconnected": "Disconnected due to inactivity. Reconnect when you are ready.",
     "lockOnExit": "Lock Computer on Exit",
-    "lockOnExitHint": "Locks when you leave remote desktop. Reconnecting or switching apps does not lock the computer.",
+    "lockOnExitHint": "Locks the computer when you exit remote desktop.",
     "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
     "nativeResolution": "Native",
     "autoUnlock": "Automatically unlock computer",
@@ -3398,6 +3406,9 @@
       },
       "xd": {
         "title": "Cindy AI",
+        "personal": "Personal",
+        "xdOrganization": "XD",
+        "organization": "Organization",
         "subtitle": "All models · Claude Code / Codex · billed from your balance per token",
         "modelLabel": "All models",
         "billingLabel": "billed from your balance per token",
@@ -5589,6 +5600,173 @@
       }
     },
     "remoteControl": {
+      "relay": {
+        "summary": {
+          "official": "Cindy relay",
+          "owner": "This computer is the relay",
+          "member": "Joined {{name}}",
+          "server": "Server relay \"{{name}}\""
+        },
+        "description": "Remote control between your devices goes through the Cindy relay by default. You can instead deploy a relay to your own server, run one on this computer, or join a relay on another computer of yours. Sign-in, models and other services are not affected.",
+        "current": "In use",
+        "ownerName": "This computer",
+        "unavailable": "To use your own relay, sign in to Cindy and make sure the system keychain is available.",
+        "limits": "While you use your own relay, phone push notifications, provider sharing and shared tasks are unavailable.",
+        "actions": {
+          "host": "Run on this computer",
+          "join": "Join another relay",
+          "useOfficial": "Switch back to Cindy relay",
+          "editHost": "Change settings",
+          "deploy": "Deploy to my server",
+          "useDeployment": "Use this relay"
+        },
+        "host": {
+          "title": "Run a relay on this computer",
+          "hint": "Your other devices must be able to reach this computer: the same local network, router port forwarding, a tunnel or a mesh VPN all work, and you are responsible for that. If this computer sleeps or Cindy quits, every device disconnects, so Keep computer awake is turned on.",
+          "port": "Port",
+          "scope": "Who can connect",
+          "scopeLocal": "This computer only",
+          "scopeAll": "Any network",
+          "scopeLocalHint": "Accepts connections from this computer only. Use it with your own reverse proxy, tunnel or mesh VPN.",
+          "scopeAllHint": "Devices on your local network can connect directly. The connection is not encrypted, so use it only on trusted networks. Phones need an https address.",
+          "externalUrl": "Address other devices use",
+          "externalUrlPlaceholder": "e.g. https://relay.example.com",
+          "externalUrlHintAll": "Included in join links. If empty, this computer's local network address is used.",
+          "externalUrlHintLocal": "Included in join links. Enter the public address of your proxy or tunnel.",
+          "suggested": "This computer's addresses:",
+          "start": "Start",
+          "save": "Save and restart relay",
+          "cancel": "Cancel",
+          "running": "Relay is running. Other devices connect to {{address}}"
+        },
+        "add": {
+          "intro": "Create a join link so a phone or another computer can join this relay.",
+          "create": "Add device",
+          "hint": "Scan it with your phone's camera, or send the link to another computer and paste it under Join another relay. The link works once and expires in 10 minutes.",
+          "qrAlt": "QR code to join the relay",
+          "copy": "Copy link",
+          "copied": "Join link copied",
+          "newLink": "New link",
+          "waiting": "Waiting for a device to ask…"
+        },
+        "requests": {
+          "item": "{{name}} wants to join",
+          "verify": "Pairing code",
+          "verifyHint": "Approve only if it matches the code on that device.",
+          "replaces": "This device joined before. Approving revokes its old credential.",
+          "approve": "Approve",
+          "reject": "Decline",
+          "unverified": "This request can't be verified: it doesn't match a join link from this computer and may have been tampered with, so it can only be declined. If it's your device, create a new join link and try again."
+        },
+        "join": {
+          "title": "Join another relay",
+          "hint": "Paste the join link from Add device on the relay's computer. Cindy switches over once it's approved.",
+          "placeholder": "Paste the join link",
+          "submit": "Join",
+          "connecting": "Connecting to the relay…",
+          "waiting": "Request sent. On {{name}}, check that these digits match and approve:",
+          "cancel": "Cancel"
+        },
+        "issue": {
+          "removed": "This computer was removed from the relay, or the relay was stopped.",
+          "unauthorized": "The relay no longer accepts this computer's credential.",
+          "next": "Join again, or switch back to the Cindy relay."
+        },
+        "confirm": {
+          "ownerTitle": "Stop the relay on this computer?",
+          "ownerDescription": "Devices that joined will disconnect and be told the relay was stopped. This computer switches back to the Cindy relay.",
+          "memberTitle": "Switch back to the Cindy relay?",
+          "memberDescription": "This computer leaves \"{{name}}\" and uses the Cindy relay. To join again, ask for a new join link.",
+          "serverTitle": "Switch back to the Cindy relay?",
+          "serverDescription": "The relay \"{{name}}\" keeps running on your server, and devices that joined can still reach each other through it. You can switch this computer back at any time."
+        },
+        "errors": {
+          "INVALID_LINK": "The join link or address is not valid.",
+          "UNREACHABLE": "Can't reach this relay. Make sure this computer can open the address in the link.",
+          "NOT_A_RELAY": "This address is not a Cindy relay.",
+          "INCOMPATIBLE": "This relay's version isn't compatible. Update Cindy on both computers.",
+          "ACCOUNT_MISMATCH": "This relay belongs to another Cindy account.",
+          "CODE_INVALID": "This join link has expired or was already used. Ask for a new one.",
+          "RATE_LIMITED": "Too many attempts. Try again in a few minutes.",
+          "REJECTED": "The request was declined.",
+          "EXPIRED": "Timed out waiting for approval. Join again.",
+          "CANCELLED": "Cancelled.",
+          "FAILED": "The action didn't complete.",
+          "HOSTING": "This computer is running a relay. Switch back to the Cindy relay before joining another one.",
+          "NOT_SIGNED_IN": "Sign in to Cindy first.",
+          "SECURE_STORAGE_UNAVAILABLE": "The system keychain isn't available, so the relay credential can't be stored safely.",
+          "PORT_IN_USE": "Port {{port}} is already in use. Choose another port.",
+          "START_FAILED": "The relay couldn't start. Try another port.",
+          "EXTERNAL_URL_REQUIRED": "Enter the address other devices use, or set Who can connect to Any network.",
+          "SSH_FAILED": "Can't connect to the server. Check its SSH settings under Remote.",
+          "NEEDS_ROOT": "This needs the root account, or an account that can use sudo without a password. Cindy never asks for your server password.",
+          "UNSUPPORTED_SYSTEM": "Only 64-bit Linux with systemd (x64 / arm64) is supported, and curl or wget must be installed.",
+          "PORT_BUSY": "Another service is using port 80 or 443 and can't be configured automatically. Existing Nginx is handled automatically; check other services using these ports.",
+          "NGINX_FAILED": "Nginx configuration couldn't be completed, so deployment stopped. See the details for the reason.",
+          "DOWNLOAD_FAILED": "The server couldn't download the runtime from the official source or the mirror. Check that the server can reach the internet.",
+          "RELAY_MISMATCH": "This server already has a relay that wasn't deployed from this computer. You can remove it and redeploy.",
+          "CERTIFICATE_FAILED": "Couldn't get an HTTPS certificate. Usually port 80 isn't allowed in the cloud security group, or the domain doesn't point to this server yet. Fix that, then retry.",
+          "NOT_REACHABLE": "The relay is running on the server, but this computer can't reach it. Allow port 443 in the cloud security group.",
+          "BUNDLE_MISSING": "This version of Cindy doesn't include the relay. Update Cindy.",
+          "DEPLOY_FAILED": "Deployment didn't complete.",
+          "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new join link.",
+          "NOT_OWNER": "Only the computer that deployed or started this relay can manage it.",
+          "BUSY": "A deployment is in progress. Please wait.",
+          "INVALID_ADDRESS": "Enter a public IP or domain, without http:// or a port.",
+          "NO_DEPLOYMENT": "Nothing has been deployed to a server yet.",
+          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the join link didn't issue. You may be connected to a fake relay, so joining stopped."
+        },
+        "deploy": {
+          "title": "Deploy to my server",
+          "hint": "Install the relay on your own Linux server so your phone and devices on other networks can connect. Cindy installs it over the SSH connection set up under Remote, gets an HTTPS certificate and renews it automatically.",
+          "requirements": "Requires 64-bit Linux with systemd, root or passwordless sudo, and TCP 80 and 443 allowed in your cloud security group or firewall. Cindy automatically checks and configures existing Nginx.",
+          "noHosts": "No servers yet. Add an SSH host under Remote, then come back to deploy.",
+          "server": "Server",
+          "address": "Address",
+          "addressPlaceholder": "Public IP or domain, e.g. 203.0.113.10",
+          "addressHint": "The address other devices use to reach the relay. A public IP gets a 6-day IP certificate that renews automatically; a domain must already point to this server.",
+          "name": "Name",
+          "defaultName": "My relay",
+          "submit": "Deploy",
+          "cancel": "Cancel",
+          "detail": "Details: {{detail}}",
+          "retry": "Retry",
+          "replace": "Remove the old relay and redeploy",
+          "running": {
+            "deploy": "Deploying to your server…",
+            "upgrade": "Upgrading the relay on your server…",
+            "uninstall": "Removing the relay from your server…"
+          },
+          "done": {
+            "deploy": "Deployed. This computer now uses the relay on your server. Use Add device to bring in your phone and other computers.",
+            "upgrade": "The relay on your server is now version {{version}}.",
+            "uninstall": "The relay was removed from your server."
+          },
+          "steps": {
+            "connect": "Connect to the server",
+            "check": "Check the system and ports",
+            "runtime": "Install the runtime",
+            "upload": "Upload the relay",
+            "configure": "Configure and start the service",
+            "certificate": "Get an HTTPS certificate",
+            "verify": "Check this computer can reach it",
+            "finish": "Done",
+            "remove": "Stop the service and delete files"
+          }
+        },
+        "server": {
+          "title": "My server relay",
+          "version": "Relay version {{version}}",
+          "incomplete": "The last deployment didn't finish. Retry or uninstall.",
+          "upgrade": "Upgrade to {{version}}",
+          "uninstall": "Uninstall from server",
+          "uninstallTitle": "Uninstall the relay from your server?",
+          "uninstallDescription": "The relay and its device records are deleted from the server, and devices using it disconnect. If you deploy again, every device needs to join again.",
+          "forget": "Remove from this computer only",
+          "forgetTitle": "Remove from this computer only?",
+          "forgetDescription": "The relay keeps running on the server, but this computer stops managing it and can't add devices to it anymore. Do this only if you no longer use that server."
+        }
+      },
       "title": "Remote Connection",
       "description": "Control your other signed-in devices remotely, or connect to a remote host over SSH.",
       "accessRevokedByPeer": "Access revoked — the other device must restore it in its settings",
@@ -5608,6 +5786,7 @@
         "restoreFailed": "Failed to restore access"
       },
       "sections": {
+        "relay": "Relay service",
         "myDevices": "My devices",
         "ssh": "SSH remote hosts",
         "hook": "Cindy IM bots"
@@ -11379,6 +11558,40 @@
     },
     "modelSelector": {
       "displayPricing": {
+        "components": {
+          "text": "Text",
+          "image": "Image",
+          "audio": "Audio",
+          "video": "Video"
+        },
+        "roles": {
+          "text": {
+            "input": "Text input",
+            "output": "Text output",
+            "cacheRead": "Text cache read",
+            "cacheWrite": "Text cache write"
+          },
+          "image": {
+            "input": "Image input",
+            "output": "Image output",
+            "cacheRead": "Image cache read",
+            "cacheWrite": "Image cache write"
+          },
+          "audio": {
+            "input": "Audio input",
+            "output": "Audio output",
+            "cacheRead": "Audio cache read",
+            "cacheWrite": "Audio cache write"
+          },
+          "video": {
+            "input": "Video input",
+            "output": "Video output",
+            "cacheRead": "Video cache read",
+            "cacheWrite": "Video cache write"
+          }
+        },
+        "durationInput": "Duration input",
+        "durationOutput": "Duration output",
         "million": "1M",
         "free": "Free",
         "estimated": "About {{price}}",
@@ -13555,7 +13768,8 @@
         "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
       },
       "filterCreatorsHeading": "Teammates",
-      "filterCreatorsAny": "Any source",
+      "filterCreatorsAny": "All",
+      "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
       "filterAllProjects": "All projects",
@@ -17970,6 +18184,26 @@
     "contextReferences": "Context references:"
   },
   "sharing": {
+    "loginRequired": "Sign In to Share",
+    "localUploadNotice": "Upload “{{name}}” v{{version}} to Cindy so signed-in recipients can download this version. Sharing does not publish it to the marketplace.",
+    "uploadLocal": "Upload and Share Plugin",
+    "localPreparing": "Uploading plugin and preparing sharing material…",
+    "localRecipientHint": "Recipients sign in to Cindy to view and install this exact version.",
+    "localLoading": "Reading shared plugin…",
+    "localPackage": "Local Share",
+    "localInstallTarget": "Install on",
+    "localTargetUnsupported": "Update Cindy on “{{device}}” to install shared local plugins.",
+    "localInstallButton": "Install v{{version}}",
+    "localReplaceTitle": "Replace “{{name}}”",
+    "localReplaceButton": "Replace",
+    "localReplaceNotice": "This shared package will replace the installed plugin. Only replace it if you trust this package.",
+    "localReplaceRetainsState": "The new code will continue using the existing accounts and data. A matching plugin ID does not prove it came from the same author.",
+    "localInstalling": "Installing plugin…",
+    "localVersionNotice": "This link keeps the version saved when it was shared. Review the plugin’s permissions before installation.",
+    "localSignIn": "Sign In to View",
+    "localOpenHint": "Sign in to Cindy to view and install this shared plugin.",
+    "localReadFailed": "Could not read this shared plugin",
+    "localChanged": "The plugin has changed. Close this window and share it again.",
     "includeAttribution": "Include my name and avatar",
     "recipientHint": "Open the link or scan the image to view the plugin. Continue in Cindy on a computer.",
     "linkLabel": "Share link",

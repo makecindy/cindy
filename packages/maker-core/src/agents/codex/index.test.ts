@@ -20124,6 +20124,58 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
+  // Regression: 2026-10-29 Telegram reply finished but its cancelled question
+  // retained the product boundary. Existing cancellation coverage only checked
+  // the RPC/UI response, not completion while the UI resolver was still pending.
+  // Unit: real adapter handlers, cancellation followed immediately by completion.
+  it.each(['native', 'dynamic'] as const)('finishes after a server-cancelled %s question without waiting for the UI', async (kind) => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart
+      ? { turn: { id: `turn-${++turnSeq}` } } : undefined);
+    const handle = await agent.startSession({
+      sessionId: `cancelled-question-${kind}`, model: 'gpt-5.4', workingDir: '/repo',
+    });
+    const decision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => decision.promise);
+    const events = await collectAgentEvents(handle);
+    await handle.send({ type: 'user', content: 'Estimate the project' });
+    const handlers = host.getThreadHandlers()!;
+    const base = { threadId: 'start-thread-id', turnId: 'turn-1' };
+    const response = kind === 'native'
+      ? handlers.requestUserInput!({ ...base, itemId: 'question',
+          questions: [{ id: 'q', header: 'Scope', question: 'Choose?' }] }, { requestId: 0 })
+      : handlers.dynamicToolCall!({ ...base, callId: 'question', namespace: 'cindy', tool: 'ask_user_question',
+          arguments: { questions: [{ id: 'q', question: 'Choose?' }] } }, { requestId: 0 });
+    try {
+      handlers.serverRequestResolved!({ threadId: base.threadId, requestId: 0 });
+      handlers.serverRequestResolved!({ threadId: base.threadId, requestId: 0 });
+      handlers.itemCompleted!({ ...base, item: {
+        type: 'agentMessage', id: 'final', phase: 'final_answer', text: 'The estimate is ready.',
+      } });
+      handlers.turnCompleted!({ threadId: base.threadId, turn: { id: base.turnId, status: 'completed' } });
+      await response;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      const done = events.filter((event) => event.type === 'done');
+      expect(done).toHaveLength(1);
+      expect(done[0]?.turnContinuationId).toBeUndefined();
+      expect(events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(1);
+      expect(events.some((event) => event.type === 'text'
+        && JSON.stringify(event.data).includes('The estimate is ready.'))).toBe(true);
+
+      // A delayed UI answer cannot revive the cancelled question or send a new turn.
+      decision.resolve({ kind: 'ask_user_question', answers: { 'Choose?': 'Late answer' } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(askUserTurnStartCalls(host)).toHaveLength(1);
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+      await handle.send({ type: 'user', content: 'New work' });
+      expect(askUserTurnStartCalls(host)).toHaveLength(2);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('cancels pending user input when serverRequest/resolved arrives', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

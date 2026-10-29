@@ -1911,7 +1911,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
-      if (client) {
+      if (client && (!hosted || client.hostToolsOnly)) {
         hostMcpServerNames = new Set([client.mcpName ?? 'client']);
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
@@ -4507,7 +4507,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { disallowedTools: [...claudeDisallowedTools] }
             : {}),
           // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
-          ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
+          ...(hosted?.guest && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+            ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly

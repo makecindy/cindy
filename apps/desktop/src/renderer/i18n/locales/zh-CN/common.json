@@ -317,6 +317,9 @@
     "closeAllDescription": "所有访客将无法继续访问，任务记录保留。"
   },
   "providerShare": {
+    "owned": {
+      "title": "我分享的供应商"
+    },
     "memberBudget": {
       "recommended": "推荐模型",
       "none": "不指定",
@@ -1185,8 +1188,12 @@
     "clipboardSyncPermission": "剪贴板同步需要粘贴权限，授权后回到窗口即可恢复",
     "clipboardSyncWaiting": "远程电脑的剪贴板暂时无法访问（可能已锁屏），解锁后会自动继续同步。",
     "lockingOnExit": "正在锁定电脑…",
+    "idleLock": "无操作后断开并锁屏",
+    "idleNever": "永不",
+    "idleMinutes_other": "{{count}} 分钟",
+    "idleDisconnected": "已因长时间无操作断开，请重新连接。",
     "lockOnExit": "退出后锁定电脑",
-    "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
+    "lockOnExitHint": "主动退出远程桌面时锁屏。",
     "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
     "nativeResolution": "原生",
     "autoUnlock": "自动解锁电脑",
@@ -3369,6 +3376,9 @@
       },
       "xd": {
         "title": "Cindy AI",
+        "personal": "个人",
+        "xdOrganization": "心动",
+        "organization": "企业",
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 从余额扣费",
@@ -5558,6 +5568,173 @@
       }
     },
     "remoteControl": {
+      "relay": {
+        "summary": {
+          "official": "Cindy 官方中转",
+          "owner": "这台电脑当中转",
+          "member": "已加入 {{name}}",
+          "server": "服务器中转「{{name}}」"
+        },
+        "description": "设备之间的远程控制默认经 Cindy 官方中转。你也可以把中转部署到自己的服务器、让这台电脑当中转，或加入你自己另一台电脑上的中转。登录、模型等其他服务不受影响。",
+        "current": "当前使用",
+        "ownerName": "这台电脑",
+        "unavailable": "登录 Cindy 账号，并且系统钥匙串可用时，才能使用自己的中转。",
+        "limits": "使用自己的中转时，手机系统推送、供应商分享和共享任务暂不可用。",
+        "actions": {
+          "host": "在这台电脑上开启",
+          "join": "加入别的中转",
+          "useOfficial": "切回官方中转",
+          "editHost": "修改设置",
+          "deploy": "部署到我的服务器",
+          "useDeployment": "改用这个中转"
+        },
+        "host": {
+          "title": "在这台电脑上开启中转",
+          "hint": "其他设备要能访问到这台电脑：同一局域网、路由器端口映射、内网穿透或组网工具都可以，由你自己保证。这台电脑休眠或退出 Cindy 时，所有设备都会断开，开启后会自动打开「保持电脑唤醒」。",
+          "port": "端口",
+          "scope": "允许谁连接",
+          "scopeLocal": "仅本机",
+          "scopeAll": "所有网络",
+          "scopeLocalHint": "只接受本机连接，适合配合你自己的反向 Proxy、内网穿透或组网工具。",
+          "scopeAllHint": "局域网里的设备可以直接连接。连接不加密，只建议在可信网络中使用；手机需要 https 地址才能连接。",
+          "externalUrl": "其他设备访问的地址",
+          "externalUrlPlaceholder": "例如 https://relay.example.com",
+          "externalUrlHintAll": "会写进加入链接。不填时使用这台电脑的局域网地址。",
+          "externalUrlHintLocal": "会写进加入链接。填你的 Proxy 或穿透服务对外的地址。",
+          "suggested": "这台电脑的地址：",
+          "start": "开启",
+          "save": "保存并重启中转",
+          "cancel": "取消",
+          "running": "中转运行中，其他设备访问地址：{{address}}"
+        },
+        "add": {
+          "intro": "生成加入链接，让手机或另一台电脑加入这个中转。",
+          "create": "添加设备",
+          "hint": "用手机相机扫码，或把链接发给另一台电脑，在「加入别的中转」里粘贴。链接 10 分钟内有效，只能用一次。",
+          "qrAlt": "加入中转的二维码",
+          "copy": "复制链接",
+          "copied": "已复制加入链接",
+          "newLink": "重新生成",
+          "waiting": "等待设备申请…"
+        },
+        "requests": {
+          "item": "{{name}} 请求加入",
+          "verify": "配对码",
+          "verifyHint": "和对方屏幕上显示的一致再同意。",
+          "replaces": "这台设备之前加入过，同意后它的旧凭证失效。",
+          "approve": "同意",
+          "reject": "拒绝",
+          "unverified": "无法核对这台设备：它的申请和这台电脑给出的加入链接对不上，可能被人篡改，只能拒绝。如果是你自己的设备，请重新生成加入链接再试。"
+        },
+        "join": {
+          "title": "加入别的中转",
+          "hint": "粘贴主人电脑上「添加设备」给出的加入链接，等对方同意后自动切换。",
+          "placeholder": "粘贴加入链接",
+          "submit": "加入",
+          "connecting": "正在连接中转…",
+          "waiting": "已发出申请。请在 {{name}} 上核对这串数字并点同意：",
+          "cancel": "取消"
+        },
+        "issue": {
+          "removed": "这台电脑已被移出中转，或中转已停用。",
+          "unauthorized": "中转不再接受这台电脑的凭证。",
+          "next": "可以重新加入，或切回官方中转。"
+        },
+        "confirm": {
+          "ownerTitle": "停用这台电脑上的中转？",
+          "ownerDescription": "已加入的设备会断开，并提示中转已停用。这台电脑切回 Cindy 官方中转。",
+          "memberTitle": "切回官方中转？",
+          "memberDescription": "这台电脑会退出「{{name}}」，改用 Cindy 官方中转。之后要再加入，需要对方重新生成加入链接。",
+          "serverTitle": "切回官方中转？",
+          "serverDescription": "服务器上的中转「{{name}}」会继续运行，已加入的其他设备仍能通过它互相连接。这台电脑随时可以改回来。"
+        },
+        "errors": {
+          "INVALID_LINK": "加入链接或地址格式不正确。",
+          "UNREACHABLE": "连不上这个中转。请确认这台电脑能访问链接里的地址。",
+          "NOT_A_RELAY": "这个地址不是 Cindy 中转。",
+          "INCOMPATIBLE": "这个中转的版本与本机不兼容，请把两边的 Cindy 都更新到最新版。",
+          "ACCOUNT_MISMATCH": "这个中转属于另一个 Cindy 账号。",
+          "CODE_INVALID": "加入链接已失效或已被使用，请让对方重新生成。",
+          "RATE_LIMITED": "尝试次数太多，请过几分钟再试。",
+          "REJECTED": "对方拒绝了这次加入。",
+          "EXPIRED": "等待同意超时，请重新加入。",
+          "CANCELLED": "已取消。",
+          "FAILED": "操作没有完成。",
+          "HOSTING": "这台电脑正在当中转。要加入别的中转，请先切回官方中转。",
+          "NOT_SIGNED_IN": "请先登录 Cindy 账号。",
+          "SECURE_STORAGE_UNAVAILABLE": "系统钥匙串不可用，无法安全保存中转凭证。",
+          "PORT_IN_USE": "端口 {{port}} 已被占用，请换一个端口。",
+          "START_FAILED": "中转没能启动，可以换一个端口再试。",
+          "EXTERNAL_URL_REQUIRED": "请先填写其他设备访问的地址，或把「允许谁连接」改为所有网络。",
+          "SSH_FAILED": "连不上服务器。请在「远程」里检查这台服务器的 SSH 设置。",
+          "NEEDS_ROOT": "需要 root 账号，或这个账号能免密码使用 sudo。Cindy 不会索要服务器密码。",
+          "UNSUPPORTED_SYSTEM": "目前只支持带 systemd 的 64 位 Linux（x64 / arm64），并且需要 curl 或 wget。",
+          "PORT_BUSY": "服务器的 80 或 443 端口被其他服务占用，暂时无法自动接入。已有 Nginx 会自动配置，请检查占用端口的其他服务。",
+          "NGINX_FAILED": "未能完成 Nginx 配置，部署已停止。请查看详细原因。",
+          "DOWNLOAD_FAILED": "服务器下载运行环境失败（官方源和国内镜像都没成功）。请检查服务器能否访问外网。",
+          "RELAY_MISMATCH": "这台服务器上已有一个不是这台电脑部署的中转。可以清除它后重新部署。",
+          "CERTIFICATE_FAILED": "申请 HTTPS 证书失败。通常是云服务器安全组没有放行 80 端口，或域名还没解析到这台服务器。处理后点重试。",
+          "NOT_REACHABLE": "服务器上的中转已经运行，但这台电脑连不上它。请在云服务器安全组里放行 443 端口。",
+          "BUNDLE_MISSING": "这个版本的 Cindy 没有带中转程序，请更新 Cindy。",
+          "DEPLOY_FAILED": "部署没有完成。",
+          "PAIR_PROOF_INVALID": "无法核对这台设备的申请，不能同意。请重新生成加入链接。",
+          "NOT_OWNER": "只有部署或开启这个中转的电脑才能管理它。",
+          "BUSY": "正在部署，请稍候。",
+          "INVALID_ADDRESS": "请填写公网 IP 或域名，不带 http:// 和端口。",
+          "NO_DEPLOYMENT": "还没有部署到服务器。",
+          "OWNER_MISMATCH": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。"
+        },
+        "deploy": {
+          "title": "部署到我的服务器",
+          "hint": "把中转装到你自己的 Linux 服务器上，手机和不在同一网络的设备都能连。Cindy 通过「远程」里配置的 SSH 连接安装，并自动申请 HTTPS 证书、到期前自动续期。",
+          "requirements": "需要：64 位 Linux（带 systemd）、root 或免密 sudo，并在云服务器安全组或防火墙里放行 TCP 80 和 443。Cindy 会自动检查并配置已有的 Nginx。",
+          "noHosts": "还没有可用的服务器。先在「远程」里添加 SSH 主机，再回来部署。",
+          "server": "服务器",
+          "address": "访问地址",
+          "addressPlaceholder": "公网 IP 或域名，例如 203.0.113.10",
+          "addressHint": "其他设备连接中转用的地址。填公网 IP 会申请 6 天有效、自动续期的 IP 证书；填域名需要先把域名解析到这台服务器。",
+          "name": "名称",
+          "defaultName": "我的中转",
+          "submit": "开始部署",
+          "cancel": "取消",
+          "detail": "详细原因：{{detail}}",
+          "retry": "重试",
+          "replace": "清除旧中转并重新部署",
+          "running": {
+            "deploy": "正在部署到服务器…",
+            "upgrade": "正在升级服务器上的中转…",
+            "uninstall": "正在从服务器卸载…"
+          },
+          "done": {
+            "deploy": "部署完成，这台电脑已改用服务器上的中转。用「添加设备」让手机和其他电脑加入。",
+            "upgrade": "服务器上的中转已升级到 {{version}}。",
+            "uninstall": "已从服务器卸载中转。"
+          },
+          "steps": {
+            "connect": "连接服务器",
+            "check": "检查系统和端口",
+            "runtime": "安装运行环境",
+            "upload": "上传中转程序",
+            "configure": "配置并启动服务",
+            "certificate": "申请 HTTPS 证书",
+            "verify": "从这台电脑检查能否连上",
+            "finish": "完成",
+            "remove": "停止服务并删除文件"
+          }
+        },
+        "server": {
+          "title": "我的服务器中转",
+          "version": "中转版本 {{version}}",
+          "incomplete": "上次部署没有完成，可以重试或卸载。",
+          "upgrade": "升级到 {{version}}",
+          "uninstall": "从服务器卸载",
+          "uninstallTitle": "从服务器卸载中转？",
+          "uninstallDescription": "服务器上的中转程序和设备档案都会被删除，正在用它的设备会断开。之后重新部署，所有设备都需要重新加入。",
+          "forget": "只在本机移除",
+          "forgetTitle": "只在这台电脑上移除？",
+          "forgetDescription": "服务器上的中转不会被删除，但这台电脑不再管理它，也不能再为它添加设备。确定不再使用那台服务器时再这样做。"
+        }
+      },
       "title": "远程连接",
       "description": "在同账号的设备之间互相远程操控，或通过 SSH 连接远端主机。",
       "accessRevokedByPeer": "访问权限已被撤销，需对方在选项中恢复",
@@ -5577,6 +5754,7 @@
         "restoreFailed": "恢复失败"
       },
       "sections": {
+        "relay": "中转服务",
         "myDevices": "我的设备",
         "ssh": "SSH 远程主机",
         "hook": "Cindy IM 机器人"
@@ -11344,6 +11522,40 @@
     },
     "modelSelector": {
       "displayPricing": {
+        "components": {
+          "text": "文字",
+          "image": "图片",
+          "audio": "音频",
+          "video": "视频"
+        },
+        "roles": {
+          "text": {
+            "input": "文字输入",
+            "output": "文字输出",
+            "cacheRead": "文字缓存读取",
+            "cacheWrite": "文字缓存写入"
+          },
+          "image": {
+            "input": "图片输入",
+            "output": "图片输出",
+            "cacheRead": "图片缓存读取",
+            "cacheWrite": "图片缓存写入"
+          },
+          "audio": {
+            "input": "音频输入",
+            "output": "音频输出",
+            "cacheRead": "音频缓存读取",
+            "cacheWrite": "音频缓存写入"
+          },
+          "video": {
+            "input": "视频输入",
+            "output": "视频输出",
+            "cacheRead": "视频缓存读取",
+            "cacheWrite": "视频缓存写入"
+          }
+        },
+        "durationInput": "时长输入",
+        "durationOutput": "时长输出",
         "million": "百万",
         "free": "免费",
         "estimated": "约 {{price}}",
@@ -13501,7 +13713,8 @@
         "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
       },
       "filterCreatorsHeading": "伙伴",
-      "filterCreatorsAny": "不限来源",
+      "filterCreatorsAny": "全部",
+      "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
@@ -17910,6 +18123,26 @@
     "contextReferences": "参考资料："
   },
   "sharing": {
+    "loginRequired": "登录后分享",
+    "localUploadNotice": "将「{{name}}」v{{version}} 上传至 Cindy，供已登录的接收者下载此版本。分享不会将插件上架到市场。",
+    "uploadLocal": "上传并分享插件",
+    "localPreparing": "正在上传插件并生成分享…",
+    "localRecipientHint": "接收者需在 Cindy 中登录，查看并安装本次分享的版本。",
+    "localLoading": "正在读取插件…",
+    "localPackage": "本地分享",
+    "localInstallTarget": "安装到哪台设备",
+    "localTargetUnsupported": "请更新「{{device}}」上的 Cindy 后，再安装分享的本地插件。",
+    "localInstallButton": "安装 v{{version}}",
+    "localReplaceTitle": "替换「{{name}}」",
+    "localReplaceButton": "替换",
+    "localReplaceNotice": "将使用本次分享包替换已安装的插件。请仅在信任此包时替换。",
+    "localReplaceRetainsState": "替换后的代码会继续使用原账号和数据。插件标识相同，不代表作者相同。",
+    "localInstalling": "正在安装插件…",
+    "localVersionNotice": "此链接保留分享时的版本。安装前会显示插件权限，由你确认。",
+    "localSignIn": "登录并查看",
+    "localOpenHint": "登录 Cindy 后，可查看并安装本次分享的插件。",
+    "localReadFailed": "无法读取本次分享的插件",
+    "localChanged": "插件已发生变化，请关闭此窗口后重新分享。",
     "includeAttribution": "附上我的昵称和头像",
     "recipientHint": "接收者可打开链接或扫描图片查看插件，在电脑端 Cindy 中使用。",
     "linkLabel": "分享链接",

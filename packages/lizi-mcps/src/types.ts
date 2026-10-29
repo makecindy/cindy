@@ -280,6 +280,7 @@ export interface SlackToolBridgeLike {
  * (大结果落盘的钳制根)。
  */
 export interface SlackHookMcpDeps {
+  compressInlineImage?: CompressInlineImageFn;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   getSessionContext?: () => LiziMcpSessionContext;
   getBridge(): SlackToolBridgeLike | null;

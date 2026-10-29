@@ -810,6 +810,32 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
   ).toBeNull();
 });
 
+// Component contract (unit): the real drawer names the charge, independently of its token unit.
+// Existing cases only name directions; one image quote and mixed/uncategorized variants cover fallback.
+it.each([
+  { components: ['image'], label: 'newChat.modelSelector.displayPricing.roles.image.output', prefixes: [] },
+  { components: ['image', 'image'], label: 'newChat.modelSelector.displayPricing.roles.image.output', prefixes: [] },
+  { components: [undefined], label: 'settings.providers.models.advanced.price.output', prefixes: [] },
+  { components: ['future_kind'], label: 'settings.providers.models.advanced.price.output', prefixes: [] },
+  { components: ['text', 'image'], label: 'settings.providers.models.advanced.price.output', prefixes: ['text', 'image'] },
+  { components: ['image', undefined], label: 'settings.providers.models.advanced.price.output', prefixes: ['image'] },
+])('labels primary quotes without inferring a category: $components', ({ components, label, prefixes }) => {
+  draw({ ...model, currency: 'CNY', displayPricing: {
+    items: [{ label: 'Custom fee', price: 1, unit: 'request', quantity: 1 }],
+    summary: { output: components.map((component, index) => ({
+      price: 840 + index, unit: 'token', quantity: 1000000, tier: index === 0 ? 'HD' : '4K', component,
+    })) },
+  } });
+  const row = screen.getByText(label).parentElement!;
+  expect(row.textContent).toContain('¥840');
+  expect(row.textContent).toContain('HD');
+  expect(row.textContent).not.toContain('future_kind');
+  for (const component of ['text', 'image', 'audio', 'video']) {
+    const prefix = `newChat.modelSelector.displayPricing.components.${component}`;
+    expect(row.textContent?.includes(prefix)).toBe(prefixes.includes(component));
+  }
+});
+
 // Unit contract: drawer summary must show translated roles while retaining supplier conditions below.
 // Previous drawer tests had no displayPricing; one input quote previously showed only the English table.
 it.each([{ hasSummary: true, withNotes: true }, { hasSummary: true, withNotes: false }, { hasSummary: false, withNotes: false }])('keeps supplementary items when they do not match the summary: %j', ({ hasSummary, withNotes }) => {

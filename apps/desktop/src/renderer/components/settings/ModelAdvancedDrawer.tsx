@@ -1,7 +1,8 @@
-import { isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
+import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
  * ModelAdvancedDrawer —— 单模型配置面板。宽屏配置与事实并列，窄屏按同一顺序排成一列。
@@ -534,7 +535,7 @@ export function ModelAdvancedDrawer({
                   {localizedModelName(primaryModel.name, t)}
                 </Dialog.Title>
                 <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
-                  {provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name}
+                  {providerDisplayName(provider, t)}
                 </p>
               </div>
               <Dialog.Close
@@ -1009,10 +1010,14 @@ export function ModelAdvancedDrawer({
                         {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
                           const quotes = primaryModel.displayPricing?.summary?.[role];
                           if (!quotes?.length) return null;
+                          const components = quotes.map(quote => displayPricingComponent(quote.component));
+                          const component = components.every(value => value === components[0]) ? components[0] : undefined;
                           return (
                             <Row
                               key={role}
-                              label={t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                              label={component
+                                ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                                : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
                             >
                               <span className="flex flex-col items-end gap-1">
                                 {quotes.map((quote, index) => (
@@ -1021,6 +1026,9 @@ export function ModelAdvancedDrawer({
                                     quote={quote}
                                     currency={primaryModel.currency!}
                                     costDiscount={discount}
+                                    componentLabel={!component && components[index]
+                                      ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                                      : undefined}
                                   />
                                 ))}
                               </span>

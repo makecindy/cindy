@@ -5,6 +5,7 @@ import {
 } from '@cindy/maker-shared/device-link-contract';
 import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
 import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
+import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 
@@ -33,12 +34,22 @@ const CONNECTION_ISSUE_COPY_KEYS: Record<
   unstable: { title: 'deviceLink.unstableTitle', hint: 'deviceLink.unstableHint' },
 };
 
+/**
+ * 自建中转下,鉴权失败与 4410 只说明中转凭证失效(被主人移出或中转已停用),与 Cindy 登录无关:
+ * 不能沿用「请重新登录」,改为指向设置里的「切回官方中转」。
+ */
+function isSelfHostedRelayRemoval(kind: DeviceLinkConnectionIssueKind): boolean {
+  return (kind === 'auth-failed' || kind === 'device-removed') && getActiveSelfHostedRelay() !== null;
+}
+
 /** Mobile 连接问题标题/提示统一走 i18n,避免同一 banner 混用本地化与中文硬编码。 */
 export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
+  if (isSelfHostedRelayRemoval(kind)) return i18n.t('relay.issue.removedTitle');
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].title);
 }
 
 export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string {
+  if (isSelfHostedRelayRemoval(kind)) return i18n.t('relay.issue.removedHint');
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
 }
 

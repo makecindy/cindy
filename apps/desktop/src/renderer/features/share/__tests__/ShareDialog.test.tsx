@@ -49,6 +49,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('manual sharing output', () => {
+  // A changed local package must ask for a new check/confirmation, rather than
+  // offer a retry of the obsolete confirmed package. The old output tests only
+  // covered clipboard/native-save failures after successful material loading.
+  it('explains changed content and requires reopening instead of retrying the old confirmation', async () => {
+    const changed = vi.fn().mockResolvedValueOnce({ confirmationRequired: true })
+      .mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] Package changed'));
+    render(<ShareDialog load={changed} confirmation={{ message: 'Upload notice', label: 'Upload' }} onClose={vi.fn()} />);
+    const confirm = await screen.findByRole('button', { name: 'Upload' });
+    fireEvent.click(confirm);
+    await screen.findByText('sharing.localChanged');
+    expect(screen.queryByRole('button', { name: 'sharing.retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Upload' })).toBeNull();
+  });
   it('does not copy a picture that finishes rendering after dismissal', async () => {
     let finish!: (blob: Blob) => void;
     io.png.mockImplementationOnce(

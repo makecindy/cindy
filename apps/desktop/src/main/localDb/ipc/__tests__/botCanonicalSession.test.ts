@@ -4493,12 +4493,16 @@ describe('Bot Session task end-to-end runtime', () => {
     agentKind: string;
   }
 
-  async function runOwnerAction<T>(tool: string, current: () => boolean, operation: () => Promise<T>): Promise<T> {
+  async function runOwnerAction<T>(tool: string, current: () => boolean, operation: () => Promise<T>, deliveryCurrent?: () => boolean): Promise<T> {
     const check = () => { if (!current()) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
     const decision = await admitTaskAction({
       sessionId: 'session-1', server: 'cindy_helper', tool, args: {},
     }, { key: 'input', ownerInput: true, delegated: false,
-      assertCurrent: async () => check(), assertCurrentSync: check });
+      assertCurrent: async () => check(), assertCurrentSync: check,
+      ...(deliveryCurrent ? { assertDeliveryCurrent: async () => {
+        if (!deliveryCurrent()) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } } : {}),
+    });
     if (!decision.ok || !decision.run) throw new Error('Expected admission');
     return decision.run(operation);
   }
@@ -5916,7 +5920,9 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { read.mockRestore(); mkdir.mockRestore(); release(); runtime.dispose(); }
   });
 
-  it.each(['valid', 'revoked', 'ended', 'action-revoked'] as const)('cancels delegation input at the actual host accepted adapter: %s', async condition => {
+  // The adapter must retain real revocation and the legacy guard fallback,
+  // while normal source-turn completion alone must not cancel an admitted input.
+  it.each(['valid', 'revoked', 'ended', 'action-revoked', 'source-ended', 'delivery-revoked'] as const)('cancels delegation input at the actual host accepted adapter: %s', async condition => {
     await seedPair(); seedGroupLane();
     let draining = false;
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
@@ -5939,13 +5945,15 @@ describe('Bot Session task end-to-end runtime', () => {
       const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Accepted boundary fixture.' });
       if (!task.ok) throw new Error(task.message);
       armed = true;
-      const send = () => runtime.delegation.messageSessionTask(condition === 'action-revoked' ? 'session-1' : 'group-lane', task.delegationId, { kind: 'message', text: 'Follow-up input.' });
-      await (condition === 'action-revoked' ? runOwnerAction('message_session_task', () => !draining, send) : send());
+      const ownerAction = ['action-revoked', 'source-ended', 'delivery-revoked'].includes(condition);
+      const send = () => runtime.delegation.messageSessionTask(ownerAction ? 'session-1' : 'group-lane', task.delegationId, { kind: 'message', text: 'Follow-up input.' });
+      await (ownerAction ? runOwnerAction('message_session_task', () => condition === 'delivery-revoked' || !draining, send,
+        condition === 'source-ended' ? () => true : condition === 'delivery-revoked' ? () => !draining : undefined) : send());
       expect(input?.onAccepted).toBeTypeOf('function');
       const vendor = vi.fn();
       draining = true;
       const drain = async () => { await runAcceptedCallback(input!.onAccepted, input!.targetSessionId, input!.clientId!, { warn: vi.fn() }); vendor(); };
-      if (condition === 'valid') { await drain(); expect(vendor).toHaveBeenCalledOnce(); }
+      if (condition === 'valid' || condition === 'source-ended') { await drain(); expect(vendor).toHaveBeenCalledOnce(); }
       else { await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled); expect(vendor).not.toHaveBeenCalled(); }
     } finally { release(); runtime.dispose(); }
   });
@@ -7587,6 +7595,44 @@ describe('Bot Session task end-to-end runtime', () => {
         resultText: 'Queued result.', hadPendingInputAtTerminal: false });
       expect(h.sqlite!.prepare('SELECT status, result_summary FROM bot_delegations WHERE id = ?').get(task.delegationId))
         .toEqual({ status: 'completed', result_summary: 'Queued result.' });
+    } finally { runtime.dispose(); }
+  });
+
+  /**
+   * 测试价值：messageSessionTask → 真输入协调器 → onAccepted → SQLite 执行回执。
+   * Bug：已准入补充排队期间发起轮结束，旧 onAccepted 误用精确输入检查而拒绝续接。
+   * 缺口：既有队列用例没有绑定发起轮授权；仅 bindTaskActionInput 不能覆盖服务回调。
+   * 最小输入：忙碌子任务 + 一条已准入补充 + 发起 input 换新；unit，模型进程为替身。
+   */
+  it('delivers an admitted supplement after its source input changes without admitting a new mutation', async () => {
+    await seedPair();
+    let execution = { instanceId: 'native', generation: 1 };
+    let sourceCurrent = true;
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots: new Map(), readSessionExecution: () => execution });
+    const request = { sessionId: 'session-1', server: 'cindy_helper' as const, tool: 'message_session_task', args: {} };
+    const check = () => { if (!sourceCurrent) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Original work.' });
+      if (!task.ok) throw new Error('missing task');
+      const scope = { key: 'original-input', ownerInput: true, delegated: false,
+        assertCurrent: async () => check(), assertCurrentSync: check, assertDeliveryCurrent: async () => {} };
+      const decision = await admitTaskAction(request, scope);
+      if (!decision.ok || !decision.run) throw new Error('missing admission');
+      await expect(decision.run(() => runtime.delegation.messageSessionTask('session-1', task.delegationId,
+        { kind: 'message', text: 'Already approved supplement.' }))).resolves.toMatchObject({ ok: true });
+      expect(runtime.coordinator!.getQueueControlSnapshot(task.childSessionId).pendingQueue).toHaveLength(1);
+      sourceCurrent = false;
+      // A new invocation cannot borrow the accepted input's delivery authority.
+      expect(await admitTaskAction(request, scope)).toMatchObject({ ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', execution,
+        resultText: 'Original result.', pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      execution = { instanceId: 'native', generation: 2 };
+      await runtime.settleChild(task.childSessionId, 'Original turn ended.');
+      await vi.waitFor(() => expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(2));
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', execution,
+        resultText: 'Supplement result.', pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(h.sqlite!.prepare('SELECT status, result_summary FROM bot_delegations WHERE id = ?').get(task.delegationId))
+        .toEqual({ status: 'completed', result_summary: 'Supplement result.' });
     } finally { runtime.dispose(); }
   });
 

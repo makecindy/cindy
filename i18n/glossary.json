@@ -5,6 +5,13 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
+    {"id": "cindy-ai-xd", "status": "proposed", "en": "Cindy AI · XD", "translations": {"zh-CN": "Cindy AI · 心动", "zh-TW": "Cindy AI · 心動", "ja": "Cindy AI · XD", "ko": "Cindy AI · XD"}, "note": "心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。"},
+    {"id": "pricing-component-text", "status": "proposed", "en": "Text", "translations": {"zh-CN": "文字", "zh-TW": "文字", "ja": "テキスト", "ko": "텍스트"}, "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"},
+    {"id": "pricing-component-image", "status": "proposed", "en": "Image", "translations": {"zh-CN": "图片", "zh-TW": "圖片", "ja": "画像", "ko": "이미지"}, "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"},
+    {"id": "pricing-component-audio", "status": "proposed", "en": "Audio", "translations": {"zh-CN": "音频", "zh-TW": "音訊", "ja": "音声", "ko": "오디오"}, "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"},
+    {"id": "pricing-component-video", "status": "proposed", "en": "Video", "translations": {"zh-CN": "视频", "zh-TW": "影片", "ja": "動画", "ko": "동영상"}, "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"},
+    {"id": "pricing-duration", "status": "proposed", "en": "Duration", "translations": {"zh-CN": "时长", "zh-TW": "時長", "ja": "時間", "ko": "길이"}, "note": "模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。"},
     {"id":"scrolling-screenshot","status":"proposed","en":"Scrolling Screenshot","translations":{"zh-CN":"滚动截图","zh-TW":"捲動截圖","ja":"スクロールスクリーンショット","ko":"스크롤 스크린샷"},"checkCase":false,"note":"2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。"},
     {"id": "archive-task", "status": "proposed", "en": "Archive", "translations": {"zh-CN": "归档", "zh-TW": "歸檔", "ja": "アーカイブ", "ko": "보관"}, "checkCase": false, "note": "任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。"},
     {"id": "speech-speed", "status": "proposed", "en": "Speech speed", "translations": {"zh-CN": "语速", "zh-TW": "語速", "ja": "読み上げ速度", "ko": "읽기 속도"}, "checkCase": false, "note": "伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。"},
@@ -255,6 +262,18 @@
         "ko": "컴퓨터에 직접 연결"
       },
       "note": "远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。"
+    },
+    {
+      "id": "self-hosted-relay-service",
+      "status": "proposed",
+      "en": "Relay service",
+      "translations": {
+        "zh-CN": "中转服务",
+        "zh-TW": "中繼服務",
+        "ja": "リレーサービス",
+        "ko": "중계 서비스"
+      },
+      "note": "远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。"
     },
     {
       "id": "remote-desktop-video-relay",

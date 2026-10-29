@@ -24,6 +24,7 @@ import {
   ORCA_TASK_ACTION_TOOLS,
   captureTaskActionSyncGuard,
   captureTaskActionGuard,
+  captureTaskActionDeliveryGuard,
 } from '../taskActionAuthorization.js';
 
 function fixture(ownerInput = false, delegated = false) {
@@ -259,7 +260,8 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
                 ? rows.team
                   ? [rows.team]
                   : []
-                : [caller],
+                // SQL reads return value snapshots, not a shared mutable row.
+                : [{ ...caller }],
         };
         return query;
       },
@@ -674,6 +676,28 @@ describe('Desktop owner input task actions', () => {
 // Review regressions: caller identity must not erase scoped delegation or mint it.
 // Existing owner-input cases did not exercise automatic continuations. Unit tier.
 describe('Existing execution authority', () => {
+  // Regression: delegation onAccepted must use the Host delivery scope after
+  // source-input rollover. Prior queue-binding tests did not capture this guard.
+  // Minimum: one owner-admitted call + new input key; unit, no real account/IO.
+  it.each(['source-only', 'cleared', 'deleted', 'bot-paused', 'archived'] as const)
+  ('retains delivery scope across source-input rollover while rejecting %s revocation', async changed => {
+    const h = desktopFixture('private');
+    const decision = await h.authorize(call('message_session_task'));
+    if (!decision.ok || !decision.run) throw new Error('missing admission');
+    const guards = await decision.run(async () => ({
+      mutation: captureTaskActionGuard()!, delivery: captureTaskActionDeliveryGuard()!,
+    }));
+    h.activeInput.key = 'next-owner-input';
+    await expect(guards.mutation()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    if (changed === 'cleared') Object.assign(h.caller, { clearedAt: 1 });
+    if (changed === 'deleted') h.caller.status = 'deleted';
+    if (changed === 'bot-paused') h.caller.botStatus = 'paused';
+    if (changed === 'archived') Object.assign(h.caller, { archivedAt: 1 });
+    if (changed === 'source-only') await expect(guards.delivery()).resolves.toBeUndefined();
+    else await expect(guards.delivery()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
   it('keeps delegated work independent of follow-up enablement, but respects pause/revocation', async () => {
     const h = desktopFixture('automatic');
     const grant = {

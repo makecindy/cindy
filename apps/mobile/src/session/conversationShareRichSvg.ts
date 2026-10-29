@@ -1,3 +1,8 @@
+import { splitRichAnswer } from "@cindy/maker-shared/rich-answer";
+import {
+  layoutConversationShareRichAnswer,
+  type ShareVector,
+} from "./conversationShareRichAnswer";
 import { latexToUnicodeApproximation } from "@cindy/maker-shared/math-markdown";
 import { i18n } from "@/i18n";
 import { tokenizeCode } from "@/session/codeHighlight";
@@ -63,16 +68,17 @@ export function layoutConversationShareRichBody(
   const textBlocks: ConversationShareSvgTextBlock[] = [];
   const rectangles: ShareSvgRect[] = [];
   const images: ConversationShareSvgLayout["images"] = [];
+  const vectors: ShareVector[] = [];
   let cursor = y;
-  const gap = spacing.md;
+  const gap = spacing.lg;
 
   function text(
     runs: Run[],
     left: number,
     top: number,
     available: number,
-    size: number = typeScale.body,
-    leading: number = lineHeight.body,
+    size: number = typeScale.bodyLarge,
+    leading: number = lineHeight.bodyLarge,
   ): number {
     if (available <= 0) return 0;
     // Even a single wide, bold glyph must fit in a narrow table cell.
@@ -131,8 +137,8 @@ export function layoutConversationShareRichBody(
     left: number,
     top: number,
     available: number,
-    size: number = typeScale.body,
-    leading: number = lineHeight.body,
+    size: number = typeScale.bodyLarge,
+    leading: number = lineHeight.bodyLarge,
     bold = false,
   ): number {
     let height = 0;
@@ -277,7 +283,7 @@ export function layoutConversationShareRichBody(
       );
       const markerWidth = Math.max(
         spacing.xl,
-        markerUnits * typeScale.body + spacing.sm,
+        markerUnits * typeScale.bodyLarge + spacing.sm,
       );
       text(
         [{ text: marker, color: colors.textPrimary }],
@@ -297,22 +303,59 @@ export function layoutConversationShareRichBody(
           : value.level === 2
             ? typeScale.subtitle
             : typeScale.body
-        : typeScale.body;
+        : typeScale.bodyLarge;
       cursor += inlines(
         value.inlines,
         x,
         cursor,
         width,
         size,
-        heading ? lineHeight.listTitle : lineHeight.body,
+        heading ? lineHeight.listTitle : lineHeight.bodyLarge,
         heading,
       );
     }
     cursor += gap;
   }
 
-  const markdown = (source: string) =>
-    parseMobileMarkdown(source).forEach(block);
+  const markdown = (source: string) => {
+    if (message.kind !== "assistant") {
+      parseMobileMarkdown(source).forEach(block);
+      return;
+    }
+    for (const part of splitRichAnswer(source)) {
+      if (part.kind === "markdown") {
+        parseMobileMarkdown(part.source).forEach(block);
+        continue;
+      }
+      const layout = layoutConversationShareRichAnswer(
+        part.source,
+        message.richValues?.[part.key],
+        colors,
+        x,
+        cursor,
+        width,
+        (text, left, top, available) =>
+          layoutConversationShareRichBody(
+            {
+              ...message,
+              kind: "user",
+              body: text,
+              bodyParts: undefined,
+              secondaryBody: undefined,
+            },
+            colors,
+            left,
+            top,
+            available,
+          ),
+      );
+      textBlocks.push(...layout.textBlocks);
+      rectangles.push(...layout.rectangles);
+      images.push(...layout.images);
+      vectors.push(...layout.vectors);
+      cursor += layout.height + gap;
+    }
+  };
   if (message.bodyParts) {
     for (const part of message.bodyParts) {
       if (part.kind === "text") markdown(part.text);
@@ -332,6 +375,7 @@ export function layoutConversationShareRichBody(
     textBlocks,
     rectangles,
     images,
+    vectors,
     height: Math.max(0, cursor - y - gap),
   };
 }

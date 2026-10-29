@@ -733,3 +733,22 @@ describe('public plugin links are navigation only', () => {
     expect(parseDeepLink('cindy://plugin/cindy-github')).toBeNull();
   });
 });
+
+// A local share is a fixed package, never a market ID or an automatic install.
+// Unit: the real parser and pending handoff need no server or real Electron app.
+describe('fixed local plugin share navigation', () => {
+  const snapshotId = 'a'.repeat(32);
+  it('keeps the exact snapshot through the loaded login page', () => {
+    const window = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), focus: vi.fn(),
+      restore: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send: vi.fn() } } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(window);
+    handleIncomingDeepLink(`cindy://plugin-share/${snapshotId}`, 'open-url');
+    expect(takePendingDeepLink()).toEqual({ type: 'local-plugin-share', snapshotId });
+    expect(takePendingDeepLink()).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+  it.each(['?install=1', '?url=https://example.test/file', '#auto', '/other', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin-share/${snapshotId}${suffix}`)).toBeNull();
+  });
+});

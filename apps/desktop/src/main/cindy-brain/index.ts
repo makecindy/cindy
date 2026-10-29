@@ -35,6 +35,7 @@ export const remotePluginSettings = {
 interface RemotePluginManagementServices {
   isRelayOnline(): boolean;
   market: RemotePluginManagementDeps['market'];
+  installShare: NonNullable<RemotePluginManagementDeps['installShare']>;
   listProjects(): Promise<Array<{ path: string; exists: boolean }>>;
   sidebar: { read(id: string): boolean; write(id: string, visible: boolean, assertCurrent: () => void): Promise<void> };
 }
@@ -8109,6 +8110,43 @@ async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInst
     }
 }
 
+/** A fixed local share uses the same root/manual consent and durable install/update transactions. */
+export async function installLocalPluginSharePackage(file: string, options: {
+  ghostId: string; version: string; sha256: string;
+  prompt: GhostInstallConsentPrompt; assertCurrent: () => void;
+}): Promise<InstalledGhost> {
+  const owner = captureGhostMutationOwner();
+  options.assertCurrent();
+  const manager = getGhostManager();
+  const inspected = await manager.inspect(file);
+  options.assertCurrent();
+  if ('rejection' in inspected) throwInstallError(inspected.rejection);
+  if (inspected.packageSha256 !== options.sha256 || inspected.canonicalManifest.id !== options.ghostId ||
+      inspected.canonicalManifest.version !== options.version)
+    throwIpcError('GHOST_FILE_INVALID', 'The downloaded package does not match this share');
+  rejectReservedGhostId(inspected.manifest.id);
+  rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
+  const existing = findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: null });
+  const updateSource = existing ? readLocalGhostUpdateSource(manager, existing, inspected) : undefined;
+  rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides);
+  const approval = existing ? ghostInstallApprovalToken(existing.approval) : undefined;
+  const consent = await obtainGhostInstallConsent({ mode: 'prompt',
+    prompt: request => options.prompt(existing ? { ...request, purpose: 'share-replace' } : request),
+    initiator: 'user', origin: 'local-file', force: Boolean(existing),
+    target: ghostInstallTargetContext(manager.list(), inspected.manifest.id, null, existing, updateSource?.sourceChanged === true) },
+    existing, inspected.manifest, inspected.packageSha256);
+  options.assertCurrent();
+  const release = beginGhostMutation(owner);
+  try {
+    if (existing) return await withGhostInstallLock(inspected.manifest.id, () => updateLocalGhostPackageLocked(
+      manager, file, inspected, options.sha256, approval!, installedGhostStoragePart(existing), consent, undefined,
+      () => { options.assertCurrent(); return true; }, updateSource?.sourceChanged));
+    return await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: null, enable: true,
+      registrySource: 'manual', expectedPackageSha256: options.sha256,
+      consent: { decision: consent, manifest: inspected.manifest }, beforePackagePlacement: options.assertCurrent });
+  } finally { release(); }
+}
+
 /** Materialize only an authenticated peer inbox ticket, then reuse ordinary file install/update. */
 async function installRemoteGhostFile(peer: string, attachment: string, target: string | undefined,
   expectedApproval: string | undefined, prompt: GhostInstallConsentPrompt, assertCurrent: () => void): Promise<void> {
@@ -8267,6 +8305,7 @@ export function registerGhostIpc(): void {
     setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },
     uninstall: async (id, _approval, assertCurrent) => { assertCurrent(); await uninstallGhostAndCleanup(id, { assertCurrent }); },
     installFile: installRemoteGhostFile,
+    installShare: (snapshot, prompt, assertScope) => requireRemotePluginManagementServices().installShare(snapshot, prompt, assertScope),
   });
   mobilePluginPages = new MobilePluginPages({
     answerModelPicker: (pageId, requestId, route) => getGhostModelPicker().resolve(pageId, requestId, route),

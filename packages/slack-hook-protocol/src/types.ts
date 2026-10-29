@@ -1825,6 +1825,14 @@ export interface GroupMessageRecipient {
  * 条目按同一组 id 关联, prompt 缺失上下文时 agent 可按 id 查本地窗口兜底。
  * 一次性凭证(如 Telegram 绑定深链 /start <token>)由 server 过滤, 不转发。
  */
+export interface GroupMessageImageRef {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  /** Recipient-bound proof for POST /telegram/group-image; never a bot token. */
+  downloadToken?: string;
+}
+
 export interface GroupMessagePayload {
   /** IM 平台标识(开放集合, 当前 'telegram')。 */
   provider: string;
@@ -1844,6 +1852,7 @@ export interface GroupMessagePayload {
   text: string;
   /** 附件文件名列表(仅名字, 不携带字节; 桌面窗口行内标注用)。 */
   fileNames?: string[];
+  imageRefs?: GroupMessageImageRef[];
   /** 消息在 IM 平台的发送时刻(unix ms)。 */
   sentAt: number;
 }

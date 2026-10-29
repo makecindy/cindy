@@ -203,6 +203,9 @@ export function GhostPluginDetailView({
     ? remoteFileUpdate && !isUserInstallReservedGhostId(detail.ghostId)
     : import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
+  const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
+    ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && ghost.namespace === null &&
+    !ghost.builtin && !isUserInstallReservedGhostId(ghost.manifest.id);
 
   return (
     <main
@@ -213,7 +216,7 @@ export function GhostPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
-        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : undefined}
+        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader

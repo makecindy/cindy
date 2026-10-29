@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   workers: new Map<string, ReadonlySet<string>>(),
   owner: { dataOwnerId: 'owner-a', generation: 1 },
   isLoading: false,
+  historyLoading: false,
+  historyError: null as Error | null,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
 const botState = vi.hoisted(() => ({
@@ -64,8 +66,8 @@ vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: (options: { includeArchived: string }) => ({
     sessions:
       options.includeArchived === 'all' ? (state.history ?? state.sessions) : state.sessions,
-    isLoading: state.isLoading,
-    error: null,
+    isLoading: options.includeArchived === 'all' ? state.historyLoading : state.isLoading,
+    error: options.includeArchived === 'all' ? state.historyError : null,
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
@@ -99,6 +101,8 @@ afterEach(() => {
   state.publish.mockClear();
   botState.markRead.mockClear(); botState.markRemoteRead.mockClear();
   state.isLoading = false;
+  state.historyLoading = false;
+  state.historyError = null;
   state.sessions = ['a', 'b', 'c'].map((id) => ({ id, status: 'active' }));
   state.history = null;
   state.remoteSessions = [];
@@ -182,6 +186,22 @@ describe('app badge projection lifecycle', () => {
     const projection = state.publish.mock.calls.at(-1)?.[0];
     expect(projection.sessionIds).toHaveLength(1003);
     expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
+  });
+
+  it('keeps publishing the projection when the archived bucket is still loading or broken', () => {
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+    // 历史桶只补齐去重目录；它一直 loading / 报错也不得把计入数的投影一次次吞掉，
+    // 否则角标会永久停在最后一次推送的旧值（界面上已经没有未读了）。
+    state.historyLoading = true;
+    state.historyError = new Error('db busy');
+    const view = render(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ count: 3, sessionIds: ['a', 'b', 'c'] }),
+    );
+    // 历史桶一直坏着，同一个组件在未读清零后也必须把 0 推下去。
+    state.attention = new Map();
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 0 }));
   });
 
   it('keeps remote IDs in the projection but excludes remote attention from the badge', () => {

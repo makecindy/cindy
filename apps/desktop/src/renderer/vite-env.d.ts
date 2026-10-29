@@ -1673,6 +1673,10 @@ interface ElectronAPI {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
+    prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean) => Promise<import('../shared/share').SharePreparation>;
+    localShareDetail: (snapshotId: string) => Promise<import('@cindy/plugin-protocol').LocalPluginShareSnapshot>;
+    installLocalShare: (snapshotId: string, expected: import('@cindy/plugin-protocol').LocalPluginShareSnapshot) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    releaseLocalShare: (operationId: string) => Promise<void>;
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
@@ -2960,6 +2964,7 @@ interface ElectronAPI {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    inputHandoffRequestId?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
@@ -3087,6 +3092,7 @@ interface ElectronAPI {
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
         | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
@@ -3109,6 +3115,7 @@ interface ElectronAPI {
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
     | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
     | null
   >;
@@ -4128,6 +4135,7 @@ interface ElectronAPI {
   openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
+  selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;
   sharedTask: {
     host(command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown>;
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;

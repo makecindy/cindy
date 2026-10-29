@@ -55,6 +55,19 @@ const ID = /^[a-zA-Z0-9_-]{1,80}$/;
 const MAX_SOURCE = 2_000_000;
 const MAX_NODES = 2048;
 const MAX_DEPTH = 32;
+/** Kinds whose children are separate `create` operations. */
+const CONTAINER_KINDS = [
+  "stack",
+  "row",
+  "grid",
+  "group",
+  "form",
+  "details",
+  "tabs",
+];
+
+/** Kinds that render `props.text`; only these can carry a bare string. */
+const TEXT_PROP_KINDS: RichAnswerKind[] = ["text", "markdown", "heading", "code", "math", "diagram"];
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 const value = (v: unknown): v is RichValue =>
@@ -139,6 +152,8 @@ export class RichAnswerStream {
   private roots: string[] = [];
   private revision = 0;
   private issues = 0;
+  private failedFinalLine: { offset: number; seq: number; issues: number } | null = null;
+  private sourceTooLong = false;
   update(source: string, complete = false): RichDocument {
     if (!source.startsWith(this.source)) {
       this.source = "";
@@ -147,21 +162,35 @@ export class RichAnswerStream {
       this.nodes = new Map();
       this.roots = [];
       this.issues = 0;
+      this.failedFinalLine = null;
       this.revision++;
+    } else if (this.failedFinalLine && source.length > this.source.length && source.length <= MAX_SOURCE) {
+      // Retry only the failed line. Earlier committed content can differ from
+      // reparsing its source after malformed suffixes were already consumed.
+      this.offset = this.failedFinalLine.offset;
+      this.seq = this.failedFinalLine.seq;
+      this.issues = this.failedFinalLine.issues;
+      this.failedFinalLine = null;
     }
     if (source.length > MAX_SOURCE) {
-      this.issues = Math.max(1, this.issues);
+      this.sourceTooLong = true;
       return this.snapshot();
     }
+    this.sourceTooLong = false;
     this.source = source;
     this.nodes = new Map(this.nodes);
     let end: number;
     while ((end = source.indexOf("\n", this.offset)) !== -1) {
       this.line(source.slice(this.offset, end));
+      this.failedFinalLine = null;
       this.offset = end + 1;
     }
     if (complete && this.offset < source.length) {
-      this.line(source.slice(this.offset));
+      const checkpoint = { offset: this.offset, seq: this.seq, issues: this.issues };
+      const failed = !this.line(source.slice(this.offset));
+      // A suffix after a committed tail is not a whole line and must not be
+      // retried as one when later snapshots extend it.
+      this.failedFinalLine = failed && (this.offset === 0 || source[this.offset - 1] === "\n") ? checkpoint : null;
       this.offset = source.length;
     }
     return this.snapshot();
@@ -171,17 +200,17 @@ export class RichAnswerStream {
       nodes: this.nodes,
       roots: this.roots,
       revision: this.revision,
-      issues: this.issues,
+      issues: this.sourceTooLong ? Math.max(1, this.issues) : this.issues,
     };
   }
-  private line(line: string) {
-    if (!line.trim()) return;
+  private line(line: string): boolean {
+    if (!line.trim()) return true;
     try {
       const op: unknown = JSON.parse(line);
       if (!record(op) || !Number.isSafeInteger(op.seq) || Number(op.seq) < 1)
         throw Error("sequence");
       const seq = Number(op.seq);
-      if (seq <= this.seq) return;
+      if (seq <= this.seq) return true;
       // A malformed or absent line leaves a numbering gap: committed content stays,
       // the missing operations are reported, and later lines still apply.
       this.issues += Math.min(seq - this.seq - 1, MAX_NODES);
@@ -189,7 +218,7 @@ export class RichAnswerStream {
       if (op.version !== undefined && op.version !== 1) throw Error("version");
       if (typeof op.id !== "string" || !ID.test(op.id)) throw Error("id");
       const current = this.nodes.get(op.id);
-      const props = this.props(op.props);
+      const props = this.props(op.props, op.kind as RichAnswerKind);
       // Some real harness outputs place visual style beside props. Normalize once.
       if (record(op.style) && props.style === undefined)
         props.style = this.props(op.style);
@@ -205,18 +234,7 @@ export class RichAnswerStream {
             ? null
             : this.nodes.get(String(op.parent));
         if (op.parent && op.parent !== "root" && !parent) throw Error("parent");
-        if (
-          parent &&
-          ![
-            "stack",
-            "row",
-            "grid",
-            "group",
-            "form",
-            "details",
-            "tabs",
-          ].includes(parent.kind)
-        )
+        if (parent && !CONTAINER_KINDS.includes(parent.kind))
           throw Error("leaf");
         const node: RichNode = {
           id: op.id,
@@ -237,6 +255,11 @@ export class RichAnswerStream {
         } else {
           this.roots = [...this.roots];
           this.roots.splice(index, 0, node.id);
+        }
+        const inline = node.props.children;
+        if (Array.isArray(inline) && CONTAINER_KINDS.includes(node.kind)) {
+          delete node.props.children;
+          this.attachInlineChildren(node.id, inline, this.depth(node.id) + 1);
         }
       } else if (op.op === "append") {
         if (
@@ -321,12 +344,91 @@ export class RichAnswerStream {
         }
       } else throw Error("operation");
       this.revision++;
+      return true;
     } catch {
       this.issues++;
+      return false;
     }
   }
-  private props(v: unknown): Record<string, unknown> {
+  /** #7627: children written inline in `props` become the child nodes they were meant to be. */
+  private attachInlineChildren(
+    parentId: string,
+    drafts: unknown[],
+    childDepth: number,
+  ) {
+    const parent = this.nodes.get(parentId);
+    if (!parent) return;
+    const children = [...parent.children];
+    drafts.forEach((draft, offset) => {
+      // Inline children are already part of the document the reader sees, so a
+      // drop here is missing content: report it like a rejected operation.
+      const dropped = () => {
+        this.issues++;
+      };
+      if (
+        !record(draft) ||
+        !RICH_ANSWER_KINDS.includes(draft.kind as RichAnswerKind) ||
+        childDepth > MAX_DEPTH ||
+        this.nodes.size >= MAX_NODES
+      ) {
+        dropped();
+        return;
+      }
+      // One unreadable draft must not take its siblings down with it.
+      let props: Record<string, unknown>;
+      try {
+        props = this.props(
+          draft.props ?? (typeof draft.text === "string" ? { text: draft.text } : {}),
+          draft.kind as RichAnswerKind,
+        );
+      } catch {
+        dropped();
+        return;
+      }
+      // A draft may name itself (`{id:"second"}`); `tabs.props.default` points at
+      // that id, so a declared id wins while it is still free.
+      const declared =
+        typeof draft.id === "string" && ID.test(draft.id) && !this.nodes.has(draft.id);
+      const id = declared ? (draft.id as string) : this.inlineChildId(parentId, offset + 1);
+      this.nodes.set(id, {
+        id,
+        kind: draft.kind as RichAnswerKind,
+        props,
+        children: [],
+      });
+      children.push(id);
+      // `children` may sit on the draft itself (`{kind:"stack",children:[...]}`) or
+      // inside its props; both mean the same thing and both keep nesting bounded.
+      const nested = Array.isArray(draft.children) ? draft.children : props.children;
+      if (Array.isArray(nested) && CONTAINER_KINDS.includes(draft.kind as RichAnswerKind)) {
+        delete props.children;
+        this.attachInlineChildren(id, nested, childDepth + 1);
+      }
+    });
+    this.nodes.set(parentId, { ...parent, children });
+  }
+  private inlineChildId(parentId: string, ordinal: number) {
+    // The id grammar caps ids at 80 characters, so the suffix gets the room first.
+    for (let attempt = 1; ; attempt++) {
+      const suffix = attempt === 1 ? `-${ordinal}` : `-${ordinal}-${attempt}`;
+      const id = `${parentId.slice(0, 80 - suffix.length)}${suffix}`;
+      if (!this.nodes.has(id)) return id;
+    }
+  }
+  private props(v: unknown, kind?: RichAnswerKind): Record<string, unknown> {
     if (v === undefined) return {};
+    // Models write the text straight into props (`"props": "hello"`); the protocol
+    // default keeps that block readable instead of dropping the whole node (#7627).
+    if (typeof v === "string") {
+      // Only kinds that render `props.text` take a bare string; anywhere else the
+      // text would be stored and never shown, so the draft counts as unreadable.
+      if (kind && !TEXT_PROP_KINDS.includes(kind)) throw Error("props");
+      // The limit is on the node that gets stored and replayed, which is the
+      // object below: escaping can make it longer than the incoming string.
+      const text = { text: v };
+      if (JSON.stringify(text).length > 65_536) throw Error("props");
+      return text;
+    }
     if (!record(v) || JSON.stringify(v).length > 65_536) throw Error("props");
     return Object.fromEntries(
       Object.entries(v).filter(
@@ -966,3 +1068,4 @@ export function richMediaSource(node: RichNode): string | null {
     ? allowed[1].toLowerCase() + src.slice(allowed[1].length)
     : src;
 }
+

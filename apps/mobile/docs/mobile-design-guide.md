@@ -325,6 +325,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - 颜色走 token(`colors.textPrimary` / `textSecondary` / `statusAccent` / `permAutoAccent` 等),不写死。
 - 会话 Agent 身份图标走 `MobileVendorIcon`；provider / model 厂牌图标分别走 `MobileProviderMark` / `MobileModelIconMark`。
 - **底部浮窗按平台承载**：iOS 新增与迁移优先系统 sheet，详情默认中等高度、短工具按内容高度，具体见 iOS 规范。Android 和尚未迁移的兼容实现继续复用 `SheetModal` / `SheetSurface`，不另造自绘外壳；其二级内容保留单 Modal 内导航。不同面板之间等待关闭回调后再呈现，避免叠加遮罩。
+- **创建群表单（2026-10-28 用户修正）**：iOS 使用展开的系统 page sheet 与 UIKit 导航栏，正文采用不透底的主题 surface。左侧为系统关闭图标按钮，右侧为文字创建按钮，均保留中性玻璃底；创建不用蓝色或 prominent 填充。标题、按钮几何与交互由导航栏负责，不在内容里用自定义标题行模拟 toolbar。表单可滚动并避让键盘，呈现完成后聚焦群名；有草稿或提交中禁止滑动关闭，显式关闭沿用丢弃确认。
 
 ---
 

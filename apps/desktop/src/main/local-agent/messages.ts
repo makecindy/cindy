@@ -2,6 +2,9 @@ import { t } from '../i18n.js';
 
 /** Localize product copy at the host boundary; stable wire codes stay untranslated. */
 export function localAgentMessage(code: string): string {
+  if (['REMOTE_AGENT_PEER_TOO_OLD', 'REMOTE_AGENT_SHARE_PAUSED', 'REMOTE_AGENT_SHARE_REMOVED', 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'REMOTE_AGENT_UNAVAILABLE'].includes(code)) {
+    return t(`chat.remoteError.${code}`);
+  }
   let key: string;
   switch (code) {
     case 'HOST_IN_USE':

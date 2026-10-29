@@ -804,6 +804,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/cc-manager',
     'resources/anthropic-compat-proxy',
     'resources/remote-file-service',
+    // 自建中转单文件:「部署到我的服务器」经 SSH 上传到用户服务器运行。
+    'resources/device-link-relay',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。

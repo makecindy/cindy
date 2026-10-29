@@ -38,6 +38,7 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 import { createTelegramBotMcpServer } from './telegramBotMcpServer.js';
 import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
@@ -473,6 +474,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 注册表取用(静态 import ipc.ts 会与 maker-host 闭环, 见 slackToolBridge
     // 模块头); 未注册 = null, provider isEnabled fail-closed。
     slackHook: {
+      compressInlineImage,
       withAccountDataAccess,
       getBridge: () => getSlackToolBridge(),
       logger: createLogger('mcp/cindy_slack'),

@@ -33,8 +33,9 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
-vi.mock('../index.js', () => ({
-  deviceLinkApiBase: () => 'http://relay.test:3335',
+// presign 经 deviceLinkApi 发往当前中转;未启用自建中转时即官方清单里的 device-link 地址。
+vi.mock('../../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'http://relay.test:3335',
 }));
 
 vi.mock('../../logger.js', () => ({

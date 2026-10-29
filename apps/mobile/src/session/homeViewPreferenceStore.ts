@@ -12,6 +12,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from './homeDisplaySettings';
@@ -30,7 +31,7 @@ export interface HomeViewPreferences {
   manualProjectOrder: string[];
   /** 项目 key 带设备与路径,只对保存它的账号身份有效(见 projectFilterOwner)。 */
   projectFilter: HomeProjectFilter;
-  teammateFilter: HomeProjectFilter;
+  teammateFilter: HomeTeammateFilter;
   teammateFilterOwner: string;
   /** 保存项目筛选时的账号身份(homeNavigationOwner);读取时与当前身份不符则视为不筛选。 */
   projectFilterOwner: string;
@@ -53,7 +54,7 @@ export interface HomeViewPreferencePatch {
   manualProjectOrder?: string[];
   /** 写项目筛选必须同时给 owner,否则无法判断它属于哪个账号。 */
   projectFilter?: { owner: string; value: HomeProjectFilter };
-  teammateFilter?: { owner: string; value: HomeProjectFilter };
+  teammateFilter?: { owner: string; value: HomeTeammateFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
   viewMode?: HomeListViewMode;
@@ -122,7 +123,7 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
       delete record[field];
       delete record[`${field}Owner`];
     } else {
-      record[field] = [...filter.value];
+      record[field] = filter.value === 'none' ? 'none' : [...filter.value];
       record[`${field}Owner`] = filter.owner;
     }
   }
@@ -199,7 +200,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
     projectFilter: normalizeProjectFilter(record.projectFilter),
-    teammateFilter: normalizeProjectFilter(record.teammateFilter),
+    teammateFilter: record.teammateFilter === 'none' ? 'none' : normalizeProjectFilter(record.teammateFilter),
     teammateFilterOwner: readString(record.teammateFilterOwner) ?? '',
     projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),

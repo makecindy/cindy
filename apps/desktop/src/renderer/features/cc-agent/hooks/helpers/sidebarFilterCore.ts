@@ -30,7 +30,7 @@ const log = createLogger('SidebarFilterCore');
 export const STATUS_KEY = 'cc-agent.sidebar.filter.status';
 export const PROJECTS_KEY = 'cc-agent.sidebar.filter.projects';
 export const CREATORS_KEY = 'cc-agent.sidebar.filter.creators';
-export type FilterCreators = 'all' | string[];
+export type FilterCreators = 'all' | 'none' | string[];
 
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
@@ -151,6 +151,7 @@ export function loadCreators(ownerId: string | null): FilterCreators {
   if (!raw) return 'all';
   try {
     const value: unknown = JSON.parse(raw);
+    if (value === 'none') return 'none';
     if (!Array.isArray(value)) return 'all';
     const keys = [...new Set(value.filter((key): key is string => typeof key === 'string' && key.length > 0))];
     return keys.length ? keys : 'all';
@@ -166,7 +167,7 @@ export function normalizeTaskCreators(
   selected: FilterCreators,
   options: readonly { filterKey?: string; filterMemberKeys?: readonly string[] }[],
 ): FilterCreators {
-  if (selected === 'all') return selected;
+  if (selected === 'all' || selected === 'none') return selected;
   const aliases = new Map(options.flatMap(bot => bot.filterKey
     ? (bot.filterMemberKeys ?? []).map(member => [member, bot.filterKey!] as const) : []));
   const next = [...new Set(selected.map(key => aliases.get(key) ?? key))];
@@ -174,7 +175,7 @@ export function normalizeTaskCreators(
 }
 
 export function nextCreatorsAfterToggle(previous: FilterCreators, key: string): FilterCreators {
-  if (previous === 'all') return [key];
+  if (previous === 'all' || previous === 'none') return [key];
   const next = previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key];
   return next.length ? next : 'all';
 }
@@ -911,6 +912,23 @@ export function mergeVisibleReorder(
   // visibleNewOrder 里不在 currentFullOrder 的新置顶 id(刚 pin)→ 追加末尾。
   for (const id of queue) result.push(id);
   return result;
+}
+
+/** Build the same pinned drag request for the expanded sidebar and collapsed rail. */
+export function buildManualPinnedReorder(
+  rankedOrder: readonly string[],
+  activeEntryIds: readonly string[],
+  visibleNewOrder: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
+): { baseOrder: string[]; order: string[] } {
+  const displayOrder = normalizeManualPinnedOrder(rankedOrder, activeEntryIds, comparisonKey);
+  const rankedIdentities = new Set(rankedOrder.map(comparisonKey));
+  return {
+    // Display-only pins are new entries, not concurrently removed ranks (#6345).
+    // Keep ranks outside this status catalogue out of the base so Main retains them.
+    baseOrder: displayOrder.filter((entryId) => rankedIdentities.has(comparisonKey(entryId))),
+    order: mergeVisibleReorder(displayOrder, visibleNewOrder, comparisonKey),
+  };
 }
 
 /**

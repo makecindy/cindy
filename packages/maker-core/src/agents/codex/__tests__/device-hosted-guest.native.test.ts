@@ -49,9 +49,9 @@ async function listFiles(dir: string): Promise<string[]> {
 
 describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server', () => {
   // 本机应用复用真实 app-server 夹具；历史 hhh namespace 验证 v1 兼容，不读取用户凭据。
-  it.each([true, false, 'local-host-only', 'local-native'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
+  it.each([true, false, 'local-host-only', 'local-native', 'hosted-client-only'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
     const guest = variant === true;
-    const localHostOnly = variant === 'local-host-only';
+    const localHostOnly = variant === 'local-host-only' || variant === 'hosted-client-only';
     const localClient = localHostOnly || variant === 'local-native';
     const root = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'cindy-codex-guest-native-')));
     const hostHome = path.join(root, 'host-codex-home');
@@ -185,6 +185,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     };
     try {
       const handle = await agent.startSession({
+        ...(variant === 'hosted-client-only' ? { deviceHosted } : {}),
         sessionId: guest ? 'guest-native' : 'owner-native',
         model: 'gpt-5.5',
         ...(guest ? { providerId: 'xd' } : {}),

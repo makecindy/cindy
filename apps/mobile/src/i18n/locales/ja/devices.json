@@ -419,7 +419,8 @@
       "summarySeparator": "、",
       "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。",
       "filterTeammatesHeading": "パートナー",
-      "filterAnySource": "すべての作成元",
+      "filterAnySource": "すべて",
+      "filterHideAllTeammates": "すべて非表示",
       "filterSelectedTeammates": "{{count}} 人を選択"
     },
     "search": {

@@ -6,6 +6,7 @@ import {
   WEEKLY_WINDOW_MINUTES,
 } from '@/lib/compactQuotaCountdown';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
+import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
 /**
@@ -1701,7 +1702,7 @@ export function TodaySpendChip({
     // Account quota is separate from lifetime task cost. API and SSH-remote routes never borrow it;
     // device-link 网关形态用被控端 LiteLLM 配额镜像(claudeQuota 已切换),credit 三池不镜像。
     if (usesGatewayQuota || isDeviceLinkRemoteGateway) {
-      account.title = t('quotaCard.gatewayTitle');
+      account.title = providerDisplayNameById('xd', quotaProviders, t);
       if (creditTotals) {
         // Keep the retained balance's observation time; a render/refresh is not new data.
         const observedAt = Date.parse(creditUsage?.observedAt ?? '');

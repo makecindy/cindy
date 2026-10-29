@@ -215,6 +215,14 @@ Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它�
 
 Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。
 
+### Cindy AI · Personal
+
+个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。
+
+### Cindy AI · XD
+
+心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。
+
 ### Cindy Codex home
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
@@ -511,6 +519,26 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
 
+### Audio
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Image
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Text
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Video
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Duration
+
+模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
+
 ### Process
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
@@ -626,6 +654,10 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 ### Scrolling Screenshot
 
 2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。
+
+### Relay service
+
+远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。
 
 ### Mute notifications
 

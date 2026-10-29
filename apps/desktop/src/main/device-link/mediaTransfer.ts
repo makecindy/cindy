@@ -32,9 +32,8 @@ import path from 'node:path';
 import { net } from 'electron';
 import type { AttachmentIntegrity } from '@cindy/device-link';
 
-import { serverApiFetch } from '../serverApiClient.js';
 import { requireAppCapability } from '../appCapabilities.js';
-import { deviceLinkApiBase } from './index.js';
+import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
@@ -89,10 +88,9 @@ async function presignPut(
   contentType: string,
 ): Promise<PresignPutResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return serverApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
+  return deviceLinkApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
     body: { size, ext, contentType, ...(sharedTaskMediaId() ? { sharedTaskId: sharedTaskMediaId() } : {}) },
-    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -111,10 +109,9 @@ const REMOVE_REMOTE_TIMEOUT_MS = 15_000;
 /** 向 relay server 申请下载预签名(server 校验请求方 == key 内嵌 userId)。 */
 async function presignGet(key: string): Promise<PresignGetResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return serverApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
+  return deviceLinkApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
     method: 'POST',
     body: { key },
-    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -707,10 +704,9 @@ export async function downloadToFile(
 export async function removeRemote(key: string): Promise<void> {
   try {
     requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-    await serverApiFetch<{ deleted: boolean }>(DELETE_PATH, {
+    await deviceLinkApiFetch<{ deleted: boolean }>(DELETE_PATH, {
       method: 'DELETE',
       body: { key },
-      baseUrl: deviceLinkApiBase,
       // Best-effort (the OSS lifecycle rule is the backstop): never let an unresponsive relay
       // hold up the upload failure or copy cancellation waiting on it.
       timeoutMs: REMOVE_REMOTE_TIMEOUT_MS,

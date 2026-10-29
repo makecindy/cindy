@@ -234,6 +234,12 @@ describe("home chrome menus", () => {
     state = { ...state, ...homeDisplayActionPatch("filter.teammate:cindy", state) };
     state = { ...state, ...homeDisplayActionPatch("filter.teammate:filo", state) };
     expect(state.teammateFilter).toBe("all");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammates.none", state) };
+    expect(state.teammateFilter).toBe("none");
+    const hidden = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(find(hidden, "filter.teammates.none")?.state).toBe("on");
+    expect(find(hidden, "filter.teammate:cindy")?.state).toBe("off");
+    expect(homeDisplayActionPatch("filter.teammate:cindy", state)).toEqual({ teammateFilter: ["cindy"] });
     expect(homeDisplayActionPatch("filter.teammates.all", { ...state, teammateFilter: ["cindy"] })).toEqual({ teammateFilter: "all" });
   });
 

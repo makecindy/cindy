@@ -37,6 +37,7 @@ import {
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
+import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
@@ -59,7 +60,7 @@ import {
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop';
 import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
-import { isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-protocol';
 import {
   parseProjectOrderSnapshot,
   SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
@@ -897,6 +898,7 @@ const fanOutProviderShareSettled = createIpcFanOut(PROVIDER_SHARE_IPC.SETTLED);
 const fanOutProviderShareOpenJoin = createIpcFanOut(PROVIDER_SHARE_IPC.OPEN_JOIN);
 const fanOutProviderShareOpenManage = createIpcFanOut(PROVIDER_SHARE_IPC.OPEN_MANAGE);
 const fanOutProviderShareReshareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.RESHARE_REQUESTED);
+const fanOutSelfHostedRelayChanged = createIpcFanOut(SELF_HOSTED_RELAY_IPC.CHANGED);
 const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
@@ -1640,6 +1642,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions): Promise<import('../shared/share').ShareContent> =>
       ipcRenderer.invoke('plugin-market:prepare-share', pluginId, options),
+    prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean): Promise<import('../shared/share').SharePreparation> =>
+      ipcRenderer.invoke('plugin-market:prepare-local-share', instanceId, operationId, options, expected, uploadConfirmed),
+    releaseLocalShare: (operationId: string): Promise<void> =>
+      ipcRenderer.invoke('plugin-market:release-local-share', operationId),
+    localShareDetail: (snapshotId: string): Promise<import('@cindy/plugin-protocol').LocalPluginShareSnapshot> =>
+      ipcRenderer.invoke('plugin-market:local-share-detail', snapshotId),
+    installLocalShare: (snapshotId: string, expected: import('@cindy/plugin-protocol').LocalPluginShareSnapshot): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
+      ipcRenderer.invoke('plugin-market:install-local-share', snapshotId, expected),
     localIcons: (
       requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
     ): Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]> =>
@@ -3933,6 +3943,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    inputHandoffRequestId?: string;
     channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
     markAttention?: boolean;
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),
@@ -4054,6 +4065,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'provider-share-join'; link: string }
         | { type: 'chat-invite'; token: string }
@@ -4070,6 +4082,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         filePath?: unknown;
         importId?: unknown;
         pluginId?: unknown;
+        snapshotId?: unknown;
         invitation?: unknown;
         token?: unknown;
         server?: unknown;
@@ -4100,6 +4113,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         });
       } else if (p.type === 'plugin' && isValidPluginResourceId(p.pluginId)) {
         callback({ type: 'plugin', pluginId: p.pluginId });
+      } else if (p.type === 'local-plugin-share' && isLocalPluginSnapshotId(p.snapshotId)) {
+        callback({ type: 'local-plugin-share', snapshotId: p.snapshotId });
       } else if (p.type === 'chat-message' && typeof p.groupId === 'string' && typeof p.messageId === 'string'
         && [p.groupId, p.messageId, ...(p.threadRootId === undefined ? [] : [p.threadRootId])].every(value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value))) {
         callback({ type: 'chat-message', groupId: p.groupId, messageId: p.messageId,
@@ -4168,6 +4183,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
     | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'shared-task-join'; invitation: string; server: string }
     | { type: 'provider-share-join'; link: string }
     | { type: 'chat-invite'; token: string }
@@ -4862,6 +4878,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     windowsSupport: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.WINDOWS_SUPPORT, enabled),
     stop: () => ipcRenderer.invoke(DESKTOP_LOCAL.STOP),
   } satisfies RemoteDesktopApi,
+  // 自建中转服务:本机中转与加入别的中转(只接受本机应用窗口)。
+  selfHostedRelay: {
+    command: (command) => ipcRenderer.invoke(SELF_HOSTED_RELAY_IPC.COMMAND, command),
+    onChanged: fanOutSelfHostedRelayChanged as SelfHostedRelayApi['onChanged'],
+  } satisfies SelfHostedRelayApi,
   sharedTask: {
     host: (command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown> =>
       ipcRenderer.invoke('maker:shared-task', command),

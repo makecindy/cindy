@@ -901,6 +901,9 @@ describe('creator filter selection and owner persistence', () => {
     persistCreators(['a', 'b'], OWNER_ID);
     expect(loadCreators(OWNER_ID)).toEqual(['a', 'b']);
     expect(loadCreators('owner-b')).toBe('all');
+    persistCreators('none', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('none');
+    expect(nextCreatorsAfterToggle('none', 'a')).toEqual(['a']);
     persistCreators('all', OWNER_ID);
     expect(loadCreators(OWNER_ID)).toBe('all');
   });

@@ -1,3 +1,4 @@
+import { isRemoteDesktopIdleMinutes } from '@cindy/device-link';
 import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file';
@@ -21,7 +22,9 @@ const store = createOverrideSettingsFile<Overrides>({
       for (const key of Object.keys(
         DEFAULT_VIEWER_PREFERENCES,
       ) as (keyof RemoteViewerPreferences)[]) {
-        if (key in value && typeof value[key] === 'boolean') patch[key] = value[key];
+        if (key === 'idleTimeoutMinutes') {
+          if (isRemoteDesktopIdleMinutes(value[key])) patch[key] = value[key];
+        } else if (key in value && typeof value[key] === 'boolean') patch[key] = value[key];
       }
       result[device] = patch;
     }
@@ -49,7 +52,10 @@ export async function writeViewerPreferences(
     Array.isArray(patch) ||
     Object.entries(patch).some(
       ([key, value]) =>
-        !Object.hasOwn(DEFAULT_VIEWER_PREFERENCES, key) || typeof value !== 'boolean',
+        !Object.hasOwn(DEFAULT_VIEWER_PREFERENCES, key) ||
+        (key === 'idleTimeoutMinutes'
+          ? !isRemoteDesktopIdleMinutes(value)
+          : typeof value !== 'boolean'),
     )
   )
     throw new Error('INVALID_REQUEST');

@@ -47,6 +47,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   listAgentSkills: vi.fn(),
   localProviders: [] as ProviderView[],
   uploadChatFolder: vi.fn(),
+  atPanelStandin: false,
 }));
 
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -85,7 +86,15 @@ vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: ({ open, onOpenChange, p
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: ({ disabled }: ComponentProps<typeof PermissionSelector>) => <button data-testid="permission-selector" disabled={disabled} /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typeof AtMentionPanel>) => { h.atPanel = props; return null; } }));
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typeof AtMentionPanel>) => {
+  h.atPanel = props;
+  // 焦点归还需要真实 DOM:焦点测试用与真实面板同契约的最小替身(面板根标记 + 搜索框)。
+  return h.atPanelStandin ? (
+    <div data-composer-suggestion-panel="">
+      <input data-composer-suggestion-search="" aria-label="newChat.atMention.typeToSearchFiles" />
+    </div>
+  ) : null;
+} }));
 vi.mock('@/lib/atResourceService', async (original) => ({ ...await original<typeof import('@/lib/atResourceService')>(), scanAtResources: h.scan }));
 vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query }: { query: string }) => <div data-testid="test-slash-palette" data-query={query} /> }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
@@ -788,6 +797,38 @@ it('does not let a pending local resource scan repopulate an SSH composer', asyn
   await waitFor(() => expect(currentPanelState()).toEqual({ kind: 'ready', items: [], truncated: false }));
   await act(async () => finish({ success: true, items: [{ type: 'file', relPath: 'stale.txt', name: 'stale.txt' }], truncated: false }));
   expect(currentPanelState()).toEqual({ kind: 'ready', items: [], truncated: false });
+});
+
+// 合成「+」面板的关闭焦点(面板搜索框退格收起走 onClose,不经过 MorphPopover 的
+// onOpenChange):面板内关闭必须把焦点交还编辑器,否则收合快照判「键盘关闭」、
+// 焦点掉回「+」按钮,接着打的字被按钮吃掉;焦点已在面板外则不得抢回。
+it('restores editor focus when the suggestion panel closes while focus is inside it', async () => {
+  h.atPanelStandin = true;
+  supplyRangeGeometry();
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  const box = await screen.findByRole('textbox', { name: 'newChat.atMention.typeToSearchFiles' });
+  await act(async () => { box.focus(); });
+  expect(document.activeElement).toBe(box);
+  await act(async () => { h.atPanel!.onClose(); });
+  const editorDom = view.container.querySelector('[contenteditable]');
+  expect(editorDom).not.toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(editorDom));
+});
+
+it('does not steal focus back when the suggestion panel closes after focus moved elsewhere', async () => {
+  h.atPanelStandin = true;
+  supplyRangeGeometry();
+  renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  await screen.findByRole('textbox', { name: 'newChat.atMention.typeToSearchFiles' });
+  // 用户已把焦点挪到面板外(如 Tab 到其他控件):关闭不得把焦点抢回编辑器。
+  const chip = screen.getByRole('button', { name: 'test-suggestions' });
+  await act(async () => { chip.focus(); });
+  await act(async () => { h.atPanel!.onClose(); });
+  expect(document.activeElement).toBe(chip);
 });
 
 it('keeps a remote draft with no directory local-scan-free, but searches nonempty queries remotely', async () => {

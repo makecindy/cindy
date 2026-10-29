@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,9 +22,20 @@ import { handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
-import { decodeOpenPayload, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
+import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
 
 let root: string;
+
+it('encodes only application isolation, never its private URL, token, path or target', () => {
+  const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
+    url: 'http://127.0.0.1:12345/private', token: 'private-token', storageDirectory: '/private-history', agentDeviceId: 'share:private', mcpName: 'hhh', hostToolsOnly: true,
+  } });
+  expect(decodeStartOptions(JSON.parse(JSON.stringify(encoded)))).toEqual(encoded);
+  expect(JSON.stringify(encoded)).not.toMatch(/private|127\.0\.0\.1/);
+  for (const patch of [{ storageKey: '../escape' }, { mcpName: 'cindy_exec' }, { hostToolsOnly: 'false' }]) {
+    expect(() => decodeStartOptions({ ...encoded, localApplication: { ...encoded.localApplication, ...patch } })).toThrow('REMOTE_AGENT_INVALID');
+  }
+});
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-plumbing-')));

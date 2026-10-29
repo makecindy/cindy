@@ -7,7 +7,9 @@ import { SelectParts as Select } from '@/components/ui/select';
 
 import { OneshotModelPinPicker } from '@/cindy-brain/OneshotModelPinPicker';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -26,6 +28,9 @@ type AuxiliaryModelMode = 'automatic' | 'custom';
 export function AuxiliaryModelSection() {
   const { t } = useTranslation();
   const { mode: authMode } = useAuth();
+  const { providers } = useProviders();
+  const cindyAiProvider = providers.find((provider) => provider.id === 'xd');
+  const cindyAiName = cindyAiProvider ? providerDisplayName(cindyAiProvider, t) : null;
   const [settings, setSettings] = useState<AuxiliaryModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -75,6 +80,12 @@ export function AuxiliaryModelSection() {
     () =>
       (settings?.options ?? []).map((option) => ({
         ...option,
+        // Names follow the existing live catalog, independently of saved choices
+        // or an in-flight save whose options may still carry the old locale.
+        ...(option.providerId === 'xd' && cindyAiName ? {
+          group: cindyAiName,
+          label: `${option.agentSuffix} · ${option.modelName} · ${cindyAiName}`,
+        } : {}),
         available:
           option.available !== false &&
           isModelEnabled(option.agentKind, option.providerId, {
@@ -82,7 +93,7 @@ export function AuxiliaryModelSection() {
             defaultEnabled: option.defaultEnabled,
           }),
       })),
-    [modelVisibilityVersion, settings?.options],
+    [cindyAiName, modelVisibilityVersion, settings?.options],
   );
 
   if (!settings) return null;

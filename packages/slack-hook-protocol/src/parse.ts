@@ -1507,6 +1507,26 @@ function validateGroupMessage(p: Record<string, unknown>): string | null {
   if (typeof p.text !== 'string' || p.text.length > GROUP_MESSAGE_TEXT_MAX) {
     return `group.message.text must be a string of at most ${GROUP_MESSAGE_TEXT_MAX} chars`;
   }
+  if (
+    p.imageRefs !== undefined &&
+    (!Array.isArray(p.imageRefs) ||
+      p.imageRefs.length > 4 ||
+      p.imageRefs.some(
+        (ref) =>
+          !isPlainObject(ref) ||
+          typeof ref.fileId !== 'string' ||
+          ref.fileId.length < 1 ||
+          ref.fileId.length > 1024 ||
+          typeof ref.name !== 'string' ||
+          ref.name.length > 256 ||
+          typeof ref.mimeType !== 'string' ||
+          !/^image\/(jpeg|png|gif|webp)$/.test(ref.mimeType) ||
+          (ref.downloadToken !== undefined &&
+            (typeof ref.downloadToken !== 'string' || ref.downloadToken.length > 8192)),
+      ))
+  ) {
+    return 'group.message.imageRefs must contain at most 4 bounded image locators';
+  }
   if (p.fileNames !== undefined) {
     if (
       !isStringArray(p.fileNames) ||

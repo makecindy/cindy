@@ -61,7 +61,7 @@ import {
   type ShapeAnnotation,
   type TextAnnotation,
 } from './annotations';
-import { bitmapToImageData, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
+import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
 import { colorHex, colorRgb, Magnifier, type PixelColor } from './Magnifier';
 import { ScreenshotModeBar, ScreenshotStyleBar, ScreenshotToolbar, TOOL_SHORTCUTS, type ScreenshotMode } from './ScreenshotToolbar';
 import { SCREENSHOT_INK, SCREENSHOT_OVERLAY, type ScreenshotInk } from './screenshotColors';
@@ -291,13 +291,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       }
       initialCursorRef.current = payload.cursor ?? null;
       // 各工具上次用的颜色 / 粗细跨截图保留 (浮层复用, 本次运行内有效)。
-      const canvas = frameRef.current;
       const frameData = bitmapToImageData(payload.frame);
-      if (canvas) {
-        canvas.width = payload.frame.width;
-        canvas.height = payload.frame.height;
-        canvas.getContext('2d')?.putImageData(frameData, 0, 0);
-      }
+      // The layout effect writes the frozen frame once after React has mounted
+      // its canvas (including the independent editor's first image).
       setSession({
         token: payload.token,
         scaleFactor: payload.scaleFactor,
@@ -590,19 +586,27 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       const source = annotationSource();
       if (!mapped || !source) return;
       const { crop, output } = mapped;
-      const canvas = document.createElement('canvas');
-      canvas.width = output.width;
-      canvas.height = output.height;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
-      const sx = output.width / rect.width;
-      const sy = output.height / rect.height;
-      ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
-      drawAnnotations(ctx, list, source);
-      const image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
+      // Unedited, pixel-aligned captures already have their pixels in memory.
+      // Avoid an extra canvas backing store and GPU readback. Resizing,
+      // annotations and alpha compositing retain the existing canvas path.
+      let image = list.length === 0 && crop.width === output.width && crop.height === output.height
+        ? cropOpaqueImageDataToBitmap(current.frameData, crop)
+        : null;
+      if (!image) {
+        const canvas = document.createElement('canvas');
+        canvas.width = output.width;
+        canvas.height = output.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
+        const sx = output.width / rect.width;
+        const sy = output.height / rect.height;
+        ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
+        drawAnnotations(ctx, list, source);
+        image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
+      }
       busyRef.current = true;
       setAiMenuOpen(false);
       const ok = await bridge

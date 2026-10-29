@@ -587,7 +587,7 @@ describe('metadata layers through the active catalog', () => {
 
 
 it('keeps complex quotes with their provider snapshot and clears them on successful replacement', () => {
-  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'], summary: { output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P' }] } };
+  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'], summary: { output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P', component: 'video' }] } };
   const video = { id: 'example-video', name: 'Video', mode: 'video_generation', agents: [] as const,
     currency: 'USD' as const, costDiscount: 0.2, displayPricing,
     modalities: { input: ['text'], output: ['video'] } };

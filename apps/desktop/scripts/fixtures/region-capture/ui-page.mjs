@@ -265,13 +265,19 @@ export default {
       await (await button('remoteDesktop.actualSize')).click();
       // The idle case produces a short image. Give it a smaller editing window
       // so a wheel gesture has real overflow to scroll, just as with a long capture.
-      if (ui.case === 'idle') await page.setViewportSize({ width: 900, height: 400 });
-      const review = page.locator('[tabindex="0"]');
-      assert.ok(await review.evaluate(el => el.scrollHeight > el.clientHeight), 'the editor has overflow to review');
-      await review.evaluate(el => { el.scrollTop = 0; });
-      await review.hover(); await page.mouse.wheel(0, 300);
-      await page.waitForFunction(() => document.querySelector('[tabindex="0"]').scrollTop > 0);
-      assert.deepEqual(await page.locator('canvas').first().evaluate(el => [el.width, el.height]), dimensions, 'zoom and scrolling do not resample the source');
+      try {
+        if (ui.case === 'idle') await page.setViewportSize({ width: 900, height: 400 });
+        const review = page.locator('[tabindex="0"]');
+        assert.ok(await review.evaluate(el => el.scrollHeight > el.clientHeight), 'the editor has overflow to review');
+        await review.evaluate(el => { el.scrollTop = 0; });
+        await review.hover(); await page.mouse.wheel(0, 300);
+        await page.waitForFunction(() => document.querySelector('[tabindex="0"]').scrollTop > 0);
+        assert.deepEqual(await page.locator('canvas').first().evaluate(el => [el.width, el.height]), dimensions, 'zoom and scrolling do not resample the source');
+      } finally {
+        // Electron reuses this page across variants. A CDP viewport override
+        // survives native setContentSize, poisoning every case after idle.
+        if (ui.case === 'idle') await page.setViewportSize({ width: 900, height: 700 });
+      }
       // The shortcut hint follows the host platform: "(Ctrl+S)" on Windows, "(⌘S)" on macOS.
       const save = (await ui.t('regionScreenshot.save')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       await page.getByRole('button', { name: new RegExp(`^${save} \\((Ctrl\\+|⌘)S\\)$`) }).click();

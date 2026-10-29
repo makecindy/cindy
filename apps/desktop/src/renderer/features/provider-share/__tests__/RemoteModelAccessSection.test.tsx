@@ -22,6 +22,56 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 describe('remote model settings', () => {
+  // Regression: the real dialog listed Codex and Pi/Claude bridge IDs twice. Existing
+  // fixtures had no aliases. Unit: two wire IDs must render once, but both must be
+  // sent on an explicit grant/revoke; distinct context profiles stay independent.
+  const gptModels = [
+    { id: 'gpt-6.1-sol', name: 'GPT-6.1-Sol' },
+    { id: 'chatgpt/gpt-6.1-sol', name: 'GPT-6.1-Sol' },
+    { id: 'gpt-6.1-sol[1m]', name: 'GPT-6.1-Sol 1M' },
+  ];
+  it('groups engine aliases and saves both actual IDs so Pi remains available', async () => {
+    local.mockResolvedValue({ ...value(), models: [], availableModels: gptModels });
+    render(<RemoteModelAccessDialog providerId="openai" onClose={() => {}} />);
+    await screen.findByRole('checkbox', { name: 'GPT-6.1-Sol 1M' });
+    expect(screen.getAllByRole('checkbox', { name: 'GPT-6.1-Sol' })).toHaveLength(1);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'chatgpt/' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GPT-6.1-Sol' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(local).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: 'set-model-access', models: ['gpt-6.1-sol', 'chatgpt/gpt-6.1-sol'],
+    })));
+  });
+  it('removes every engine alias when excluding a model from an unrestricted grant', async () => {
+    local.mockResolvedValue({ ...value(), availableModels: gptModels });
+    render(<RemoteModelAccessDialog providerId="openai" onClose={() => {}} />);
+    await screen.findByRole('checkbox', { name: 'GPT-6.1-Sol 1M' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GPT-6.1-Sol' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(local).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: 'set-model-access', models: ['gpt-6.1-sol[1m]'],
+    })));
+  });
+  it.each([false, true])('preserves an old partial grant without silently enabling Pi (missing alias: %s)', async missingAlias => {
+    const selected = missingAlias ? 'chatgpt/gpt-6.1-sol' : 'gpt-6.1-sol';
+    local.mockResolvedValue({ ...value(), models: [selected], availableModels: missingAlias ? [gptModels[0]] : gptModels });
+    render(<RemoteModelAccessDialog providerId="openai" onClose={() => {}} />);
+    const row = await screen.findByRole('checkbox', { name: 'GPT-6.1-Sol' });
+    expect((row as HTMLInputElement).indeterminate).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(local).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'set-model-access', models: [selected] })));
+  });
+  it.each([undefined, 'studio'])('respects a Pi-only provider ceiling when editing a member: %s', async deviceId => {
+    local.mockResolvedValue({ ...value(), models: [], providerModels: ['chatgpt/gpt-6.1-sol'], availableModels: gptModels });
+    render(<RemoteModelAccessDialog providerId="openai" deviceId={deviceId} memberId="alice" onClose={() => {}} />);
+    await screen.findByRole('checkbox', { name: 'GPT-6.1-Sol 1M' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GPT-6.1-Sol' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(local).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: 'set-model-access', memberId: 'alice', models: ['chatgpt/gpt-6.1-sol'],
+    })));
+    if (deviceId) expect(remote).toHaveBeenCalledWith(expect.objectContaining({ action: 'remote-manage', deviceId }));
+  });
   // Unit: a member limit edit must preserve the existing model grant on save.
   it('saves member limits in the model access panel without broadening the model grant', async () => {
     local.mockResolvedValue({ ...value(), models: ['small'], budgetSupported: true, budgetAvailable: true });

@@ -192,12 +192,6 @@ function basenameFromPathLike(value: string): string {
   return slash >= 0 ? value.slice(slash + 1) : value;
 }
 
-function normalizeKnownFileHref(href: string): string {
-  const strippedScheme = href.startsWith('file://') ? href.slice(7) : href;
-  const decoded = safeDecodeURIComponent(stripQueryAndHash(strippedScheme.trim()));
-  return basenameFromPathLike(decoded);
-}
-
 /**
  * Resolve a model-authored markdown link against files the user attached in
  * this chat session. LLMs often cite an uploaded document as
@@ -223,12 +217,13 @@ export function resolveKnownLocalFileHref(
   if (!href || !files || files.length === 0) return null;
   const decoded = safeDecodeURIComponent(stripQueryAndHash(href.trim()));
   if (/^(?:file:\/\/|[\\/]|[a-z]:[\\/]|~[\\/])/i.test(decoded)) return null;
-  const wanted = normalizeKnownFileHref(href).toLowerCase();
+  const wanted = basenameFromPathLike(decoded).toLowerCase();
   if (!wanted) return null;
 
   const matches = files.filter((file) => {
-    const name = normalizeKnownFileHref(file.name).toLowerCase();
-    const pathName = normalizeKnownFileHref(file.path).toLowerCase();
+    // Attachment metadata is literal filesystem text, not URL syntax.
+    const name = basenameFromPathLike(file.name).toLowerCase();
+    const pathName = basenameFromPathLike(file.path).toLowerCase();
     return wanted === name || wanted === pathName;
   });
 
@@ -328,17 +323,19 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+function toMainLookupHref(href: string, workingDir: string): string {
+  if (!href.startsWith('file://')) return href;
+  // File URL conversion yields literal text; main still decodes its href input.
+  return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
+}
+
 export async function resolveLocalPathSmart(
   href: string,
   workingDir: string,
   options: { refresh?: boolean } = {},
 ): Promise<SmartResolveResult> {
   const fallback = resolveLocalPath(href, workingDir);
-  // Main-process resolver expects a native absolute/relative path, not a
-  // file:// URL. Keep the public API accepting file:// because markdown links
-  // frequently use that form; resolveLocalPath already handles the cross-
-  // platform decoding rules.
-  const lookupHref = href.startsWith('file://') ? fallback : href;
+  const lookupHref = toMainLookupHref(href, workingDir);
   const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
     | { resolvePath?: typeof window.electronAPI.resolvePath }
     | undefined;
@@ -467,11 +464,10 @@ async function runBatchForDir(
     return;
   }
 
-  // Main resolver wants a native path, not a file:// URL — same rule as
-  // `resolveLocalPathSmart`. Map each href to the lookup form it sends.
+  // Use the same URL decoding boundary for direct and batched lookups.
   const lookupOf = new Map<string, string>();
   for (const href of hrefs) {
-    lookupOf.set(href, href.startsWith('file://') ? resolveLocalPath(href, workingDir) : href);
+    lookupOf.set(href, toMainLookupHref(href, workingDir));
   }
   const lookups = [...new Set(lookupOf.values())];
 
