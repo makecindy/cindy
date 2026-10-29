@@ -106,6 +106,10 @@ export interface CcMeta {
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
   mcpApp?: boolean;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
+  /** Host-frozen invocation facts, independent of the loaded history window. */
+  turnResources?: import('@cindy/maker-shared/turn-resources').TurnResourceReceipt[];
+  /** Exact native Workflow start attached to its originating tool-use row. */
+  workflowResource?: import('@cindy/maker-shared/turn-resources').TurnResourceReceipt;
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */

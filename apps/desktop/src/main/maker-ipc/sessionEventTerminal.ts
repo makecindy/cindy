@@ -241,7 +241,9 @@ export function finishSessionTerminalEvent(
           session.id,
           turnBoundaryAssistantPersistId,
           nativeForkAnchor ? { nativeForkAnchor } : undefined,
-          ...(prepared.botTaskResultInputIds?.length ? [prepared.botTaskResultInputIds] : []),
+          ...(prepared.turnResourceInputClientIds?.length && !isContinuationBoundary
+            ? [prepared.botTaskResultInputIds?.length ? prepared.botTaskResultInputIds : undefined, prepared.turnResourceInputClientIds] as const
+            : prepared.botTaskResultInputIds?.length ? [prepared.botTaskResultInputIds] as const : []),
         );
       }
     }

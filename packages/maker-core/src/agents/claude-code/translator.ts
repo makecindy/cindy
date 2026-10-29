@@ -814,7 +814,7 @@ export function translateSdkMessage(
       for (const pair of fullPairs) {
         queue.push({
           type: 'tool_result_full',
-          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
+          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, isError: pair.isError, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
           source: 'claude-code',
           ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });

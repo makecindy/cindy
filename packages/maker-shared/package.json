@@ -89,6 +89,7 @@
     "./system-card": "./src/systemCard.ts",
     "./thinking-text": "./src/thinkingText.ts",
     "./turn-continuation": "./src/turnContinuation.ts",
+    "./turn-resources": "./src/turnResources.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
     "./tool-result-compaction": "./src/toolResultCompaction.ts",
     "./tool-loop-error": "./src/toolLoopError.ts",

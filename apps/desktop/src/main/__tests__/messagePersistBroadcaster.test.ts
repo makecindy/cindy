@@ -5,6 +5,11 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
 vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
 import { readTaskResultsForReply } from '../botTaskReplyResults.js';
+vi.mock('../readTurnResourcesForReply.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../readTurnResourcesForReply.js')>(),
+  readTurnResourcesForReply: vi.fn(async () => []),
+}));
+import { createTurnResourceReceipt, readExecutedPluginIdentity, readExecutedSkillIdentity, readTurnResourcesForReply } from '../readTurnResourcesForReply.js';
 /**
  * messagePersistBroadcaster.test.ts
  * ---------------------------------------------------------------------------
@@ -4362,6 +4367,139 @@ it('persists bound results with the final seal, and a failed result lookup canno
   await expect(markAssistantTurnCompleted(SESSION, 'other', undefined, ['bot-delegation-completion:job'])).resolves.toBe(true);
   expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'other', { turnCompleted: true });
 });
+
+// Unit: the history window must not own receipts; the seal waits behind native tool
+// writes and retains the accepted input snapshot when the next input is already active.
+it('seals frozen turn resources after prior tool writes and tolerates unavailable resource history', async () => {
+  const resources = [createTurnResourceReceipt('skill', 'claude:review', 'review')!];
+  vi.mocked(readTurnResourcesForReply).mockResolvedValueOnce(resources);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const blocking = enqueueDurableWrite('resource-write-order', () => gate);
+  onToolUseEvent(SESSION, { toolUseId: 'resource-tool', toolName: 'Skill', input: { skill: 'review' } }, { replyToClientId: 'accepted' });
+  const inputs = ['accepted', 'steer'];
+  const sealed = markAssistantTurnCompleted(SESSION, 'final-resources', undefined, undefined, inputs);
+  inputs.splice(0, inputs.length, 'next-input');
+  expect(readTurnResourcesForReply).not.toHaveBeenCalled();
+  release();
+  await blocking;
+  await sealed;
+  expect(readTurnResourcesForReply).toHaveBeenCalledWith(SESSION, 'final-resources', ['accepted', 'steer']);
+  expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({ role: 'tool_use' }), expect.anything());
+  expect(vi.mocked(createMessage).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(readTurnResourcesForReply).mock.invocationCallOrder[0]);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'final-resources', { turnCompleted: true, turnResources: resources });
+  expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'final-resources', expect.anything());
+  vi.mocked(readTurnResourcesForReply).mockRejectedValueOnce(new Error('History unavailable'));
+  await expect(markAssistantTurnCompleted(SESSION, 'fallback-final', undefined, undefined, ['accepted'])).resolves.toBe(true);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'fallback-final', { turnCompleted: true });
+});
+
+it('records only a native named Workflow start and drops an in-flight record after clear', async () => {
+  vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue({ clientId: 'workflow-tool-row', toolUseId: 'workflow-native-id' });
+  const update = { provider: 'claude-code', taskId: 'workflow-task', parentToolUseId: 'workflow-native-id',
+    taskType: 'local_workflow', status: 'running', workflowName: 'Release pipeline' };
+  expect(onAgentTaskUpdateEvent(SESSION, update)).toBe(true);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'workflow-tool-row', {
+    workflowResource: createTurnResourceReceipt('workflow', 'Release pipeline', 'Release pipeline'),
+  });
+  vi.mocked(patchMessageAgentMetaWithResult).mockClear();
+  expect(onAgentTaskUpdateEvent(SESSION, { ...update, workflowName: undefined })).toBe(false);
+  expect(onAgentTaskUpdateEvent(SESSION, { ...update, workflowName: 'hidden\nlabel' })).toBe(false);
+  expect(onAgentTaskUpdateEvent(SESSION, update)).toBe(true);
+  clearSessionPersistState(SESSION);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+});
+
+// Unit: all existing result assembly orders must preserve execution before the
+// display-only 8KB cap, without accepting provider-supplied resource metadata.
+it.each(['full', 'buffered', 'update'] as const)('keeps a host plugin execution fact before capping its %s result', async order => {
+  const toolName = 'mcp__cindy__ghost_call';
+  const input = { ghost_id: 'github', namespace: 'team', tool: 'search' };
+  const fullText = JSON.stringify({ ok: true, result: { text: 'x'.repeat(10000) } });
+  const identity = readExecutedPluginIdentity(toolName, input, fullText)!;
+  vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue({ clientId: 'plugin-row', toolUseId: 'large-plugin' });
+  if (order === 'buffered') onToolResultFullEvent(SESSION, { toolUseId: 'large-plugin', fullText }, null);
+  const providerMeta = { replyToClientId: 'accepted', turnResourcePluginExecutionId: 'provider-forgery' };
+  onToolUseEvent(SESSION, { toolUseId: 'large-plugin', toolName, input }, providerMeta);
+  if (order === 'update') onToolResultEvent(SESSION, { toolUseIds: ['large-plugin'], summary: 'pending' }, null);
+  if (order === 'buffered') {
+    onToolResultEvent(SESSION, { toolUseIds: ['large-plugin'], summary: '' }, null);
+  } else onToolResultFullEvent(SESSION, { toolUseId: 'large-plugin', fullText }, null);
+  await drainPersistQueue();
+  const toolUse = vi.mocked(createMessage).mock.calls.find(([, body]) => body.role === 'tool_use')?.[1];
+  expect(toolUse?.agentMeta).not.toHaveProperty('turnResourcePluginExecutionId');
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'plugin-row', { turnResourcePluginExecutionId: identity });
+  const storedResult = order === 'update'
+    ? vi.mocked(updateMessageContent).mock.calls.find(([, , content]) => typeof content === 'string' && content.includes('truncated'))?.[2]
+    : vi.mocked(createMessage).mock.calls.find(([, body]) => body.role === 'tool_result')?.[1].content;
+  expect(typeof storedResult).toBe('string');
+  expect((storedResult as string).length).toBeLessThanOrEqual(8192);
+  expect(storedResult).toContain('[tool result truncated: stored first 8KB]');
+});
+
+it('does not stamp plugin execution from discovery, rejected calls or a forged provider fact', async () => {
+  const input = { ghost_id: 'github', tool: 'search' };
+  const providerMeta = { replyToClientId: 'accepted', turnResourcePluginExecutionId: 'provider-forgery' };
+  onToolUseEvent(SESSION, { toolUseId: 'discovery', toolName: 'mcp:cindy:ghost_call', input: { ...input, tool: 'list_tools' } }, providerMeta);
+  onToolResultFullEvent(SESSION, { toolUseId: 'discovery', fullText: '{"ok":true}' }, null);
+  onToolUseEvent(SESSION, { toolUseId: 'rejected', toolName: 'mcp:cindy:ghost_call', input }, providerMeta);
+  onToolResultFullEvent(SESSION, { toolUseId: 'rejected', fullText: '{"ok":false}' }, null);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  for (const [, body] of vi.mocked(createMessage).mock.calls.filter(([, body]) => body.role === 'tool_use'))
+    expect(body.agentMeta).not.toHaveProperty('turnResourcePluginExecutionId');
+});
+
+// #7113 review: a grouped display result cannot prove every invocation ran.
+// Buffer full results before tool_use so only their exact IDs can supply facts.
+it.each(['buffered', 'single-summary', 'group-summary'] as const)('does not share plugin execution evidence across a %s result', async order => {
+  const toolName = 'mcp__cindy__ghost_call';
+  const successInput = { ghost_id: 'github', tool: 'search' };
+  const rejectedInput = { ghost_id: 'notion', tool: 'query' };
+  const success = JSON.stringify({ ok: true, result: { text: 'x'.repeat(10000) } });
+  if (order === 'buffered') {
+    onToolResultFullEvent(SESSION, { toolUseId: 'plugin-success', fullText: success }, null);
+    onToolResultFullEvent(SESSION, { toolUseId: 'plugin-rejected', fullText: '{"ok":false}' }, null);
+  }
+  vi.mocked(findVisibleToolUseMessageByAliases).mockImplementation(async (_session, aliases) => ({
+    clientId: `${aliases[0]}-row`, toolUseId: aliases[0],
+  }));
+  onToolUseEvent(SESSION, { toolUseId: 'plugin-rejected', toolName, input: rejectedInput }, null);
+  onToolUseEvent(SESSION, { toolUseId: 'plugin-success', toolName, input: successInput }, null);
+  onToolResultEvent(SESSION, { toolUseIds: order === 'single-summary' ? ['plugin-rejected'] : ['plugin-rejected', 'plugin-success'],
+    summary: order === 'buffered' ? '' : success }, null);
+  await drainPersistQueue();
+  const facts = vi.mocked(patchMessageAgentMetaWithResult).mock.calls
+    .filter(([, , meta]) => 'turnResourcePluginExecutionId' in meta);
+  expect(facts.map(([, id]) => id)).toEqual(order === 'buffered' ? ['plugin-success-row'] : []);
+  if (order === 'buffered') expect(facts[0][2]).toEqual({
+    turnResourcePluginExecutionId: readExecutedPluginIdentity(toolName, successInput, success),
+  });
+});
+
+// #7113: native errors must survive a later, longer generated summary. Unit:
+// observe host metadata persisted by the real full/buffer/summary event handlers.
+it.each([['full', false], ['full', true], ['buffered', false], ['buffered', true]] as const)(
+  'keeps exact Skill success across a %s result and later summary (isError=%s)', async (order, isError) => {
+    const input = { skill: 'review' };
+    const fullText = isError ? 'Skill could not be loaded' : 'Launching skill: review';
+    const providerMeta = { replyToClientId: 'accepted', turnResourceSkillExecutionId: 'provider-forgery' };
+    vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue({ clientId: 'skill-row', toolUseId: 'native-skill' });
+    if (order === 'buffered') onToolResultFullEvent(SESSION, { toolUseId: 'native-skill', fullText, isError }, null);
+    onToolUseEvent(SESSION, { toolUseId: 'native-skill', toolName: 'Skill', input }, providerMeta);
+    if (order === 'full') onToolResultFullEvent(SESSION, { toolUseId: 'native-skill', fullText, isError }, null);
+    onToolResultEvent(SESSION, { toolUseIds: ['native-skill'], summary: 'Displayed summary '.repeat(100) }, null);
+    await drainPersistQueue();
+    const facts = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([, , meta]) => 'turnResourceSkillExecutionId' in meta);
+    expect(facts.map(([, , meta]) => meta)).toEqual(isError ? [] : [{
+      turnResourceSkillExecutionId: readExecutedSkillIdentity('Skill', input, fullText),
+    }]);
+    const tool = vi.mocked(createMessage).mock.calls.find(([, row]) => row.role === 'tool_use')?.[1];
+    expect(tool?.agentMeta).not.toHaveProperty('turnResourceSkillExecutionId');
+  },
+);
 
 // Unit regression: a late import updates the original result, never the next turn.
 it('persists process media on its accepted result and broadcasts the durable row', async () => {

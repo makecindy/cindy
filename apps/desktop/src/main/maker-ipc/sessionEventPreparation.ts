@@ -214,9 +214,10 @@ export function prepareSessionEvent(
     deps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
   }
   // Snapshot before onTurnEvent releases the active input and drains the next queue item.
-  const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
-    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
-      .filter(id => taskResultClientIdForInput(id) !== null) : [];
+  const turnResourceInputClientIds = event.type === 'done' && event.turnScope !== 'background'
+    ? [...(deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])]
+    : [];
+  const botTaskResultInputIds = turnResourceInputClientIds.filter(id => taskResultClientIdForInput(id) !== null);
   const activeInputId = event.turnScope === 'background' ? null
     : deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
   const provenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
@@ -248,6 +249,8 @@ export function prepareSessionEvent(
   // its accepted durable input on the reply before the turn lease is released.
   if (!activeInputId && event.turnScope !== 'background') {
     const inputClientId = readChannelToolScope({ sessionId: session.id, sessionInstanceId: session.instanceId })?.inputClientId;
+    if (event.type === 'done' && inputClientId && !turnResourceInputClientIds.includes(inputClientId))
+      turnResourceInputClientIds.push(inputClientId);
     if (inputClientId) attributedEvent = {
       ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyToClientId: inputClientId },
     };
@@ -614,6 +617,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    turnResourceInputClientIds,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,

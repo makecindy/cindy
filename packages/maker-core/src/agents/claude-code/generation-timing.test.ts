@@ -688,7 +688,7 @@ describe('claude generation pause boundaries', () => {
       generationReliable: true,
     });
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done', isError: false },
     }));
     if (hasEnvelope) {
       expect(events).toContainEqual(expect.objectContaining({

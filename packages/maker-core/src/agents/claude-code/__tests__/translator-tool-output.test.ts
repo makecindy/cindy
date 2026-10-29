@@ -64,12 +64,15 @@ describe('Claude Code translator tool output normalization', () => {
     const results = (await drain(queue)).filter((event) => event.type === 'tool_result_full');
     expect(results).toHaveLength(1);
     expect(results[0].data).toEqual({
-      toolUseId: 'image-tool', fullText: 'xdt-image://fixture/generated.png',
+      toolUseId: 'image-tool', fullText: 'xdt-image://fixture/generated.png', isError: false,
     });
     expect(results[0].agentMeta).toEqual(parent ? { parentUuid: parent } : undefined);
   });
 
-  it.each([true, false])('propagates tool_result.is_error=%s to the loop-guard callback', (isError) => {
+  // #7113: without the SDK error flag on the full event, a later longer summary
+  // can erase a failed Skill's only failure evidence. The callback-only case
+  // did not protect host persistence. Unit: one SDK tool-result echo per flag.
+  it.each([true, false])('propagates tool_result.is_error=%s to the loop-guard callback and full event', async (isError) => {
     const queue = createAsyncQueue<AgentEvent>();
     const onToolResultDone = vi.fn();
     const ctx = { ...createCtx(), onToolResultDone };
@@ -109,6 +112,12 @@ describe('Claude Code translator tool output normalization', () => {
       isError,
       expect.any(String),
     );
+    const full = (await drain(queue)).find((event) => event.type === 'tool_result_full');
+    expect(full?.data).toEqual({
+      toolUseId: 'toolu_error_flag',
+      fullText: 'The pages must be numbered',
+      isError,
+    });
   });
 
   it('把同一 user tool-result 消息中的并行结果标记为同一批次', () => {
