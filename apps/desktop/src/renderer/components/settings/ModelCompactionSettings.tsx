@@ -34,8 +34,12 @@ export function ModelCompactionSettings({
       className="mt-3 border-t border-[var(--settings-theme-card-border)] pt-3"
       data-model-compaction
     >
+      {/* 状态标记挂在标题行：它出现/消失时不会挤压下面的滑杆，滑杆宽度保持恒定。 */}
       <summary className="cursor-pointer text-12 font-medium text-[var(--text-secondary)]">
         {t(`${key}.title`)}
+        <span className="ml-2 inline-flex items-center rounded-full bg-[var(--surface-chip)] px-2 py-0.5 align-middle text-11 font-medium leading-none text-[var(--text-secondary)]">
+          {policy.isCustomized ? t('settings.defaults.customizedBadge') : t(`${key}.defaultBadge`)}
+        </span>
       </summary>
       <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
         {t(`${key}.hint`)}
@@ -63,13 +67,15 @@ export function ModelCompactionSettings({
             <span>{MAX_MODEL_COMPACTION_PCT}%</span>
           </div>
         </div>
-        <span className="shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 font-medium leading-none text-[var(--text-primary)]">
-          {draft !== null || policy.isCustomized ? `${value}%` : t(`${key}.default`, { pct: value })}
+        {/* 定宽数值块：50%–95% 数字位数相同，滑杆不会随数值长短跳动。 */}
+        <span className="w-[52px] shrink-0 text-center text-13 font-medium leading-none tabular-nums text-[var(--text-primary)]">
+          {value}%
         </span>
         <DefaultOverrideControls
           isCustomized={policy.isCustomized}
           disabled={disabled}
           alwaysVisible
+          showCustomizedBadge={false}
           onReset={() => void commit(null)}
         />
       </div>
