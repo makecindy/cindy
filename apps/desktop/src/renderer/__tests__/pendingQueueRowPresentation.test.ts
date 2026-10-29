@@ -228,6 +228,8 @@ describe('getPendingQueueRowPresentation', () => {
   it('never presents background-command callback rows (bgcmd:<runId> scheduler origins) as automation, but keeps them locked', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
+        text: '〔后台命令完成〕…(完整报告原文含日志尾部与模型指令)',
+        persistedContent: '后台命令完成 · 成功（exit 0） · node -e',
         origin: { kind: 'scheduler', scheduleId: 'bgcmd:bg-test', scheduleName: '后台命令' },
       }),
     );
@@ -238,6 +240,8 @@ describe('getPendingQueueRowPresentation', () => {
       senderLabel: null,
       canEdit: false,
       canSteer: false,
+      // 正文与来源标签分开:队列显示 persistedContent 摘要,不灌报告原文。
+      displayText: '后台命令完成 · 成功（exit 0） · node -e',
     });
   });
 

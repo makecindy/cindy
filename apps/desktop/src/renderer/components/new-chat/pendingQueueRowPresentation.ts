@@ -78,6 +78,9 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
+  // 正文选择与来源标签分开:后台命令回注与自动化心跳一样,text 是发给 Agent 的
+  // 原文(含日志尾部与指令),队列面板只显示 persistedContent 摘要。
+  const usesMachineVisibleText = isScheduler || isSession || isPlugin || isBgcmdOrigin;
   const isPendingEnqueue = entry.isPendingEnqueue === true;
 
   return {
@@ -99,8 +102,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     senderBotId: isSession && origin?.kind === 'session' ? (origin.senderBotId ?? null) : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
-      : isScheduler || isSession || isPlugin
-        ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
+      : usesMachineVisibleText
+        ? isSession
+          ? forwardedRequestDisplayText(queueItemVisibleText(entry))
+          : queueItemVisibleText(entry)
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           : entry.text,
