@@ -28,20 +28,6 @@ import { ModelHarnessPicker } from './ModelHarnessPicker';
 import { EffortSlider } from '@/components/ui/effort-slider';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
-/**
- * 定稿（2026-10-28）：文案按预览页确认，后续再迁 i18n。
- * 本文件之外不要新增同一批文案的副本。
- */
-const COPY = {
-  label: '额度用尽时改用',
-  unset: '不启用',
-  empty: '同引擎下没有其他可用模型',
-  staleHint: '已失效：这条备用路线绑定的模型已不是任务当前使用的组合，不会再触发。',
-  reset: '重设',
-  error: '没有保存：',
-  sectionLabel: '额度用尽时的备用模型',
-} as const;
-
 /** 额度备用候选：同一引擎下、目录里已加载的模型（由面板注入，不发额外请求）。 */
 export interface UsageLimitFallbackCandidate {
   providerId: string;
@@ -154,7 +140,7 @@ export function ModelConfigFlyout({
     ? fallbackSelected
       ? `${localizedModelName(fallbackSelected.displayName, t)} · ${fallbackSelected.sourceLabel}`
       : fallbackTarget.model
-    : COPY.unset;
+    : t('newChat.usageLimitFallback.unset');
 
   const applyFallbackValue = (value: string) => {
     if (!usageLimitFallback) return;
@@ -401,25 +387,25 @@ export function ModelConfigFlyout({
           {usageLimitFallback.stale && (
             <div className="mb-1.5 flex items-start gap-1.5 leading-[1.5] text-[var(--warning-fg)]">
               <TriangleAlert size={12} className="mt-[2px] shrink-0" aria-hidden />
-              <span className="min-w-0 flex-1">{COPY.staleHint}</span>
+              <span className="min-w-0 flex-1">{t('newChat.usageLimitFallback.staleHint')}</span>
               <button
                 type="button"
                 disabled={disabled || usageLimitFallback.loading}
                 onClick={resetFallback}
                 className="shrink-0 underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {COPY.reset}
+                {t('newChat.usageLimitFallback.reset')}
               </button>
             </div>
           )}
           <div className="flex items-center justify-between gap-2">
-            <span className="shrink-0 text-[var(--text-secondary)]">{COPY.label}</span>
+            <span className="shrink-0 text-[var(--text-secondary)]">{t('newChat.usageLimitFallback.label')}</span>
             {usageLimitFallbackCandidates.length === 0 ? (
               <span
                 className="min-w-0 truncate text-[var(--text-tertiary)]"
-                title={COPY.empty}
+                title={t('newChat.usageLimitFallback.empty')}
               >
-                {COPY.empty}
+                {t('newChat.usageLimitFallback.empty')}
               </span>
             ) : (
               <DropdownMenu>
@@ -427,7 +413,7 @@ export function ModelConfigFlyout({
                   <button
                     type="button"
                     disabled={disabled || usageLimitFallback.loading}
-                    aria-label={COPY.sectionLabel}
+                    aria-label={t('newChat.usageLimitFallback.sectionLabel')}
                     title={fallbackTargetLabel}
                     className={cn(
                       'flex h-7 min-w-0 max-w-[220px] items-center gap-1 rounded-full border px-2.5 text-12 transition-colors',
@@ -448,7 +434,7 @@ export function ModelConfigFlyout({
                     onValueChange={applyFallbackValue}
                   >
                     <DropdownMenuRadioItem value={FALLBACK_NONE}>
-                      {COPY.unset}
+                      {t('newChat.usageLimitFallback.unset')}
                     </DropdownMenuRadioItem>
                     {usageLimitFallbackCandidates.map((candidate) => (
                       <DropdownMenuRadioItem
@@ -466,7 +452,7 @@ export function ModelConfigFlyout({
           </div>
           {usageLimitFallback.error && (
             <div className="mt-1 leading-[1.5] text-[var(--error-fg)]" role="alert">
-              {COPY.error}
+              {t('newChat.usageLimitFallback.error')}
               {usageLimitFallback.error}
             </div>
           )}

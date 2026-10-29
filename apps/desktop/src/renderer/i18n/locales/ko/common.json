@@ -11014,6 +11014,15 @@
     }
   },
   "newChat": {
+    "usageLimitFallback": {
+      "label": "사용량 한도에 도달하면 전환",
+      "unset": "사용 안 함",
+      "empty": "같은 엔진에서 사용할 수 있는 다른 모델이 없습니다",
+      "staleHint": "더 이상 적용되지 않습니다: 연결된 모델이 현재 작업 조합과 달라 실행되지 않습니다.",
+      "reset": "다시 설정",
+      "error": "저장하지 못했습니다: ",
+      "sectionLabel": "사용량 한도 도달 시 대체 모델"
+    },
     "homeSuggestions": {
       "shuffle": "다른 제안",
       "dismiss": "다시 보지 않기",
@@ -12585,6 +12594,9 @@
       }
     },
     "systemCard": {
+      "usageLimitRevert": {
+        "message": "사용량 한도가 복구되어 {{from}}에서 {{to}}로 자동 전환했습니다"
+      },
       "help": {
         "title": "사용 가능한 명령",
         "builtInCommands": "기본 제공 명령",

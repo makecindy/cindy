@@ -11014,6 +11014,15 @@
     }
   },
   "newChat": {
+    "usageLimitFallback": {
+      "label": "额度用尽时改用",
+      "unset": "不启用",
+      "empty": "同引擎下没有其他可用模型",
+      "staleHint": "已失效：这条备用路线绑定的模型已不是任务当前使用的组合，不会再触发。",
+      "reset": "重设",
+      "error": "没有保存：",
+      "sectionLabel": "额度用尽时的备用模型"
+    },
     "homeSuggestions": {
       "shuffle": "换一批",
       "dismiss": "不再显示",
@@ -12585,6 +12594,9 @@
       }
     },
     "systemCard": {
+      "usageLimitRevert": {
+        "message": "额度已恢复，已自动从 {{from}} 切回 {{to}}"
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "内置命令",

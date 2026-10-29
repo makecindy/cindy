@@ -898,11 +898,6 @@ function summarizeInterruption(detail?: string): string | undefined {
  * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
  * 组件层搬到了 i18n 层（copilot review）。
  */
-// 定稿（2026-10-28）：文案按预览页确认，后续再迁 i18n。
-const USAGE_LIMIT_REVERT_COPY = {
-  message: '额度已恢复，已自动从 {from} 切回 {to}',
-} as const;
-
 /**
  * 「额度恢复后已自动切回原路线」的瞬态提示。
  *
@@ -911,13 +906,15 @@ const USAGE_LIMIT_REVERT_COPY = {
  * 只活在内存里（固定 clientId，见 makerChatStore），重开会话即消失。
  */
 function UsageLimitRevertRow({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const fromModel = typeof data?.fromModel === 'string' ? data.fromModel : null;
   const toModel = typeof data?.toModel === 'string' ? data.toModel : null;
   // 主进程总会带两个模型名；缺字段就不画这行，不渲染半截句子。
   if (!fromModel || !toModel) return null;
-  const label = USAGE_LIMIT_REVERT_COPY.message
-    .replace('{from}', fromModel)
-    .replace('{to}', toModel);
+  const label = t('chat.systemCard.usageLimitRevert.message', {
+    from: fromModel,
+    to: toModel,
+  });
   return (
     <div
       className="flex w-full items-center gap-2 py-2 text-11 text-muted-foreground select-none"

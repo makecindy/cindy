@@ -11049,6 +11049,15 @@
     }
   },
   "newChat": {
+    "usageLimitFallback": {
+      "label": "Switch to when the usage limit is reached",
+      "unset": "Off",
+      "empty": "No other models available on this engine",
+      "staleHint": "No longer active: this fallback is bound to a model the task no longer uses, so it won't trigger.",
+      "reset": "Reset",
+      "error": "Not saved: ",
+      "sectionLabel": "Fallback model when the usage limit is reached"
+    },
     "homeSuggestions": {
       "shuffle": "Show more",
       "dismiss": "Don't show again",
@@ -12630,6 +12639,9 @@
       }
     },
     "systemCard": {
+      "usageLimitRevert": {
+        "message": "Usage limit recovered; switched back from {{from}} to {{to}}"
+      },
       "help": {
         "title": "Available Commands",
         "builtInCommands": "Built-in Commands",
