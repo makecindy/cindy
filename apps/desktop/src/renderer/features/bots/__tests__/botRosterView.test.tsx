@@ -257,13 +257,16 @@ describe('name-only creation', () => {
     } else expect(input.capabilities).toBeUndefined();
   });
 
-  it('preserves the name when the configured model is unavailable', async () => {
-    mocks.addBotProfileAndWait.mockRejectedValueOnce(new mocks.BotModelSelectionRequiredError());
+  it.each(['missing', 'unavailable'])('preserves the name and explains a %s configured model', async failure => {
+    mocks.addBotProfileAndWait.mockRejectedValueOnce(failure === 'missing'
+      ? new mocks.BotModelSelectionRequiredError()
+      : new Error("Error invoking remote method 'local-db:bots:create': Error: [MODEL_SELECTION_UNAVAILABLE] unavailable"));
     render(<BotRosterView />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
     await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
-    await screen.findByRole('alert');
+    expect((await screen.findByRole('alert')).textContent).toBe(failure === 'missing'
+      ? 'bots.guided.modelRequired' : 'ipcError.MODEL_SELECTION_UNAVAILABLE');
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Mika');
     expect(mocks.navigate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'choose-custom-codex-model' }));

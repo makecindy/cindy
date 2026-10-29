@@ -15,6 +15,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { Session } from '@/lib/ccAgent.types';
+import { extractIpcError } from '@/utils/ipcError';
 
 // Only the provider-setup detour retains a draft; ordinary close/unmount discards it.
 let providerSetupDraft: {
@@ -106,7 +107,8 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
       onClose?.();
     } catch (cause) {
       if (alive.current) setError(t(cause instanceof BotModelSelectionRequiredError
-        ? 'bots.guided.modelRequired' : 'bots.createWizard.createFailed'));
+        ? 'bots.guided.modelRequired' : extractIpcError(cause)?.code === 'MODEL_SELECTION_UNAVAILABLE'
+          ? 'ipcError.MODEL_SELECTION_UNAVAILABLE' : 'bots.createWizard.createFailed'));
     } finally {
       submitting.current = false;
       if (alive.current) setCreating(false);

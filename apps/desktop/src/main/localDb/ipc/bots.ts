@@ -1837,7 +1837,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
       model: source.model, providerId: source.providerId, effort: source.effort ?? '', fastMode: source.fastMode ?? false };
     const requested = body.capabilities as Record<string, unknown> | undefined;
     const primary = normalizeBotModelChain(requested?.modelChainOverride ?? requested?.modelChain, requested ?? route)[0];
-    if (!primary || !await validateTaskModel(primary)) throwIpcError('PRECONDITION_FAILED', '请选择可用的伙伴模型');
+    if (!primary || !await validateTaskModel(primary)) throwIpcError('MODEL_SELECTION_UNAVAILABLE', '请选择已启用且已连接的伙伴模型');
     owner.assertCurrent();
     const profile = await createBotProfileInternal({ ...body, sourceSessionId, requestId, name: body.name || source.title,
       prepareInvitation: false, welcomeMessage: undefined,
