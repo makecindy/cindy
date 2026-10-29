@@ -224,3 +224,67 @@ export async function readModelFileBytes(
     { hardCap: READ_MODEL_BYTES_CAP },
   );
 }
+
+/**
+ * Read one external resource referenced by a local glTF file.
+ *
+ * The renderer supplies only a relative URI from the model JSON.  Resolve it
+ * below the model's real directory, then reuse the bounded descriptor reader
+ * with the same path policy.  This keeps `.bin` files and textures out of the
+ * broad arbitrary-file surface while still allowing normal multi-file glTF.
+ */
+export async function readModelFileResourceBytes(
+  params: unknown,
+  deps: ReadFileBytesDeps,
+): Promise<{ bytes: Uint8Array; size: number }> {
+  if (typeof params !== 'object' || params === null) {
+    throwIpcError('INVALID_PARAMS', 'params must be an object');
+  }
+  const { modelPath, relativePath } = params as { modelPath?: unknown; relativePath?: unknown };
+  if (
+    typeof modelPath !== 'string' ||
+    !nodePath.isAbsolute(modelPath) ||
+    !isModel3DPath(modelPath) ||
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(modelPath) ||
+    typeof relativePath !== 'string' ||
+    !relativePath ||
+    relativePath.includes('\0') ||
+    /^[a-z][a-z0-9+.-]*:/i.test(relativePath) ||
+    nodePath.isAbsolute(relativePath)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'invalid model resource path');
+  }
+  if (!deps.isPathAllowed(modelPath)) {
+    throwIpcError('PERMISSION_DENIED', 'path is not allowed');
+  }
+
+  const realModelPath = await deps
+    .realpath(modelPath)
+    .catch(() => throwIpcError('NOT_FOUND', 'file not found'));
+  if (!isModel3DPath(realModelPath) || !deps.isPathAllowed(realModelPath)) {
+    throwIpcError('PERMISSION_DENIED', 'path is not allowed');
+  }
+
+  const root = nodePath.dirname(realModelPath);
+  const resourcePath = nodePath.resolve(root, relativePath);
+  const relativeToRoot = nodePath.relative(root, resourcePath);
+  if (
+    !relativeToRoot ||
+    relativeToRoot === '..' ||
+    relativeToRoot.startsWith(`..${nodePath.sep}`) ||
+    nodePath.isAbsolute(relativeToRoot)
+  ) {
+    throwIpcError('PERMISSION_DENIED', 'model resource is outside the model directory');
+  }
+
+  const isWithinRoot = (candidate: string) =>
+    candidate === root || candidate.startsWith(`${root}${nodePath.sep}`);
+  return readFileBytesForPreview(
+    { filePath: resourcePath },
+    {
+      ...deps,
+      isPathAllowed: (candidate) => isWithinRoot(candidate) && deps.isPathAllowed(candidate),
+    },
+    { hardCap: READ_MODEL_BYTES_CAP },
+  );
+}

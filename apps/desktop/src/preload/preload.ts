@@ -4577,6 +4577,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }): Promise<{ bytes: Uint8Array; size: number }> =>
     ipcRenderer.invoke('read-model-file-bytes', params),
 
+  /** Read one relative `.gltf` companion resource under the model directory. */
+  readModelFileResourceBytes: (params: {
+    modelPath: string;
+    relativePath: string;
+  }): Promise<{ bytes: Uint8Array; size: number }> =>
+    ipcRenderer.invoke('read-model-file-resource-bytes', params),
+
   // File header peek IPC (F-FI-8 fallback inference)
   peekFileHeader: (params: {
     filePath: string;

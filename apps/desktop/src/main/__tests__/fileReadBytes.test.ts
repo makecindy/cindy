@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   readFileBytesForPreview,
   readModelFileBytes,
+  readModelFileResourceBytes,
   READ_FILE_BYTES_CAP,
   READ_MODEL_BYTES_CAP,
   type FileHandleLike,
@@ -343,5 +344,41 @@ describe('readModelFileBytes', () => {
         ),
       ),
     ).toBe('PRECONDITION_FAILED');
+  });
+});
+
+describe('readModelFileResourceBytes', () => {
+  const modelPath = '/home/user/models/ship.gltf';
+
+  it('reads a relative companion resource below the model directory', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4, data: Buffer.from([1, 2, 3, 4]) }));
+    const result = await readModelFileResourceBytes(
+      { modelPath, relativePath: 'textures/albedo.png' },
+      deps({ open }),
+    );
+    expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4]);
+    expect(open).toHaveBeenCalledWith('/home/user/models/textures/albedo.png');
+  });
+
+  it('rejects traversal and absolute or URL-shaped resource paths', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4 }));
+    for (const relativePath of ['../secret.bin', '/tmp/secret.bin', 'https://example.com/a.bin', '']) {
+      expect(
+        await codeOf(readModelFileResourceBytes({ modelPath, relativePath }, deps({ open }))),
+      ).toBe(relativePath === '../secret.bin' ? 'PERMISSION_DENIED' : 'INVALID_PARAMS');
+    }
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('rejects a companion symlink that resolves outside the model directory', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4 }));
+    const result = await codeOf(
+      readModelFileResourceBytes(
+        { modelPath, relativePath: 'textures/albedo.png' },
+        deps({ realpath: async (p) => (p === modelPath ? p : '/outside/albedo.png'), open }),
+      ),
+    );
+    expect(result).toBe('PERMISSION_DENIED');
+    expect(open).not.toHaveBeenCalled();
   });
 });

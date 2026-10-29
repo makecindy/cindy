@@ -3424,6 +3424,11 @@ interface ElectronAPI {
     filePath: string;
   }) => Promise<{ bytes: Uint8Array; size: number }>;
 
+  readModelFileResourceBytes: (params: {
+    modelPath: string;
+    relativePath: string;
+  }) => Promise<{ bytes: Uint8Array; size: number }>;
+
   // ── File header peek IPC (F-FI-8 fallback inference) ──
   /**
    * Read at most `bytes` (default 8192, hard-cap 64KB) from the head of a

@@ -593,6 +593,7 @@ import { isIpcError } from '../shared/ipc-errors';
 import {
   readFileBytesForPreview,
   readModelFileBytes,
+  readModelFileResourceBytes,
   type ReadFileBytesDeps,
 } from './fileReadBytes.js';
 import { copyPngToClipboard } from './pngClipboard.js';
@@ -7405,6 +7406,17 @@ const registerIpcHandlers = () => {
     ): Promise<{ bytes: Uint8Array; size: number }> => {
       assertTrustedAppRendererEvent(event);
       return readModelFileBytes(params, buildLocalFileReadDeps());
+    },
+  );
+
+  ipcMain.handle(
+    'read-model-file-resource-bytes',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { modelPath: string; relativePath: string },
+    ): Promise<{ bytes: Uint8Array; size: number }> => {
+      assertTrustedAppRendererEvent(event);
+      return readModelFileResourceBytes(params, buildLocalFileReadDeps());
     },
   );
 

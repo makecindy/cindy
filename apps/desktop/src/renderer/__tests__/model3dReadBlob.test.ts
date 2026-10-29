@@ -13,11 +13,16 @@ import {
 
 const HASH = 'a'.repeat(64);
 const readModelFileBytes = vi.fn();
+const readModelFileResourceBytes = vi.fn();
+const statPath = vi.fn();
 
 beforeEach(() => {
   readModelFileBytes.mockReset();
-  vi.stubGlobal('electronAPI', { readModelFileBytes });
-  (window as unknown as { electronAPI: unknown }).electronAPI = { readModelFileBytes };
+  readModelFileResourceBytes.mockReset();
+  statPath.mockReset().mockResolvedValue({ kind: 'file', sizeBytes: 3 });
+  const api = { readModelFileBytes, readModelFileResourceBytes, fsBrowse: { statPath } };
+  vi.stubGlobal('electronAPI', api);
+  (window as unknown as { electronAPI: unknown }).electronAPI = api;
 });
 
 afterEach(() => {
@@ -94,11 +99,63 @@ describe('readModel3DBlob — local source', () => {
     expect(blob.size).toBe(3);
   });
 
+  it('inlines external glTF buffers and textures through the confined resource IPC', async () => {
+    const gltf = new TextEncoder().encode(
+      JSON.stringify({
+        asset: { version: '2.0' },
+        buffers: [{ uri: 'meshes/ship.bin', byteLength: 3 }],
+        images: [{ uri: 'textures/albedo.png' }],
+      }),
+    );
+    readModelFileBytes.mockResolvedValue({ bytes: gltf, size: gltf.byteLength });
+    readModelFileResourceBytes
+      .mockResolvedValueOnce({ bytes: new Uint8Array([1, 2, 3]), size: 3 })
+      .mockResolvedValueOnce({ bytes: new Uint8Array([4, 5]), size: 2 });
+
+    const { blob, fileName } = await readModel3DBlob({ kind: 'local', absPath: '/work/ship.gltf' });
+    const inlined = JSON.parse(await blob.text()) as {
+      buffers: Array<{ uri: string }>;
+      images: Array<{ uri: string }>;
+    };
+    expect(fileName).toBe('ship.gltf');
+    expect(inlined.buffers[0].uri).toBe('data:application/octet-stream;base64,AQID');
+    expect(inlined.images[0].uri).toBe('data:image/png;base64,BAU=');
+    expect(readModelFileResourceBytes).toHaveBeenNthCalledWith(1, {
+      modelPath: '/work/ship.gltf',
+      relativePath: 'meshes/ship.bin',
+    });
+    expect(readModelFileResourceBytes).toHaveBeenNthCalledWith(2, {
+      modelPath: '/work/ship.gltf',
+      relativePath: 'textures/albedo.png',
+    });
+  });
+
   it('rejects results above the requested limit', async () => {
     readModelFileBytes.mockResolvedValue({ bytes: new Uint8Array(1), size: MODEL3D_THUMBNAIL_MAX_BYTES + 1 });
     await expect(readModel3DBlob(source, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES })).rejects.toBeInstanceOf(
       Model3DTooLargeError,
     );
+  });
+
+  it('reports a local file over the limit as too large before reading it (not a generic failure)', async () => {
+    statPath.mockResolvedValue({ kind: 'file', sizeBytes: MODEL3D_VIEW_MAX_BYTES + 1 });
+    const error = await readModel3DBlob(source).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Model3DTooLargeError);
+    expect((error as Model3DTooLargeError).size).toBe(MODEL3D_VIEW_MAX_BYTES + 1);
+    expect(readModelFileBytes).not.toHaveBeenCalled();
+  });
+
+  it('still converts the main-process size rejection when stat is unavailable or stale', async () => {
+    statPath.mockRejectedValue(new Error('stat failed'));
+    readModelFileBytes.mockRejectedValue(
+      new Error("Error invoking remote method 'read-model-file-bytes': Error: [PRECONDITION_FAILED] file exceeds the preview size limit"),
+    );
+    await expect(readModel3DBlob(source)).rejects.toBeInstanceOf(Model3DTooLargeError);
+  });
+
+  it('keeps other PRECONDITION_FAILED rejections as ordinary errors', async () => {
+    readModelFileBytes.mockRejectedValue(new Error('[PRECONDITION_FAILED] file changed during read'));
+    await expect(readModel3DBlob(source)).rejects.not.toBeInstanceOf(Model3DTooLargeError);
   });
 
   it('keeps the viewer limit aligned with the main-process 128MB cap', () => {
