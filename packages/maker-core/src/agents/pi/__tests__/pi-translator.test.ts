@@ -2466,6 +2466,43 @@ it('retains tool image bytes and a video resource alongside text', () => {
 
 // #6531 unit: native Pi bypasses the Chat bridge; streamed text/thinking must still reconcile.
 describe('native Pi serialized calls', () => {
+  // #6545 review unit: existing retry tests end the failed message or have no
+  // pending text. Without message_end, a silent retry must preserve the failed
+  // text/thinking now, then independently reject unexecuted recovered markup.
+  // Minimal input: held markup -> silent auto_retry_start -> new assistant.
+  it.each([
+    { channel: 'text', errorMessage: 'HTTP status 529: overloaded' },
+    { channel: 'thinking', errorMessage: 'provider 500 from upstream' },
+  ])('preserves failed $channel on silent retry and reconciles recovery', ({ channel, errorMessage }) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+    const failedText = 'before.' + markup + 'after.';
+    try {
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: channel + '_delta', contentIndex: 0, delta: failedText,
+      } }), queue, ctx);
+      translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage }), queue, ctx);
+      expect(events.filter(event => event.type === channel).map(event => (event.data as { text?: string }).text ?? '').join(''))
+        .toBe(failedText);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop',
+        content: [{ type: 'text', text: markup }],
+      } }), queue, ctx);
+      translatePiEvent(ev({ type: 'auto_retry_end', success: true }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(events.filter(event => event.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'unexecuted-tool-markup' }) }),
+      ]);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      expect(events.filter(event => event.type === 'tool_use')).toHaveLength(0);
+    } finally { disposePiTranslateContext(ctx); }
+  });
+
   // #6545 follow-up unit: input-wrapper evidence must be available when the
   // message_end final text precedes Pi's separate tool_execution_start event.
   it('reconciles freeform input before Pi starts executing the tool', () => {

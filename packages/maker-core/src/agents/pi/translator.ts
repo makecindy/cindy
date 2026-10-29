@@ -689,6 +689,12 @@ export function translatePiEvent(
   ctx: PiTranslateContext,
 ): void {
   const projection = toolMarkupProjection(ctx);
+  if (event.type === 'auto_retry_start') {
+    // Failed requests may omit message_end and retry without a visible error.
+    // Drain their original output before resetting the recovered sample.
+    projection.finish(queue, true);
+    projection.begin(queue);
+  }
   const message = event.message as PiAssistantMessage | undefined;
   if (event.type === 'agent_start' || (event.type === 'message_start' && (!message || message.role === 'assistant'))) projection.begin(queue);
   const preserveText = message?.stopReason === 'error' || message?.stopReason === 'aborted'
