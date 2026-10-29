@@ -32,8 +32,9 @@ function recoveryHarness() {
     'refresh',
     `
     let refreshPromise = null;
+    const coldStartAuthInFlight = null;
     let authStateEpoch = 1;
-    const refreshBackoff = new AuthRefreshBackoff(() => 1_000_000);
+    const refreshBackoff = new AuthRefreshBackoff(() => 1_000_000, () => 0);
     const getActiveAppSession = () => ({ mode: 'cloud' });
     const log = { debug() {} };
     ${compiled}
@@ -59,41 +60,28 @@ function recoveryHarness() {
 }
 
 describe('network recovery during an in-flight refresh', () => {
-  it('retries a late network failure once and retains the next failure cooldown', async () => {
+  it('shares a late network failure without launching a synchronized recovery request', async () => {
     const h = recoveryHarness();
-    h.retry.mockImplementation(async () => {
-      h.backoff.defer(1, undefined, true);
-      return false;
-    });
     const ordinary = h.call();
-    const recovery = h.call({ networkRecovered: true });
-    expect(h.retry).not.toHaveBeenCalled();
-    h.backoff.defer(1, undefined, true);
+    const first = h.call({ networkRecovered: true });
+    const second = h.call({ networkRecovered: true });
+    h.backoff.defer(1);
     h.finish();
-    await expect(ordinary).resolves.toBe(false);
-    await expect(recovery).resolves.toBe(false);
-    expect(h.retry).toHaveBeenCalledExactlyOnceWith();
+    await expect(Promise.all([ordinary, first, second])).resolves.toEqual([false, false, false]);
+    expect(h.retry).not.toHaveBeenCalled();
     expect(h.backoff.remaining(1)).toBe(60_000);
   });
 
-  it('coalesces concurrent recovery callers onto the new in-flight refresh', async () => {
+  it('does not bypass or reset backoff when recovery hints arrive after failure', async () => {
     const h = recoveryHarness();
-    let completeRetry!: (value: boolean) => void;
-    const next = new Promise<boolean>((resolve) => {
-      completeRetry = resolve;
-    });
-    h.retry.mockImplementation(() => {
-      h.setPending(next);
-      return next;
-    });
-    const first = h.call({ networkRecovered: true });
-    const second = h.call({ networkRecovered: true });
-    h.backoff.defer(1, undefined, true);
     h.finish();
-    await Promise.resolve();
-    expect(h.retry).toHaveBeenCalledExactlyOnceWith();
-    completeRetry(true);
-    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    h.backoff.defer(1);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(h.call({ networkRecovered: true })).resolves.toBe(false);
+    }
+    expect(h.retry).not.toHaveBeenCalled();
+    expect(h.backoff.remaining(1)).toBe(60_000);
+    expect(h.backoff.defer(1)).toBe(120_000);
   });
 
   it.each(['server failure', 'Retry-After', 'owner changed', 'succeeded'])(
@@ -103,11 +91,7 @@ describe('network recovery during an in-flight refresh', () => {
       const recovery = h.call({ networkRecovered: true });
       const epoch = outcome === 'owner changed' ? 2 : 1;
       h.setEpoch(epoch);
-      const delay = h.backoff.defer(
-        epoch,
-        outcome === 'Retry-After' ? 1_120_000 : undefined,
-        outcome === 'owner changed',
-      );
+      const delay = h.backoff.defer(epoch, outcome === 'Retry-After' ? 1_120_000 : undefined);
       h.finish(outcome === 'succeeded');
       await expect(recovery).resolves.toBe(outcome === 'succeeded');
       expect(h.retry).not.toHaveBeenCalled();
@@ -117,31 +101,53 @@ describe('network recovery during an in-flight refresh', () => {
 });
 
 describe('runtime auth refresh backoff', () => {
-  it('releases only a transport failure after a real response from the same login generation', () => {
-    const backoff = new AuthRefreshBackoff(() => 1_000_000);
-    backoff.defer(1, undefined, true);
-    backoff.networkRecovered(2);
-    expect(backoff.remaining(1)).toBe(60_000);
-    backoff.networkRecovered(1);
-    expect(backoff.remaining(1)).toBe(0);
-    backoff.defer(1);
-    backoff.networkRecovered(1);
-    expect(backoff.remaining(1)).toBe(60_000);
+  // 2026-10-29: a fleet-wide outage must not synchronize all clients on a
+  // fixed retry interval or on the same Retry-After deadline (unit, fake time).
+  it('spreads clients across the retry window, including after a common server deadline', () => {
+    const clients = [0, 0.25, 0.5, 0.75, 0.999].map(
+      (random) =>
+        new AuthRefreshBackoff(
+          () => 1_000_000,
+          () => random,
+        ),
+    );
+    const delays = clients.map((client) => client.defer(1, 1_600_000));
+    expect(new Set(delays).size).toBe(clients.length);
+    expect(Math.min(...delays)).toBeGreaterThanOrEqual(600_000);
+    expect(Math.max(...delays) - Math.min(...delays)).toBeGreaterThan(50_000);
   });
 
-  it.each([undefined, 1_030_000, 1_120_000])(
-    'never bypasses server failure or rate limiting (%s)',
-    (retryAt) => {
-      const backoff = new AuthRefreshBackoff(() => 1_000_000);
-      const delay = backoff.defer(1, retryAt);
-      backoff.networkRecovered(1);
-      expect(backoff.remaining(1)).toBe(delay);
-    },
-  );
+  it('backs off repeated failures, stays capped, and resets only for a new login or success', () => {
+    const backoff = new AuthRefreshBackoff(
+      () => 1_000_000,
+      () => 0.5,
+    );
+    const delays = Array.from({ length: 8 }, () => backoff.defer(1));
+    expect(delays.slice(0, 4)).toEqual([90_000, 180_000, 360_000, 450_000]);
+    expect(delays.slice(4)).toEqual([450_000, 450_000, 450_000, 450_000]);
+    expect(backoff.defer(2)).toBe(90_000);
+    backoff.clear();
+    expect(backoff.defer(2)).toBe(90_000);
+  });
+
+  it('continues to randomize retries after reaching the cap', () => {
+    let fraction = 0;
+    const backoff = new AuthRefreshBackoff(
+      () => 1_000_000,
+      () => fraction,
+    );
+    for (let attempt = 0; attempt < 4; attempt++) backoff.defer(1);
+    expect(backoff.defer(1)).toBe(300_000);
+    fraction = 0.999;
+    expect(backoff.defer(1)).toBe(599_700);
+  });
 
   it('keeps an absolute deadline across two-second explicit calls and resumes at expiry', () => {
     let now = 1_000_000;
-    const backoff = new AuthRefreshBackoff(() => now);
+    const backoff = new AuthRefreshBackoff(
+      () => now,
+      () => 0,
+    );
     expect(backoff.remaining(1)).toBe(0);
     expect(backoff.defer(1)).toBe(60_000);
     for (let elapsed = 2_000; elapsed < 60_000; elapsed += 2_000) {
@@ -154,7 +160,10 @@ describe('runtime auth refresh backoff', () => {
 
   it('honors a longer server wait without applying the failed login generation to another account', () => {
     let now = 1_000_000;
-    const backoff = new AuthRefreshBackoff(() => now);
+    const backoff = new AuthRefreshBackoff(
+      () => now,
+      () => 0,
+    );
     expect(backoff.defer(1, now + 120_000)).toBe(120_000);
     now += 60_000;
     expect(backoff.remaining(1)).toBe(60_000);
@@ -167,13 +176,19 @@ describe('runtime auth refresh backoff', () => {
   it.each([undefined, 0, 999_999, Number.NaN, Number.POSITIVE_INFINITY])(
     'retains the minimum wait for invalid or shorter deadline %s',
     (retryAt) => {
-      const backoff = new AuthRefreshBackoff(() => 1_000_000);
+      const backoff = new AuthRefreshBackoff(
+        () => 1_000_000,
+        () => 0,
+      );
       expect(backoff.defer(1, retryAt)).toBe(60_000);
     },
   );
 
   it('clears the failed wait when a successful login or refresh schedules normal renewal', () => {
-    const backoff = new AuthRefreshBackoff(() => 1_000_000);
+    const backoff = new AuthRefreshBackoff(
+      () => 1_000_000,
+      () => 0,
+    );
     backoff.defer(1);
     backoff.clear();
     expect(backoff.remaining(1)).toBe(0);

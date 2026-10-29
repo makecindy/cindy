@@ -37,7 +37,8 @@ import {
   type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '@cindy/device-link';
-import { serverApiFetch, ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient';
+import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -67,7 +68,6 @@ import {
   revokeController,
   restoreController,
   broadcast,
-  deviceLinkApiBase,
   applyControllerDisplayNameListSnapshot,
   applyControllerPresenceListSnapshot,
   beginControllerDisplayNameDirectoryRefresh,
@@ -208,7 +208,8 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
-    apiFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: deviceLinkApiBase }),
+    // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
+    apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
     openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
     invoke: (...args) => {

@@ -55,6 +55,13 @@ import {
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
+import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
+import { currentSelfHostedRelayFrameAuth } from './selfHostedRelayFrameAuth';
+import {
+  getActiveSelfHostedRelay,
+  getSelfHostedRelayRouteGeneration,
+  waitForSelfHostedRelayRoute,
+} from './selfHostedRelayRouting';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useSharedTaskApi } from './useSharedTaskApi';
 import {
@@ -401,6 +408,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }
 
   const auth = useAuth();
+  // 官方中转 ↔ 自建中转切换时,与换账号走同一条重建连接的路径(见下方 client effect 依赖)。
+  const relayRouteGeneration = useSelfHostedRelayRouteGeneration();
   const [directBridge] = useState(() => createDirectRuntimeBridge());
   const sharedTaskApi = useSharedTaskApi();
   const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
@@ -1000,10 +1009,30 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // 新账号/新 client 必须从空的 peer 生命周期表开始；旧连接迟到的恢复结果
     // 会被 scheduler generation 丢弃，不能写回新账号。
     peerRecoverySchedulerRef.current?.clear();
+    // 旧 client 的连接问题(如被自建中转移除的 4410)属于旧连接;cleanup 先退订再 stop,
+    // 新 client 不会替它清掉,这里显式清空。
+    setConnectionIssue(null);
+    // 这个 client 只服务创建时的那一代路由;路由一变 effect 会重建 client。
+    const clientRelayRoute = getSelfHostedRelayRouteGeneration();
+    const getAccessToken = auth.getAccessToken;
     const client = new DeviceLinkClient({
       directRuntime: directBridge.runtime,
       getWsUrl: () => deviceLinkWsUrl(),
-      getToken: auth.getAccessToken,
+      // 自建中转用中转凭证 + CindyRelay,账号 token 绝不发往中转(docs/self-hosted-relay-plan.md §5.2)。
+      // 先等本账号的中转设置读完,避免冷启动先连上官方再切走;取 token 期间路由变了就放弃这一轮,
+      // 不让官方 token 与 CindyRelay 方案、中转地址拼到同一次握手里。
+      getToken: async () => {
+        await waitForSelfHostedRelayRoute();
+        if (getSelfHostedRelayRouteGeneration() !== clientRelayRoute) return null;
+        const relay = getActiveSelfHostedRelay();
+        if (relay) return relay.credential;
+        const token = await getAccessToken();
+        return getSelfHostedRelayRouteGeneration() === clientRelayRoute ? token : null;
+      },
+      authorizationScheme: () => (getActiveSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
+      // 自建中转的设备签名(docs/self-hosted-relay-plan.md §16);官方中转返回 null。
+      // 收到的消息在分发前核对主人签发的设备证书与帧签名，防止中转替换权限请求的展示内容。
+      frameAuth: currentSelfHostedRelayFrameAuth,
       getHello: () => ({
         capabilities: [SHARED_TASK_CAPABILITY],
         deviceName: mobileDeviceName(),
@@ -1548,6 +1577,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     auth.accountGeneration,
     auth.getAccessToken,
     auth.isAuthenticated,
+    relayRouteGeneration,
     clearPerAccountDeviceLinkState,
     clearOnePresenceWipeTimer,
     clearAllPresenceWipeTimers,

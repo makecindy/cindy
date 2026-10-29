@@ -41,6 +41,8 @@ import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
 import { REMOTE_DESKTOP_ICE_SERVERS } from '../remoteDesktopIce.js';
+import { nodeRelayAuthCrypto } from '../nodeRelayCrypto.js';
+import { createRelaySigningKey, issueRelayDeviceCert, RELAY_AUTH_CHANNEL, RelayFrameAuthenticator } from '../selfHostedRelayAuth.js';
 import {
   DIRECT_PATH_HIGH_WATER_BYTES,
   type DeviceLinkDirectChannel,
@@ -105,6 +107,7 @@ function makeHarness(opts?: {
   peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
+  frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -126,6 +129,7 @@ function makeHarness(opts?: {
     peerFailurePolicy: opts?.peerFailurePolicy,
     peerResetReadRetry: opts?.peerResetReadRetry,
     invokeMetrics: opts?.invokeMetrics,
+    frameAuth: opts?.frameAuth,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -383,6 +387,324 @@ describe('outbound invoke admission', () => {
     } finally {
       h.client.stop(); await Promise.all(calls); vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * 自建中转的设备签名(docs/self-hosted-relay-plan.md §16):被控电脑收到的每条对端消息都必须带发送设备的
+ * 有效签名,中转(哪怕被人控制)伪造、篡改或重放的消息在分发前丢弃;本机发出的对端消息都带签名。
+ * 最小失败输入:未签名 / 他人密钥签名 / 签名后改内容 / 原样重放的同一条 push。
+ */
+describe('self-hosted relay device signatures', () => {
+  function signingPeers(ids: string[]) {
+    const owner = createRelaySigningKey(nodeRelayAuthCrypto);
+    const keys = new Map(ids.map(id => [id, createRelaySigningKey(nodeRelayAuthCrypto)]));
+    const certs = [...keys].map(([deviceId, key]) => issueRelayDeviceCert(nodeRelayAuthCrypto, owner.seed, {
+      relayId: 'test-relay', deviceId, publicKey: key.publicKey, role: 'member', issuedAt: 1,
+    }));
+    return Object.assign((deviceId: string) => {
+      const auth = new RelayFrameAuthenticator({ crypto: nodeRelayAuthCrypto, relayId: 'test-relay', deviceId,
+        seed: keys.get(deviceId)!.seed, ownerPublicKey: owner.publicKey });
+      auth.setCertificates(certs);
+      return auth;
+    }, { certs });
+  }
+
+  function frameAuth(auth: RelayFrameAuthenticator) {
+    return { sign: (env: Readonly<Envelope>) => auth.sign(env),
+      verify: (env: Readonly<Record<string, unknown>>) => auth.verify(env) === 'ok',
+      peerChallenge: { session: auth, state: (peer: string) => auth.peerChallenge(peer) } };
+  }
+
+  // 认证只交换签名挑战，不能隐式调用 openLink；未建链查询与手机关闭远控时的插件同步必须继续可用。
+  // 生产 DeviceLinkClient + 双端真实密钥，经 MemoryRelay 验证业务分发结果，tier: unit。
+  it('authenticates unlinked queries and plugin pushes without opening a control link', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const signer = signingPeers(['host', 'phone']);
+    const signerHost = signer('host'), signerPhone = signer('phone');
+    const host = makeRelayClient(relay, 'host', undefined, { frameAuth: () => frameAuth(signerHost) });
+    const phone = makeRelayClient(relay, 'phone', undefined, { frameAuth: () => frameAuth(signerPhone), remoteControlEnabled: false });
+    const received: Envelope[] = [];
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(0); });
+    host.onFrame(env => {
+      received.push(env);
+      if (env.kind === 'invoke') host.sendInvokeResult(env.src!, env.id!, { ok: true, result: ['visible'] });
+    });
+    phone.onFrame(env => received.push(env));
+    try {
+      host.start(); phone.start(); await pump();
+      host.sendPush('phone', PLUGIN_SYNC_CHANNEL, { version: 1, type: 'snapshot' });
+      await pump();
+      expect(received.filter(env => env.kind === 'push').map(env => env.payload))
+        .toEqual([{ channel: PLUGIN_SYNC_CHANNEL, payload: { version: 1, type: 'snapshot' } }]);
+      const query = phone.invoke('host', { channel: 'local-db:sessions:list', args: [] });
+      await pump();
+      await expect(query).resolves.toEqual({ ok: true, result: ['visible'] });
+      const delivered = [...relay.deliveredTo.values()].flat();
+      expect(delivered.some(env => env.kind === 'link-open' || env.kind === 'link-accept')).toBe(false);
+      expect(delivered.some(env => (env.payload as { channel?: string })?.channel === RELAY_AUTH_CHANNEL)).toBe(true);
+      expect(received.some(env => (env.payload as { channel?: string })?.channel === RELAY_AUTH_CHANNEL)).toBe(false);
+    } finally { host.stop(); phone.stop(); vi.useRealTimers(); }
+  });
+
+  // 首发在挑战完成前排队；过期或身份切换后，迟到的认证回复不能让旧写操作执行。
+  it.each(['expired', 'identity-changed', 'closed'] as const)('never sends a queued write after it is %s while another peer remains usable', async mode => {
+    vi.useFakeTimers();
+    const signer = signingPeers(['dev-self', 'blocked', 'healthy']);
+    let self = signer('dev-self');
+    const blocked = signer('blocked'), healthy = signer('healthy');
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 10_000 },
+      frameAuth: () => frameAuth(self) });
+    const answerChallenge = (peer: RelayFrameAuthenticator) => {
+      const request = h.current().sent.filter(env => env.dst === peer.deviceId &&
+        (env.payload as { channel?: string })?.channel === RELAY_AUTH_CHANNEL).at(-1)!;
+      expect(peer.verify({ ...request, src: 'dev-self' })).toBe('ok');
+      const response: Envelope = { v: 1, kind: 'push', id: request.id, src: peer.deviceId, dst: 'dev-self',
+        payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } };
+      h.current().push({ ...response, auth: peer.sign(response) } as Envelope);
+    };
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const write = h.client.invoke('blocked', { channel: 'maker:create-session', args: [] }, 20).catch(error => error);
+      if (mode === 'expired') await vi.advanceTimersByTimeAsync(21);
+      else if (mode === 'identity-changed') self = signer('dev-self');
+      else h.client.closeLink('blocked', 'user');
+      answerChallenge(blocked);
+      expect(h.current().sent.some(env => env.kind === 'invoke' && env.dst === 'blocked')).toBe(false);
+      if (mode === 'identity-changed') await vi.advanceTimersByTimeAsync(1_000);
+      expect(await write).toMatchObject({ code: mode === 'expired' ? 'BACKPRESSURE'
+        : mode === 'closed' ? 'LINK_NOT_OPEN' : 'NOT_CONNECTED', inFlight: false });
+      const read = h.client.invoke('healthy', { channel: 'local-db:sessions:list', args: [] });
+      answerChallenge(healthy);
+      const request = h.current().sent.find(env => env.kind === 'invoke' && env.dst === 'healthy')!;
+      const result: Envelope = { v: 1, kind: 'invoke-result', id: request.id, src: 'healthy', dst: 'dev-self',
+        payload: { ok: true, result: [] } };
+      h.current().push({ ...result, auth: healthy.sign(result) } as Envelope);
+      await expect(read).resolves.toEqual({ ok: true, result: [] });
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // #7722:冷启动证书迟到不丢首次link-open；认证完成后再发送它。
+  // 已协商可靠流后认证器更新，完整大请求必须仍由可靠层分片；认证等待不能计作已写 socket。
+  it('keeps a fragmented request in the reliable stream until fresh authentication completes', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const signer = signingPeers(['host', 'phone']);
+    const hostAuth = signer('host');
+    hostAuth.setCertificates([]);
+    let phoneAuth = signer('phone');
+    const host = makeRelayClient(relay, 'host', undefined, { frameAuth: () => frameAuth(hostAuth) });
+    const phone = makeRelayClient(relay, 'phone', undefined, { frameAuth: () => frameAuth(phoneAuth) });
+    const executed: unknown[] = [];
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(0); });
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executed.push(env.payload);
+        host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'complete' });
+      }
+    });
+    try {
+      host.start(); phone.start(); await pump();
+      const opening = phone.openLink('host', { controllerName: 'Phone', protocolVersion: 1, appVersion: '1' });
+      await pump();
+      expect((relay.deliveredTo.get('host') ?? []).some(env => env.kind === 'link-open')).toBe(false);
+      hostAuth.setCertificates(signer.certs);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await pump(); await opening;
+      phoneAuth = signer('phone');
+      const payload = { channel: 'maker:send', args: ['x'.repeat(2 * MAX_TRANSPORT_CHUNK_BYTES)] };
+      const request = phone.invoke('host', payload);
+      expect(executed).toEqual([]);
+      await pump();
+      await expect(request).resolves.toEqual({ ok: true, result: 'complete' });
+      expect(executed).toEqual([payload]);
+      const fragments = (relay.deliveredTo.get('host') ?? []).filter(env => env.kind === 'invoke');
+      expect(fragments.length).toBeGreaterThan(1);
+    } finally { host.stop(); phone.stop(); vi.useRealTimers(); }
+  });
+
+  // #7722 discussion_r4403909690：手机保持热进程、电脑重启后，旧挑战拒绝不能丢掉仍有效的首次建链。
+  // 重建真实接收Client与认证器，发送端socket保留；覆盖冷证书，超时/取消/换身份不能补发。tier: unit。
+  it.each(['connected', 'cold-certificates', 'expired', 'closed', 'identity-changed'] as const)('handles a receiver restart while the original link request is %s', async mode => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const signer = signingPeers(['host', 'phone']);
+    let hostAuth = signer('host');
+    const makeHost = () => makeRelayClient(relay, 'host', { requestTimeoutMs: 2_000 }, { frameAuth: () => frameAuth(hostAuth) });
+    let host = makeHost();
+    let phoneAuth = signer('phone');
+    const phone = makeRelayClient(relay, 'phone', { requestTimeoutMs: 2_000 }, { frameAuth: () => frameAuth(phoneAuth) });
+    const received: Envelope[] = [];
+    const accept = (client: DeviceLinkClient) => client.onFrame(env => {
+      if (env.kind !== 'link-open') return;
+      received.push(env);
+      client.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const opening = () => phone.openLink('host', { controllerName: 'Phone', protocolVersion: 1, appVersion: '1' });
+    accept(host);
+    try {
+      host.start(); phone.start(); await pump();
+      const initial = opening(); await pump(); await initial;
+      expect(phoneAuth.peerChallenge('host')).toBe('ready');
+      host.stop(); hostAuth = signer('host');
+      if (mode === 'cold-certificates') hostAuth.setCertificates([]);
+      host = makeHost(); accept(host); host.start(); await pump();
+      received.length = 0;
+      const settled = vi.fn();
+      const restored = opening();
+      void restored.then(value => settled(value), error => settled(error));
+      if (mode === 'identity-changed') phoneAuth = signer('phone');
+      if (mode === 'expired') await vi.advanceTimersByTimeAsync(2_001);
+      if (mode === 'closed') phone.closeLink('host', 'user');
+      await pump();
+      if (mode === 'cold-certificates') {
+        expect(settled).not.toHaveBeenCalled();
+        expect(received).toHaveLength(0);
+        hostAuth.setCertificates(signer.certs);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await pump();
+      }
+      expect(settled).toHaveBeenCalledOnce();
+      if (mode === 'connected' || mode === 'cold-certificates') {
+        await expect(restored).resolves.toMatchObject({ appVersion: '1' });
+        expect(received).toHaveLength(1);
+        const attempts = (relay.deliveredTo.get('host') ?? []).filter(env => env.kind === 'link-open');
+        expect(attempts.at(-1)!.id).toBe(attempts.at(-2)!.id);
+      } else {
+        await expect(restored).rejects.toMatchObject({ code: mode === 'expired' ? 'INVOKE_TIMEOUT'
+          : mode === 'closed' ? 'LINK_NOT_OPEN' : 'NOT_CONNECTED' });
+        expect(received).toHaveLength(0);
+      }
+      expect(sockets.mock.calls.filter(([id]) => id === 'phone')).toHaveLength(1);
+    } finally { host.stop(); phone.stop(); vi.useRealTimers(); }
+  });
+
+  // 冷证书恢复会探测未知来源；恶意中转不能借此执行未验签业务或无限保留任意来源。tier: unit。
+  it('bounds unauthenticated probes without retaining or delivering the rejected business frame', async () => {
+    vi.useFakeTimers();
+    const signer = signingPeers(['dev-self', 'peer']);
+    const signerSelf = signer('dev-self'), peer = signer('peer');
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 1_000 }, frameAuth: () => frameAuth(signerSelf) });
+    signerSelf.setCertificates([]);
+    const received = vi.fn();
+    h.client.onFrame(received);
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const frame = { v: 1, kind: 'invoke', id: 'rejected', dst: 'dev-self',
+        payload: { channel: 'maker:send', args: ['must not execute'] } } as Envelope;
+      for (const src of ['', 'x'.repeat(257), ...Array.from({ length: 40 }, (_, i) => `unknown-${i}`)]) {
+        h.current().push({ ...frame, src, auth: peer.sign(frame) } as Envelope);
+      }
+      const probes = h.current().sent.filter(env => env.kind === 'push');
+      expect(probes).toHaveLength(32);
+      expect(probes.every(env => (env.payload as { channel: string }).channel === RELAY_AUTH_CHANNEL)).toBe(true);
+      expect(probes.every(env => env.dst?.startsWith('unknown-'))).toBe(true);
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(h.current().sent.filter(env => env.kind === 'push')).toHaveLength(32);
+      expect(received).not.toHaveBeenCalled();
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // #7722 discussion_r4403285988:内存计数在接收端重启后消失，旧写请求不能在十分钟内再次执行。
+  // 真实认证器公开握手/验签入口；重放建链和invoke，并验证新的握手仍能恢复正常写请求。tier: unit。
+  it('binds requests to the receiver boot so a restart cannot replay an executed write', () => {
+    const owner = createRelaySigningKey(nodeRelayAuthCrypto);
+    const keys = { host: createRelaySigningKey(nodeRelayAuthCrypto), peer: createRelaySigningKey(nodeRelayAuthCrypto) };
+    const certs = Object.entries(keys).map(([deviceId, key]) => issueRelayDeviceCert(nodeRelayAuthCrypto, owner.seed, {
+      relayId: 'restart-relay', deviceId, publicKey: key.publicKey, role: 'member', issuedAt: 1,
+    }));
+    const create = (deviceId: 'host' | 'peer') => {
+      const auth = new RelayFrameAuthenticator({
+        crypto: nodeRelayAuthCrypto, relayId: 'restart-relay', deviceId, seed: keys[deviceId].seed, ownerPublicKey: owner.publicKey,
+      });
+      auth.setCertificates(certs);
+      return auth;
+    };
+    const peer = create('peer');
+    const host = create('host');
+    const challenge = { kind: 'push', id: 'auth-1', src: 'peer', dst: 'host',
+      payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'request' } } };
+    const signedChallenge = { ...challenge, auth: peer.sign(challenge) };
+    expect(host.verify(signedChallenge)).toBe('ok');
+    const acceptance = { kind: 'push', id: 'auth-1', src: 'host', dst: 'peer',
+      payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } };
+    expect(peer.verify({ ...acceptance, auth: host.sign(acceptance) })).toBe('ok');
+    const opening = { kind: 'link-open', id: 'open-1', src: 'peer', dst: 'host', payload: {} };
+    const signedOpen = { ...opening, auth: peer.sign(opening) };
+    expect(host.verify(signedOpen)).toBe('ok');
+    const write = { kind: 'invoke', id: 'write-1', src: 'peer', dst: 'host', payload: { channel: 'maker:create-session', args: [] } };
+    const executed = { ...write, auth: peer.sign(write) };
+    expect(host.verify(executed)).toBe('ok');
+    expect(host.verify(executed)).toBe('replayed');
+
+    const restarted = create('host');
+    expect(restarted.verify(signedChallenge)).toBe('ok');
+    expect(restarted.verify(signedOpen)).toBe('wrong-session');
+    expect(restarted.verify(executed)).toBe('wrong-session');
+    const receiverBoot = restarted.sign(acceptance).b;
+    // 仅替换挑战也无效；挑战本身必须在签名范围内。
+    expect(restarted.verify({ ...executed, auth: { ...executed.auth, r: receiverBoot } })).toBe('bad-signature');
+    expect(restarted.verify({ ...challenge, id: 'auth-2', auth: peer.sign({ ...challenge, id: 'auth-2' }) })).toBe('ok');
+    const newAcceptance = { ...acceptance, auth: restarted.sign(acceptance) };
+    expect(peer.verify(newAcceptance)).toBe('ok');
+    expect(restarted.verify({ ...write, id: 'write-2', auth: peer.sign({ ...write, id: 'write-2' }) })).toBe('ok');
+  });
+
+  it('signs outbound peer frames and drops forged, tampered or replayed inbound frames', async () => {
+    const relayId = '0b7a4a52-8f6a-4d55-9a53-3f1f6f2c9e10';
+    const owner = createRelaySigningKey(nodeRelayAuthCrypto);
+    const selfKey = createRelaySigningKey(nodeRelayAuthCrypto);
+    const peerKey = createRelaySigningKey(nodeRelayAuthCrypto);
+    const certs = [
+      ['dev-self', selfKey.publicKey],
+      ['dev-b', peerKey.publicKey],
+    ].map(([deviceId, publicKey]) => issueRelayDeviceCert(nodeRelayAuthCrypto, owner.seed, {
+      relayId, deviceId, publicKey, role: 'member', issuedAt: 1,
+    }));
+    const authenticator = (deviceId: string, seed: string) => {
+      const auth = new RelayFrameAuthenticator({ crypto: nodeRelayAuthCrypto, relayId, deviceId, seed, ownerPublicKey: owner.publicKey });
+      auth.setCertificates(certs);
+      return auth;
+    };
+    const self = authenticator('dev-self', selfKey.seed);
+    const peer = authenticator('dev-b', peerKey.seed);
+    const challenge = { kind: 'push', id: 'auth-1', src: 'dev-self', dst: 'dev-b',
+      payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'request' } } };
+    expect(peer.verify({ ...challenge, auth: self.sign(challenge) })).toBe('ok');
+    const response = { ...challenge, src: 'dev-b', dst: 'dev-self',
+      payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } };
+    expect(self.verify({ ...response, auth: peer.sign(response) })).toBe('ok');
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000 },
+      frameAuth: () => ({ sign: (frame) => self.sign(frame), verify: (frame) => self.verify(frame) === 'ok' }),
+    });
+    h.client.start(); await tick(); h.current().ack();
+    const received: unknown[] = [];
+    h.client.onFrame((frame) => { if (frame.kind === 'push' && frame.src === 'dev-b') received.push(frame.payload); });
+
+    void h.client.openLink('dev-b', { controllerName: 'Test', protocolVersion: 1, appVersion: '1' }).catch(() => undefined);
+    const linkOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    // 中转覆写 src 后交给对端,对端用本机证书核对通过。
+    expect(peer.verify({ ...linkOpen, src: 'dev-self' })).toBe('ok');
+
+    const frame = (payload: unknown): Envelope => ({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', dst: 'dev-self', payload });
+    const signed = (env: Envelope) => ({ ...env, auth: peer.sign(env) }) as Envelope;
+    const genuine = signed(frame({ channel: 'evt', payload: { n: 1 } }));
+    const forger = authenticator('dev-b', createRelaySigningKey(nodeRelayAuthCrypto).seed);
+    h.current().push(frame({ channel: 'evt', payload: { n: 0 } }));
+    h.current().push({ ...frame({ channel: 'evt', payload: { n: 0 } }), auth: forger.sign(frame({})) } as Envelope);
+    h.current().push({ ...genuine, payload: { channel: 'evt', payload: { n: 2 } } });
+    h.current().push(genuine);
+    h.current().push(genuine);
+    await tick();
+    expect(received).toEqual([{ channel: 'evt', payload: { n: 1 } }]);
+    h.client.stop();
   });
 });
 
@@ -802,7 +1124,8 @@ function makeRelayClient(
   relay: MemoryRelay,
   deviceId: string,
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'],
-  extra?: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'transferCodec' | 'invokeMetrics' | 'directRuntime'>,
+  extra?: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'transferCodec' | 'invokeMetrics' | 'directRuntime' | 'frameAuth'>
+    & { remoteControlEnabled?: boolean },
 ): DeviceLinkClient {
   return new DeviceLinkClient({
     ...extra,
@@ -812,7 +1135,7 @@ function makeRelayClient(
       deviceName: deviceId,
       platform: 'darwin',
       appVersion: '1.0.0',
-      remoteControlEnabled: true,
+      remoteControlEnabled: extra?.remoteControlEnabled ?? true,
       busy: false,
     }),
     createWebSocket: () => relay.makeWebSocket(deviceId),

@@ -8,12 +8,16 @@ const native = vi.hoisted(() => ({
   platform: { OS: 'ios' },
   keyboard: vi.fn((enabled: boolean) => ({ height: enabled ? 300 : 0 })),
   finish: undefined as undefined | ((result: { finished: boolean }) => void),
+  onShow: undefined as undefined | (() => void),
 }));
 vi.mock('react-native', () => {
   const View = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
   return {
     View, KeyboardAvoidingView: View, Pressable: View,
-    Modal: ({ visible, children }: { visible: boolean; children: ReactNode }) => visible ? <div>{children}</div> : null,
+    Modal: ({ visible, children, onShow }: { visible: boolean; children: ReactNode; onShow: () => void }) => {
+      native.onShow = onShow;
+      return visible ? <div>{children}</div> : null;
+    },
     Platform: native.platform,
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { absoluteFill: {} },
@@ -76,4 +80,14 @@ it('never subscribes action-only sheets or Android native-resize sheets', () => 
   native.platform.OS = 'android';
   render(true);
   expect(enabled()).toBe(false);
+});
+
+it('waits for the Android dialog to show before requesting form focus', () => {
+  native.platform.OS = 'android';
+  const focus = vi.fn();
+  act(() => root.render(<SheetModal visible onShow={focus}
+    onRequestClose={() => {}} onBackdropPress={() => {}}>form</SheetModal>));
+  expect(focus).not.toHaveBeenCalled();
+  act(() => native.onShow?.());
+  expect(focus).toHaveBeenCalledOnce();
 });

@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "새 그룹 채팅",
-    "description": "동료 몇 명을 한 그룹에 모아 보세요. 한마디 하면 동료들이 함께 이어서 답합니다.",
     "nameLabel": "그룹 이름",
     "namePlaceholder": "예: 주말 나들이",
     "nameRequired": "그룹 이름을 입력하세요",
     "membersLabel": "동료 선택",
     "selectedCount_one": "{{count}}명 선택됨, 최대 {{max}}명",
     "selectedCount_other": "{{count}}명 선택됨, 최대 {{max}}명",
-    "minMembers": "동료를 {{min}}명 이상 선택하세요",
-    "notEnoughBots": "그룹 채팅을 만들려면 사용할 수 있는 동료가 {{min}}명 이상 필요합니다. 먼저 동료를 추가하세요.",
+    "close": "닫기",
+    "submitShort": "만들기",
     "submit": "그룹 채팅 만들기",
-    "failed": "그룹 채팅을 만들지 못했습니다. 잠시 후 다시 시도하세요.",
-    "chooseComputer": "만들 컴퓨터 선택",
-    "computerNote": "이 그룹 채팅은 {{deviceName}}에 만들어지고, 동료들은 그 컴퓨터에서 작업합니다."
+    "failed": "그룹 채팅을 만들지 못했습니다. 잠시 후 다시 시도하세요."
   },
   "memberStatus": {
     "paused": "일시 중지됨",

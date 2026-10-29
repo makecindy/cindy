@@ -622,6 +622,7 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
+import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
@@ -9921,6 +9922,8 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerProviderShareIpc();
+  // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
+  registerSelfHostedRelayIpc();
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();

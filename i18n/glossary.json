@@ -257,6 +257,18 @@
       "note": "远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。"
     },
     {
+      "id": "self-hosted-relay-service",
+      "status": "proposed",
+      "en": "Relay service",
+      "translations": {
+        "zh-CN": "中转服务",
+        "zh-TW": "中繼服務",
+        "ja": "リレーサービス",
+        "ko": "중계 서비스"
+      },
+      "note": "远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。"
+    },
+    {
       "id": "remote-desktop-video-relay",
       "status": "proposed",
       "en": "Server video relay",

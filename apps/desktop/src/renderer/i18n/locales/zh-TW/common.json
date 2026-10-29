@@ -5558,6 +5558,172 @@
       }
     },
     "remoteControl": {
+      "relay": {
+        "summary": {
+          "official": "Cindy 官方中繼",
+          "owner": "這台電腦當中繼",
+          "member": "已加入 {{name}}",
+          "server": "伺服器中繼「{{name}}」"
+        },
+        "description": "裝置之間的遠端控制預設經 Cindy 官方中繼。你也可以把中繼部署到自己的伺服器、讓這台電腦當中繼，或加入你自己另一台電腦上的中繼。登入、模型等其他服務不受影響。",
+        "current": "目前使用",
+        "ownerName": "這台電腦",
+        "unavailable": "登入 Cindy 帳號，並且系統鑰匙圈可用時，才能使用自己的中繼。",
+        "limits": "使用自己的中繼時，手機系統推播、供應商分享和共享任務暫不可用。",
+        "actions": {
+          "host": "在這台電腦上開啟",
+          "join": "加入別的中繼",
+          "useOfficial": "切回官方中繼",
+          "editHost": "修改設定",
+          "deploy": "部署到我的伺服器",
+          "useDeployment": "改用這個中繼"
+        },
+        "host": {
+          "title": "在這台電腦上開啟中繼",
+          "hint": "其他裝置要能連到這台電腦：同一區域網路、路由器連接埠轉送、內網穿透或組網工具都可以，由你自己確保。這台電腦休眠或結束 Cindy 時，所有裝置都會斷線，開啟後會自動開啟「保持電腦喚醒」。",
+          "port": "連接埠",
+          "scope": "允許誰連線",
+          "scopeLocal": "僅本機",
+          "scopeAll": "所有網路",
+          "scopeLocalHint": "只接受本機連線，適合搭配你自己的反向 Proxy、內網穿透或組網工具。",
+          "scopeAllHint": "區域網路裡的裝置可以直接連線。連線不加密，只建議在可信任的網路中使用；手機需要 https 位址才能連線。",
+          "externalUrl": "其他裝置連線的位址",
+          "externalUrlPlaceholder": "例如 https://relay.example.com",
+          "externalUrlHintAll": "會寫進加入連結。不填時使用這台電腦的區域網路位址。",
+          "externalUrlHintLocal": "會寫進加入連結。填你的 Proxy 或穿透服務對外的位址。",
+          "suggested": "這台電腦的位址：",
+          "start": "開啟",
+          "save": "儲存並重新啟動中繼",
+          "cancel": "取消",
+          "running": "中繼執行中，其他裝置連線位址：{{address}}"
+        },
+        "add": {
+          "intro": "產生加入連結，讓手機或另一台電腦加入這個中繼。",
+          "create": "新增裝置",
+          "hint": "用手機相機掃描，或把連結傳給另一台電腦，在「加入別的中繼」裡貼上。連結 10 分鐘內有效，只能用一次。",
+          "qrAlt": "加入中繼的 QR 碼",
+          "copy": "複製連結",
+          "copied": "已複製加入連結",
+          "newLink": "重新產生",
+          "waiting": "等待裝置申請…"
+        },
+        "requests": {
+          "item": "{{name}} 請求加入",
+          "verify": "配對碼",
+          "verifyHint": "和對方螢幕上顯示的一致再同意。",
+          "replaces": "這台裝置之前加入過，同意後它的舊憑證失效。",
+          "approve": "同意",
+          "reject": "拒絕",
+          "unverified": "無法核對這台裝置：它的申請和這台電腦給出的加入連結對不上，可能被人竄改，只能拒絕。如果是你自己的裝置，請重新產生加入連結再試。"
+        },
+        "join": {
+          "title": "加入別的中繼",
+          "hint": "貼上主人電腦上「新增裝置」給出的加入連結，等對方同意後自動切換。",
+          "placeholder": "貼上加入連結",
+          "submit": "加入",
+          "connecting": "正在連線中繼…",
+          "waiting": "已送出申請。請在 {{name}} 上核對這串數字並按同意：",
+          "cancel": "取消"
+        },
+        "issue": {
+          "removed": "這台電腦已被移出中繼，或中繼已停用。",
+          "unauthorized": "中繼不再接受這台電腦的憑證。",
+          "next": "可以重新加入，或切回官方中繼。"
+        },
+        "confirm": {
+          "ownerTitle": "停用這台電腦上的中繼？",
+          "ownerDescription": "已加入的裝置會斷線，並提示中繼已停用。這台電腦切回 Cindy 官方中繼。",
+          "memberTitle": "切回官方中繼？",
+          "memberDescription": "這台電腦會退出「{{name}}」，改用 Cindy 官方中繼。之後要再加入，需要對方重新產生加入連結。",
+          "serverTitle": "切回官方中繼？",
+          "serverDescription": "伺服器上的中繼「{{name}}」會繼續執行，已加入的其他裝置仍能透過它互相連線。這台電腦隨時可以改回來。"
+        },
+        "errors": {
+          "INVALID_LINK": "加入連結或位址格式不正確。",
+          "UNREACHABLE": "連不上這個中繼。請確認這台電腦能連到連結裡的位址。",
+          "NOT_A_RELAY": "這個位址不是 Cindy 中繼。",
+          "INCOMPATIBLE": "這個中繼的版本與本機不相容，請把兩邊的 Cindy 都更新到最新版。",
+          "ACCOUNT_MISMATCH": "這個中繼屬於另一個 Cindy 帳號。",
+          "CODE_INVALID": "加入連結已失效或已被使用，請讓對方重新產生。",
+          "RATE_LIMITED": "嘗試次數太多，請過幾分鐘再試。",
+          "REJECTED": "對方拒絕了這次加入。",
+          "EXPIRED": "等待同意逾時，請重新加入。",
+          "CANCELLED": "已取消。",
+          "FAILED": "操作沒有完成。",
+          "HOSTING": "這台電腦正在當中繼。要加入別的中繼，請先切回官方中繼。",
+          "NOT_SIGNED_IN": "請先登入 Cindy 帳號。",
+          "SECURE_STORAGE_UNAVAILABLE": "系統鑰匙圈不可用，無法安全保存中繼憑證。",
+          "PORT_IN_USE": "連接埠 {{port}} 已被占用，請換一個連接埠。",
+          "START_FAILED": "中繼沒能啟動，可以換一個連接埠再試。",
+          "EXTERNAL_URL_REQUIRED": "請先填寫其他裝置連線的位址，或把「允許誰連線」改為所有網路。",
+          "SSH_FAILED": "連不上伺服器。請在「遠端」裡檢查這台伺服器的 SSH 設定。",
+          "NEEDS_ROOT": "需要 root 帳號，或這個帳號能免密碼使用 sudo。Cindy 不會索取伺服器密碼。",
+          "UNSUPPORTED_SYSTEM": "目前只支援含 systemd 的 64 位元 Linux（x64 / arm64），並且需要 curl 或 wget。",
+          "PORT_BUSY": "伺服器的 80 或 443 連接埠已被其他程式佔用（例如網站服務）。請先停用它，或換一台伺服器。",
+          "DOWNLOAD_FAILED": "伺服器下載執行環境失敗（官方來源和鏡像都沒成功）。請檢查伺服器能否連上外網。",
+          "RELAY_MISMATCH": "這台伺服器上已有一個不是這台電腦部署的中繼。可以清除它後重新部署。",
+          "CERTIFICATE_FAILED": "申請 HTTPS 憑證失敗。通常是雲端主機安全群組沒有放行 80 連接埠，或網域還沒解析到這台伺服器。處理後點重試。",
+          "NOT_REACHABLE": "伺服器上的中繼已經執行，但這台電腦連不上它。請在雲端主機安全群組裡放行 443 連接埠。",
+          "BUNDLE_MISSING": "這個版本的 Cindy 沒有附帶中繼程式，請更新 Cindy。",
+          "DEPLOY_FAILED": "部署沒有完成。",
+          "PAIR_PROOF_INVALID": "無法核對這台裝置的申請，不能同意。請重新產生加入連結。",
+          "NOT_OWNER": "只有部署或開啟這個中繼的電腦才能管理它。",
+          "BUSY": "正在部署，請稍候。",
+          "INVALID_ADDRESS": "請填寫公網 IP 或網域，不含 http:// 和連接埠。",
+          "NO_DEPLOYMENT": "還沒有部署到伺服器。",
+          "OWNER_MISMATCH": "中繼回傳的憑證不是加入連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。"
+        },
+        "deploy": {
+          "title": "部署到我的伺服器",
+          "hint": "把中繼裝到你自己的 Linux 伺服器上，手機和不在同一網路的裝置都能連。Cindy 透過「遠端」裡設定的 SSH 連線安裝，並自動申請 HTTPS 憑證、到期前自動續期。",
+          "requirements": "需要：64 位元 Linux（含 systemd）、root 或免密碼 sudo，伺服器的 80 和 443 連接埠沒被其他程式佔用，並在雲端主機控制台的安全群組或防火牆裡放行 TCP 80 和 443。",
+          "noHosts": "還沒有可用的伺服器。先在「遠端」裡新增 SSH 主機，再回來部署。",
+          "server": "伺服器",
+          "address": "存取位址",
+          "addressPlaceholder": "公網 IP 或網域，例如 203.0.113.10",
+          "addressHint": "其他裝置連線中繼用的位址。填公網 IP 會申請 6 天有效、自動續期的 IP 憑證；填網域需要先把網域解析到這台伺服器。",
+          "name": "名稱",
+          "defaultName": "我的中繼",
+          "submit": "開始部署",
+          "cancel": "取消",
+          "detail": "詳細原因：{{detail}}",
+          "retry": "重試",
+          "replace": "清除舊中繼並重新部署",
+          "running": {
+            "deploy": "正在部署到伺服器…",
+            "upgrade": "正在升級伺服器上的中繼…",
+            "uninstall": "正在從伺服器解除安裝…"
+          },
+          "done": {
+            "deploy": "部署完成，這台電腦已改用伺服器上的中繼。用「新增裝置」讓手機和其他電腦加入。",
+            "upgrade": "伺服器上的中繼已升級到 {{version}}。",
+            "uninstall": "已從伺服器解除安裝中繼。"
+          },
+          "steps": {
+            "connect": "連線伺服器",
+            "check": "檢查系統和連接埠",
+            "runtime": "安裝執行環境",
+            "upload": "上傳中繼程式",
+            "configure": "設定並啟動服務",
+            "certificate": "申請 HTTPS 憑證",
+            "verify": "從這台電腦檢查能否連上",
+            "finish": "完成",
+            "remove": "停止服務並刪除檔案"
+          }
+        },
+        "server": {
+          "title": "我的伺服器中繼",
+          "version": "中繼版本 {{version}}",
+          "incomplete": "上次部署沒有完成，可以重試或解除安裝。",
+          "upgrade": "升級到 {{version}}",
+          "uninstall": "從伺服器解除安裝",
+          "uninstallTitle": "從伺服器解除安裝中繼？",
+          "uninstallDescription": "伺服器上的中繼程式和裝置檔案都會被刪除，正在使用它的裝置會斷線。之後重新部署，所有裝置都需要重新加入。",
+          "forget": "只在本機移除",
+          "forgetTitle": "只在這台電腦上移除？",
+          "forgetDescription": "伺服器上的中繼不會被刪除，但這台電腦不再管理它，也不能再為它新增裝置。確定不再使用那台伺服器時再這樣做。"
+        }
+      },
       "title": "遠端連線",
       "description": "在同帳號的裝置之間互相遠端操控，或透過 SSH 連線遠端主機。",
       "accessRevokedByPeer": "訪問權限已被撤銷，需對方在選項中恢復",
@@ -5577,6 +5743,7 @@
         "restoreFailed": "恢復失敗"
       },
       "sections": {
+        "relay": "中繼服務",
         "myDevices": "我的裝置",
         "ssh": "SSH 遠端主機",
         "hook": "Cindy IM 機器人"

@@ -1,10 +1,10 @@
 /** The same authorized device/share directory used by Cindy's model picker. */
 import type { AgentKind } from '@cindy/maker-core';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { deviceLinkApiBase, remoteBackgroundInvoke } from '../device-link/index.js';
+import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.js';
 import { getReceivedShares } from '../device-link/providerShareGuest.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.js';
-import { serverApiFetch } from '../serverApiClient.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { t } from '../i18n.js';
 import { LOCAL_AGENT_ROUTE, localAgentModels, type LocalAgentModel } from './catalog.js';
@@ -70,7 +70,7 @@ export async function readRemoteCatalog(
 export async function remoteLocalAgentModels(isCurrent: () => boolean, localGroups: Readonly<Record<string, ProviderGroupConfig>> = {}, localModels: readonly LocalAgentModel[] = []): Promise<LocalAgentModel[]> {
   const settings = readDeviceLinkSettings();
   const shares = getReceivedShares().filter(share => share.status === 'active');
-  const directory = await bounded(serverApiFetch<{ devices: DeviceLinkDeviceView[] }>('/api/device-link/devices', { baseUrl: deviceLinkApiBase }), { devices: [] });
+  const directory = await bounded(deviceLinkApiFetch<{ devices: DeviceLinkDeviceView[] }>('/api/device-link/devices'), { devices: [] });
   if (!isCurrent()) return [];
   const sources: RemoteCatalogSource[] = directory.devices
     .filter(device => !device.isSelf && device.online && device.remoteControlEnabled && !settings.disabledControlDeviceIds.includes(device.deviceId))

@@ -69,7 +69,6 @@ import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
-import { serverApiFetch } from '../serverApiClient';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -169,7 +168,9 @@ import {
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
-import { getClientEndpoint } from '../clientEndpointsService';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
+import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
+import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import {
   handleContactsDeviceLinkStatusChanged,
   handleContactsPeerPresenceChanged,
@@ -203,7 +204,8 @@ const WS_PATH = '/api/device-link/ws';
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
 export function deviceLinkApiBase(): string {
-  return getClientEndpoint('deviceLinkApiBaseUrl');
+  // 自建中转(docs/self-hosted-relay-plan.md)时指向用户自己的中转,否则走官方清单。
+  return resolveDeviceLinkApiBase();
 }
 
 type DeviceDirectoryResponse = {
@@ -333,8 +335,7 @@ async function runControllerDisplayNamesFromDirectory(
   presenceRequestEpoch: number,
 ): Promise<void> {
   try {
-    const result = await serverApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', {
-      baseUrl: deviceLinkApiBase,
+    const result = await deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', {
       timeoutMs: 10_000,
     });
     if (
@@ -617,6 +618,9 @@ let relayAuthRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
  * refresh 路径自己走会话过期出口(清会话 + 弹重登),auth 监听随后会停掉本服务。
  */
 function recoverFromRelayAuthFailure(): void {
+  // 自建中转拒绝的是中转凭证,与 Cindy 账号无关:不刷新、不轮换账号 token。
+  // 界面经 connection issue 提示「已被移出中转」,由用户重新加入或切回官方。
+  if (activeSelfHostedRelay()) return;
   const now = Date.now();
   const elapsed = now - lastRelayAuthRecoveryAt;
   if (elapsed < RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS) {
@@ -713,9 +717,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     directRuntime: desktopDirectRuntime,
     getWsUrl: wsUrl,
     transferCodec: desktopTransferCodec,
+    // 自建中转用中转凭证(CindyRelay),官方中转用账号 token(Bearer);两者每次建连前同一轮取值。
+    authorizationScheme: () => (activeSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
+    // 自建中转:每条对端消息签名,收到的对端消息核对签名(中转无法冒充设备);官方中转返回 null,行为不变。
+    frameAuth: currentRelayFrameAuth,
     getToken: async () => {
       // Prepare the name before the first hello without blocking Electron's main thread.
       await deviceNameReady;
+      const relay = activeSelfHostedRelay();
+      if (relay) return authManager.getAuthState().isAuthenticated ? relay.credential : null;
       const token = authManager.getAccessToken();
       if (token) return token;
       // 无现值(冷启动竞态/过期被清):尝试 refresh 一次,失败则跳过本轮重连
@@ -1350,6 +1360,24 @@ function restartDeviceLinkForAuthRealmChange(): void {
       ) {
         return;
       }
+      arbiter?.start();
+    });
+}
+
+/**
+ * 切换中转(官方 ↔ 自建,或换一个自建中转)后重连:与换区相同,先完整释放持有权并拆掉旧链路,
+ * 再按最新地址 / 凭证重新参与仲裁。不重连就会一直连着旧中转。
+ */
+export function restartDeviceLinkForRelayChange(): void {
+  if (!client || !arbiter) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  const generation = ++authRealmReconnectGeneration;
+  void stopArbitrationAndTeardown()
+    .catch((error) => {
+      log.warn('device-link ownership release during relay switch failed', error);
+    })
+    .then(() => {
+      if (generation !== authRealmReconnectGeneration || !authManager.getAuthState().isAuthenticated) return;
       arbiter?.start();
     });
 }

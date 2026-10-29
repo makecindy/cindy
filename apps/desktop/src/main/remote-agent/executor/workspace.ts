@@ -309,15 +309,33 @@ export function mapJsonPathText(
   });
 }
 
+interface ProjectionPlan { size: number; entries: ExecutorPathAlias[]; prefixes?: AliasPrefixes<ExecutorPathAlias> }
+
+/**
+ * 别名排序和前缀正则只与别名数组有关，按数组引用缓存(#7710)：每段输出、每个流式 delta 都要投影，
+ * 别名几百条时逐次重建会占满主线程。数组必须整体替换，不得原地修改；长度变了也视为失效。
+ */
+const projectionPlans = new WeakMap<readonly ExecutorPathAlias[], Map<boolean, ProjectionPlan>>();
+
+function projectionPlan(aliases: readonly ExecutorPathAlias[], escapedSeparators: boolean): ProjectionPlan {
+  let byEscape = projectionPlans.get(aliases);
+  if (!byEscape) projectionPlans.set(aliases, byEscape = new Map());
+  const cached = byEscape.get(escapedSeparators);
+  if (cached?.size === aliases.length) return cached;
+  const entries = aliases.filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
+    .sort((a, b) => b.from.length - a.from.length);
+  const plan: ProjectionPlan = { size: aliases.length, entries, prefixes: entries.length ? aliasPrefixes(entries, { escapedSeparators }) : undefined };
+  byEscape.set(escapedSeparators, plan);
+  return plan;
+}
+
 /** 对已知目录做单次双向投影，最长前缀先匹配，防止替换结果再次被短祖先别名改写。 */
 export function projectPathText(
   text: string, aliases: readonly ExecutorPathAlias[], context: PathTextContext = 'text',
   isCompletePath?: (mapped: string) => boolean, options: ProjectPathTextOptions = {},
 ): string {
-  const entries = aliases.filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
-    .sort((a, b) => b.from.length - a.from.length);
-  if (!entries.length) return text;
-  const prefixes = aliasPrefixes(entries, { escapedSeparators: options.escapedSeparators });
+  const { entries, prefixes } = projectionPlan(aliases, options.escapedSeparators ?? false);
+  if (!prefixes) return text;
   const { spellings } = options;
   // 同一个路径在 JSON 字符串里和正文里的转义不同，原写法按所处层级分别记录与还原。
   let depth = 0;
@@ -542,11 +560,15 @@ export class PathSpellings {
   }
 }
 
+const NO_PREFIXES: readonly string[] = [];
+
 export class ExecutorWorkspace {
   readonly workingDir: string;
   private roots: string[];
   private extraDirs: string[];
   private aliases: ExecutorPathAlias[];
+  /** 由 this.aliases 派生的数组，按它的引用缓存；别名整体替换后自然失效(#7710)。 */
+  private derived?: { aliases: ExecutorPathAlias[]; toLocal?: ExecutorPathAlias[]; prefixes?: readonly string[]; toAgent?: ExecutorPathAlias[] };
   private virtualRoot?: string;
 
   constructor(roots: ExecutorWorkspaceRoots) {
@@ -743,6 +765,22 @@ export class ExecutorWorkspace {
 
   /** 本机真实路径(含 Git Bash 写法)→ Agent 看到的虚拟路径。 */
   private agentAliases(aliases: readonly ExecutorPathAlias[] = this.aliases, canonical?: ReadonlyMap<string, readonly string[]>): ExecutorPathAlias[] {
+    if (canonical || aliases !== this.aliases) return this.buildAgentAliases(aliases, canonical);
+    // 每次都同步 realpath 全部别名会随输出条数相乘；同一个事件循环批次内复用，下一批重新解析(junction 变化仍可见)。
+    const derived = this.derivedAliases();
+    if (!derived.toAgent) {
+      derived.toAgent = this.buildAgentAliases(aliases, canonical);
+      setImmediate(() => { derived.toAgent = undefined; });
+    }
+    return derived.toAgent;
+  }
+
+  private derivedAliases(): NonNullable<ExecutorWorkspace['derived']> {
+    if (this.derived?.aliases !== this.aliases) this.derived = { aliases: this.aliases };
+    return this.derived;
+  }
+
+  private buildAgentAliases(aliases: readonly ExecutorPathAlias[], canonical?: ReadonlyMap<string, readonly string[]>): ExecutorPathAlias[] {
     const seen = new Set<string>();
     return aliases.flatMap((alias) => {
       // A junction/symlink can be resolved differently by the Windows runner and by
@@ -796,7 +834,8 @@ export class ExecutorWorkspace {
   };
 
   private agentPathsToLocal(): ExecutorPathAlias[] {
-    return this.aliases.map((alias) => ({ from: alias.from.replace(/\\/g, '/'), to: alias.to }));
+    const derived = this.derivedAliases();
+    return derived.toLocal ??= this.aliases.map((alias) => ({ from: alias.from.replace(/\\/g, '/'), to: alias.to }));
   }
 
   /**
@@ -926,7 +965,9 @@ export class ExecutorWorkspace {
 
   /** 展示层延迟尚未传完整的虚拟路径；别名仍由当前执行器维护。 */
   agentPathPrefixes(): readonly string[] {
-    return this.virtualRoot ? this.aliases.map((alias) => alias.from) : [];
+    if (!this.virtualRoot) return NO_PREFIXES;
+    const derived = this.derivedAliases();
+    return derived.prefixes ??= this.aliases.map((alias) => alias.from);
   }
 
   mapOutputForAgent(data: Buffer): Buffer {

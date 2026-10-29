@@ -1,0 +1,37 @@
+{
+  "name": "@cindy/device-link-relay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "自建 device-link 中转服务内核:与官方 relay 线协议兼容的 WebSocket 中转、设备档案、配对与管理接口、媒体中转。同一份代码既可在 Cindy 内运行,也可在服务器上用 Node 独立运行。零 Electron 依赖。",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "interop": "tsx scripts/run-interop.ts",
+    "bundle": "node build.mjs"
+  },
+  "author": {
+    "name": "XD Inc.",
+    "email": "feedback@cindy.app"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@cindy/device-link": "workspace:*",
+    "@cindy/device-link-protocol": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

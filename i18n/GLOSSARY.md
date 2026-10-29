@@ -627,6 +627,10 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 
 2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。
 
+### Relay service
+
+远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。
+
 ### Mute notifications
 
 任务右键菜单里的通知开关，是普通句子不是品牌词，故 checkCase 为 false。开关两态成对出现：未静音时显示「消息免打扰」（点了就静音），已静音时显示「允许消息通知」（点了就恢复）；英文对为 Mute notifications / Allow notifications。与设置里的全局通知开关（ccAgent.settings.notifications）区分：这个是单个任务的。中文不用「免打扰模式」「静音」。「允许消息通知」是反面文案，未列入 translations，待五语用例变多后一并裁决。

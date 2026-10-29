@@ -122,6 +122,7 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { isSelfHostedRelayBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
@@ -3312,6 +3313,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
       opts.assertCurrent?.();
+      // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
+      // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+        return apiFetchRaw<T>(path, { ...opts, token: null });
+      }
       const token = await getAccessToken();
       opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');

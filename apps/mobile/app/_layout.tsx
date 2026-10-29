@@ -83,6 +83,7 @@ import {
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { usePendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClipboardInvitationHistory';
 import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
@@ -91,6 +92,8 @@ const holdSplash = () => undefined;
 
 function NavigationGate() {
   const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
+  // 登录前扫了「加入中转」二维码:登录完成后回到加入页继续(加入码只在内存里)。
+  const pendingRelayJoin = Boolean(usePendingRelayJoinIntent()?.link);
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
   const sessionHeaderShown = Platform.OS === 'ios'
@@ -135,17 +138,24 @@ function NavigationGate() {
     if (!auth.initialized) return;
     const inAuthGroup = segments[0] === '(auth)';
     // 供应商分享链接的提示页只说明「请在电脑上打开」,不读账号数据,未登录也直接显示。
-    if (!auth.isAuthenticated && !inAuthGroup && segments[0] !== 'provider-share') {
+    // 加入中转页未登录时只提示先登录(不发任何请求),同样直接显示。
+    if (
+      !auth.isAuthenticated &&
+      !inAuthGroup &&
+      segments[0] !== 'provider-share' &&
+      segments[0] !== 'relay-join'
+    ) {
       router.replace('/login');
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
       if (pendingSharedTaskInvitation) router.replace('/shared-session');
+      else if (pendingRelayJoin) router.replace('/relay-join');
       else router.replace('/');
     } else if (auth.isAuthenticated && pendingSharedTaskInvitation && segments.join('/') !== 'shared-session') {
       router.replace('/shared-session');
     }
-  }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, pendingRelayJoin, pendingSharedTaskInvitation, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;

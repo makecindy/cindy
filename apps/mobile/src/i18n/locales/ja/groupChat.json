@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "グループチャットを作成",
-    "description": "何人かの仲間を 1 つのグループにまとめます。あなたが話しかけると、仲間たちが一緒に返信します。",
     "nameLabel": "グループ名",
     "namePlaceholder": "例: 週末のお出かけ",
     "nameRequired": "グループ名を入力してください",
     "membersLabel": "仲間を選択",
     "selectedCount_one": "{{count}} 人選択中（最大 {{max}} 人）",
     "selectedCount_other": "{{count}} 人選択中（最大 {{max}} 人）",
-    "minMembers": "仲間を {{min}} 人以上選択してください",
-    "notEnoughBots": "グループチャットを作成するには、利用できる仲間が {{min}} 人以上必要です。まず仲間を追加してください。",
+    "close": "閉じる",
+    "submitShort": "作成",
     "submit": "グループチャットを作成",
-    "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください",
-    "chooseComputer": "作成するパソコンを選択",
-    "computerNote": "このグループチャットは {{deviceName}} に作成され、仲間はそのパソコンで作業します。"
+    "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください"
   },
   "memberStatus": {
     "paused": "一時停止中",

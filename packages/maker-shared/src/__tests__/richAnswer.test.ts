@@ -374,3 +374,133 @@ it('lets the user retry a refused submission without consuming field values', as
   await controller.submit('receipt', 'Park', async () => true);
   expect(controller.status('receipt', 'Park')).toBe('sent');
 });
+
+
+// #7627: two near-miss drafts models keep writing. Both used to drop the whole
+// node (or all of its text) and leave only the "part of this content was hidden" line.
+describe('malformed node drafts stay readable', () => {
+  it('keeps the text of a node whose props is a plain string', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'b', kind: 'text', props: '这一行会消失' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('b')?.props.text).toBe('这一行会消失');
+  });
+  it('turns inline children of a details node into child nodes', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: { label: '折叠块', children: [{ kind: 'markdown', text: '正文' }] },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(doc.issues).toBe(0);
+    expect(details?.props.children).toBeUndefined();
+    expect(details?.children).toHaveLength(1);
+    const child = doc.nodes.get(details?.children[0] ?? '');
+    expect(child?.kind).toBe('markdown');
+    expect(child?.props.text).toBe('正文');
+  });
+});
+describe('inline draft limits', () => {
+  it('caps nested inline drafts at the depth limit', () => {
+    let nested: Record<string, unknown> = { kind: 'markdown', text: 'deepest' };
+    for (let level = 0; level < 40; level++) nested = { kind: 'stack', children: [nested] };
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: { label: '折叠块', children: [nested] } }),
+    );
+    expect(doc.nodes.size).toBeLessThanOrEqual(32);
+    expect(doc.nodes.get('d')?.children).toHaveLength(1);
+    // 被深度上限截掉的子树属于「没能显示出来的内容」, 不能让 issues 保持 0。
+    expect(doc.issues).toBeGreaterThan(0);
+  });
+  it('skips one unreadable inline draft without losing its siblings', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: {
+          label: '折叠块',
+          children: [
+            { kind: 'markdown', text: '第一段' },
+            { kind: 'text', props: 123 },
+            { kind: 'markdown', text: '第二段' },
+          ],
+        },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(details?.children).toHaveLength(2);
+    const texts = (details?.children ?? []).map((id) => doc.nodes.get(id)?.props.text);
+    expect(texts).toEqual(['第一段', '第二段']);
+    expect(doc.issues).toBe(1);
+  });
+});
+describe('inline draft ids', () => {
+  it('limits string props by the size of the node it becomes', () => {
+    const quoted = '"'.repeat(65_535);
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'q', kind: 'text', props: quoted }),
+    );
+    // 原始字符串没超限, 但存下来的是 {text: ...}, 序列化后翻倍越过上限。
+    expect(doc.nodes.get('q')).toBeUndefined();
+    expect(doc.issues).toBe(1);
+    const plain = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'p', kind: 'text', props: 'a'.repeat(30_000) }),
+    );
+    expect(plain.nodes.get('p')?.props.text).toHaveLength(30_000);
+  });
+  it('keeps generated ids inside the eighty character grammar', () => {
+    const parentId = 'p'.repeat(79);
+    const drafts = Array.from({ length: 1001 }, (_, i) => ({ kind: 'markdown', text: `第${i}段` }));
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: parentId, kind: 'details', props: { label: '折叠块', children: drafts } }),
+    );
+    const children = doc.nodes.get(parentId)?.children ?? [];
+    expect(children).toHaveLength(1001);
+    expect(new Set(children).size).toBe(1001);
+    for (const id of children) expect(id.length).toBeLessThanOrEqual(80);
+    expect(doc.issues).toBe(0);
+  });
+});
+
+// #7627 review: a draft that names itself keeps that id, and a bare string only
+// counts as text for the kinds that render `props.text`.
+describe('inline draft ids and text-only props', () => {
+  it('keeps an inline child id that the draft declares', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'tabs',
+        kind: 'details',
+        props: {
+          label: 'x',
+          children: [
+            { id: 'second', kind: 'markdown', text: 'two' },
+            { kind: 'markdown', text: 'three' },
+          ],
+        },
+      }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('tabs')?.children[0]).toBe('second');
+  });
+
+  it('keeps a string props on the kinds that render text from it', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'm', kind: 'math', props: 'E = mc^2' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('m')?.props.text).toBe('E = mc^2');
+  });
+  it('drops a string props on a kind that never reads text', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: 'plain string' }),
+    );
+    expect(doc.nodes.has('d')).toBe(false);
+    expect(doc.issues).toBe(1);
+  });
+});

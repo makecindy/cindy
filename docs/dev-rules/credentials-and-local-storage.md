@@ -179,16 +179,31 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 
 ### 运行时会话续期退避
 
-Desktop 的运行时 refresh 遇到瞬时失败后，主动调用与定时重试共用至少 60 秒的等待；
-429 的有效 `Retry-After` 更长时按服务器等待时间执行。等待期间的调用不发请求、不延长
-原期限，也不清除凭证。成功续期/登录清除等待，登录代次改变后旧等待不约束新账号。
-唯一提前结束等待的情形是：此前失败为无服务端响应的网络错误（status 0），且 relay
-随后明确返回鉴权拒绝，证明网络路径已可达。同登录代次的自救可提前续期，仍复用在途
-refresh 与 relay 自救节流。在途 refresh 尚未返回时收到的恢复信号等待其结束；若同代次
-请求随后以网络错误失败，只补一次续期，并发恢复调用仍共享该次请求，新失败保留自己的
-等待期限。网卡变化提示不能触发该例外，429、Retry-After 和服务端错误
-仍遵守原期限。续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
-冷启动、确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
+Desktop 冷启动恢复已保存的登录时，DNS／断网、服务端临时错误及区域端点清单暂不可用
+不会清除凭证，也不在有限次数失败后放弃。启动画面仍只等待原有的 20 秒，恢复流程在
+后台持续按下述随机退避策略重试；直到恢复成功、凭证明确
+失效，或用户开始新的登录／退出／切换账号／进入未登录模式。人工操作使旧流程失效，
+迟到响应不能覆盖新界面身份；不通过中断正在轮换凭证的网络请求来实现取消。
+已发出的刷新若成功，先在既有凭证事务中核对仍保存着请求所消费的凭证，再保存轮换结果；
+即使用户正在手动登录，也不能丢掉这一结果。旧账号仍保存时仅更新它的凭证，不重新激活，
+不覆盖较新的凭证，也不复活已退出的账号。
+登录页「重试」优先恢复已保存的登录，复用正在进行的请求，并可提前结束普通网络失败
+的等待，但不能绕过服务端冷却时间。运行时续期也不与冷启动流程并发轮换同一凭证。
+实现与回归见 `authManager.ts`、`authColdStartRecovery.test.ts`。
+
+Desktop 冷启动恢复与运行时 refresh 共用随机指数退避策略：连续失败后的等待区间依次为
+1–2 分钟、2–4 分钟、4–8 分钟，之后持续在 5–10 分钟内重新随机取值，不设次数上限。
+429／503 的有效 `Retry-After` 更长时先遵守服务器期限，再追加当前退避档位的随机间隔，
+防止所有客户端在同一个服务器恢复时间一起重试。等待期间的主动调用不发请求、不延长
+原期限，也不清除凭证。成功续期／登录清除等待，登录代次改变后旧等待不约束新账号；
+冷启动画面超时转后台不能重置失败次数。冷启动的等待期限和失败次数归属于当前保存的
+凭证，返回／取消再恢复沿用原期限，取消后的迟到限流响应也必须保留期限；手动重试释放
+纯网络错误的等待时不清零失败次数。恢复停止期间的启动超时不能清除手动登录进度。
+网络变化、resume 或 relay 恢复信号均不能跳过等待或清零失败次数；在途请求仍复用同一个
+promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，且
+此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
+续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
+确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
 实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
 `main/__tests__/authRefreshBackoff.test.ts`。
 
@@ -201,6 +216,9 @@ refresh 与 relay 自救节流。在途 refresh 尚未返回时收到的恢复�
 | Cindy 管理的持久数据                | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录                                                                                                                                                                                                                                                                                                                                       |
 | 浏览器用户配方与经验 | `userData/browser-recipes/<site>/recipes/<id 的 SHA-256>.json`，每站多个流程，原子替换；兼容旧 `recipe.json`，新文件优先。只保存参数化定义及 candidate/active/suspended 状态、浏览器 profile 范围，不保存试跑 inputs/页面返回值；禁止写入凭据，业务变动值用 inputs。同站 `experience.json` 最多保存 32 种操作形状（动作枚举、次数、时间），不保存 URL 路径/查询、选择器、脚本或输入输出；删除站点目录一并重置。重复形状仅提示当前 Agent 判断，不触发后台模型。试跑凭证与单轮修复预算只在 MCP 会话内存，暂停状态跨重启保留。 |
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
+| 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
+| 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
+| 自建中转服务（用户服务器） | 「部署到我的服务器」经 SSH 写入用户自己的服务器：`/opt/cindy-relay`（Node 运行环境与 `relay.mjs`）、`/var/lib/cindy-relay`（属 `cindy-relay` 系统用户、0700：设备凭证哈希与证书档案、Let's Encrypt 账户密钥、0600 原子发布的 `tls/material.json` 证书与 TLS 私钥、`status.json`）、`/etc/systemd/system/cindy-relay.service`。旧分立 PEM 文件仅在密钥配对且未过期时兼容读取；续期提交失败保留上一完整代次。主人凭证明文与主人私钥从不离开主人电脑；卸载前核对中转 ID 和主人公钥，匹配才删除。见 `device-link/selfHostedRelayDeploy.ts` |
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |
 | 预创建 worktree 的取消标记          | `userData/worktree-cancelled-creations/<sessionId 的 SHA-256>`，空文件原子排他创建；不含路径、草稿或关联密钥。保留以拒绝重启后迟到的创建请求，不按超时删除。只在核实未被任务认领后写入。同路径加 `.lock` 是可释放的跨进程操作锁，复用既有锁协议；同一 profile、同一任务的创建登记与取消回收串行，拿不到锁不得确认回收完成。异步创建完成后、登记前再次核对取消标记                                               |
 | Mobile 已取消创建的草稿             | 复用账号隔离的 durable outbox；持久创建流程先保存草稿、原项目目录和附件，再登记 reservation 和发送远端 worktree 创建；创建回包前暂停发件箱投递。回收确认后，`creation.cancelled` 与原项目目录先持久写入，再忘记回收账本。重建使用新远端 ID，`storageSessionId` 保持原 AsyncStorage 键和附件目录，通过单次记录写入提交；写入失败时原草稿仍可读。编辑页恢复目录时重新探测资格，不沿用旧 worktree 的资格或分支偏好 |

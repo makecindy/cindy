@@ -70,6 +70,7 @@ import {
   type RetransmitEstimate,
 } from './transport.js';
 import { PLUGIN_SYNC_CHANNEL } from './pluginSyncProtocol.js';
+import { RELAY_AUTH_CHANNEL, relayAuthHandshake } from './selfHostedRelayAuth.js';
 import { DIRECT_LINK_CAPABILITY, DIRECT_LINK_SIGNAL, DirectLinkNegotiator, parseDirectSignal,
   type DirectRuntime } from './directNegotiation.js';
 import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
@@ -248,6 +249,33 @@ export interface DeviceLinkLogger {
   error(...args: unknown[]): void;
 }
 
+/** WebSocket 升级的认证方案,见 `DeviceLinkClientOptions.authorizationScheme`。 */
+export type DeviceLinkAuthorizationScheme = 'Bearer' | 'ProviderShareGuest' | 'CindyRelay';
+
+/**
+ * 自建中转的设备签名钩子(docs/self-hosted-relay-plan.md §16,实现见 selfHostedRelayAuth.ts)。
+ * `sign` 返回要附在经中转转发的对端帧上的 `auth`;`verify` 返回 false 的入站对端帧直接丢弃。
+ */
+export interface DeviceLinkFrameAuth {
+  sign(frame: Readonly<Envelope>): unknown;
+  verify(frame: Readonly<Record<string, unknown>>): boolean;
+  /** 稳定身份用于隔离账号切换前的待发消息；认证交换不创建远控链路。 */
+  peerChallenge?: {
+    session: object;
+    state(deviceId: string): 'ready' | 'needed' | 'unknown';
+  };
+}
+
+interface RelayChallengeQueue {
+  session: object;
+  id: string;
+  startedAt: number;
+  startedMonotonicAt: number;
+  lastProbeAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  frames: Map<string, { env: Envelope; bytes: number; pending?: PendingRequest }>;
+}
+
 export interface DeviceLinkClientOptions {
   /** Host WebRTC adapter. Both peers must opt in; unavailable/old hosts keep using relay. */
   directRuntime?: DirectRuntime;
@@ -257,9 +285,16 @@ export interface DeviceLinkClientOptions {
   getToken(): Promise<string | null>;
   /**
    * WebSocket 升级的认证方案。默认 `Bearer`(账号 Access Token);供应商分享的跨区域受邀者
-   * 连接对方区域时用 `ProviderShareGuest`(只限分享的凭证，契约 §6.3)。
+   * 连接对方区域时用 `ProviderShareGuest`(只限分享的凭证，契约 §6.3);连接自建中转用
+   * `CindyRelay`(加入中转时拿到的设备凭证，绝不发送账号 token，见 docs/self-hosted-relay-plan.md §5.2)。
+   * 传函数时每次建连前取值:host 在官方中转与自建中转之间切换时,方案与 getToken 必须同一轮一致。
    */
-  authorizationScheme?: 'Bearer' | 'ProviderShareGuest';
+  authorizationScheme?: DeviceLinkAuthorizationScheme | (() => DeviceLinkAuthorizationScheme);
+  /**
+   * 自建中转的设备签名。每帧取值:返回 null(官方中转)时不签名也不核对,wire 行为与旧版完全相同。
+   * host 在官方与自建中转之间切换时与 `getToken` / `authorizationScheme` 同一轮生效。
+   */
+  frameAuth?: () => DeviceLinkFrameAuth | null;
   /** 每次(重)连时的 hello payload(host 持有 deviceName / 开关 / busy 的真相) */
   getHello(): HelloPayload;
   createWebSocket: WsFactory;
@@ -558,6 +593,8 @@ interface PendingRequest {
   linkGeneration?: number;
   /** peer reset 时让 host 快速结束本次等待，由 host 重开后决定是否重试。 */
   retryAfterPeerReset?: () => void;
+  /** 仅自建中转建链可在对端启动挑战更新后重送；沿用原 id、签名身份与请求期限。 */
+  relayLinkRetry?: { envelope: Envelope; session: object };
 }
 
 
@@ -578,6 +615,8 @@ interface PendingReliableMessage {
   sent: boolean;
   /** 入队时刻（monotonicNow 单调时钟）；push 帧按 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 判定过期。 */
   enqueuedAt: number;
+  /** 认证身份切换后，旧业务不能用新身份重新签名发送。 */
+  relaySigningSession?: object;
   /**
    * 本轮(attempts 归零后)首次真正写出的时刻(monotonicNow)。enqueuedAt 可能早于
    * 发送(link 未就绪时排队),判断「对端有过 ACK 机会却没回」必须从首发算起。
@@ -812,6 +851,9 @@ export class DeviceLinkClient {
   private selfDeviceId: string | null = null;
 
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly relayChallenges = new Map<string, RelayChallengeQueue>();
+  private relayChallengeBytes = 0;
+  private relayChallengeFrames = 0;
   /**
    * 每个控制端/被控端各自维护一个 stream。stream 在 relay 重连时保留，
    * 这样未 ACK 的消息可以在重新 openLink 后继续重发；旧 stream 不会混入
@@ -1499,6 +1541,7 @@ export class DeviceLinkClient {
         peer.linkAcceptedInbound = false;
       }
     } else {
+      this.cancelRelayQueuedControl(dst);
       this.rejectPendingLinkOpen(
         dst,
         'LINK_NOT_OPEN',
@@ -1854,6 +1897,10 @@ export class DeviceLinkClient {
         dst: env.dst,
         linkGeneration: env.dst ? this.getPeerLinkGeneration(env.dst) : undefined,
       };
+      const relaySigningSession = this.opts.frameAuth?.()?.peerChallenge?.session;
+      if (env.kind === 'link-open' && relaySigningSession) {
+        pendingRequest.relayLinkRetry = { envelope: { ...env, id }, session: relaySigningSession };
+      }
       this.pending.set(id, pendingRequest);
       if (
         allowPeerResetRetry
@@ -2056,8 +2103,11 @@ export class DeviceLinkClient {
 
     let ws: WsLike;
     try {
+      const scheme = typeof this.opts.authorizationScheme === 'function'
+        ? this.opts.authorizationScheme()
+        : this.opts.authorizationScheme;
       ws = await this.opts.createWebSocket(this.opts.getWsUrl(), {
-        authorization: `${this.opts.authorizationScheme ?? 'Bearer'} ${token}`,
+        authorization: `${scheme ?? 'Bearer'} ${token}`,
       });
     } catch (err) {
       // 异步工厂可能在更新的一轮 connect 已经起来之后才 reject —— 那是过期尝试的失败,
@@ -2303,6 +2353,7 @@ export class DeviceLinkClient {
 
   private clearTimers(): void {
     this.clearNetworkProbe();
+    for (const peer of this.relayChallenges.keys()) this.clearRelayChallenge(peer);
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -2378,6 +2429,21 @@ export class DeviceLinkClient {
       this.log.warn('dropping invalid device-link frame');
       return;
     }
+    // 自建中转:对端帧必须带发送设备的有效签名(在任何解码与分发之前核对,中转改不了内容)。
+    const frameAuth = this.opts.frameAuth?.();
+    if (typeof parsed.src === 'string' && ROUTED_KINDS.has(parsed.kind)) {
+      if (frameAuth && !frameAuth.verify(parsed as unknown as Record<string, unknown>)) {
+        this.noteRejectedSignature(parsed.src, parsed.kind);
+        // 冷启动证书尚未就绪时也只发有界认证探测；未验签业务仍直接丢弃。
+        // 与设备证书相同的短 ID 边界，避免任意长来源占据探测队列。
+        if (parsed.src.length > 0 && parsed.src.length <= 256 && frameAuth.peerChallenge
+          && frameAuth.peerChallenge.state(parsed.src) !== 'ready') {
+          try { this.probeRelayChallenge(parsed.src, this.ensureRelayChallenge(parsed.src, frameAuth)); }
+          catch { /* 认证重试有界；失败不触发共享 socket 重连。 */ }
+        }
+        return;
+      }
+    }
     const env = decodeScopedEnvelope(parsed, this.scopeSupport());
     if (!env) { this.log.warn('dropping invalid device-link routing scope'); return; }
     const validForHeartbeat = isValidInboundEnvelope(env);
@@ -2396,6 +2462,23 @@ export class DeviceLinkClient {
         this.networkProbeTimer = null;
         this.networkProbeNextAllowedAt = this.lastInboundAt + 3_000;
         this.log.debug(`network probe confirmed relay activity (elapsedMs=${Math.max(0, this.lastInboundAt - this.networkProbeStartedAt)})`);
+      }
+    }
+
+    if (frameAuth?.peerChallenge && env.src && ROUTED_KINDS.has(env.kind)) {
+      const handshake = relayAuthHandshake(env);
+      if (handshake === 'request') {
+        // 只回送认证证明，不调用业务 handler，也不改变 remoteControlEnabled 或订阅。
+        try {
+          this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', id: env.id, dst: env.src,
+            payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } });
+        } catch { /* 对端会在自己的预算内重试。 */ }
+        this.recoverRelayLinkOpen(env.src, frameAuth);
+        return;
+      }
+      if (handshake === 'response') {
+        if (frameAuth.peerChallenge.state(env.src) === 'ready') this.flushRelayChallenge(env.src, frameAuth);
+        return;
       }
     }
 
@@ -3319,6 +3402,7 @@ export class DeviceLinkClient {
       lastSentAt: 0,
       sent: false,
       enqueuedAt: this.monotonicNow(),
+      relaySigningSession: this.opts.frameAuth?.()?.peerChallenge?.session,
       lastBlockedBy: willSendNow ? undefined : !this.isPeerSendReady(peer) ? 'link'
         : this.isOutsideReceiveWindow(peer, seq) ? 'receive-window'
         : this.shouldHoldRecoverySend(peer, additionalFrames) ? 'recovery-ack' : 'relay-budget',
@@ -3356,6 +3440,18 @@ export class DeviceLinkClient {
    * 一分片都没写出才抛;中途竞态只返回已上网的帧数,让恢复预算能结算部分突发。
    */
   private sendReliableFrames(peer: PeerTransportState, pending: PendingReliableMessage): number {
+    const frameAuth = this.opts.frameAuth?.();
+    if (pending.relaySigningSession !== frameAuth?.peerChallenge?.session) {
+      pending.relaySigningSession = frameAuth?.peerChallenge?.session;
+      const id = pending.envelope.id!;
+      const request = this.pending.get(id);
+      if (request) {
+        this.pending.delete(id);
+        request.reject(new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+      }
+      this.dropReliablePendingForRequest(pending.envelope.dst!, id);
+      return 0;
+    }
     // A resume/ACK callback can run before the overdue timeout callback. The
     // existing timeout path substitutes a skip at the same sequence number;
     // never retransmit an expired command just because its timer ran late.
@@ -3381,6 +3477,13 @@ export class DeviceLinkClient {
       // 从队头推进 ACK，不能让当前短尾帧抢占 relay 探测预算，卡住缺失的大队头。
       const head = peer.pending.values().next().value;
       if (head && head !== pending && !head.sent) return 0;
+    }
+    if (frameAuth?.peerChallenge && frameAuth.peerChallenge.state(pending.envelope.dst!) !== 'ready') {
+      // 逻辑消息保留在已有可靠 pending；分片不能挤进认证队列或被误记为物理已发送。
+      const dst = pending.envelope.dst!;
+      this.probeRelayChallenge(dst, this.ensureRelayChallenge(dst, frameAuth));
+      pending.lastBlockedBy = 'link';
+      return 0;
     }
     const peers = this.getReadyReliablePeers(pending.envelope.dst!);
     const budgetNow = this.monotonicNow();
@@ -3414,7 +3517,7 @@ export class DeviceLinkClient {
       for (const frame of frames) {
         // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
         // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
-        this.sendRoutedEnvelope(frame, peer.linkGeneration);
+        this.sendRoutedEnvelope(frame, peer.linkGeneration, true);
         writtenBytes += byteLength(JSON.stringify(encodeScopedEnvelope(frame, ALL_SCOPES)));
         pending.sent = true;
         sent += 1;
@@ -3720,10 +3823,169 @@ export class DeviceLinkClient {
     return Math.max(originalBytes, skipBytes);
   }
 
-  private sendEnvelope(env: Envelope): void {
+  private rejectedSignatureLogAt = 0;
+  private rejectedSignatureCount = 0;
+
+  /** 签名不对的帧可能成批出现(时钟不准、证书未同步),日志按分钟汇总。 */
+  private noteRejectedSignature(src: string, kind: string): void {
+    this.rejectedSignatureCount++;
+    const now = Date.now();
+    if (now - this.rejectedSignatureLogAt < 60_000) return;
+    this.log.warn(
+      `dropping device-link frame without a valid device signature src=${src.slice(0, 8)} kind=${kind} count=${this.rejectedSignatureCount}`,
+    );
+    this.rejectedSignatureLogAt = now;
+    this.rejectedSignatureCount = 0;
+  }
+
+  private recoverRelayLinkOpen(dst: string, auth: DeviceLinkFrameAuth): void {
+    const challenge = auth.peerChallenge;
+    if (!challenge || challenge.state(dst) === 'ready') return;
+    for (const [id, pending] of this.pending) {
+      const retry = pending.relayLinkRetry;
+      if (!retry || pending.dst !== dst || !pending.hasWritten() || pending.expireIfOverdue()) continue;
+      if (retry.session !== challenge.session) {
+        this.pending.delete(id);
+        this.settleOutboundRouteAttemptsForId(dst, id);
+        pending.reject(new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+        continue;
+      }
+      try {
+        // 先进入原有认证队列，双方挑战确认后再重签发送；首次写入时间不变，不延长预算。
+        this.sendRoutedEnvelope(retry.envelope, pending.linkGeneration);
+      } catch { /* 保留原请求期限；不扩大到共享 socket 或业务写请求的重试。 */ }
+    }
+  }
+
+  private ensureRelayChallenge(dst: string, auth: DeviceLinkFrameAuth): RelayChallengeQueue {
+    const session = auth.peerChallenge!.session;
+    let queue = this.relayChallenges.get(dst);
+    if (queue && queue.session !== session) {
+      this.clearRelayChallenge(dst, new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+      queue = undefined;
+    }
+    if (queue) return queue;
+    if (this.relayChallenges.size >= 32) throw new DeviceLinkError('BACKPRESSURE', 'relay authentication queue is full');
+    queue = { session, id: createRequestId(), startedAt: Date.now(), startedMonotonicAt: this.monotonicNow(),
+      lastProbeAt: -Infinity, timer: null, frames: new Map() };
+    this.relayChallenges.set(dst, queue);
+    const retry = () => {
+      queue!.timer = null;
+      if (this.relayChallenges.get(dst) !== queue) return;
+      const current = this.opts.frameAuth?.();
+      if (current?.peerChallenge?.session !== session) {
+        this.clearRelayChallenge(dst, new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+        return;
+      }
+      if (Date.now() - queue!.startedAt >= this.timing.requestTimeoutMs
+        || this.monotonicNow() - queue!.startedMonotonicAt >= this.timing.requestTimeoutMs) {
+        this.clearRelayChallenge(dst, new DeviceLinkError('BACKPRESSURE', 'relay authentication timed out before socket write'));
+        return;
+      }
+      try { this.probeRelayChallenge(dst, queue!); } catch { /* 有界预算内再试。 */ }
+      if (this.relayChallenges.get(dst) !== queue) return;
+      queue!.timer = setTimeout(retry, Math.min(1_000, Math.max(100, this.timing.transportRetryIntervalMs)));
+    };
+    queue.timer = setTimeout(retry, Math.min(1_000, Math.max(100, this.timing.transportRetryIntervalMs)));
+    return queue;
+  }
+
+  private probeRelayChallenge(dst: string, queue: RelayChallengeQueue): void {
+    if (this.monotonicNow() - queue.lastProbeAt < 100) return;
+    queue.lastProbeAt = this.monotonicNow();
+    this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', id: queue.id, dst,
+      payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'request' } } });
+  }
+
+  private clearRelayChallenge(dst: string, error?: DeviceLinkError): RelayChallengeQueue | undefined {
+    const queue = this.relayChallenges.get(dst);
+    if (!queue) return;
+    this.relayChallenges.delete(dst);
+    if (queue.timer) clearTimeout(queue.timer);
+    for (const { env, bytes, pending } of queue.frames.values()) {
+      this.relayChallengeBytes -= bytes;
+      this.relayChallengeFrames--;
+      if (error && pending && env.id && this.pending.get(env.id) === pending) {
+        this.pending.delete(env.id);
+        this.settleOutboundRouteAttemptsForId(dst, env.id);
+        this.dropReliablePendingForRequest(dst, env.id);
+        pending.reject(error);
+      }
+    }
+    return queue;
+  }
+
+  private cancelRelayQueuedControl(dst: string): void {
+    const queue = this.relayChallenges.get(dst);
+    if (!queue) return;
+    for (const [key, { env, bytes, pending }] of queue.frames) {
+      if (isUnlinkedLegacyEnvelope(env)) continue;
+      queue.frames.delete(key);
+      this.relayChallengeBytes -= bytes;
+      this.relayChallengeFrames--;
+      if (env.id) this.settleOutboundRouteAttemptsForId(dst, env.id);
+      if (pending && env.id && this.pending.get(env.id) === pending) {
+        this.pending.delete(env.id);
+        pending.reject(new DeviceLinkError('LINK_NOT_OPEN', 'control link closed before socket write'));
+      }
+    }
+  }
+
+  private flushRelayChallenge(dst: string, auth: DeviceLinkFrameAuth): void {
+    const queue = this.relayChallenges.get(dst);
+    if (!queue) return;
+    if (queue.session !== auth.peerChallenge?.session) {
+      this.clearRelayChallenge(dst, new DeviceLinkError('NOT_CONNECTED', 'relay signing identity changed'));
+      return;
+    }
+    this.clearRelayChallenge(dst);
+    for (const { env, pending } of queue.frames.values()) {
+      // 超时的写请求绝不能因迟到的认证响应在后台继续发送。
+      if (pending && (this.pending.get(env.id!) !== pending || pending.expireIfOverdue?.())) continue;
+      try {
+        if (this.sendEnvelope(env)) pending?.noteFirstWrite?.();
+      } catch (error) {
+        if (pending && this.pending.get(env.id!) === pending) {
+          this.pending.delete(env.id!);
+          this.settleOutboundRouteAttemptsForId(dst, env.id!);
+          this.dropReliablePendingForRequest(dst, env.id!);
+          pending.reject(error instanceof DeviceLinkError ? error : new DeviceLinkError('NOT_CONNECTED', 'socket write failed'));
+        }
+      }
+    }
+    this.retryPending(dst, { ignoreInterval: false, onlyUnsent: true });
+  }
+
+  private sendEnvelope(env: Envelope, allowAuthenticationQueue = true): boolean {
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
-    const text = JSON.stringify(encodeScopedEnvelope(env, this.scopeSupport()));
+    let wire = encodeScopedEnvelope(env, this.scopeSupport());
+    if (wire.dst && ROUTED_KINDS.has(wire.kind)) {
+      const frameAuth = this.opts.frameAuth?.();
+      if (frameAuth?.peerChallenge && !relayAuthHandshake(wire) && frameAuth.peerChallenge.state(wire.dst) !== 'ready') {
+        const bytes = byteLength(JSON.stringify(wire));
+        if (bytes > MAX_FRAME_BYTES) throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds relay authentication budget');
+        const queue = this.ensureRelayChallenge(wire.dst, frameAuth);
+        if (!allowAuthenticationQueue) {
+          this.probeRelayChallenge(wire.dst, queue);
+          return false;
+        }
+        const key = `${wire.kind}:${wire.id ?? ''}`;
+        if (!queue.frames.has(key)) {
+          if (this.relayChallengeFrames >= 256 || this.relayChallengeBytes + bytes > 2 * MAX_FRAME_BYTES) {
+            throw new DeviceLinkError('BACKPRESSURE', 'relay authentication queue is full');
+          }
+          queue.frames.set(key, { env, bytes, pending: env.id ? this.pending.get(env.id) : undefined });
+          this.relayChallengeFrames++;
+          this.relayChallengeBytes += bytes;
+        }
+        this.probeRelayChallenge(wire.dst, queue);
+        return false;
+      }
+      const auth = frameAuth?.sign(wire);
+      if (auth !== undefined) wire = { ...wire, auth } as Envelope;
+    }
+    const text = JSON.stringify(wire);
     // 按 UTF-8 字节数判定,与服务端 MAX_FRAME_BYTES(Buffer.byteLength)一致。
     // 用 text.length(UTF-16 码元)会与服务端不符:CJK 等多字节内容客户端自检通过、
     // 服务端却 PAYLOAD_TOO_LARGE 丢帧,invoke 只能等 30s 超时而非快速失败。
@@ -3736,9 +3998,10 @@ export class DeviceLinkClient {
     // 时提前拒绝，避免弱网下 native socket 持续吃内存。
     this.assertWebSocketCapacity(frameBytes);
     ws.send(text);
+    return true;
   }
 
-  private sendRoutedEnvelope(env: Envelope, linkGeneration?: number): string | undefined {
+  private sendRoutedEnvelope(env: Envelope, linkGeneration?: number, requirePhysicalWrite = false): string | undefined {
     if (!env.dst) {
       this.sendEnvelope(env);
       return env.id;
@@ -3747,8 +4010,9 @@ export class DeviceLinkClient {
     const generation = linkGeneration ?? this.getPeerLinkGeneration(env.dst);
     this.rememberOutboundRouteGeneration(routed.id!, env.dst, generation);
     try {
-      this.sendEnvelope(routed);
-      this.pending.get(routed.id!)?.noteFirstWrite?.();
+      const written = this.sendEnvelope(routed, !requirePhysicalWrite);
+      if (written) this.pending.get(routed.id!)?.noteFirstWrite?.();
+      else if (requirePhysicalWrite) throw new DeviceLinkError('BACKPRESSURE', 'awaiting relay authentication');
     } catch (err) {
       this.rollbackOutboundRouteGeneration(routed.id!, env.dst, generation);
       throw err;

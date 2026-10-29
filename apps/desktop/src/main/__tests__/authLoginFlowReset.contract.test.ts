@@ -5,10 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import {
-  ColdStartAuthFallbackRegistry,
-  commitColdStartRefreshIfCurrent,
-} from '../authStartupGate';
+import { ColdStartAuthFallbackRegistry, commitColdStartRefreshIfCurrent } from '../authStartupGate';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
@@ -52,26 +49,43 @@ describe('auth login-flow reset', () => {
     const start = source.indexOf('async function finishFreshLogin(');
     const finish = source.slice(start, source.indexOf('async function runLoginAction(', start));
     expect(finish).toContain('discoverPersonalLoginOrganization(outcome.membership');
-    expect(finish.indexOf('assertLoginFlowCurrent(expectedLoginFlowEpoch)')).toBeGreaterThan(finish.indexOf('await discoverPersonalLoginOrganization'));
+    expect(finish.indexOf('assertLoginFlowCurrent(expectedLoginFlowEpoch)')).toBeGreaterThan(
+      finish.indexOf('await discoverPersonalLoginOrganization'),
+    );
     expect(finish).toContain('pendingPersonalLogin = { outcome, realm: personalRealm }');
     expect(finish).toContain('personalLoginAvailable: true');
     expect(finish).not.toContain('pendingAuthRealm = discovery.region');
     expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch)');
     const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
-    const lookup = source.slice(lookupStart, source.indexOf('async function completeLogin(', lookupStart));
+    const lookup = source.slice(
+      lookupStart,
+      source.indexOf('async function completeLogin(', lookupStart),
+    );
     expect(lookup).not.toContain('pendingAuthRealm =');
     const continueStart = source.indexOf("if (action.type === 'cancel-sso-realm')");
-    const continueBody = source.slice(continueStart, source.indexOf('if (!providerConfig)', continueStart));
+    const continueBody = source.slice(
+      continueStart,
+      source.indexOf('if (!providerConfig)', continueStart),
+    );
     expect(continueBody).toContain('pendingAuthRealm = personal.realm');
     expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch)');
     expect(continueBody).not.toContain('finishFreshLogin(');
     const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
     const confirmBody = source.slice(confirmStart, continueStart);
-    expect(confirmBody.indexOf('pendingPersonalLogin = null')).toBeLessThan(confirmBody.indexOf('pendingAuthRealm = confirmation.targetRegion'));
+    expect(confirmBody.indexOf('pendingPersonalLogin = null')).toBeLessThan(
+      confirmBody.indexOf('pendingAuthRealm = confirmation.targetRegion'),
+    );
     expect(confirmBody).toContain('pendingAccountRefreshToken = null');
-    expect(source.slice(0, source.indexOf('async function acceptLoginOutcome('))).not.toContain('await finishFreshLogin(');
-    expect(source).toContain("await finishFreshLogin({ status: 'ok', ...pair }, actionLoginFlowEpoch)");
-    const reset = source.slice(source.indexOf('function resetLoginFlowState()'), source.indexOf('function clearAuth('));
+    expect(source.slice(0, source.indexOf('async function acceptLoginOutcome('))).not.toContain(
+      'await finishFreshLogin(',
+    );
+    expect(source).toContain(
+      "await finishFreshLogin({ status: 'ok', ...pair }, actionLoginFlowEpoch)",
+    );
+    const reset = source.slice(
+      source.indexOf('function resetLoginFlowState()'),
+      source.indexOf('function clearAuth('),
+    );
     expect(reset).toContain('pendingPersonalLogin = null');
     expect(reset).toContain('handledLoginEmail = null');
   });
@@ -154,14 +168,23 @@ describe('auth login-flow reset', () => {
       source.indexOf("if (action.type === 'discover-sso-org') {"),
     );
     expect(discover).toContain('discoverEmailLogin(action.email');
-    expect(discover.indexOf('discoveredMethods = [];')).toBeLessThan(discover.indexOf('await discoverEmailLogin'));
+    expect(discover.indexOf('discoveredMethods = [];')).toBeLessThan(
+      discover.indexOf('await discoverEmailLogin'),
+    );
     expect(discover).toContain('discoverOrganizationRealm(domain, actionLoginFlowEpoch)');
     expect(discover).toContain('pendingAuthRealm = region;');
-    expect(discover.indexOf("type: 'realm-switch-required'")).toBeLessThan(discover.indexOf('discoveredMethods = methods;'));
+    expect(discover.indexOf("type: 'realm-switch-required'")).toBeLessThan(
+      discover.indexOf('discoveredMethods = methods;'),
+    );
     expect(source).toContain("email: confirmation.email ?? ''");
     const requestStart = source.indexOf("if (action.type === 'request-code') {");
-    const request = source.slice(requestStart, source.indexOf("if (action.type === 'verify-code') {", requestStart));
-    expect(request.indexOf('pendingAuthRealm = AUTH_REGION;')).toBeGreaterThan(request.indexOf('await client.requestCode('));
+    const request = source.slice(
+      requestStart,
+      source.indexOf("if (action.type === 'verify-code') {", requestStart),
+    );
+    expect(request.indexOf('pendingAuthRealm = AUTH_REGION;')).toBeGreaterThan(
+      request.indexOf('await client.requestCode('),
+    );
     expect(request).toContain('discoveredMethods = [];');
   });
 
@@ -795,12 +818,16 @@ describe('auth login-flow reset', () => {
     const initializeStart = source.indexOf('export async function initialize(');
     const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
     const initializeBody = source.slice(initializeStart, initializeEnd);
-    expect(initializeBody).toContain('await loadClientEndpointsForRealm(persistedSession.realm);');
     expect(initializeBody).not.toContain('activateClientEndpointRealm(persistedSession.realm);');
 
     const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
     const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
     const coldBody = source.slice(coldStart, coldEnd);
+    // Endpoint discovery now runs inside the recoverable flow, still before any
+    // credential request or realm activation (cross-realm credential boundary).
+    expect(coldBody.indexOf('await loadClientEndpointsForRealm(storedRealm);')).toBeLessThan(
+      coldBody.indexOf('await runAuthRefreshWithReplacementRetry(storedToken,'),
+    );
     const coldCredentialCommit = coldBody.indexOf('await commitDesktopRefreshCredentials(');
     const coldPolicyGuard = coldBody.indexOf('!canRestoreAuthSessionForMembership(');
     const coldRealmActivation = coldBody.indexOf('activateClientEndpointRealm(storedRealm);');
@@ -810,7 +837,11 @@ describe('auth login-flow reset', () => {
     expect(coldRealmActivation).toBeGreaterThan(coldPolicyGuard);
     expect(coldBody).toContain('requestedToken,');
     expect(coldBody).toContain('allowUnclaimedVault: true');
-    expect(coldBody).toContain("epochChanged('before-cold-start-credential-commit')");
+    // Token rotation is durable before publication checks; stopping the UI must
+    // not lose the consumed credential. Ownership remains checked in the vault.
+    expect(coldBody.indexOf("epochChanged('after-cold-start-credential-commit')")).toBeGreaterThan(
+      coldCredentialCommit,
+    );
     expect(coldBody).toContain("credentialCommit !== 'active'");
     const inactiveCommit = coldBody.indexOf("credentialCommit !== 'active'");
     const activeCandidateRead = coldBody.indexOf(
@@ -905,18 +936,24 @@ describe('auth login-flow reset', () => {
     // The timeout boundary must go through the guarded helper so a still-pending
     // owner transition is not awaited (its teardown awaits are unbounded) and no
     // competing signed-out cleanup starts underneath it.
-    const guardedRecovery = initializeBody.lastIndexOf('resolveColdStartTimeoutRecovery({', timeoutRecovery);
+    const guardedRecovery = initializeBody.lastIndexOf(
+      'resolveColdStartTimeoutRecovery({',
+      timeoutRecovery,
+    );
     expect(guardedRecovery).toBeGreaterThan(-1);
     expect(guardedRecovery).toBeLessThan(timeoutRecovery);
     expect(initializeBody).toContain('pendingState: snapshotLoggedOutAuthState(true)');
     expect(initializeBody).toContain('timeoutStartEpoch: startupTimeoutEpoch');
     expect(initializeBody).toContain('currentEpoch: authStateEpoch');
     expect(initializeBody).toContain('currentState: snapshotAuthState()');
-    expect(initializeBody).not.toContain('await ownerChangeShellGate.waitForSettled();\n        return snapshotAuthState();');
+    expect(initializeBody).not.toContain(
+      'await ownerChangeShellGate.waitForSettled();\n        return snapshotAuthState();',
+    );
     // The fallback must tell the recovery it is the startup-gate fallback, so the
     // epoch it raises is recorded at the moment it is raised (see below).
-    expect(initializeBody.indexOf('coldStartTimeoutRecovery: true', timeoutRecovery))
-      .toBeGreaterThan(timeoutRecovery);
+    expect(
+      initializeBody.indexOf('coldStartTimeoutRecovery: true', timeoutRecovery),
+    ).toBeGreaterThan(timeoutRecovery);
   });
 
   it('accepts a late refresh when the fallback edge was recorded at bump time', () => {
@@ -1001,7 +1038,9 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g)).toHaveLength(2);
+    expect(
+      refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g),
+    ).toHaveLength(2);
     expect(refreshBody).toContain(
       'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
     );
@@ -1185,7 +1224,9 @@ describe('auth login-flow reset', () => {
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
     const completeBody = source.slice(completeStart, completeEnd);
     const acceptedUser = completeBody.indexOf('currentUser = nextUser;');
-    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+    const ownerCommit = completeBody.indexOf(
+      'commitCloudAppSession(currentUser.id, authRealmChanged);',
+    );
     const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', acceptedUser);
     expect(acceptedUser).toBeGreaterThan(-1);
     expect(clearPreviousFlag).toBeGreaterThan(acceptedUser);

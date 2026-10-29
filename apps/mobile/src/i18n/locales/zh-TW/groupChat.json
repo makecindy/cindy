@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "新增群聊",
-    "description": "選幾位夥伴放進一個群聊。你說一句，它們會一起接話。",
     "nameLabel": "群聊名稱",
     "namePlaceholder": "例如：週末出遊",
     "nameRequired": "為群聊取個名字",
     "membersLabel": "選擇夥伴",
     "selectedCount_one": "已選 {{count}} 位，最多 {{max}} 位",
     "selectedCount_other": "已選 {{count}} 位，最多 {{max}} 位",
-    "minMembers": "至少選 {{min}} 位夥伴",
-    "notEnoughBots": "至少需要 {{min}} 位可用的夥伴才能建立群聊，先去新增夥伴吧。",
+    "close": "關閉",
+    "submitShort": "建立",
     "submit": "建立群聊",
-    "failed": "群聊沒能建立，請稍後重試",
-    "chooseComputer": "在哪台電腦上建群",
-    "computerNote": "群聊建在 {{deviceName}} 上，夥伴們在這台電腦上做事。"
+    "failed": "群聊沒能建立，請稍後重試"
   },
   "memberStatus": {
     "paused": "已暫停",
