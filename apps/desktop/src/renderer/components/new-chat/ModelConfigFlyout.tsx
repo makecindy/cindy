@@ -451,9 +451,15 @@ export function ModelConfigFlyout({
             )}
           </div>
           {usageLimitFallback.error && (
-            <div className="mt-1 leading-[1.5] text-[var(--error-fg)]" role="alert">
-              {t('newChat.usageLimitFallback.error')}
-              {usageLimitFallback.error}
+            <div
+              className="mt-1 leading-[1.5] text-[var(--error-fg)]"
+              role="alert"
+              // 主进程原文只留给悬停诊断，界面按错误码说人话。
+              title={usageLimitFallback.error}
+            >
+              {usageLimitFallback.errorCode
+                ? t(`newChat.usageLimitFallback.errors.${usageLimitFallback.errorCode}`)
+                : `${t('newChat.usageLimitFallback.error')}${usageLimitFallback.error}`}
             </div>
           )}
         </div>

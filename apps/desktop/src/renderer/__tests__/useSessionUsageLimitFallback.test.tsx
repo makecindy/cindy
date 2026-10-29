@@ -44,6 +44,37 @@ afterEach(() => {
 const savedTarget = { providerId: 'xd', model: 'deepseek-v4-flash' };
 
 describe('useSessionUsageLimitFallback', () => {
+  it('exposes the error code so the UI can speak the user\'s language', async () => {
+    maker.sessionUsageLimitFallbackSet.mockReturnValueOnce(
+      Promise.resolve({
+        ok: false as const,
+        errorCode: 'ROUTE_UNAVAILABLE' as const,
+        message: 'provider "xd" is not connected',
+      }),
+    );
+
+    const { result } = renderHook(() => useSessionUsageLimitFallback('task-a'));
+    await waitFor(() => expect(maker.sessionUsageLimitFallbackGet).toHaveBeenCalledWith('task-a'));
+
+    await act(async () => {
+      expect(await result.current.setTarget(savedTarget)).toBe(false);
+    });
+
+    // 码给界面拿去翻译；原文只当诊断信息保留。
+    expect(result.current.errorCode).toBe('ROUTE_UNAVAILABLE');
+    expect(result.current.error).toBe('provider "xd" is not connected');
+
+    // 下一次写入成功时��码与错误都要清掉，不能把旧错误留在界面上。
+    maker.sessionUsageLimitFallbackSet.mockReturnValueOnce(
+      Promise.resolve({ ok: true as const, target: savedTarget }),
+    );
+    await act(async () => {
+      expect(await result.current.setTarget(savedTarget)).toBe(true);
+    });
+    expect(result.current.errorCode).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
   it('does not send IPC before a task exists', async () => {
     const { result } = renderHook(() => useSessionUsageLimitFallback(null));
     await waitFor(() => expect(result.current.loading).toBe(false));
