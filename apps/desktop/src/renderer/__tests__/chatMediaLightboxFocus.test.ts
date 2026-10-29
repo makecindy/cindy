@@ -189,7 +189,7 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
   // must release it once even if the SDK load promise settles afterwards.
   it('releases once when closed during model parsing', async () => {
     let finishLoad: () => void = () => undefined;
-    viewerLoad.mockImplementationOnce(() => new Promise((resolve) => { finishLoad = resolve; }));
+    viewerLoad.mockImplementationOnce(() => new Promise((resolve) => { finishLoad = () => resolve(undefined); }));
     const { unmount } = render(React.createElement(ModelLightbox, {
       source: { kind: 'local', absPath: '/work/a.obj' }, onClose: vi.fn(),
     }));
