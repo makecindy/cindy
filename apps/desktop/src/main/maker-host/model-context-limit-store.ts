@@ -378,5 +378,8 @@ export const __testing = {
   MAX_ENTRIES,
   invalidate(): void {
     store.invalidateIfChanged();
+    // mtime 守卫会漏掉同一刻的直接改写（Windows CI 上文件系统 mtime 粒度更粗），
+    // 测试里直接改文件后必须真读盘，不能吃缓存里的旧值。
+    dropCachedStore();
   },
 };

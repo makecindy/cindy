@@ -37,8 +37,8 @@ export function ModelCompactionSettings({
   } | null>(null);
   const writing = useRef<number | null>(null);
   const lastWriteAt = useRef(0);
-  // 共享 Slider 取消手势会把“按下时”的值回放一遍；记下按下时的值来识别它。
-  const pressValue = useRef<number | null>(null);
+  // 取消手势后，共享 Slider 会回放一次按下前的值；这一次不是新预览。
+  const cancelling = useRef(false);
   const value = draft ?? policy.pct;
 
   // 策略变化（自己写入的确认、还原、换模型、外部改写）→ 预览跟住落盘值；
@@ -120,22 +120,17 @@ export function ModelCompactionSettings({
             max={MAX_MODEL_COMPACTION_PCT}
             step={1}
             disabled={disabled}
-            onPointerDown={() => {
-              pressValue.current = value;
-            }}
-            onPointerUp={() => {
-              pressValue.current = null;
+            onValueCancel={() => {
+              // 取消：预览作废，界面跟住落盘值。
+              cancelling.current = true;
+              setDraft(null);
             }}
             onValueChange={(next: number[]) => {
               const pct = next[0];
               if (typeof pct !== 'number') return;
-              // 取消回放与拖回起点都等于“按下时”的值：丢弃预览，跟住落盘值。
-              // 不能拿当前 policy.pct 比对——拖动期间策略被外部改掉时两者不同。
-              // 命中后顺手清掉：取消回放自身必命中，等于自动清了，
-              // 否则取消后键盘恰好调回该值会被误当成又一次回放。
-              if (pct === pressValue.current) {
-                pressValue.current = null;
-                setDraft(null);
+              if (cancelling.current) {
+                // 取消回放：共享 Slider 把按下前的值再发一次，丢弃它。
+                cancelling.current = false;
                 return;
               }
               setDraft(pct);

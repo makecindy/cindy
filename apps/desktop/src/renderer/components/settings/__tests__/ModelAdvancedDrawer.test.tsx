@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   setCompaction: vi.fn(async () => {}),
   ownerGeneration: 1,
   sliderValue: null as number | null,
+  pressValue: null as number | null,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -60,15 +61,15 @@ vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => 
 // Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
 // 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
 vi.mock('@/components/ui/slider', () => ({
-  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onPointerDown, onPointerUp, ...rest }: {
+  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onValueCancel, onPointerCancel, ...rest }: {
     value?: number[];
     min?: number;
     max?: number;
     step?: number;
     onValueChange?: (next: number[]) => void;
     onValueCommit?: (next: number[]) => void;
-    onPointerDown?: (event: unknown) => void;
-    onPointerUp?: (event: unknown) => void;
+    onValueCancel?: (restored: number[]) => void;
+    onPointerCancel?: (event: unknown) => void;
     'aria-label'?: string;
   }) => {
     // 受控 input 在 jsdom 里不回写未变化的 DOM value，断言直接读收到的 value prop。
@@ -81,8 +82,18 @@ vi.mock('@/components/ui/slider', () => ({
       min={min}
       max={max}
       step={step}
-      onPointerDown={(event) => onPointerDown?.(event)}
-      onPointerUp={(event) => onPointerUp?.(event)}
+      onPointerDown={(event) => {
+        // 共享 Slider 记下按下时的值，取消时回放它。
+        mocks.pressValue = value?.[0] ?? min ?? null;
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        // 共享 Slider 的取消语义：先报告取消，再回放按下前的值。
+        // 回放值不等于落盘值（真实场景：按下 90、别的窗口存了 70）。
+        const restored = [mocks.pressValue ?? value?.[0] ?? min ?? 0];
+        onValueCancel?.(restored);
+        onValueChange?.(restored);
+      }}
       onChange={(event) => onValueChange?.([Number(event.target.value)])}
       onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
     />
@@ -146,6 +157,7 @@ beforeEach(() => {
   mocks.compaction = { pct: 90, isCustomized: false };
   mocks.ownerGeneration = 1;
   mocks.sliderValue = null;
+  mocks.pressValue = null;
   vi.mocked(getProviderModelEffort).mockReset();
   // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
   vi.stubGlobal('ResizeObserver', class {
@@ -286,29 +298,27 @@ describe('model advanced editor', () => {
     }
   });
 
-  // The shared Slider cancels by replaying the press-time value. That value can
-  // differ from the saved policy (an external edit landed mid-drag); the replay
-  // must still drop the preview instead of keeping it as one.
-  it('drops the drag preview on cancel replay even when the saved value changed mid-drag', () => {
+  // The shared Slider reports a canceled gesture explicitly (a consumer cannot
+  // tell a cancel replay from a normal move to the same value). The preview
+  // must follow the saved policy, even when the drag passed the start value.
+  it('drops the drag preview on cancel even when the drag passed the start value', () => {
     mocks.compactionEnabled = true;
     const view = render(drawer());
     const ratio = () => screen.getByRole('slider', {
       name: 'settings.providers.models.advanced.compaction.sliderAria',
     }) as HTMLInputElement;
 
-    fireEvent.pointerDown(ratio(), { pointerId: 1, button: 0 });
+    fireEvent.pointerDown(ratio(), { pointerId: 1, button: 0, isPrimary: true });
     fireEvent.change(ratio(), { target: { value: '80' } });
-    expect(ratio().value).toBe('80');
+    expect(mocks.sliderValue).toBe(80);
     expect(mocks.setCompaction).not.toHaveBeenCalled();
 
     // Another window saves 70 while the drag is in the air.
     mocks.compaction = { pct: 70, isCustomized: true };
     view.rerender(drawer());
 
-    // Cancel replays the press-time value (90 ≠ saved 70); the preview must
-    // follow the saved policy, not the replay. A canceled gesture gets no
-    // pointerup — the replay itself is what clears the press value.
-    fireEvent.change(ratio(), { target: { value: '90' } });
+    // Cancel: the shared Slider reports it and replays the press-time value.
+    fireEvent.pointerCancel(ratio(), { pointerId: 1 });
     expect(mocks.sliderValue).toBe(70);
     expect(mocks.setCompaction).not.toHaveBeenCalled();
 
