@@ -95,6 +95,8 @@ import { getAppShortcutPlatform } from '@/lib/appShortcutStore';
 vi.mock('@/features/device-link/useSharedTaskTasks', () => ({ useSharedTaskTasks: vi.fn() }));
 vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({ JoinSharedTaskDialog: () => null }));
 vi.mock('@/features/device-link/SharedTaskEndedNotice', () => ({ SharedTaskEndedNotice: () => null }));
+// MenuButton shows the pending-approval count; keep the chat store (and its i18n bootstrap) out of this test.
+vi.mock('@/features/approvals/useApprovalSessionIds', () => ({ useApprovalSessionIds: () => [] }));
 
 afterEach(() => {
   cleanup();

@@ -1,0 +1,54 @@
+/* Approval inbox. Tokens only: no colour literals, no shadows. */
+
+/* Arming sweep: a functional safety delay (the decision controls are inert), not decoration.
+   600ms is the product requirement, so it is intentionally outside the --motion-* tiers. */
+@keyframes approval-arm-sweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.approval-arm-fill {
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.approval-arming-band[data-visible='true'] .approval-arm-fill {
+  animation: approval-arm-sweep 600ms linear forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep: a static, dimmed bar. The 600ms lock itself still applies. */
+  .approval-arming-band[data-visible='true'] .approval-arm-fill {
+    animation: none;
+    transform: scaleX(1);
+    opacity: 0.4;
+  }
+}
+/* The band keeps its height after arming so the decision buttons never move. */
+.approval-arming-band {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-ease-move);
+}
+.approval-arming-band[data-visible='true'] { opacity: 1; }
+
+/* While the wrapper is inert the real PermissionPrompt buttons look disabled. */
+.approval-gate[data-arming='true'] button { opacity: 0.6; }
+
+/* A request that arrives appends at the bottom and only fades in. */
+@keyframes approval-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.approval-row { animation: approval-enter var(--motion-fast) var(--motion-ease-out) both; }
+
+/* A vanished request keeps its height as a placeholder, then collapses. */
+.approval-row {
+  display: grid;
+  grid-template-rows: 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  transition:
+    grid-template-rows var(--motion-base) var(--motion-ease-move),
+    opacity var(--motion-fast) var(--motion-ease-move);
+}
+.approval-row > .approval-row-inner { min-height: 0; }
+.approval-row[data-state='leaving'] { grid-template-rows: 0fr; opacity: 0; }
+.approval-row[data-state='leaving'] > .approval-row-inner { overflow: hidden; }
+
+.approval-tnum { font-variant-numeric: tabular-nums; }

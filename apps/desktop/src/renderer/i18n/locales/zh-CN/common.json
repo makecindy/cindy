@@ -18263,5 +18263,48 @@
     "title": "确认附件访问",
     "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
     "button": "使用原文件"
+  },
+  "approvalsInbox": {
+    "title": "授权审批",
+    "waitingCount": "{{count}} 项待处理",
+    "refresh": "刷新",
+    "indicatorLabel": "待处理的授权请求",
+    "menuButtonLabel": "{{menu}}，{{count}} 项待处理",
+    "queueTitle": "待处理请求",
+    "seenSeconds": "{{count}} 秒前出现",
+    "seenMinutes": "{{count}} 分钟前出现",
+    "seenHours": "{{count}} 小时前出现",
+    "seenHint": "本窗口首次看到该请求的时间。重新加载窗口后会重新计时，请求实际等待的时间可能更长。",
+    "kind": {
+      "command": "命令",
+      "edit": "文件修改",
+      "folder": "文件夹访问",
+      "other": "其他"
+    },
+    "status": {
+      "sending": "正在发送…",
+      "failed": "未发送"
+    },
+    "ended": "已不再等待",
+    "openSession": "打开任务",
+    "showPath": "显示路径",
+    "hidePath": "隐藏路径",
+    "parentTask": "所属任务",
+    "back": "请求列表",
+    "idleTitle": "选择一个请求进行查看",
+    "idleBody": "当前没有选中任何请求，因此不会误批准任何操作。选择请求后，可以查看它具体要做什么。",
+    "emptyTitle": "没有待处理的请求",
+    "empty": "当任务或 Worker 需要你的授权时，请求会显示在这里。",
+    "decisionScope": "“拒绝”和“允许一次”只对这一个请求生效。若显示“本任务…允许”按钮，点击后本任务中后续匹配的操作也会被放行。",
+    "gate": {
+      "locking": "正在解锁操作…",
+      "ready": "可以决定了"
+    },
+    "inspectorLabel": "来自 {{name}} 的请求",
+    "labelSeparator": "，",
+    "loadFailed": "部分待处理请求未能加载，可刷新查看",
+    "loading": "正在检查待处理请求…",
+    "unavailable": "未能检查待处理请求",
+    "unnamed": "未命名任务"
   }
 }

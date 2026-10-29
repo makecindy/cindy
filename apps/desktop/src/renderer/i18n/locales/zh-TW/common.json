@@ -18263,5 +18263,48 @@
     "title": "確認附件存取",
     "message": "Cindy 無法讀取這個附件。請選擇原始檔案，確認後繼續傳送這則訊息；取消會保留草稿。",
     "button": "使用原始檔案"
+  },
+  "approvalsInbox": {
+    "title": "授權審批",
+    "waitingCount": "{{count}} 項待處理",
+    "refresh": "重新整理",
+    "indicatorLabel": "待處理的授權請求",
+    "menuButtonLabel": "{{menu}}，{{count}} 項待處理",
+    "queueTitle": "待處理請求",
+    "seenSeconds": "{{count}} 秒前出現",
+    "seenMinutes": "{{count}} 分鐘前出現",
+    "seenHours": "{{count}} 小時前出現",
+    "seenHint": "本視窗首次看到該請求的時間。重新載入視窗後會重新計時，請求實際等待的時間可能更長。",
+    "kind": {
+      "command": "命令",
+      "edit": "檔案修改",
+      "folder": "資料夾存取",
+      "other": "其他"
+    },
+    "status": {
+      "sending": "正在傳送…",
+      "failed": "未傳送"
+    },
+    "ended": "已不再等待",
+    "openSession": "開啟任務",
+    "showPath": "顯示路徑",
+    "hidePath": "隱藏路徑",
+    "parentTask": "所屬任務",
+    "back": "請求列表",
+    "idleTitle": "選擇一個請求進行查看",
+    "idleBody": "目前沒有選取任何請求，因此不會誤批准任何操作。選擇請求後，可以查看它具體要做什麼。",
+    "emptyTitle": "沒有待處理的請求",
+    "empty": "當任務或 Worker 需要你的授權時，請求會顯示在這裡。",
+    "decisionScope": "「拒絕」和「允許一次」只對這一個請求生效。若顯示「本任務…允許」按鈕，點擊後本任務中後續符合的操作也會被放行。",
+    "gate": {
+      "locking": "正在解鎖操作…",
+      "ready": "可以決定了"
+    },
+    "inspectorLabel": "來自 {{name}} 的請求",
+    "labelSeparator": "，",
+    "loadFailed": "部分待處理請求未能載入，可重新整理查看",
+    "loading": "正在檢查待處理請求…",
+    "unavailable": "未能檢查待處理請求",
+    "unnamed": "未命名任務"
   }
 }

@@ -18263,5 +18263,48 @@
     "title": "첨부 파일 접근 확인",
     "message": "Cindy가 이 첨부 파일을 읽을 수 없습니다. 원본 파일을 선택하면 이 메시지 전송을 계속합니다. 취소하면 초안이 유지됩니다.",
     "button": "원본 파일 사용"
+  },
+  "approvalsInbox": {
+    "title": "승인",
+    "waitingCount": "{{count}}개 대기 중",
+    "refresh": "새로고침",
+    "indicatorLabel": "승인 대기 중",
+    "menuButtonLabel": "{{menu}}, 승인 대기 {{count}}개",
+    "queueTitle": "대기 중인 요청",
+    "seenSeconds": "{{count}}초 전 확인",
+    "seenMinutes": "{{count}}분 전 확인",
+    "seenHours": "{{count}}시간 전 확인",
+    "seenHint": "이 창이 처음 확인한 시각입니다. 창을 다시 불러오면 초기화되므로 실제로는 더 오래 기다렸을 수 있습니다.",
+    "kind": {
+      "command": "명령",
+      "edit": "파일 편집",
+      "folder": "폴더 접근",
+      "other": "기타"
+    },
+    "status": {
+      "sending": "보내는 중…",
+      "failed": "전송되지 않음"
+    },
+    "ended": "더 이상 대기 중이 아님",
+    "openSession": "세션 열기",
+    "showPath": "경로 보기",
+    "hidePath": "경로 숨기기",
+    "parentTask": "상위 세션",
+    "back": "요청",
+    "idleTitle": "검토할 요청을 선택하세요",
+    "idleBody": "선택된 요청이 없어서 실수로 승인되는 일은 없습니다. 요청을 선택하면 정확히 무엇을 하는지 확인할 수 있습니다.",
+    "emptyTitle": "대기 중인 요청이 없습니다",
+    "empty": "세션이나 Worker가 권한을 요청하면 여기에 표시됩니다.",
+    "decisionScope": "“거부”와 “한 번 허용”은 이 요청에만 적용됩니다. “이 세션에서 … 항상 허용” 버튼이 표시되면, 누르면 이 세션에서 이후 일치하는 작업도 허용됩니다.",
+    "gate": {
+      "locking": "작업 잠금 해제 중…",
+      "ready": "결정할 수 있습니다"
+    },
+    "inspectorLabel": "{{name}}의 요청",
+    "labelSeparator": ", ",
+    "loadFailed": "일부 요청을 불러오지 못했습니다. 새로고침하여 다시 확인할 수 있습니다.",
+    "loading": "대기 중인 요청 확인 중…",
+    "unavailable": "대기 중인 요청을 확인하지 못했습니다.",
+    "unnamed": "제목 없는 세션"
   }
 }

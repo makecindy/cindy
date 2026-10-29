@@ -228,3 +228,71 @@ describe('PermissionPrompt 的插件安装确认', () => {
     expect(screen.queryByRole('button', { name: /alwaysAllow/ })).toBeNull();
   });
 });
+
+/**
+ * #7695: multiple inbox cards coexist. Global keys must not decide any of
+ * them; focused native buttons remain usable. Existing tests cover one card.
+ */
+describe('PermissionPrompt in a multi-request inbox', () => {
+  it('ignores global approval keys while retaining per-card button decisions', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    render(<>
+      <PermissionPrompt permission={permission()} onRespond={first} enableKeyboardShortcuts={false} />
+      <PermissionPrompt permission={{ ...permission(), requestId: 'req-2' }} onRespond={second} enableKeyboardShortcuts={false} />
+    </>);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    expect(screen.queryByText('Esc')).toBeNull();
+    const buttons = screen.getAllByRole('button', { name: 'agentIsland.native.allowOnce' });
+    fireEvent.click(buttons[1]);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+  });
+});
+
+/**
+ * Approval inbox (#7695): the inspector is ~480 px wide at a 900 px window and the three actions
+ * wrapped onto three lines. `compactActions` is an opt-in layout; the markup every other caller
+ * renders today must stay byte-for-byte what it was.
+ */
+describe('PermissionPrompt compactActions', () => {
+  const ACTIONS_CLASS = 'mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50';
+
+  it('renders the default markup unchanged when the prop is absent or false', () => {
+    const request = permission([bashRule]);
+    const { container, rerender } = render(<PermissionPrompt permission={request} onRespond={vi.fn()} />);
+    const defaultHtml = container.innerHTML;
+    const actions = screen.getAllByRole('button')[0].parentElement!;
+    expect(actions.className).toBe(ACTIONS_CLASS);
+    expect(actions.hasAttribute('data-compact-actions')).toBe(false);
+    expect(screen.getByRole('button', { name: /alwaysAllowScoped/ }).className).toContain('min-w-0 max-w-[min(100%,460px)]');
+    rerender(<PermissionPrompt permission={request} onRespond={vi.fn()} compactActions={false} />);
+    expect(container.innerHTML).toBe(defaultHtml);
+  });
+
+  it('keeps DOM order, labels and decisions identical while changing only the layout', () => {
+    const request = permission([bashRule]);
+    const names = (root: HTMLElement) => Array.from(root.querySelectorAll('button')).map((b) => b.textContent);
+    const plain = render(<PermissionPrompt permission={request} onRespond={vi.fn()} />);
+    const plainNames = names(plain.container);
+    cleanup();
+    const onRespond = vi.fn();
+    const compact = render(<PermissionPrompt permission={request} onRespond={onRespond} compactActions />);
+    expect(names(compact.container)).toEqual(plainNames);
+    const actions = screen.getAllByRole('button')[0].parentElement!;
+    expect(actions.getAttribute('data-compact-actions')).toBe('true');
+    expect(actions.className).toContain('flex-nowrap');
+    expect(actions.className).not.toContain('flex-wrap');
+    const always = screen.getByRole('button', { name: /alwaysAllowScoped/ });
+    expect(always.getAttribute('title')).toContain('alwaysAllowScoped');
+    fireEvent.click(always);
+    fireEvent.click(screen.getByRole('button', { name: /agentIsland.native.deny/ }));
+    fireEvent.click(screen.getByRole('button', { name: /agentIsland.native.allowOnce/ }));
+    expect(onRespond.mock.calls.map(([result]) => result.behavior)).toEqual(['allow', 'deny', 'allow']);
+    expect(onRespond.mock.calls[0][0]).toMatchObject({ updatedPermissions: [bashRule], decisionClassification: 'user_permanent' });
+  });
+});

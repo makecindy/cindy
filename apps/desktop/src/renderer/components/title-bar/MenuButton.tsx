@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { useApprovalSessionIds } from '@/features/approvals/useApprovalSessionIds';
 import { cn } from '@/lib/utils';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
@@ -24,29 +25,48 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   useSharedTaskTasks();
+  const approvalCount = useApprovalSessionIds().length;
+  // The badge is part of the 28 px button (it only overlaps the 4 px gap): the chrome cluster
+  // geometry, and the no-drag holes cut for it in the drag regions, assume a fixed cluster width.
+  const menuLabel = approvalCount > 0
+    ? t('approvalsInbox.menuButtonLabel', { menu: t('titleBar.menu'), count: approvalCount })
+    : t('titleBar.menu');
 
   return (
     <><DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
-        <Tip text={t('titleBar.menu')} side="bottom" controlledOpen={menuOpen ? false : undefined}>
+        <Tip text={menuLabel} side="bottom" controlledOpen={menuOpen ? false : undefined}>
           {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
               与折叠态标题行图标(「…」h-7 / 15)视觉重量一致。 */}
           <button
             className={cn(
-              'flex items-center justify-center',
+              'relative flex items-center justify-center',
               'h-7 w-7 rounded-md',
               'text-titlebar-icon',
               'transition-colors',
               'hover:bg-titlebar-button-hover',
               'focus-visible:outline-none',
             )}
-            aria-label={t('titleBar.menu')}
+            aria-label={menuLabel}
           >
             <Menu size={15} />
+            {approvalCount > 0 && (
+              <span
+                data-testid="approvals-indicator"
+                aria-hidden="true"
+                className="absolute -right-1 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full border border-content-area bg-[var(--accent-cta-bg-pure)] px-1 text-10 font-medium leading-none text-[var(--accent-pure-cta-fg)] [font-variant-numeric:tabular-nums]"
+              >
+                {approvalCount > 99 ? '99+' : approvalCount}
+              </span>
+            )}
           </button>
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={() => navigate('/approvals')}>
+          {t('approvalsInbox.title')}
+          {approvalCount > 0 && <span className="ml-auto pl-3">{approvalCount}</span>}
+        </DropdownMenuItem>
         {onExitFullscreen && (
           <DropdownMenuItem onSelect={onExitFullscreen}>
             {t('contentHeader.exitFullscreen')}

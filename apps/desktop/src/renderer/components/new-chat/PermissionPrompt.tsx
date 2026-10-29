@@ -35,6 +35,14 @@ import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallCon
 interface PermissionPromptProps {
   permission: PendingPermission;
   companion?: BotChatIdentity | null;
+  /** Multiple inbox cards must never share global approval shortcuts. */
+  enableKeyboardShortcuts?: boolean;
+  /**
+   * Narrow hosts (the approval inspector): keep Deny, the session-wide action and Allow once on
+   * one row, in the same DOM order. The session-wide action takes the leftover width and wraps its
+   * label to at most two lines. Off by default; every other caller renders the same markup as before.
+   */
+  compactActions?: boolean;
   onRespond: (result: CCAgentPermissionResult) => void;
 }
 
@@ -90,7 +98,7 @@ const allowActionClass = cn(
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
+export function PermissionPrompt({ permission, onRespond, companion, enableKeyboardShortcuts = true, compactActions = false }: PermissionPromptProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
@@ -133,6 +141,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   );
   const allowScope = scopeLabels?.join(t('newChat.permissionPrompt.ruleSeparator')) ?? null;
 
+  const alwaysAllowLabel = allowScope
+    ? t('newChat.permissionPrompt.alwaysAllowScoped', { scope: allowScope })
+    : t('agentIsland.native.alwaysAllowForSession');
+
   // ── Action handlers ──
 
   const handleAllowOnce = useCallback(() => {
@@ -167,6 +179,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   // ── Keyboard shortcuts ──
 
   useEffect(() => {
+    if (!enableKeyboardShortcuts) return;
     const handler = (e: KeyboardEvent) => {
       // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
       // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
@@ -188,7 +201,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+  }, [enableKeyboardShortcuts, handleAllowOnce, handleAlwaysAllow, handleDeny]);
 
   // ── Render ──
 
@@ -256,7 +269,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           {t(submitting ? 'newChat.permissionPrompt.submitting' : 'newChat.permissionPrompt.submissionFailed')}
         </p>
       )}
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
+      <div
+        data-compact-actions={compactActions ? 'true' : undefined}
+        className={compactActions
+          ? 'mt-4 flex flex-nowrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50'
+          : 'mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50'}
+      >
         {/* Deny */}
         <Button
           pressFeedback={false}
@@ -264,12 +282,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           size="lg"
           onClick={handleDeny}
           disabled={submitting}
-          className={secondaryActionClass}
+          className={compactActions ? cn(secondaryActionClass, 'shrink-0') : secondaryActionClass}
         >
           <span>{t(isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
-          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+          {enableKeyboardShortcuts && (<kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
-          </kbd>
+          </kbd>)}
         </Button>
 
         {canAlwaysAllowForSession && (
@@ -293,19 +311,20 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
               size="lg"
               onClick={handleAlwaysAllow}
               disabled={submitting}
-              className={cn(secondaryActionClass, 'min-w-0 max-w-[min(100%,460px)]')}
+              title={compactActions ? alwaysAllowLabel : undefined}
+              className={compactActions
+                ? cn(secondaryActionClass, 'min-w-0 flex-1 justify-start text-left')
+                : cn(secondaryActionClass, 'min-w-0 max-w-[min(100%,460px)]')}
             >
-              <span className="min-w-0 truncate">
-                {allowScope
-                  ? t('newChat.permissionPrompt.alwaysAllowScoped', { scope: allowScope })
-                  : t('agentIsland.native.alwaysAllowForSession')}
+              <span className={compactActions ? 'min-w-0 line-clamp-2 whitespace-normal break-all' : 'min-w-0 truncate'}>
+                {alwaysAllowLabel}
               </span>
-              <kbd className="shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              {enableKeyboardShortcuts && (<kbd className="shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
                 Ctrl
-              </kbd>
-              <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              </kbd>)}
+              {enableKeyboardShortcuts && (<kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
                 Enter
-              </kbd>
+              </kbd>)}
             </Button>
           </Tip>
         )}
@@ -317,12 +336,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           size="lg"
           onClick={handleAllowOnce}
           disabled={submitting}
-          className={allowActionClass}
+          className={compactActions ? cn(allowActionClass, 'shrink-0') : allowActionClass}
         >
           <span>{t(isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          {enableKeyboardShortcuts && (<kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
-          </kbd>
+          </kbd>)}
         </Button>
       </div>
     </div>

@@ -18324,5 +18324,48 @@
     "title": "Confirm Attachment Access",
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
+  },
+  "approvalsInbox": {
+    "title": "Approvals",
+    "waitingCount": "{{count}} waiting",
+    "refresh": "Refresh",
+    "indicatorLabel": "Approvals waiting",
+    "menuButtonLabel": "{{menu}}, {{count}} waiting",
+    "queueTitle": "Waiting requests",
+    "seenSeconds": "Seen {{count}}s ago",
+    "seenMinutes": "Seen {{count}}m ago",
+    "seenHours": "Seen {{count}}h ago",
+    "seenHint": "First seen by this window. The time restarts when the window reloads, so the request may have been waiting longer.",
+    "kind": {
+      "command": "Command",
+      "edit": "File edit",
+      "folder": "Folder access",
+      "other": "Other"
+    },
+    "status": {
+      "sending": "Sending…",
+      "failed": "Not sent"
+    },
+    "ended": "No longer waiting",
+    "openSession": "Open session",
+    "showPath": "Show path",
+    "hidePath": "Hide path",
+    "parentTask": "Parent task",
+    "back": "Requests",
+    "idleTitle": "Select a request to review",
+    "idleBody": "Nothing is selected, so nothing can be approved by accident. Pick a request to see exactly what it will do.",
+    "emptyTitle": "No requests are waiting",
+    "empty": "When a session or Worker needs your permission, it appears here.",
+    "decisionScope": "Deny and Allow once apply to this request only. If an “Always allow … this session” button is shown, it also allows matching operations for the rest of this session.",
+    "gate": {
+      "locking": "Unlocking decisions…",
+      "ready": "Ready to decide"
+    },
+    "inspectorLabel": "Request from {{name}}",
+    "labelSeparator": ", ",
+    "loadFailed": "Some pending requests could not be loaded. Refresh to check them again.",
+    "loading": "Checking pending requests…",
+    "unavailable": "Pending requests could not be checked.",
+    "unnamed": "Untitled Session"
   }
 }

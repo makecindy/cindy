@@ -1,6 +1,7 @@
 import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
+import { ApprovalsInbox } from '@/features/approvals/ApprovalsInbox';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
@@ -93,6 +94,7 @@ export const router = createHashRouter([
                 errorElement: <RouteErrorFallback variant="section" />,
                 children: [
                   { index: true, element: <MainEntryRedirect /> },
+                  { path: 'approvals', element: <ApprovalsInbox /> },
                   {
                     path: 'cc-agent',
                     element: <CCAgentFeatureLayout />,
