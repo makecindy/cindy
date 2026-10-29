@@ -29,7 +29,7 @@ import { EffortSlider } from '@/components/ui/effort-slider';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
 /**
- * 占位：等用户确认实际界面后定稿，之后换 i18n。
+ * 定稿（2026-10-28）：文案按预览页确认，后续再迁 i18n。
  * 本文件之外不要新增同一批文案的副本。
  */
 const COPY = {

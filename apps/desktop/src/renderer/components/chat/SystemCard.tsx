@@ -898,10 +898,9 @@ function summarizeInterruption(detail?: string): string | undefined {
  * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
  * 组件层搬到了 i18n 层（copilot review）。
  */
-// 占位：等用户确认实际界面后定稿，之后换 i18n。
+// 定稿（2026-10-28）：文案按预览页确认，后续再迁 i18n。
 const USAGE_LIMIT_REVERT_COPY = {
   message: '额度已恢复，已自动从 {from} 切回 {to}',
-  fallbackMessage: '额度已恢复，已自动切回原模型',
 } as const;
 
 /**
@@ -914,12 +913,11 @@ const USAGE_LIMIT_REVERT_COPY = {
 function UsageLimitRevertRow({ data }: { data?: Record<string, unknown> }) {
   const fromModel = typeof data?.fromModel === 'string' ? data.fromModel : null;
   const toModel = typeof data?.toModel === 'string' ? data.toModel : null;
-  const label =
-    fromModel && toModel
-      ? USAGE_LIMIT_REVERT_COPY.message
-          .replace('{from}', fromModel)
-          .replace('{to}', toModel)
-      : USAGE_LIMIT_REVERT_COPY.fallbackMessage;
+  // 主进程总会带两个模型名；缺字段就不画这行，不渲染半截句子。
+  if (!fromModel || !toModel) return null;
+  const label = USAGE_LIMIT_REVERT_COPY.message
+    .replace('{from}', fromModel)
+    .replace('{to}', toModel);
   return (
     <div
       className="flex w-full items-center gap-2 py-2 text-11 text-muted-foreground select-none"

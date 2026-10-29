@@ -250,8 +250,8 @@ describe('SystemCard 额度回切提示行', () => {
     expect(row.textContent).toContain('额度已恢复，已自动从 deepseek-v4-flash 切回 gpt-6.1-sol');
   });
 
-  it('缺模型名（旧载荷）→ 退回通用文案，不渲染半截句子', () => {
+  it('缺模型名（旧载荷）→ 整行不渲染，不显示半截句子', () => {
     render(<SystemCard cardType="usage-limit-revert" data={{ at: 0 }} />);
-    expect(screen.getByRole('status').textContent).toContain('额度已恢复，已自动切回原模型');
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });
