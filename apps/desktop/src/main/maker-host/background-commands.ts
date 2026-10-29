@@ -353,13 +353,16 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         timedOut = true;
         // child 已退出时 killProcessTree 不再按 PID 查杀后代(仓库既有约定,防
         // PID 复用误杀):Windows 上自行脱离的后代因此不受硬顶治理,记日志留痕。
+        // POSIX 不同:detached 进程组仍在,可按组清理(组可能已空,则什么也没杀)。
         const childAlive =
           typeof child.exitCode !== 'number' && typeof child.signalCode !== 'string';
         killProcessTree(child.pid, child, () => {});
         deps.logger.warn?.(
           childAlive
             ? '[background-command] killed after hard cap (process tree included)'
-            : '[background-command] hard cap reached after command exit; detached descendants are not tracked',
+            : process.platform === 'win32'
+              ? '[background-command] hard cap reached after command exit; detached descendants are not tracked'
+              : '[background-command] hard cap reached after command exit; cleared remaining process group (if any)',
           { runId, platform: process.platform },
         );
         releaseSlot();
