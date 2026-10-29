@@ -1478,6 +1478,29 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // A native background completion must not revoke the still-running owner's
+  // input (task-action authorization reads that input from the coordinator).
+  it('keeps the foreground input and lifecycle when background work completes', async () => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    effects.calls.length = 0;
+    h.emit(event('done', {}, { turnScope: 'background' }));
+    expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    expect(effects.calls).not.toContain('git-end');
+    expect(effects.calls).not.toContain('resetTurnPersistState');
+    expect(effects.calls).toContain('broadcast');
+    expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
+    h.emit(event('done'));
+    expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
+      'task', 'done', undefined, undefined, expect.any(Object),
+    );
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
+    await h.dispose();
+  });
+
   it('waits for accepted persistence and worker start while returning synchronously', async () => {
     const h = harness(),
       writes = deferred(),

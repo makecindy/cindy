@@ -97,7 +97,7 @@ export function deliverSessionEvent(
   // turn-start barriers below yield; that later turn must not inherit this
   // terminal event or lose the lead_interrupt marker before it is observed.
   const workerTerminalCapture =
-    !isContinuationBoundary && (event.type === 'done' || isTerminalTurnErrorEvent(event))
+    event.turnScope !== 'background' && !isContinuationBoundary && (event.type === 'done' || isTerminalTurnErrorEvent(event))
       ? deps.orcaTeamServiceForEvents?.captureWorkerTerminalTurn(session.id)
       : undefined;
   // Reserve against the current recovery owner. Terminal persistence reads
@@ -199,11 +199,11 @@ export function deliverSessionEvent(
     }
     noteClaudeSessionTurnState(session.id, false);
   }
-  if (event.type === 'done' && !isContinuationBoundary) {
+  if (event.type === 'done' && event.turnScope !== 'background' && !isContinuationBoundary) {
     void deps.gitSnapshotCoordinator?.onTurnEnd(session.id);
   }
   if (
-    (event.type === 'done' && !isContinuationBoundary) ||
+    (event.type === 'done' && event.turnScope !== 'background' && !isContinuationBoundary) ||
     (event.type === 'status' && shouldMarkTurnStatusIdleAfterBroadcast) ||
     event.type === 'agent_task_update'
   ) {

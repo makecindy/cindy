@@ -168,6 +168,9 @@ export function finishSessionTerminalEvent(
     groupLaneInputClientId,
   } = prepared;
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
+  // Background results still reach the event/usage consumers, but do not own
+  // the foreground input, persistence buffers, or Orca product terminal.
+  if (event.type === 'done' && event.turnScope === 'background') return { turnAssistantPersistId: undefined };
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
       ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
@@ -545,7 +548,7 @@ export function finishSessionTerminalEvent(
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
       if (
-        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
+        event.turnOrigin?.kind !== 'goal'
       ) {
         deps.sessionListActivityTracker.end(session.id, {
           identity: event.sessionTurnGeneration === undefined ? undefined

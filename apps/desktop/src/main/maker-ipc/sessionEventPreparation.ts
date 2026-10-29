@@ -411,7 +411,7 @@ export function prepareSessionEvent(
       };
     }
   }
-  if (event.type === 'done') {
+  if (event.type === 'done' && event.turnScope !== 'background') {
     const doneAttemptToken = event.turnAttemptToken;
     if (typeof doneAttemptToken === 'number' && !isContinuationBoundary) {
       deps.autoResumeBookkeeping.settleOutcome(session.id, doneAttemptToken, 'failed');
