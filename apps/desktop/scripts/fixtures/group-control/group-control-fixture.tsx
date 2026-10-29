@@ -2,10 +2,12 @@ import { useEffect } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
+import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/botGroupPresentation';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
 
 interface GroupData {
@@ -22,6 +24,7 @@ interface GroupData {
   /** A server group with teammates' bubbles: quote, reactions, thread entry and a task card. */
   bubbles?: boolean;
   wrappedReactions?: boolean;
+  replyComposer?: boolean;
   /** A single-speaker server group: nobody was named, so everyone answers in turn (bot-group-chat.md §4.0/§7.0). */
   arrangement?: Queue;
   /** A preserved work plan whose ordinary messages must stay quiet. */
@@ -308,6 +311,15 @@ void mountPage({
       return { ok: true, root, replies, hasMore: false, following };
     };
     return {
+      voiceInput: {
+        getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+        onDataChanged: subscription('voiceDataChanged'),
+        onEvent: subscription('voiceEvent'),
+        onGlobalShortcutTrigger: subscription('voiceShortcut'),
+        setGlobalShortcut: async () => ({ ok: true }),
+        prewarm: async () => ({ ok: true }),
+        start: forbid('voiceInput.start'),
+      },
       agentIsland: { onSessionActivity: subscription('sessionActivity') },
       maker: {
         getCompanionCloudState: async () => ({ enabled: !!data.workRemote, selfDeviceId: null, humanActorId: null, actors: data.workRemote ? [{ id: 'a', externalId: 'a', name: 'Aster', avatar: null, homeDeviceId: 'fixture-mac', homeDevice: { deviceId: 'fixture-mac', name: 'Mac Studio', online: true, remoteControlEnabled: true, isSelf: false } }] : [], demotedBotIds: [] }),
@@ -346,9 +358,12 @@ void mountPage({
       <>
         <AppFrame sidebar={sidebar}>
           <div className="min-h-0 flex-1" data-ui-page-subject>
-            <Routes>
+            {data.replyComposer ? <div className="flex h-full flex-col justify-end">
+              <BotGroupComposer groupId="fixture-group" draftKey="fixture-reply" mode="thread"
+                members={[]} running={false} sendReply={forbid('sendReply')} />
+            </div> : <Routes>
               <Route path="/bots/groups/:groupId" element={<BotGroupChatView />} />
-            </Routes>
+            </Routes>}
           </div>
         </AppFrame>
         <ControlledBanner />

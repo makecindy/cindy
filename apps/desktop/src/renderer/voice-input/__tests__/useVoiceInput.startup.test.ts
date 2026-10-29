@@ -170,6 +170,30 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  // PR #6656 error cleanup also serves rich editors, whose event admission
+  // differs from textarea owners. Prior startup cases ended healthy runs.
+  // Minimal unit input: accepted run -> state(error) -> error -> unmount;
+  // native cancel must keep its run ID and must not dismiss the error notice.
+  it('cleans a failed rich-editor run without turning its error into a successful completion', async () => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'failed-editor' });
+      h.result.current.start();
+    });
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    await act(async () => {
+      receive({ type: 'state', runId: 'failed-editor', state: 'error' });
+      receive({ type: 'error', runId: 'failed-editor', message: 'connection lost' });
+    });
+    expect(h.api.cancel).toHaveBeenCalledExactlyOnceWith({ runId: 'failed-editor' });
+    act(() => receive({ type: 'state', runId: 'failed-editor', state: 'done' }));
+    expect(h.result.current.state).toBe('error');
+    expect(mocks.stopEngine).toHaveBeenCalled();
+    h.unmount();
+    expect(h.api.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an authorized microphone closed through a short composer click', async () => {
     const h = mount();
     h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });

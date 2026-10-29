@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 export default {
   name: 'thread-panels', entry: './fixture.tsx', viewport: { width: 960, height: 640 },
   real: 'BotDmThreadPanel, ChatThreadPanel, shared ThreadPanel/ThreadPanelRoot, BotGroupTimelineItem, Markdown, theme and translations',
-  notCovered: 'Private ready-state task runtime (checked separately in isolated Desktop), model execution, server persistence and attachments',
+  notCovered: 'Private ready-state task runtime (checked separately in isolated Desktop), model execution, server persistence, attachments and microphone/ASR',
   stubs: {
     'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView = () => { throw new Error("Use full Desktop for ready-state task verification"); };',
     'src/renderer/lib/makerChatStore': { partial: 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => window.__threadRoot };' },
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice is outside this layout fixture"); };',
+    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
   },
   cases: {
     group: { about: 'Group topic with a long source message' },

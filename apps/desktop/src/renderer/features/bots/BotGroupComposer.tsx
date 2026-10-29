@@ -40,7 +40,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
-import { Paperclip, Plus, Users, X } from 'lucide-react';
+import { Mic, Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
@@ -52,6 +52,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
@@ -101,6 +102,10 @@ import {
 import { botGroupApi } from './botGroupStore';
 import { botGroupSendSignature, enqueueBotGroupSend, registerBotGroupComposer } from './botGroupOutbox';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
+import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
+import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
+import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
+import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 
 /** 话题 replies also accept the Chat Server's own 「everyone」 spellings. */
 const THREAD_ALL_ALIASES = ['所有人', 'all', 'everyone'] as const;
@@ -234,9 +239,21 @@ export function BotGroupComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const allLabel = t('bots.groupChat.mention.all');
   const threadAllLabels = useMemo(() => [allLabel, ...THREAD_ALL_ALIASES], [allLabel]);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const voice = useBotGroupVoiceInput({
+    draftKey, textareaRef, text, disabled,
+    maxLength: thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined,
+    onTooLong: () => toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })),
+    onChange: (value, edit) => {
+      textRef.current = value;
+      mention.onChange(value, edit);
+    },
+  });
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
+    disabled: disabled || voice.isBusy,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
       if (thread && attemptRef.current && attemptRef.current.text !== value.trim()) attemptRef.current = null;
@@ -246,8 +263,13 @@ export function BotGroupComposer({
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
   });
-  const textRef = useRef(text);
-  textRef.current = text;
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  useEffect(() => {
+    if (!voice.isListening) return;
+    setRecordingSeconds(0);
+    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [voice.isListening]);
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
@@ -274,8 +296,8 @@ export function BotGroupComposer({
   const attachmentCount = attachmentState.attachments.length;
   const tooManyAttachments = attachmentCount > BOT_GROUP_ATTACHMENTS_MAX;
   const canSend =
-    !disabled && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
-  const showStop = !thread && running && trimmed.length === 0 && attachmentCount === 0;
+    !disabled && !voice.isBusy && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
+  const showStop = !voice.isBusy && !thread && running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
@@ -306,7 +328,7 @@ export function BotGroupComposer({
   // resize, the 话题 panel opening) rewraps the text, so the height is fitted again then.
   useLayoutEffect(() => {
     if (textareaRef.current) fitBotGroupComposerInput(textareaRef.current);
-  }, [text]);
+  }, [text, voice.displayText]);
   useRefitBotGroupComposerInputOnResize(textareaRef);
 
   /**
@@ -508,6 +530,10 @@ export function BotGroupComposer({
     ? t('bots.groupChat.composer.stop')
     : thread ? t('bots.groupChat.server.sendReply') : t('bots.send');
   const moreLabel = t('bots.groupChat.composer.more');
+  const voiceLabel = t(voice.isListening ? 'newChat.chatInput.voiceInput.stop'
+    : voice.state === 'refining' ? 'newChat.chatInput.voiceInput.refining'
+      : voice.state === 'submitting' ? 'voiceInputOverlay.status.submitting'
+        : 'newChat.chatInput.voiceInput.start');
   const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
   const placeholder = thread
     ? t('bots.groupChat.server.replyPlaceholder')
@@ -529,6 +555,7 @@ export function BotGroupComposer({
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
       <div className={BOT_GROUP_COMPOSER_COLUMN}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
+        {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
           <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
@@ -592,19 +619,35 @@ export function BotGroupComposer({
           ) : null}
           <textarea
             ref={textareaRef}
-            value={text}
+            value={voice.displayText}
             rows={1}
             disabled={disabled}
             aria-label={thread ? t('bots.groupChat.server.replyPlaceholder') : t('bots.groupChat.composer.label')}
             // The Chat Server caps a 话题 reply; the field enforces it as typing does (a pick obeys it too).
             maxLength={thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined}
             {...mention.textareaProps}
-            readOnly={sending}
+            readOnly={sending || voice.isBusy}
             placeholder={placeholder}
             onChange={(event) => mention.onChange(event.target.value)}
             onPaste={handlePaste}
             onKeyDown={(event) => {
               if (isComposingKey(event)) return;
+              // The native shortcut owns its gesture, even when configured as Enter.
+              if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
+                event.preventDefault();
+                return;
+              }
+              if (voice.isBusy) {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void voice.cancel();
+                } else if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (voice.isListening) void voice.stop();
+                }
+                return;
+              }
               if (mention.onKeyDown(event)) return;
               // Esc takes the quote off before anything else it would close; the text stays.
               if (event.key === 'Escape' && quote && onQuoteChange) {
@@ -709,7 +752,32 @@ export function BotGroupComposer({
               </span>
             </div>
             {/* A mouse click must not move the caret out of the input (the button disables itself right after). */}
-            <span className="inline-flex rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
+            <span className="inline-flex items-center gap-1 rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
+              <Tip text={voice.shortcutLabel ? `${voiceLabel} · ${voice.shortcutLabel}` : voiceLabel}>
+                <button
+                  type="button"
+                  aria-label={voiceLabel}
+                  aria-pressed={voice.isListening}
+                  disabled={disabled || (voice.isBusy && !voice.isListening)}
+                  onClick={() => {
+                    textareaRef.current?.focus();
+                    if (voice.isListening) void voice.stop(); else voice.start();
+                  }}
+                  className={cn(
+                    'flex h-[30px] min-w-[30px] shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--model-trigger-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
+                    voice.isListening && 'bg-[var(--surface-chip)] hover:bg-[var(--surface-chip)]',
+                  )}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
+                    {voice.isBusy && !voice.isCaptureReady ? <Spinner size={15} />
+                      : voice.isListening ? <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--settings-badge-error)] motion-reduce:animate-none" />
+                        : <Mic size={15} />}
+                  </span>
+                  {voice.isListening ? <span className="pr-3 text-12 tabular-nums" aria-hidden>
+                    {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
+                  </span> : null}
+                </button>
+              </Tip>
               <Tip text={actionLabel}>
                 <SendButton
                   disabled={showStop ? stopping : !canSend}

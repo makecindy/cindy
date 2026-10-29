@@ -3145,24 +3145,6 @@ async function terminalResultProcessIdentities(
     return null;
   }
 }
-
-/**
- * Inventory only for receipt recovery; never a source of PIDs to signal.
- * Empty stdout, a failed probe, or `complete: false` are unknown, not proof of
- * absence. A finished Windows probe may return no command lines: that means
- * the current user had no process left to read, which is absence.
- * Windows can omit command lines for protected processes in other accounts.
- * Use the OS user filter first (tasklist /FI USERNAME, like POSIX ps -u), then
- * require a readable command line or independent exit confirmation for every
- * selected PID, except OS-confirmed antimalware PPL processes (which cannot be
- * our ordinary Node/Electron/Pi runtimes). Other inaccessible live processes
- * keep recovery closed; PID discovery never authorizes a kill.
- *
- * The Windows probe has to finish inside the kill budget. Enumerating every
- * Win32_Process property, plus compiling a protection helper before checking
- * which PIDs are still alive, exceeded that budget on hosted runners (8238ms
- * against an 8000ms cap) and failed a dead child closed.
- */
 /** Full Linux argv, or null if that pid is already gone. `'unknown'` is fail-closed. */
 async function readLinuxProcArgs(
   pid: string,
@@ -3251,6 +3233,14 @@ async function supplementLinuxProcCommandLines(
   return commands;
 }
 
+/**
+ * Inventory only for receipt recovery; never a source of PIDs to signal.
+ * Failed/incomplete probes are unknown. Windows compares WTS primary-token
+ * SIDs before reading PID/command-line fields, with a limited native fallback.
+ * Unreadable live processes stay unknown except OS-confirmed antimalware PPL.
+ * Confirm exits before compiling that helper to stay within the kill budget.
+ * Linux supplements ps with full /proc argv; no command-line clipping proves absence.
+ */
 async function readRecoveryProcessInventory(deadline: number): Promise<string[] | null> {
   try {
     const remaining = Math.floor(deadline - Date.now());
@@ -3258,71 +3248,99 @@ async function readRecoveryProcessInventory(deadline: number): Promise<string[] 
     if (process.platform === 'win32') {
       const script = [
         "$ErrorActionPreference = 'Stop'",
-        '$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name',
-        // tasklist reports itself, then exits before CIM runs. Track only our
-        // own probe PID so that its expected exit cannot block every recovery.
-        '$probe = [System.Diagnostics.Process]::new()',
-        '$probe.StartInfo.FileName = "$env:SystemRoot\\System32\\tasklist.exe"',
-        // /V adds a window title per process and is not needed for the user
-        // filter. PID and image name are the only columns this probe reads.
-        '$probe.StartInfo.Arguments = \'/FO CSV /NH /FI "USERNAME eq \' + $user + \'"\'',
-        '$probe.StartInfo.UseShellExecute = $false',
-        '$probe.StartInfo.CreateNoWindow = $true',
-        '$probe.StartInfo.RedirectStandardOutput = $true',
-        '$probe.StartInfo.RedirectStandardError = $true',
-        'if (-not $probe.Start()) { throw "tasklist did not start" }',
-        '$probeId = $probe.Id',
-        // Drain both pipes before WaitForExit. Reading only stdout while stderr
-        // fills its pipe deadlocks until the outer timeout kills the probe.
-        '$csv = $probe.StandardOutput.ReadToEnd()',
-        '$null = $probe.StandardError.ReadToEnd()',
-        '$probe.WaitForExit()',
-        '$probeExitCode = $probe.ExitCode',
-        '$probe.Dispose()',
-        'if ($probeExitCode -ne 0) { throw "tasklist failed" }',
-        // Without /V the columns are Image Name, PID, Session Name, Session#, Mem Usage.
-        '$owned = @($csv | ConvertFrom-Csv -Header Name,ProcessId,SessionName,SessionNumber,Memory)',
+        // Compare token SIDs without tasklist's per-process account-name/window
+        // lookup, which can block past the entire recovery deadline on Windows.
+        // WTS enumerates the caller's processes without administrator rights;
+        // foreign-user entries do not extend this account's recovery scope.
+        // https://learn.microsoft.com/windows/win32/api/wtsapi32/nf-wtsapi32-wtsenumerateprocessesw
+        "Add-Type -TypeDefinition @'",
+        'using System;',
+        'using System.Collections.Generic;',
+        'using System.ComponentModel;',
+        'using System.Runtime.InteropServices;',
+        'using System.Security.Principal;',
+        'public static class CindyRecoveryProcessOwners {',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct Info { public uint SessionId; public uint ProcessId; public IntPtr Name; public IntPtr UserSid; }',
+        '  [DllImport("wtsapi32.dll", EntryPoint = "WTSEnumerateProcessesW", SetLastError = true)]',
+        '  private static extern bool Enumerate(IntPtr server, uint reserved, uint version, out IntPtr buffer, out uint count);',
+        '  [DllImport("wtsapi32.dll")]',
+        '  private static extern void WTSFreeMemory(IntPtr buffer);',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }',
+        '  [DllImport("kernel32.dll", SetLastError = true)]',
+        '  private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+        '  [DllImport("kernel32.dll")]',
+        '  private static extern bool CloseHandle(IntPtr handle);',
+        '  [DllImport("ntdll.dll")]',
+        '  private static extern int NtQueryInformationProcess(IntPtr handle, int kind, IntPtr buffer, uint size, out uint needed);',
+        // CIM can omit command lines for elevated processes of the same user
+        // even though PROCESS_QUERY_LIMITED_INFORMATION can read them. A failed
+        // native query still leaves the PID unknown, never presumed exited.
+        '  public static string CommandLine(uint pid) {',
+        '    IntPtr handle = OpenProcess(0x1000, false, pid);',
+        '    if (handle == IntPtr.Zero) return null;',
+        '    try {',
+        '      uint needed;',
+        '      NtQueryInformationProcess(handle, 60, IntPtr.Zero, 0, out needed); // ProcessCommandLineInformation',
+        '      if (needed < Marshal.SizeOf(typeof(UnicodeString)) || needed > 1024 * 1024) return null;',
+        '      uint size = needed;',
+        '      IntPtr buffer = Marshal.AllocHGlobal(checked((int)size));',
+        '      try {',
+        '        if (NtQueryInformationProcess(handle, 60, buffer, size, out needed) != 0 || needed > size) return null;',
+        '        var value = (UnicodeString)Marshal.PtrToStructure(buffer, typeof(UnicodeString));',
+        '        long offset = value.Buffer.ToInt64() - buffer.ToInt64();',
+        '        if (value.Length == 0 || value.Length % 2 != 0 || value.Length > value.MaximumLength || value.Length > size',
+        '          || offset < Marshal.SizeOf(typeof(UnicodeString)) || offset > size - value.Length) return null;',
+        '        return Marshal.PtrToStringUni(value.Buffer, value.Length / 2);',
+        '      } finally { Marshal.FreeHGlobal(buffer); }',
+        '    } finally { CloseHandle(handle); }',
+        '  }',
+        '  public static int[] CurrentUser() {',
+        '    IntPtr buffer; uint count;',
+        '    if (!Enumerate(IntPtr.Zero, 0, 1, out buffer, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());',
+        '    try {',
+        '      using (var identity = WindowsIdentity.GetCurrent()) {',
+        '        if (identity.User == null || buffer == IntPtr.Zero || count == 0) throw new InvalidOperationException("Missing process inventory");',
+        '        var owned = new List<int>();',
+        '        int size = Marshal.SizeOf(typeof(Info));',
+        '        for (int i = 0; i < count; i++) {',
+        '          var row = (Info)Marshal.PtrToStructure(IntPtr.Add(buffer, checked(i * size)), typeof(Info));',
+        '          if (row.UserSid != IntPtr.Zero && identity.User.Equals(new SecurityIdentifier(row.UserSid))) {',
+        '            owned.Add(checked((int)row.ProcessId));',
+        '          }',
+        '        }',
+        '        if (!owned.Contains(System.Diagnostics.Process.GetCurrentProcess().Id)) throw new InvalidOperationException("Incomplete user inventory");',
+        '        return owned.ToArray();',
+        '      }',
+        '    } finally { WTSFreeMemory(buffer); }',
+        '  }',
+        '}',
+        "'@",
         '$processIds = @{}',
-        '$names = @{}',
-        'foreach ($row in $owned) {',
-        '  $number = 0',
-        '  if (-not [int]::TryParse($row.ProcessId, [ref]$number) -or $number -le 0) { throw "invalid process inventory" }',
-        '  if ($number -eq $probeId) { continue }',
+        'foreach ($number in [CindyRecoveryProcessOwners]::CurrentUser()) {',
+        '  if ($number -le 0) { throw "invalid process inventory" }',
         '  $processIds[$number] = $true',
-        '  $name = [string]$row.Name',
-        '  if (-not [string]::IsNullOrWhiteSpace($name)) { $names[$name] = $true }',
         '}',
         '$count = $processIds.Count',
         '$commands = [System.Collections.Generic.List[string]]::new()',
         '$complete = $true',
-        'if ($names.Count -gt 0) {',
-        // A short name filter uses the indexed Name column. A long OR list can
-        // be rejected by WQL; fall back to the same two fields without a filter
-        // rather than failing the whole probe closed.
-        '  $items = $null',
-        '  if ($names.Count -le 32) {',
-        '    try {',
-        '      $clauses = @(foreach ($name in @($names.Keys)) { "Name=\'" + ($name -replace "\'", "\'\'" ) + "\'" })',
-        '      $filter = $clauses -join \' OR \'',
-        '      $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -Filter $filter -ErrorAction Stop)',
-        '    } catch { $items = $null }',
-        '  }',
-        '  if ($null -eq $items) {',
-        '    $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
-        '  }',
-        '  foreach ($item in $items) {',
-        '    $number = [int]$item.ProcessId',
-        '    if (-not $processIds.ContainsKey($number)) { continue }',
-        '    if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
-        '    $commands.Add($item.CommandLine)',
-        '    $processIds.Remove($number)',
-        '  }',
+        '$items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
+        'foreach ($item in $items) {',
+        '  $number = [int]$item.ProcessId',
+        '  if (-not $processIds.ContainsKey($number)) { continue }',
+        '  if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
+        '  $commands.Add($item.CommandLine)',
+        '  $processIds.Remove($number)',
         '}',
-        // Confirm exits before compiling the protection helper. csc.exe is
-        // another multi-second startup, and PIDs that have already vanished
-        // do not need it.
+        // Try the limited native query, then retire confirmed exits before compiling PPL support.
         '$stillLive = New-Object System.Collections.Generic.List[int]',
         'foreach ($number in @($processIds.Keys)) {',
+        '  $command = [CindyRecoveryProcessOwners]::CommandLine($number)',
+        '  if (-not [string]::IsNullOrWhiteSpace($command)) {',
+        '    $commands.Add($command)',
+        '    continue',
+        '  }',
         '  $unreadable = $null',
         '  try {',
         '    $unreadable = [System.Diagnostics.Process]::GetProcessById($number)',

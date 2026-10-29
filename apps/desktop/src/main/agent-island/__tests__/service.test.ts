@@ -60,6 +60,7 @@ function handleInteractionRequestForTest(
 }
 
 const mocks = vi.hoisted(() => ({
+  services: new Set<AgentIslandService>(),
   attached: vi.fn(),
   confirmIslandArchive: vi.fn(),
   patchSessionMetaInDb: vi.fn(),
@@ -182,7 +183,29 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 
 import { resetEpermGuidanceForTest } from '../../file-access/permissions.js';
 
-beforeEach(() => {
+// Run the real implementation, but retain each test's instance for lifecycle
+// cleanup. Otherwise real timers from earlier tests can fire after a later test
+// installs its fake clock and then keep scheduling work inside a four-hour TTL.
+vi.mock('../service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(deps: ConstructorParameters<typeof actual.AgentIslandService>[0]) {
+        super(deps);
+        mocks.services.add(this);
+      }
+    },
+  };
+});
+
+afterEach(async () => {
+  await Promise.resolve();
+  for (const service of mocks.services) service.resetRuntimeState();
+  mocks.services.clear();
+});
+
+beforeEach(async () => {
   mocks.attached.mockReset().mockReturnValue(null);
   mocks.confirmIslandArchive.mockReset().mockResolvedValue(true);
   mocks.patchSessionMetaInDb.mockReset();
@@ -231,6 +254,13 @@ beforeEach(() => {
   mocks.readdir.mockReset();
   mocks.readdir.mockRejectedValue(tccDeniedError());
   resetEpermGuidanceForTest();
+  // Card-click tests register a process-wide badge callback closing over their
+  // service. Do not let later TTL tests call back into that previous service
+  // (and arm its timers) when they stop/ack a different session.
+  const { initAppBadgeService, clearAllSessionAttention } = await import('../../appBadgeService.js');
+  initAppBadgeService({ getWindow: () => null });
+  clearAllSessionAttention();
+  mocks.ipcHandle.mockClear();
 });
 
 type NativePublishCall = [

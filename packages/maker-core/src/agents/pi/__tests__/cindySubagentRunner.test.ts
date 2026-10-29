@@ -643,6 +643,34 @@ describe('Cindy durable PI Subagent runner', () => {
       .toEqual(before);
   });
 
+  // Unlike the SIGTERM receipt case below, this also exercises Windows: a
+  // completed receipt cannot hide a later process using the same native session.
+  it('keeps a real terminal receipt in scope while its native session is still running', async () => {
+    const fixture = await makeFixture();
+    await waitForClose(fixture.child, fixture.stderr);
+    const config = JSON.parse(await readFile(path.join(fixture.runDir, 'config.json'), 'utf8'));
+    await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
+    const child = spawn(process.execPath, [
+      '-e', 'process.stdin.resume(); process.stdout.write("ready");',
+      '--', '--session-id', config.tasks[0].sessionId,
+    ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += data.toString(); });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout.once('data', () => resolve());
+        child.once('error', reject);
+        child.once('exit', () => reject(new Error('session fixture exited before ready: ' + stderr)));
+      });
+      await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(false);
+    } finally {
+      const closed = waitForClose(child, () => stderr);
+      child.stdin.end();
+      await closed;
+    }
+    await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(true);
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a real signal receipt until the orphan child has exited', async () => {
     // SIGTERM handlers are a POSIX path; Windows abrupt termination cannot
     // execute this handler. Keep the actual runner's signal/result code intact.
