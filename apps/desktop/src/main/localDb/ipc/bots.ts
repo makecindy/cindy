@@ -1805,13 +1805,15 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   if (!body.sourceSessionId) return createBotProfileInternal(raw, restored, beforeCommit);
   const sourceSessionId = readText(body.sourceSessionId, 'sourceSessionId', 128, true);
+  const requestId = readText(body.requestId, 'requestId', 128, true);
   const owner = captureBotOperationOwner();
   const client = getDbClient();
-  return coordinateBotCanonicalReplacement(sourceSessionId, async () => {
+  return coordinateBotCanonicalReplacement(`task-creation:${requestId}`, async () => {
     owner.assertCurrent();
-    const existing = await client.queryOne<{ botId: string }>('SELECT bot_id AS botId FROM bot_task_origins WHERE source_session_id=?', [sourceSessionId]);
+    const existing = await client.queryOne<{ botId: string; sourceSessionId: string }>('SELECT bot_id AS botId, source_session_id AS sourceSessionId FROM bot_task_origins WHERE request_id=?', [requestId]);
     owner.assertCurrent();
     if (existing) {
+      if (existing.sourceSessionId !== sourceSessionId) throwIpcError('INVALID_PARAMS', 'Creation request belongs to another source task');
       await prepareTaskOrigin(existing.botId, owner.assertCurrent);
       return readProfile(client, existing.botId);
     }
@@ -1837,7 +1839,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     const primary = normalizeBotModelChain(requested?.modelChainOverride ?? requested?.modelChain, requested ?? route)[0];
     if (!primary || !await validateTaskModel(primary)) throwIpcError('PRECONDITION_FAILED', '请选择可用的伙伴模型');
     owner.assertCurrent();
-    const profile = await createBotProfileInternal({ ...body, name: body.name || source.title,
+    const profile = await createBotProfileInternal({ ...body, sourceSessionId, requestId, name: body.name || source.title,
       prepareInvitation: false, welcomeMessage: undefined,
       capabilities: body.capabilities ?? { ...route, modelChain: [route], modelChainOverride: [route] },
     }, undefined, beforeCommit);
@@ -1985,7 +1987,7 @@ async function createBotProfileInternal(raw: unknown, restored?: RestoredBotOrig
   assertCreationOwnerStillCurrent();
   await client.tx('bots.createProfile', {
     id,
-    ...(typeof body.sourceSessionId === 'string' ? { sourceSessionId: body.sourceSessionId } : {}),
+    ...(typeof body.sourceSessionId === 'string' ? { sourceSessionId: body.sourceSessionId, requestId: body.requestId } : {}),
     ...(botAvatarRef ? { botAvatarRef } : {}),
     displayName: name,
     description,
@@ -2378,16 +2380,17 @@ export function registerBotIpc(): void {
         throwIpcError('PERMISSION_DENIED', 'Task owner required');
     } else assertTrustedAppRendererEvent(event);
     const body = requireObject(raw, 'body');
-    if (body.action === 'capabilities') return { version: 1 };
+    if (body.action === 'capabilities') return { version: 2 };
     if (body.action !== 'create') throwIpcError('INVALID_PARAMS', 'Unknown task companion action');
     const owner = captureBotOperationOwner();
     const profile = await createBotProfile({ sourceSessionId: readText(body.sourceSessionId, 'sourceSessionId', 128, true),
+      requestId: readText(body.requestId, 'requestId', 128, true),
       name: readText(body.name, 'name', 200), description: readText(body.description, 'description', 4000) });
     owner.assertCurrent();
     const canonical = await createBotCanonicalSession({ botId: profile.id, expectedCanonicalSessionId: profile.canonicalSessionId ?? null,
       expectedProfileVersion: profile.currentVersion });
     owner.assertCurrent();
-    return { version: 1, botId: profile.id, name: profile.name, description: profile.description, sessionId: canonical.canonicalSessionId };
+    return { version: 2, botId: profile.id, name: profile.name, description: profile.description, sessionId: canonical.canonicalSessionId };
   });
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);

@@ -1,4 +1,5 @@
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
+import { randomUUID } from 'expo-crypto';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
 import type { OpenAiAccountProvider } from './sessionControls';
@@ -118,7 +119,7 @@ export interface SessionMenuWorkerActions {
 }
 
 export interface SessionMenuSheetProps {
-  onCreateCompanion?: (name: string, description: string) => Promise<void>;
+  onCreateCompanion?: (name: string, description: string, requestId: string) => Promise<void>;
   tagDeviceId?: string;
   providerName?: string;
   /** 当前模型在模型目录里的用户可读展示名(用量卡显示;缺席时卡片自行兜底)。 */
@@ -258,6 +259,7 @@ export function SessionMenuSheet({
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [renaming, setRenaming] = useState(false);
   const [creatingCompanion, setCreatingCompanion] = useState(false);
+  const companionRequestId = useRef('');
   const [companionDescription, setCompanionDescription] = useState('');
   const [companionBusy, setCompanionBusy] = useState(false);
   // 双击标题直达的重命名:确定 / 取消后直接收起菜单,不退回一级菜单。
@@ -431,7 +433,7 @@ export function SessionMenuSheet({
     if (creatingCompanion) {
       if (!titleDraft.trim() || !onCreateCompanion || companionBusy) return;
       setCompanionBusy(true);
-      void onCreateCompanion(titleDraft.trim(), companionDescription).then(() => {
+      void onCreateCompanion(titleDraft.trim(), companionDescription, companionRequestId.current).then(() => {
         setRenaming(false); setCreatingCompanion(false); onClose();
       }).catch(() => setRenameError(t('session.fromTask.failed'))).finally(() => setCompanionBusy(false));
       return;
@@ -731,10 +733,10 @@ export function SessionMenuSheet({
           ) : null}
           {onCreateCompanion && !messageOnly ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
-              label: t('session.fromTask.create'), testID: 'session.fromTask.create', onPress: () => { setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); },
+              label: t('session.fromTask.create'), testID: 'session.fromTask.create', onPress: () => { companionRequestId.current = randomUUID(); setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); },
             }]} /> : <View style={styles.actionGroup}>
               <MenuActionRow icon={Sparkles} label={t('session.fromTask.create')}
-                onPress={() => { setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); }} />
+                onPress={() => { companionRequestId.current = randomUUID(); setCreatingCompanion(true); setTitleDraft(renamePrefill); setRenaming(true); }} />
             </View>
           ) : null}
           {Platform.OS === 'ios' ? (

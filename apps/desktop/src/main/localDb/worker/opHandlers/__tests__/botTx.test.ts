@@ -50,7 +50,7 @@ describe('Bot named worker transactions', () => {
       CREATE TABLE shared_task_events (session_id TEXT);
       CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT);
       CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY REFERENCES bot_profiles(id) ON DELETE CASCADE,
-        source_session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+        source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, request_id TEXT UNIQUE,
         created_at INTEGER NOT NULL, handoff_consumed_at INTEGER);
       CREATE TABLE bot_task_origin_messages (bot_id TEXT REFERENCES bot_task_origins(bot_id) ON DELETE CASCADE,
         message_id TEXT REFERENCES messages(id) ON DELETE CASCADE, PRIMARY KEY (bot_id, message_id));
@@ -76,7 +76,7 @@ describe('Bot named worker transactions', () => {
         ('withdrawn','source','assistant','withdrawn',3,4);
     `);
     const args = { id: 'new-bot', displayName: 'Editor', description: '', avatar: '', avatarColor: 'blue',
-      identitySource: 'Editor', capabilitiesJson: '{}', sourceSessionId: 'source', now: 5 };
+      identitySource: 'Editor', capabilitiesJson: '{}', sourceSessionId: 'source', requestId: 'request-1', now: 5 };
     db.exec(`INSERT INTO agent_input_queue_snapshots VALUES ('source','[{"text":"pending"}]')`);
     expect(() => tx(db, { name: 'bots.createProfile', args })).toThrow('Source task is unavailable');
     expect(db.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(0);
@@ -85,7 +85,7 @@ describe('Bot named worker transactions', () => {
     db.exec("INSERT INTO messages VALUES ('later','source','user','later',2,NULL)");
     expect(db.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['visible']);
     expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'duplicate', displayName: 'Another' } }))
-      .toThrow('already has a companion');
+      .toThrow('UNIQUE constraint failed');
     expect(db.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(1);
     db.exec("DELETE FROM bot_profiles WHERE id='new-bot'");
     expect(db.prepare('SELECT COUNT(*) FROM bot_task_origins').pluck().get()).toBe(0);

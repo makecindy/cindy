@@ -213,17 +213,31 @@ describe('name-only creation', () => {
     expect(mocks.generateDraft).not.toHaveBeenCalled();
   });
 
-  // Real trial: retrying an associated task looked like a failed creation. Unit UI regression:
-  // one linked profile must show its name and open it, without another create request.
-  it('offers the existing source companion explicitly and closes after opening it', async () => {
-    mocks.profiles = [{ id: 'existing', name: 'Editor', invitation: { stage: 'ready' }, sourceTask: { sourceSessionId: 'source' } }];
-    const onClose = vi.fn();
-    await act(async () => { render(<BotRosterView sourceTask={{ id: 'source', title: 'Novel' } as import('@/lib/ccAgent.types').Session} onClose={onClose} />); });
-    expect(screen.queryByRole('button', { name: 'bots.guided.generate' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /bots.market.open.*Editor/ }));
-    expect(mocks.navigate).toHaveBeenCalledWith('/bots/existing');
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
+  // User decision: multiple companions per source, one per submission. Unit UI regression:
+  // failed receipt + double click must retain the request; reopening must start a new one.
+  it('reuses a submission request on retry and creates a new request after reopening', async () => {
+    const sourceTask = { id: 'source', title: 'Novel' } as import('@/lib/ccAgent.types').Session;
+    mocks.addBotProfileAndWait.mockRejectedValueOnce(new Error('Lost receipt'));
+    const view = render(<BotRosterView sourceTask={sourceTask} />);
+    const button = await screen.findByRole('button', { name: 'bots.guided.generate' });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button); fireEvent.click(button);
+    await screen.findByRole('alert');
+    expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1);
+    const firstRequest = mocks.addBotProfileAndWait.mock.calls[0][0].requestId;
+    expect(firstRequest).toBeTruthy();
+    mocks.profiles = [{ id: 'existing', name: 'Novel', invitation: { stage: 'ready' }, sourceTask: { sourceSessionId: 'source' } }];
+    view.rerender(<BotRosterView sourceTask={sourceTask} />);
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(2));
+    expect(mocks.addBotProfileAndWait.mock.calls[1][0].requestId).toBe(firstRequest);
+    view.unmount();
+    render(<BotRosterView sourceTask={sourceTask} />);
+    fireEvent.change(screen.getByLabelText('bots.creationName'), { target: { value: 'Second editor' } });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(3));
+    expect(mocks.addBotProfileAndWait.mock.calls[2][0].requestId).not.toBe(firstRequest);
   });
 
   it.each([false, true])('keeps default-chain inheritance but saves only the visible explicit model: selected=%s', async selected => {

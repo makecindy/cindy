@@ -22,16 +22,16 @@ export function useTaskCompanionCreation(options: {
     if (visible && eligible && deviceId) {
       const owner = getMobileAuthOwner();
       void invoke<{ version?: number }>(deviceId, 'maker:task-companion', [{ action: 'capabilities' }])
-        .then(result => { if (current && isMobileAuthOwnerCurrent(owner)) setAvailable(result.version === 1); })
+        .then(result => { if (current && isMobileAuthOwnerCurrent(owner)) setAvailable(result.version === 2); })
         .catch(() => {});
     }
     return () => { current = false; generation.current++; };
   }, [visible, eligible, deviceId, session?.id, invoke]);
-  return available && session ? async (name: string, description: string) => {
+  return available && session ? async (name: string, description: string, requestId: string) => {
     const owner = getMobileAuthOwner();
     const epoch = generation.current;
     const result = await invoke<{ version: number; botId: string; sessionId: string }>(deviceId,
-      'maker:task-companion', [{ action: 'create', sourceSessionId: session.id, name, description }]);
+      'maker:task-companion', [{ action: 'create', sourceSessionId: session.id, requestId, name, description }]);
     if (!isMobileAuthOwnerCurrent(owner) || epoch !== generation.current) return;
     options.onCreated(result);
   } : undefined;

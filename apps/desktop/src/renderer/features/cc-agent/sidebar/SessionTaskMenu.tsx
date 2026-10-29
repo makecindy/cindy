@@ -106,7 +106,7 @@ function ActiveSessionTaskMenu({
     setCanCreateCompanionRemotely(false);
     if (open && session.deviceLinkDeviceId && !guest) {
       void window.electronAPI.deviceLink.invoke(session.deviceLinkDeviceId, 'maker:task-companion', [{ action: 'capabilities' }])
-        .then(result => { if (current) setCanCreateCompanionRemotely((result as { version?: number })?.version === 1); })
+        .then(result => { if (current) setCanCreateCompanionRemotely((result as { version?: number })?.version === 2); })
         .catch(() => {});
     }
     return () => { current = false; };

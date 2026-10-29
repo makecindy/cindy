@@ -248,10 +248,10 @@ describe("cindy_helper MCP server", () => {
       const index = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
       expect(JSON.stringify(index)).toContain('create_teammate_from_task');
       const result = await client.callTool({ name: 'call_tool', arguments: {
-        name: 'create_teammate_from_task', args: { source_session_id: 'computer::source', name: 'Editor' },
+        name: 'create_teammate_from_task', args: { source_session_id: 'computer::source', request_id: 'request-1', name: 'Editor' },
       } });
       expect(parsePayload(result)).toMatchObject({ ok: true, bot: { id: 'editor' } });
-      expect(create).toHaveBeenCalledWith({ callerSessionId: 'caller', sourceSessionId: 'computer::source',
+      expect(create).toHaveBeenCalledWith({ callerSessionId: 'caller', sourceSessionId: 'computer::source', requestId: 'request-1',
         name: 'Editor', description: '', identitySource: '', welcomeMessage: '' });
     } finally { await client.close(); await server.close(); }
   });

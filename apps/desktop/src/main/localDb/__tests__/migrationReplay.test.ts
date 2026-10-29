@@ -103,6 +103,38 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  // Schema 138: previously applied source uniqueness must upgrade without losing trial history.
+  // DB tier, real migration runner; minimal populated 137 source/member fixture.
+  it('preserves existing companion history while allowing independent creation requests', () => {
+    const { db, cleanup } = createTempDb();
+    const staged = createTempDrizzleDir();
+    try {
+      db.exec(`CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY); CREATE TABLE bot_profiles (id TEXT PRIMARY KEY);
+        CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT);
+        INSERT INTO sessions VALUES ('source'); INSERT INTO bot_profiles VALUES ('old'),('new-a'),('new-b');
+        INSERT INTO messages VALUES ('message','original content');`);
+      db.exec(readFileSync(path.join(drizzleDir(), '0137_huge_psynapse.sql'), 'utf8'));
+      db.exec(`INSERT INTO bot_task_origins VALUES ('old','source',1,2,3);
+        INSERT INTO bot_task_origin_messages VALUES ('old','message');`);
+      copyFileSync(path.join(drizzleDir(), '0138_dry_richard_fisk.sql'), path.join(staged.dir, '0138_dry_richard_fisk.sql'));
+      runMigrationReplay(db, { drizzleDir: staged.dir, currentVersion: 137 });
+      // A running old dev process repaired its cached schema after reading the new SQL.
+      db.exec('CREATE UNIQUE INDEX uniq_bot_task_origin_source ON bot_task_origins (source_session_id)');
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 138 });
+      expect(db.prepare('SELECT * FROM bot_task_origins').get()).toEqual({
+        bot_id: 'old', source_session_id: 'source', created_at: 1, handoff_consumed_at: 2, prepared_at: 3, request_id: null,
+      });
+      expect(db.prepare('SELECT * FROM bot_task_origin_messages').all()).toEqual([{ bot_id: 'old', message_id: 'message' }]);
+      expect(db.prepare('SELECT content FROM messages').pluck().get()).toBe('original content');
+      const insert = db.prepare('INSERT INTO bot_task_origins (bot_id,source_session_id,created_at,request_id) VALUES (?, ?, 4, ?)');
+      insert.run('new-a', 'source', 'request-a');
+      expect(() => insert.run('new-b', 'source', 'request-a')).toThrow('UNIQUE constraint failed');
+      insert.run('new-b', 'source', 'request-b');
+      expect(db.prepare('SELECT COUNT(*) FROM bot_task_origins').pluck().get()).toBe(3);
+    } finally { staged.cleanup(); cleanup(); }
+  });
   it.each(['missing', 'legacy', 'partial'])(
     'replays remote report persistence with %s Worker schema',
     (shape) => {
@@ -118,7 +150,7 @@ describeMigrationReplay('migration replay', () => {
         db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
-          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -233,7 +265,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

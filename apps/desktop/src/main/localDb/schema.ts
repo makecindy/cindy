@@ -442,10 +442,11 @@ export const botProfileVersions = sqliteTable(
 export const botTaskOrigins = sqliteTable('bot_task_origins', {
   botId: text('bot_id').primaryKey().references(() => botProfiles.id, { onDelete: 'cascade' }),
   sourceSessionId: text('source_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  requestId: text('request_id'),
   createdAt: integer('created_at').notNull(),
   handoffConsumedAt: integer('handoff_consumed_at'),
   preparedAt: integer('prepared_at'),
-}, (t) => ({ uniqueSource: uniqueIndex('uniq_bot_task_origin_source').on(t.sourceSessionId) }));
+}, (t) => ({ source: index('idx_bot_task_origin_source').on(t.sourceSessionId), request: uniqueIndex('uniq_bot_task_origin_request').on(t.requestId) }));
 
 /** Membership, not message copies: later writes cannot enter the creation snapshot. */
 export const botTaskOriginMessages = sqliteTable('bot_task_origin_messages', {

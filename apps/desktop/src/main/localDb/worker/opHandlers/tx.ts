@@ -348,9 +348,6 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
         AND NOT EXISTS (SELECT 1 FROM bot_session_links WHERE session_id = sessions.id)`)
         .get(sourceSessionId);
       if (!source) throw Object.assign(new Error('Source task is unavailable'), { code: 'PRECONDITION_FAILED' });
-      if (db.prepare('SELECT 1 FROM bot_task_origins WHERE source_session_id = ?').get(sourceSessionId)) {
-        throw Object.assign(new Error('Source task already has a companion'), { code: 'ALREADY_EXISTS' });
-      }
     }
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
     const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
@@ -385,8 +382,8 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
       VALUES (?, ?, NULL, 'created', '{}', ?)`)
       .run(`${id}:created:${now}`, id, now);
     if (sourceSessionId) {
-      db.prepare('INSERT INTO bot_task_origins (bot_id, source_session_id, created_at) VALUES (?, ?, ?)')
-        .run(id, sourceSessionId, now);
+      db.prepare('INSERT INTO bot_task_origins (bot_id, source_session_id, request_id, created_at) VALUES (?, ?, ?, ?)')
+        .run(id, sourceSessionId, expectString(p.requestId, 'requestId'), now);
       db.prepare(`INSERT INTO bot_task_origin_messages (bot_id, message_id)
         SELECT ?, m.id FROM messages m JOIN sessions s ON s.id = m.session_id
         WHERE s.id = ? AND m.rewind_at IS NULL AND m.created_at > COALESCE(s.cleared_at, 0)`)

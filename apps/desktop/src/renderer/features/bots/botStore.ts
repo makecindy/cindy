@@ -479,6 +479,7 @@ function defaultCapabilities(
 
 export interface CreateBotProfileInput {
   sourceSessionId?: string;
+  requestId?: string;
   creationDraftToken?: string;
   prepareInvitation?: boolean;
   /** Unsaved image bytes, validated and ingested by main on creation only. */
@@ -965,7 +966,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
   try {
     const created = normalizeDbProfile(
       await api.create({
-        ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
+        ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId, requestId: input.requestId } : {}),
         id: bot.id,
         name: bot.name,
         description: bot.description,

@@ -495,7 +495,7 @@ function createDb(filename = ':memory:'): void {
     );
   `);
   sqlite.exec(readFileSync(resolve(__dirname, '../../../../../drizzle/0070_woozy_harpoon.sql'), 'utf8'));
-  sqlite.exec(`CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY, source_session_id TEXT UNIQUE, created_at INTEGER, handoff_consumed_at INTEGER, prepared_at INTEGER);
+  sqlite.exec(`CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY, source_session_id TEXT, request_id TEXT UNIQUE, created_at INTEGER, handoff_consumed_at INTEGER, prepared_at INTEGER);
     CREATE TABLE bot_task_origin_messages (bot_id TEXT, message_id TEXT, PRIMARY KEY(bot_id,message_id));
     CREATE TABLE IF NOT EXISTS shared_task_events (session_id TEXT);
     CREATE TABLE IF NOT EXISTS agent_input_queue_snapshots (session_id TEXT, payload TEXT);`);
@@ -1505,18 +1505,18 @@ describe('Bot canonical Session lifecycle', () => {
       VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask',?,'pi','xd',1,1)`).run(source);
     h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
       VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
-    const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', name: 'Editor', description: 'Review prose', avatar: 'E' });
+    const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: ' request-1 ', name: 'Editor', description: 'Review prose', avatar: 'E' });
     expect(created.sourceTask).toMatchObject({ sourceSessionId: 'novel-source', title: 'Novel' });
     expect(created.invitation).toBeUndefined();
-    const retry = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', name: 'Another name', avatar: 'E' });
+    const retry = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'request-1', name: 'Another name', avatar: 'E' });
     expect(retry.id).toBe(created.id);
     const canonical = await invoke('local-db:bots:create-canonical-session', {
       botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
     expect(canonical.canonicalSessionId).not.toBe('novel-source');
-    expect(await invoke('maker:task-companion', { action: 'capabilities' })).toEqual({ version: 1 });
-    expect(await invoke('maker:task-companion', { action: 'create', sourceSessionId: 'novel-source', name: 'Editor' }))
-      .toMatchObject({ version: 1, botId: created.id, sessionId: canonical.canonicalSessionId });
+    expect(await invoke('maker:task-companion', { action: 'capabilities' })).toEqual({ version: 2 });
+    expect(await invoke('maker:task-companion', { action: 'create', sourceSessionId: 'novel-source', requestId: 'request-1', name: 'Editor' }))
+      .toMatchObject({ version: 2, botId: created.id, sessionId: canonical.canonicalSessionId });
     expect(h.sqlite!.prepare("SELECT source,permission_mode FROM sessions WHERE id='novel-source'").get())
       .toEqual({ source, permission_mode: 'ask' });
     expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['novel-u']);
@@ -1529,6 +1529,18 @@ describe('Bot canonical Session lifecycle', () => {
     expect(await agentHandoffPending.peek(canonical.canonicalSessionId)).not.toContain('Use first person.');
     agentHandoffPending.consume(canonical.canonicalSessionId);
     await vi.waitFor(() => expect(h.sqlite!.prepare('SELECT handoff_consumed_at FROM bot_task_origins').pluck().get()).toBeTypeOf('number'));
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('later-u','later-u','novel-source','user','"Choose a chapter title."',11)`).run();
+    const second = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'request-2', name: 'Second editor', avatar: 'E' });
+    expect(second.id).not.toBe(created.id);
+    const secondCanonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: second.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(secondCanonical.canonicalSessionId).not.toBe(canonical.canonicalSessionId);
+    expect(secondCanonical.session.workingDir).not.toBe(canonical.session.workingDir);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=?').pluck().all(created.id)).toEqual(['novel-u']);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=?').pluck().all(second.id)).toEqual(['later-u']);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 2);
   });
 
   it('creates a real gallery portrait when the shared tool entry receives only a name', async () => {
