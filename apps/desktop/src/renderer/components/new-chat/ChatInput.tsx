@@ -1721,11 +1721,16 @@ export function ChatInput({
   // 吞掉「+」激活前就存在于锚点后的连续文本。
   const syntheticAtRangeEndRef = useRef<number | null>(null);
   const [syntheticAtAnchor, setSyntheticAtAnchorState] = useState<number | null>(null);
+  // 合成「+」面板自带搜索框（「+」面板浮在输入框上方、盖住了输入框,在看不见的
+  // 输入框里盲打是死路）。面板形态下查询词只认这个框。
+  const [atPanelSearch, setAtPanelSearch] = useState('');
   const setSyntheticAtAnchor = useCallback((next: number | null) => {
     const previous = syntheticAtAnchorRef.current;
     syntheticAtAnchorRef.current = next;
     if (next === null) {
       syntheticAtRangeEndRef.current = null;
+      // 面板一关,搜索词清空(下次打开从空查询开始)。
+      setAtPanelSearch('');
     } else if (previous !== next || syntheticAtRangeEndRef.current === null) {
       syntheticAtRangeEndRef.current = next;
     }
@@ -3026,6 +3031,10 @@ export function ChatInput({
       // blur. We defer by a microtask so mouse-click selections on the
       // palette (which also blur the editor momentarily) still register.
       setTimeout(() => {
+        // 焦点落进面板自己的搜索框时不算离开:「+」面板盖住输入框,点搜索框必然
+        // 先让编辑器失焦,按旧口径会把刚打开的面板立刻关掉。
+        const active = document.activeElement;
+        if (active instanceof Element && active.closest('[data-composer-suggestion-search]')) return;
         if (!panelHoverRef.current) {
           // Close both palettes by suppressing the current trigger position.
           // The triggerState recomputes on next tick — if it is still
@@ -4839,7 +4848,10 @@ export function ChatInput({
     syntheticAnchor: syntheticAtAnchor,
     syntheticQuery: syntheticAtQuery,
   });
-  const atQuery = effectiveAt?.query ?? '';
+  // 合成「+」形态:查询词只认面板自己的搜索框(编辑器被面板盖住,那条路走不通);
+  // 输入 @ 的形态仍以输入框里的文字为准。
+  const atQuery =
+    effectiveAt?.activation === 'synthetic' ? atPanelSearch : (effectiveAt?.query ?? '');
 
   const runNewGoalAction = useCallback(() => {
     const activeEditor = editorRef.current;
@@ -5190,7 +5202,9 @@ export function ChatInput({
             }
             return false;
           case 'Backspace':
-            if (syntheticAtOpen && !atQuery) {
+            // 判据用编辑器自己的查询词,不用 atQuery:atQuery 现在可能是面板搜索框的词,
+            // 用它会让「按退格收面板」失效,退格转而删掉被面板盖住的正文(看不见的删除)。
+            if (syntheticAtOpen && !syntheticAtQuery) {
               closeAtPanel();
               return true;
             }
@@ -5358,6 +5372,14 @@ export function ChatInput({
       }
       const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
+        // 合成「+」形态:查询词在面板搜索框里 —— 钻取改搜索框就行,不往编辑器正文塞
+        // 路径文本(那会在选完文件后残留一段没人要的字);也不要把焦点从搜索框抢走,
+        // 抢走会让 MorphPopover 认定焦点出了本层,直接把面板关掉。
+        if (effectiveAt.activation === 'synthetic') {
+          setAtPanelSearch(directoryQuery);
+          setAtFocus(0);
+          return;
+        }
         editor
           .chain()
           .focus()
@@ -5365,14 +5387,11 @@ export function ChatInput({
             tr.replaceWith(
               from,
               to,
-              editor.schema.text(
-                effectiveAt.activation === 'typed' ? `@${directoryQuery}` : directoryQuery,
-              ),
+              editor.schema.text(`@${directoryQuery}`),
             );
             return true;
           })
           .run();
-        if (effectiveAt.activation === 'synthetic') setSyntheticAtAnchor(from);
         setAtFocus(0);
         return;
       }
@@ -5442,6 +5461,9 @@ export function ChatInput({
     (nextOpen: boolean) => {
       if (!nextOpen) {
         setSyntheticAtAnchor(null);
+        // 面板的焦点在它自己的搜索框上;若不管,收合动画结束后 MorphPopover 会按
+        // 「键盘关闭」把焦点还给「+」按钮,用户接着打的字会被按钮吃掉。
+        editorRef.current?.commands.focus();
         return;
       }
       if (!editor || editor.isDestroyed || composerMutationLocked) return;
@@ -5452,7 +5474,8 @@ export function ChatInput({
       }
       setSyntheticAtAnchor(editor.state.selection.from);
       setAtFocus(0);
-      editor.commands.focus();
+      // 不在这里抢编辑器焦点:面板的搜索框自己会拿焦点(面板浮在编辑器上方,
+      // 焦点留在编辑器等于让人对着看不见的输入框打字)。
     },
     [composerMutationLocked, editor, setSyntheticAtAnchor, trigger],
   );
@@ -9774,10 +9797,11 @@ export function ChatInput({
                   }
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
-                  autoFocusTarget={composerSuggestionFocusTarget}
                   panel={
                     <AtMentionPanel
                       embedded
+                      searchValue={atPanelSearch}
+                      onSearchChange={setAtPanelSearch}
                       query={atQuery}
                       state={atState}
                       entries={filteredAt}

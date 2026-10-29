@@ -1,6 +1,6 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
 import { Button } from '@/components/ui/button';
-import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import { MENU_CURRENT_ROW_ATTR, MENU_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
   COMPOSER_MENU_ROW,
   MenuHighlightLayer,
@@ -34,7 +34,13 @@ import {
  * Embedded content must be `w-full` — a second 480px inside the 1px-bordered
  * Morph shell overflows by 2px and flashes a 2s horizontal scrollbar.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Bot,
@@ -48,6 +54,7 @@ import {
   Paperclip,
   Plug,
   RotateCw,
+  Search,
   Sparkles,
   Target,
   UsersRound,
@@ -60,6 +67,8 @@ import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
   composerSuggestionEntryKey,
+  isComposerSuggestionEntryDisabled,
+  nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
@@ -114,6 +123,13 @@ interface AtMentionPanelProps {
   writableDirs?: ReferenceDirsSection | null;
   /** `+` 的 MorphPopover 内嵌形态；容器、阴影与 outside-click 由 MorphPopover 负责。 */
   embedded?: boolean;
+  /**
+   * 面板内搜索框(合成「+」形态)：传了才渲染搜索框，否则底部只留静态提示行。
+   * 「+」面板是浮在输入框上方的,盖住了输入框本身 —— 让用户在看不见的输入框里盲打
+   * 是死路,所以这条形态自带一个可见的输入框。
+   */
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
@@ -139,10 +155,16 @@ export function AtMentionPanel({
   referenceDirs = null,
   writableDirs = null,
   embedded = false,
+  searchValue = '',
+  onSearchChange,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
   const libraryReadOnlyLabel = t('extraDirs.libraryReadOnlyLabel');
+  // 搜索框的占位文字兼可访问名(五个语言都有,复用同一个 key 不新增词条)。
+  const hint = t('newChat.atMention.typeToSearchFiles');
+  // 本形态自带搜索框:静态提示行与「继续输入」提示都让位给搜索框。
+  const hasSearchBox = Boolean(onSearchChange);
   const rootRef = useRef<HTMLDivElement>(null);
   const focusedRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -156,6 +178,13 @@ export function AtMentionPanel({
     },
   });
   const tooltipRef = useRef<HTMLDivElement>(null);
+  // 搜索框是本面板的输入面:面板浮在编辑器上方、盖住了编辑器,所以打开就把焦点给它,
+  // 用户不用先点一下才能打字。
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!onSearchChange) return;
+    searchRef.current?.focus();
+  }, [onSearchChange]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,
@@ -461,6 +490,35 @@ export function AtMentionPanel({
       ? renderActionRow(entry.action, index)
       : renderResourceRow(entry, index);
 
+  /**
+   * 面板内搜索框的按键：↑↓ 移动焦点行,Enter 选中,空框退格收面板。
+   * 搜索框拿到焦点后编辑器收不到按键,键盘导航必须在这里自己实现一份。
+   */
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // 输入法组字期间的 Enter 属于候选词确认,不能当成选中条目。
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      onFocusedIndexChange(
+        nextEnabledSuggestionIndex(entries, focusedIndex, event.key === 'ArrowDown' ? 1 : -1),
+      );
+      return;
+    }
+    if (event.key === 'Enter') {
+      const entry = entries[focusedIndex];
+      if (!entry || isComposerSuggestionEntryDisabled(entry)) return;
+      event.preventDefault();
+      onSelect(entry);
+      return;
+    }
+    // 空框退格 = 往回退一步(收面板)。编辑器里同一条规则在 captureKey 里,
+    // 但搜索框拿到焦点后编辑器收不到按键,这里补一份。
+    if (event.key === 'Backspace' && !searchValue) {
+      event.preventDefault();
+      onClose();
+    }
+  };
+
   const hasDirectoryRows = isEmptyRootQuery && directoryRows.length > 0;
   const showLoadingSkeleton = state.kind === 'loading' && entries.length === 0 && !hasDirectoryRows;
   const showErrorState = state.kind === 'error' && entries.length === 0 && !hasDirectoryRows;
@@ -469,6 +527,13 @@ export function AtMentionPanel({
   return (
     <div
       ref={rootRef}
+      onMouseDown={(event) => {
+        // 点面板空白/分组标题时别把焦点挪到面板容器:容器可聚焦(tabIndex=-1)且没有键盘
+        // 处理,焦点落它身上会让 ↑↓/Enter 无人接收(打字黑洞)。行与输入框不受影响。
+        const target = event.target as Element | null;
+        if (target?.closest(`input, textarea, [${MENU_ROW_ATTR}]`)) return;
+        event.preventDefault();
+      }}
       className={cn(
         'pointer-events-auto',
         embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
@@ -496,6 +561,36 @@ export function AtMentionPanel({
         style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
       >
         <MenuHighlightLayer />
+        {hasSearchBox ? (
+          <div className="px-[4px] pb-[6px]">
+            <div className="relative">
+              <Search
+                size={12}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--cmd-palette-item-meta)]"
+              />
+              <input
+                ref={searchRef}
+                data-composer-suggestion-search=""
+                type="text"
+                value={searchValue}
+                onChange={(event) => onSearchChange?.(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={hint}
+                aria-label={hint}
+                className={cn(
+                  'h-8 w-full rounded-full border border-[var(--cmd-palette-border)] bg-transparent',
+                  'pl-7 pr-2 text-13 text-[var(--cmd-palette-item-text)] outline-none',
+                  'placeholder:text-[var(--text-placeholder)]',
+                  // 聚焦描边走中性弱化 token（同 composer 输入框口径）。--focus-ring
+                  // 是强蓝且只用于键盘可达性环,拿来当输入框聚焦边框会突兀成蓝框
+                  // (DESIGN §2:Focus Blue「正常交互流里不出现」);文本输入框的
+                  // :focus-visible 恒成立,所以这里不能靠 focus-visible 区分鼠标/键盘。
+                  'focus:border-[var(--chat-input-border-focus)]',
+                )}
+              />
+            </div>
+          </div>
+        ) : null}
         {showLoadingSkeleton && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (
@@ -530,7 +625,8 @@ export function AtMentionPanel({
             </Button>
           </div>
         )}
-        {showEmptyState && (
+        {/* 搜索形态下:空查询不占位(搜索框已经说明了怎么办),有查询但没命中才提示。 */}
+        {showEmptyState && (!hasSearchBox || !isEmptyRootQuery) && (
           <div
             className={cn(
               'flex items-center justify-center',
@@ -608,7 +704,7 @@ export function AtMentionPanel({
             ) : (
               indexed.map(renderEntryRow)
             )}
-            {isEmptyRootQuery && (
+            {isEmptyRootQuery && !hasSearchBox && (
               <div
                 className={cn(
                   'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-[10px] py-[8px] text-12',
@@ -618,7 +714,7 @@ export function AtMentionPanel({
                 {t('newChat.atMention.typeToSearchFiles')}
               </div>
             )}
-            {!isEmptyRootQuery && state.kind === 'ready' && state.truncated && (
+            {!isEmptyRootQuery && !hasSearchBox && state.kind === 'ready' && state.truncated && (
               <div
                 className={cn(
                   'select-none px-[10px] py-[8px] text-12',
