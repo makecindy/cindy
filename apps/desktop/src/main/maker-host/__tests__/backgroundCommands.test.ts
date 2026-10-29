@@ -154,7 +154,6 @@ it('日志目录建不出来:拒绝启动且不回注', async () => {
     cwd: logDir,
   });
   expect(result).toMatchObject({ ok: false, errorCode: 'LOG_FAILED' });
-  // 拒绝路径不产生任何回注。
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // 拒绝发生在 spawn 之前,回注不可能被触发;同步断言即可,无需真实等待。
   expect(capture).not.toHaveBeenCalled();
 });
