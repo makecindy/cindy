@@ -19,6 +19,23 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+// A sidebar-owned dialog is portaled to body, but React still bubbles its events
+// through the sidebar. Its blank-area menu cancels the native edit menu and opens
+// behind the modal. Existing invitation tests do not cover this parent boundary.
+// Minimal unit regression: right-click the real dialog's empty invitation input.
+it('keeps the native input context menu without opening the parent sidebar menu', () => {
+  const parentMenu = vi.fn((event: React.MouseEvent) => event.preventDefault());
+  const onClose = vi.fn();
+  render(<div onContextMenu={parentMenu}><ChatInviteDialog onClose={onClose} /></div>);
+  const input = screen.getByRole('textbox', { name: k('inviteLink') });
+
+  expect(fireEvent.contextMenu(input)).toBe(true);
+  expect(parentMenu).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
 async function create() {
   render(<ChatInviteDialog groupId="room" onClose={vi.fn()} />);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));

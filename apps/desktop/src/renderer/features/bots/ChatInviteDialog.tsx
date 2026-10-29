@@ -134,6 +134,9 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
   return <Dialog.Root open onOpenChange={open => !open && !locked() && onClose()}>
     <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
       <Dialog.Content onPointerDownOutside={e => e.preventDefault()}
+        // Portal events still bubble through the sidebar React tree. Keep its
+        // blank-area menu from cancelling the input's native edit menu.
+        onContextMenu={e => e.stopPropagation()}
         onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229 || locked()) e.preventDefault(); }}
         className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col gap-4 p-5 outline-none">
         <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">{title}</Dialog.Title>
