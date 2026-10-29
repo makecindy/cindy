@@ -20,9 +20,10 @@
 
 插件不需要各自实现一套聊天卡回调。普通 `source: "user"` Secret 可由 Host
 根据 manifest 声明直接生成内联表单；已有 `settings.js` 仍通过宿主 `/oauth`、`/kv`、
-`/secrets`、`/connections` 接口承担详情页的长期管理。客户端内 Provider / 模型配置也走
+`/secrets`、`/connections` 接口承担详情页的长期管理。宿主客户端配置（`client_config`）也走
 同一 Host 状态变更机制。Core 不维护插件 id / Provider id 路由表：插件只需通过
 manifest 声明 Host 能力，所属 Host 子系统继续作为 readiness 的唯一权威来源。
+模型服务就绪不属于插件 setup，在用到模型的那次能力调用时检查（见 §4.1）。
 
 ## 2. 用户体验契约
 
@@ -84,16 +85,6 @@ OAuth 插件：
 [授权] [取消]
 
 授权 → 授权中 → 等待浏览器完成 → 检查中 → 已完成
-```
-
-客户端内配置型插件：
-
-```text
-[icon] Cindy Art 设置
-使用 Cindy Art 需要先配置可用的图片模型
-[打开设置] [取消]
-
-打开设置 → 等待保存 → 检查中 → 已完成
 ```
 
 文案只是 Agent 编排示例；是否完成始终以 Host 的 setup assessment 为准。
@@ -618,7 +609,7 @@ Mobile 回归已通过；对抗复查无未解决 P0/P1。已用 remote endpoint
 | 内联 Secret 保存失败                     | 清除本地值、展示失败并允许重新输入重试                                               |
 | `settings.js` 保存 KV / Secret           | 保存成功后无需插件手写回调，卡片自动更新                                             |
 | Connection 新增                          | 持久化成功后自动 recheck                                                             |
-| Host Provider / 模型保存                 | `host_config` 触发相关插件 recheck                                                   |
+| Host 客户端配置保存                      | `host_config` 触发声明了对应 `client_config` 的插件 recheck                          |
 | any-of                                   | 完整展示组内所有可执行备选；用户选择任一条并满足后完成该 group，其他备选无需配置     |
 | 多 group                                 | 所有 group 满足才恢复调用                                                            |
 | Agent plan 非法                          | Host 使用默认 plan，不执行非法 action                                                |
@@ -643,7 +634,7 @@ P0（必须由自动化测试阻断）：
   的短暂 Secret 传递是唯一例外；
 - 配置完成后重新发起第二次 `ghost_call`，或 dispatch 后自动重试，造成外部操作重复；
 - 把 `settings.js` 的前端事件当成权威完成信号，而不重新读取 Host 存储；
-- 声称支持 Art 等客户端配置，却没有 `client_config` 探针和受控 Action，错误放行为 ready。
+- 声明了 `client_config` 需求的 Host 能力，却没有对应探针和受控 Action，错误放行为 ready。
 
 P1（本期必须收敛）：
 
