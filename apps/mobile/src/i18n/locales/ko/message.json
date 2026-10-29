@@ -407,7 +407,8 @@
     "countPreviewHint": "인용 {{n}}건, 탭하여 미리보기",
     "remove": "인용 제거",
     "closePreview": "인용 미리보기 닫기",
-    "menuLabel": "대화에 추가"
+    "menuLabel": "대화에 추가",
+    "commentLabel": "의견: "
   },
   "learning": {
     "memory": "기억했어요: {{title}}",

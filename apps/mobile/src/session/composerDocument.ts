@@ -173,6 +173,7 @@ export function composerDocumentsEqual(
     }
     if (node.type === 'quote' && candidate.type === 'quote') {
       return node.quote.text === candidate.quote.text
+        && node.quote.comment === candidate.quote.comment
         && node.quote.sourcePath === candidate.quote.sourcePath
         && node.quote.startLine === candidate.quote.startLine
         && node.quote.endLine === candidate.quote.endLine;
@@ -858,6 +859,7 @@ function normalizeQuote(value: unknown): ChatQuote | null {
   if (!value || typeof value !== 'object') return null;
   const quote = value as {
     text?: unknown;
+    comment?: unknown;
     sourcePath?: unknown;
     startLine?: unknown;
     endLine?: unknown;
@@ -875,6 +877,7 @@ function normalizeQuote(value: unknown): ChatQuote | null {
   ) return null;
   return {
     text: quote.text,
+    ...(typeof quote.comment === 'string' && quote.comment.trim() ? { comment: quote.comment } : {}),
     ...(quote.sourcePath !== undefined ? { sourcePath: quote.sourcePath } : {}),
     ...(typeof quote.startLine === 'number' ? { startLine: quote.startLine } : {}),
     ...(typeof quote.endLine === 'number' ? { endLine: quote.endLine } : {}),

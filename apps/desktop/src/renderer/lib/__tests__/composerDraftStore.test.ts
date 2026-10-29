@@ -802,6 +802,23 @@ describe('remote optimistic draft recovery', () => {
 });
 
 describe('appendQuoteToDraft', () => {
+  // #7387 unit: collection must update only its task and retain existing draft
+  // content while telling a mounted composer not to take focus.
+  it('collects bound comments without focusing or replacing another task draft', () => {
+    const id = 'annotation-task';
+    saveDraft(id, draft({ text: textDoc }));
+    const listener = vi.fn();
+    const unsubscribe = subscribeDraft(id, listener);
+    appendQuoteToDraft(id, { text: 'selected', comment: 'my comment' }, { focus: false });
+    expect(listener).toHaveBeenCalledWith({ focus: false });
+    expect(getDraft(id)?.text?.content?.[0]?.content).toEqual([
+      { type: 'text', text: 'hello' },
+      { type: 'composerQuote', attrs: { text: 'selected', comment: 'my comment', sourcePath: null, startLine: null, endLine: null } },
+    ]);
+    expect(getDraft('unrelated-annotation-task')).toBeUndefined();
+    unsubscribe();
+    clearDraft(id);
+  });
   it('lifts legacy quote arrays into leading inline nodes', () => {
     const id = 'session-legacy-quote';
     saveDraft(

@@ -3002,6 +3002,9 @@ export function ChatInput({
           { silent: true },
         );
       });
+      // Quote forms live outside the editor, so their edits need not cause a
+      // blur. Persist before another selection appends to the shared draft.
+      if (transaction.getMeta('composerQuoteEdit')) draftSaveSchedulerRef.current?.flush();
       // chat-input-autoscroll fix: 输入超过 max-h 后，让光标随内容追底
       scheduleCaretScroll(ed);
     },
@@ -4340,7 +4343,7 @@ export function ChatInput({
   useEffect(() => {
     if (!editor || !storageKey) return;
     const dataOwnerAtSubscription = editorDataOwnerRef.current;
-    return subscribeComposerDraft(storageKey, () => {
+    return subscribeComposerDraft(storageKey, (options) => {
       // Owner id only: this subscription lives as long as the editor, and the
       // draft store is namespaced by owner id, not generation. Gating on the
       // exact generation made "add selection to chat" / rewind pre-fill silently
@@ -4364,14 +4367,14 @@ export function ChatInput({
         JSON.stringify(normalizedDraftText) ===
         JSON.stringify(composerDocIsEmpty(editor.state.doc) ? null : editor.getJSON());
       if (textUnchanged) {
-        if (!editor.isFocused) editor.commands.focus();
+        if (options?.focus !== false && !editor.isFocused) editor.commands.focus();
         return;
       }
       isRestoringRef.current = true;
       try {
         if (normalizedDraftText) {
           editor.commands.setContent(normalizedDraftText);
-          editor.commands.focus('end');
+          if (options?.focus !== false) editor.commands.focus('end');
         } else {
           editor.commands.clearContent();
         }

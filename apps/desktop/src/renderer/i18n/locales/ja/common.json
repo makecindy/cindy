@@ -12627,6 +12627,11 @@
       "noText": "(注釈テキストなし)"
     },
     "quote": {
+      "comment": "コメント（任意）",
+      "commentLabel": "コメント：",
+      "confirm": "下書きに追加",
+      "save": "コメントを保存",
+      "cancel": "キャンセル",
       "addToChat": "チャットに追加",
       "remove": "引用を削除",
       "selectionCount_one": "{{count}} 件の引用",

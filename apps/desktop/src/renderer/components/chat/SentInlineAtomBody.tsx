@@ -54,7 +54,7 @@ export function SentInlineAtomBody({
               className="mx-1 inline-flex max-w-[min(240px,55vw)] select-none align-middle"
               key={`quote-${index}`}
             >
-              <QuoteChip quote={segment.quote} />
+              <QuoteChip quote={segment.quote} interactive={false} />
             </span>
           );
         }

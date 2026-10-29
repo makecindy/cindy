@@ -49,7 +49,7 @@ export function SentAgentReferenceChip({
     if (reference.kind === 'message') {
       return (
         <span className="relative top-[-1px] -my-[1px] inline-flex max-w-[min(240px,55vw)] align-middle">
-          <QuoteChip quote={{ text: label }} />
+          <QuoteChip quote={{ text: label }} interactive={false} />
         </span>
       );
     }

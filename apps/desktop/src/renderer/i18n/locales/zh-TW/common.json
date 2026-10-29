@@ -12626,6 +12626,11 @@
       "noText": "(未填寫註釋文字)"
     },
     "quote": {
+      "comment": "評論（選填）",
+      "commentLabel": "評論：",
+      "confirm": "加入草稿",
+      "save": "儲存評論",
+      "cancel": "取消",
       "addToChat": "新增到對話",
       "remove": "移除引用",
       "selectionCount_one": "{{count}} 處引用",

@@ -81,7 +81,7 @@ describe('composerQuoteDocument', () => {
         content: [
           {
             type: 'composerQuote',
-            attrs: { text: 'quote', sourcePath: null, startLine: null, endLine: null },
+            attrs: { text: 'quote', comment: null, sourcePath: null, startLine: null, endLine: null },
           },
           { type: 'text', text: 'reply' },
         ],
@@ -330,6 +330,8 @@ describe('composerQuoteDocument', () => {
   });
 
   it('round-trips quote text and source metadata through HTML clipboard serialization', () => {
+    // #7387 unit: HTML clipboard used to omit bound comments; a multiline
+    // comment must survive copy/paste with its source, not become body text.
     const editor = makeEditor();
     editor.commands.setContent({
       type: 'doc',
@@ -341,6 +343,7 @@ describe('composerQuoteDocument', () => {
               type: 'composerQuote',
               attrs: {
                 text: 'quoted <value>\nsecond line',
+                comment: 'first comment\n\nlast comment\n',
                 sourcePath: 'src/example.ts',
                 startLine: 7,
                 endLine: 9,
@@ -357,6 +360,7 @@ describe('composerQuoteDocument', () => {
       type: 'composerQuote',
       attrs: {
         text: 'quoted <value>\nsecond line',
+        comment: 'first comment\n\nlast comment\n',
         sourcePath: 'src/example.ts',
         startLine: 7,
         endLine: 9,

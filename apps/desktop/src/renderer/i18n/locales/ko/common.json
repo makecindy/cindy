@@ -12627,6 +12627,11 @@
       "noText": "(주석 텍스트 없음)"
     },
     "quote": {
+      "comment": "의견 (선택 사항)",
+      "commentLabel": "의견: ",
+      "confirm": "초안에 추가",
+      "save": "의견 저장",
+      "cancel": "취소",
       "addToChat": "대화에 추가",
       "remove": "인용 제거",
       "selectionCount_one": "인용 {{count}}개",

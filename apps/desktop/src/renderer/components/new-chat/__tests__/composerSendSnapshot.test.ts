@@ -5,7 +5,9 @@ import {
   isComposerSendSnapshotCurrent,
 } from '../composerSendSnapshot';
 
-const document = { type: 'doc', content: [{ type: 'paragraph' }] };
+const document = { type: 'doc', content: [{ type: 'paragraph', content: [
+  { type: 'composerQuote', attrs: { text: 'original', comment: 'bound opinion' } },
+] }] };
 const attachment = {
   id: 'file-1',
   name: 'one.txt',
@@ -46,6 +48,10 @@ describe('composer send snapshot', () => {
     const comments = [comment];
     const snapshot = captureComposerSendSnapshot(document, attachments, comments);
 
+    // #7387: editing an annotation while sending must protect the newer draft.
+    const edited = structuredClone(document);
+    edited.content[0].content[0].attrs.comment = 'updated opinion';
+    expect(isComposerSendSnapshotCurrent(snapshot, edited, attachments, comments)).toBe(false);
     expect(
       isComposerSendSnapshotCurrent(snapshot, structuredClone(document), attachments, comments),
     ).toBe(true);

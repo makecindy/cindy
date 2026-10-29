@@ -65,12 +65,13 @@ describe('chatQuoteStore', () => {
   it('persists after the debounce window and hydrates on cold start', async () => {
     vi.useFakeTimers();
     const { __testing, appendQuote } = await import('@/session/chatQuoteStore');
-    appendQuote('s1', { text: 'kept', sourcePath: 'src/x.ts' });
+    // #7387: comments must survive the existing persisted quote path too.
+    appendQuote('s1', { text: 'kept', comment: 'one\n\ntwo\n', sourcePath: 'src/x.ts' });
     vi.advanceTimersByTime(__testing.persistDebounceMs + 10);
     vi.useRealTimers();
     await flushMicrotasks();
     expect(JSON.parse(store.get(__testing.storageKeyForSession('s1')) ?? '[]')).toEqual([
-      { text: 'kept', sourcePath: 'src/x.ts' },
+      { text: 'kept', comment: 'one\n\ntwo\n', sourcePath: 'src/x.ts' },
     ]);
 
     // 冷启动:内存清空后 hydrate 从 AsyncStorage 回填并通知订阅方。
@@ -79,7 +80,7 @@ describe('chatQuoteStore', () => {
     const seen: number[] = [];
     subscribeQuotes('s1', () => seen.push(getQuotes('s1').length));
     await hydrateQuotes('s1');
-    expect(getQuotes('s1')).toEqual([{ text: 'kept', sourcePath: 'src/x.ts' }]);
+    expect(getQuotes('s1')).toEqual([{ text: 'kept', comment: 'one\n\ntwo\n', sourcePath: 'src/x.ts' }]);
     expect(seen).toEqual([1]);
   });
 
@@ -94,11 +95,11 @@ describe('chatQuoteStore', () => {
 
   it('setQuotes restores a snapshot (send-failure recovery) and empty array clears', async () => {
     const { appendQuote, clearQuotes, getQuotes, setQuotes } = await import('@/session/chatQuoteStore');
-    appendQuote('s1', { text: 'a' });
+    appendQuote('s1', { text: 'a', comment: 'retry this' });
     const snapshot = [...getQuotes('s1')];
     clearQuotes('s1');
     setQuotes('s1', snapshot);
-    expect(getQuotes('s1')).toEqual([{ text: 'a' }]);
+    expect(getQuotes('s1')).toEqual([{ text: 'a', comment: 'retry this' }]);
     setQuotes('s1', []);
     expect(getQuotes('s1')).toEqual([]);
   });

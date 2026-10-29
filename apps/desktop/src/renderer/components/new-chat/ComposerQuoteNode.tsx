@@ -1,9 +1,9 @@
 /**
- * Read-only inline atom used for selected-text quotes inside ChatInput.
+ * Inline atom used for selected-text quotes and comments inside ChatInput.
  *
- * The quote stays compact and immutable while prose remains editable directly
- * before/after it. The chip truncates long text and exposes the full quote on
- * hover; users can select the atom and delete it with Backspace/Delete.
+ * The source text stays immutable while the chip opens a comment editor. Prose
+ * remains editable before/after the atom; users can remove the whole quote from
+ * its editor or select the atom and delete it with Backspace/Delete.
  */
 import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
@@ -21,8 +21,16 @@ function parsePositiveLineAttribute(element: HTMLElement, name: string): number 
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-function ComposerQuoteNodeView({ node, selected }: NodeViewProps) {
+function ComposerQuoteNodeView({ node, selected, editor, getPos }: NodeViewProps) {
   const quote = composerQuoteAttrsToChatQuote(node.attrs as ComposerQuoteAttrs);
+  const update = (comment: string | null) => {
+    const position = getPos();
+    if (position === undefined) return;
+    const transaction = editor.state.tr.setMeta('composerQuoteEdit', true);
+    if (comment === null) transaction.delete(position, position + node.nodeSize);
+    else transaction.setNodeMarkup(position, undefined, { ...node.attrs, comment: comment.trim() ? comment : null });
+    editor.view.dispatch(transaction);
+  };
 
   return (
     <NodeViewWrapper
@@ -34,7 +42,10 @@ function ComposerQuoteNodeView({ node, selected }: NodeViewProps) {
       style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
       className="inline-flex max-w-[min(240px,55vw)] cursor-grab select-none align-middle active:cursor-grabbing"
     >
-      <QuoteChip quote={quote} selected={selected} />
+      <QuoteChip quote={quote} selected={selected}
+        onEditComment={update}
+        onDelete={() => update(null)}
+      />
     </NodeViewWrapper>
   );
 }
@@ -60,6 +71,11 @@ export const ComposerQuoteNode = Node.create<Record<string, never>, Record<strin
         parseHTML: (element) => element.getAttribute('data-source-path') || null,
         renderHTML: (attrs) =>
           attrs.sourcePath == null ? {} : { 'data-source-path': attrs.sourcePath },
+      },
+      comment: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-quote-comment') || null,
+        renderHTML: (attrs) => attrs.comment == null ? {} : { 'data-quote-comment': attrs.comment },
       },
       startLine: {
         default: null,

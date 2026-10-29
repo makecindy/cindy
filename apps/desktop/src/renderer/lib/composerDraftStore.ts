@@ -259,7 +259,7 @@ export function setComposerDraftOwner(ownerId: string | null): void {
  * a setContent reset (which would clobber the cursor and trigger another
  * onUpdate → another save → ...).
  */
-type DraftListener = () => void;
+type DraftListener = (options?: { focus?: boolean }) => void;
 const listeners = new Map<string, Set<DraftListener>>();
 
 /**
@@ -439,7 +439,7 @@ export function subscribeDraftPresence(sessionId: string, handler: DraftListener
 export function saveDraft(
   sessionId: string,
   draft: ComposerDraft,
-  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean },
+  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean; focus?: boolean },
 ): void {
   saveDraftAtKey(sessionId, draftKey(sessionId), draft, opts);
 }
@@ -460,7 +460,7 @@ export function captureDraftRecoveryScope(sessionId: string) {
 
 function saveDraftAtKey(
   sessionId: string, key: string, draft: ComposerDraft,
-  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean },
+  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean; focus?: boolean },
 ): void {
   if (!opts?.silent && !opts?.preserveRemoteOptimisticRecovery) {
     remoteOptimisticRecoveries.delete(key);
@@ -491,7 +491,7 @@ function saveDraftAtKey(
     if (set)
       for (const fn of set) {
         try {
-          fn();
+          fn({ focus: opts?.focus });
         } catch (err) {
           log.warn('listener threw:', err);
         }
@@ -873,7 +873,7 @@ function syncDraftUrlsToMain(): void {
  * chat-text-quote:向会话草稿正文末尾追加一条引用(非 silent——挂载中的
  * ChatInput 立即刷新正文并把光标放到引用右侧)。
  */
-export function appendQuoteToDraft(sessionId: string, quote: ChatQuote): void {
+export function appendQuoteToDraft(sessionId: string, quote: ChatQuote, options?: { focus?: boolean }): void {
   const existing = getDraft(sessionId);
   const currentDocument = prependLegacyQuotesToComposerDocument(
     existing?.text,
@@ -888,7 +888,7 @@ export function appendQuoteToDraft(sessionId: string, quote: ChatQuote): void {
       quotes: [],
       browserComments: existing?.browserComments ?? [],
     },
-    { preserveRemoteOptimisticRecovery: true },
+    { preserveRemoteOptimisticRecovery: true, focus: options?.focus },
   );
 }
 

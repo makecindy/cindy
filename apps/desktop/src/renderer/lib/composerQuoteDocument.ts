@@ -17,6 +17,7 @@ export const COMPOSER_QUOTE_NODE_TYPE = 'composerQuote';
 
 export interface ComposerQuoteAttrs {
   text: string;
+  comment?: string | null;
   sourcePath: string | null;
   startLine: number | null;
   endLine: number | null;
@@ -51,6 +52,7 @@ function trimRangeToText(
 export function composerQuoteAttrsToChatQuote(attrs: ComposerQuoteAttrs): ChatQuote {
   return {
     text: attrs.text,
+    ...(attrs.comment?.trim() ? { comment: attrs.comment } : {}),
     ...(attrs.sourcePath ? { sourcePath: attrs.sourcePath } : {}),
     ...(typeof attrs.startLine === 'number' ? { startLine: attrs.startLine } : {}),
     ...(typeof attrs.endLine === 'number' ? { endLine: attrs.endLine } : {}),
@@ -62,6 +64,7 @@ function quoteNode(quote: ChatQuote): JSONContent {
     type: COMPOSER_QUOTE_NODE_TYPE,
     attrs: {
       text: quote.text,
+      ...(quote.comment?.trim() ? { comment: quote.comment } : {}),
       sourcePath: quote.sourcePath ?? null,
       startLine: quote.startLine ?? null,
       endLine: quote.endLine ?? null,

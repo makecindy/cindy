@@ -245,7 +245,7 @@ describe('ChatInput editor-lifetime draft guards use owner id only', () => {
       'const dataOwnerAtSubscription = editorDataOwnerRef.current;',
       'const draft = getComposerDraft(storageKey);',
     );
-    expect(block).toContain('return subscribeComposerDraft(storageKey, () => {');
+    expect(block).toContain('return subscribeComposerDraft(storageKey,');
     expect(block).toContain('if (!isDataOwnerIdCurrent(dataOwnerAtSubscription)) return;');
     expect(block).not.toContain('isDataOwnerGenerationCurrent(dataOwnerAtSubscription)');
   });

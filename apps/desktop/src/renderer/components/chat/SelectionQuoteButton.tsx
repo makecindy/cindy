@@ -1,11 +1,10 @@
 import { Button } from '@/components/ui/button';
+import './SelectionQuoteButton.css';
 /**
  * SelectionQuoteButton — 聊天消息流的"选中文字 → 添加到对话"浮动按钮。
  *
- * 交互(对标图片标注的"发送到对话"心智):在消息流([data-scroll-container])
- * 内选中任意文字,选区上方浮出胶囊按钮;点击把选中文本追加进当前会话草稿的
- * 正文(composerDraftStore.appendQuoteToDraft,非 silent → ChatInput 立即插入
- * 引用块并把光标放到其后),随后清除选区、按钮消失。
+ * 选中文字后在选区附近填写可选评论；确认只追加到所属任务草稿，
+ * 保留阅读位置，不聚焦主输入框或触发发送。
  *
  * 实现要点:
  * - selectionchange 只负责"选区塌缩就隐藏";按钮定位在 mouseup 时计算一次
@@ -22,15 +21,25 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { MessageSquarePlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { QuoteCommentEditor } from './QuoteCommentEditor';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { appendQuoteToDraft } from '@/lib/composerDraftStore';
 
-/** 单条引用的长度上限:防止误选整篇转录把 prompt 撑爆;超出截断并加省略号。 */
+/** 保持现有侧边追问的独立长度限制；草稿引用完整保留选区。 */
 const QUOTE_MAX_CHARS = 4000;
 
 interface SelectionAnchor {
   text: string;
+  quote: ChatQuote;
+  sessionId: string;
+  range: Range;
+  highlightRoot: Element;
+  highlightStart: number;
+  highlightText: string;
+  owner: DataOwnerGeneration;
   x: number;
   y: number;
   placement: 'above' | 'below';
@@ -118,7 +127,7 @@ function getRectBounds(rects: readonly DOMRect[]): RectBounds | null {
   };
 }
 
-function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAnchor, 'text'> | null {
+function getFloatingAnchor(selection: Selection, range: Range): Pick<SelectionAnchor, 'x' | 'y' | 'placement'> | null {
   const rects = Array.from(range.getClientRects()).filter(
     (rect) => rect.width > 0 && rect.height > 0,
   );
@@ -177,6 +186,9 @@ export function SelectionQuoteButton({
 }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
+  const [editing, setEditing] = useState(false);
+  const editingRef = useRef(false);
+  editingRef.current = editing;
   const [openingSideChat, setOpeningSideChat] = useState(false);
   const pillRef = useRef<HTMLDivElement>(null);
   const [pillWidth, setPillWidth] = useState(200);
@@ -186,19 +198,58 @@ export function SelectionQuoteButton({
   const anchorRef = useRef<SelectionAnchor | null>(null);
   anchorRef.current = anchor;
 
-  const commitQuote = useCallback((selectionAnchor: SelectionAnchor) => {
-    const text =
-      selectionAnchor.text.length > QUOTE_MAX_CHARS
-        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
-        : selectionAnchor.text;
-    const metadata = getQuoteMetadata?.() ?? null;
+  const commitQuote = useCallback((selectionAnchor: SelectionAnchor, comment: string) => {
+    if (selectionAnchor.sessionId !== sessionId || selectionAnchor.quote.sourcePath !== sourcePath || !isDataOwnerIdCurrent(selectionAnchor.owner)) return;
     appendQuoteToDraft(
-      sessionId,
-      sourcePath ? { text, sourcePath, ...(metadata ?? {}) } : { text },
+      selectionAnchor.sessionId,
+      { ...selectionAnchor.quote, ...(comment.trim() ? { comment } : {}) },
+      { focus: false },
     );
     window.getSelection()?.removeAllRanges();
+    setEditing(false);
     setAnchor(null);
-  }, [getQuoteMetadata, sessionId, sourcePath]);
+  }, [sessionId, sourcePath]);
+
+  useEffect(() => { setAnchor(null); setEditing(false); }, [sessionId, sourcePath]);
+  useEffect(() => {
+    if (!editing || !anchor || typeof Highlight === 'undefined' || !CSS.highlights) return;
+    const highlight = new Highlight(anchor.range);
+    CSS.highlights.set('cindy-selection-quote', highlight);
+    // Streaming can replace a Text node and collapse a live DOM Range. Keep
+    // offsets within the stable body container and restore only matching text.
+    let frame = 0;
+    const refresh = () => {
+      frame = 0;
+      const walker = document.createTreeWalker(anchor.highlightRoot, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let offset = 0;
+      let started = false;
+      let complete = false;
+      const end = anchor.highlightStart + anchor.highlightText.length;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const length = node.textContent?.length ?? 0;
+        if (!started && anchor.highlightStart <= offset + length) {
+          range.setStart(node, anchor.highlightStart - offset);
+          started = true;
+        }
+        if (started && end <= offset + length) {
+          range.setEnd(node, end - offset);
+          complete = true;
+          break;
+        }
+        offset += length;
+      }
+      highlight.clear();
+      if (complete && anchor.highlightRoot.isConnected && range.toString() === anchor.highlightText) highlight.add(range);
+    };
+    const observer = new MutationObserver(() => { if (!frame) frame = requestAnimationFrame(refresh); });
+    observer.observe(anchor.highlightRoot, { childList: true, characterData: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      if (CSS.highlights.get('cindy-selection-quote') === highlight) CSS.highlights.delete('cindy-selection-quote');
+    };
+  }, [anchor, editing]);
 
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps
@@ -227,35 +278,56 @@ export function SelectionQuoteButton({
       if (!allowQuoteDisabled && selectionIntersectsFloatingQuoteDisabledArea(range, container)) return null;
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
+      const selectionElement = range.commonAncestorContainer instanceof Element
+        ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement ?? container;
+      // MarkdownRenderer replaces its streaming subtree when a reply finishes;
+      // its outer body survives. File readers and cross-block selections use
+      // the owning container rather than a paragraph that may be remounted.
+      const markdownBody = selectionElement.closest('.msg-markdown');
+      const highlightRoot = markdownBody && container.contains(markdownBody) && markdownBody.contains(range.endContainer)
+        ? markdownBody : container;
+      const prefix = range.cloneRange();
+      prefix.selectNodeContents(highlightRoot);
+      prefix.setEnd(range.startContainer, range.startOffset);
 
-      return { text, ...floatingAnchor };
+      return {
+        text, ...floatingAnchor, sessionId, range: range.cloneRange(), owner: getDataOwnerGeneration(),
+        highlightRoot, highlightStart: prefix.toString().length, highlightText: range.toString(),
+        quote: { text, ...(sourcePath ? { sourcePath, ...(getQuoteMetadata?.() ?? {}) } : {}) },
+      };
     };
 
     const onMouseUp = () => {
+      if (editingRef.current) return;
       // 松手后 selection 需要一帧定型(双击选词等场景)。
-      requestAnimationFrame(() => setAnchor(readSelectionInStream()));
+      requestAnimationFrame(() => { if (!editingRef.current) setAnchor(readSelectionInStream()); });
     };
     const onSelectionChange = () => {
       // 只负责"选区没了就藏"——避免每次拖动扩选都重算位置导致按钮乱跳。
       const sel = window.getSelection();
-      if ((!sel || sel.isCollapsed) && anchorRef.current) setAnchor(null);
+      if (!editingRef.current && (!sel || sel.isCollapsed) && anchorRef.current) setAnchor(null);
     };
     const onScrollOrResize = () => {
-      if (anchorRef.current) setAnchor(null);
+      if (!editingRef.current && anchorRef.current) setAnchor(null);
     };
     const container = containerRef.current;
     if (container) container.dataset.selectionQuoteContext = '';
     const unsubscribeAddToChat = window.electronAPI.onSelectionContextMenuAddToChat(() => {
       const currentSelection = readSelectionInStream(true);
-      if (currentSelection) commitQuote(currentSelection);
+      if (currentSelection) { setAnchor(currentSelection); setEditing(true); }
     });
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.shiftKey && event.key.startsWith('Arrow')) onMouseUp();
+    };
     document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('keyup', onKeyUp);
     document.addEventListener('selectionchange', onSelectionChange);
     // capture:消息流滚动事件不冒泡到 document,用捕获段拿到。
     document.addEventListener('scroll', onScrollOrResize, true);
     window.addEventListener('resize', onScrollOrResize);
     return () => {
       document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('keyup', onKeyUp);
       document.removeEventListener('selectionchange', onSelectionChange);
       document.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
@@ -264,15 +336,17 @@ export function SelectionQuoteButton({
         delete container.dataset.selectionQuoteContext;
       }
     };
-  }, [commitQuote, containerRef, getQuoteText]);
+  }, [containerRef, getQuoteText, getQuoteMetadata, sessionId, sourcePath]);
 
-  if (!anchor) return null;
+  if (!anchor || anchor.sessionId !== sessionId || anchor.quote.sourcePath !== sourcePath) return null;
 
   const handleAdd = () => {
-    commitQuote(anchor);
+    setEditing(true);
   };
 
   return createPortal(
+    <Popover open={editing} onOpenChange={(open) => { setEditing(open); if (!open) setAnchor(null); }}>
+    <PopoverAnchor asChild>
     <div
       ref={pillRef}
       // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
@@ -303,13 +377,26 @@ export function SelectionQuoteButton({
           try {
             if (await onAskInSideChat(anchor.text.slice(0, QUOTE_MAX_CHARS))) {
               window.getSelection()?.removeAllRanges();
+              setEditing(false);
               setAnchor(null);
             }
           } finally { setOpeningSideChat(false); }
         }}>
         {t(openingSideChat ? 'chat.sideChat.opening' : 'chat.sideChat.title')}
       </Button>}
-    </div>,
+    </div>
+    </PopoverAnchor>
+    <PopoverContent className="z-[61] w-80 max-w-[calc(100vw-16px)]" side={anchor.placement === 'above' ? 'top' : 'bottom'}
+      onOpenAutoFocus={(event) => event.preventDefault()}
+      onCloseAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => event.preventDefault()}
+    >
+      <QuoteCommentEditor quote={anchor.quote} saveLabel={t('chat.quote.confirm')}
+        onSave={(comment) => commitQuote(anchor, comment)}
+        onCancel={() => { setEditing(false); setAnchor(null); }}
+      />
+    </PopoverContent>
+    </Popover>,
     document.body,
   );
 }

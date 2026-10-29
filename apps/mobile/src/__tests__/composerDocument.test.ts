@@ -19,6 +19,7 @@ import {
   type ComposerDocument,
   removeComposerNode,
   replaceComposerTextRange,
+  composerDocumentsEqual,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
@@ -27,6 +28,19 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  // #7387 unit: Mobile keeps PC comments through its existing draft and history paths.
+  it('preserves PC comments through persistence and send/history', () => {
+    const document: ComposerDocument = { version: 1, nodes: [
+      { type: 'quote', quote: { text: 'first', comment: 'one\n\ntwo\n' } },
+      { type: 'text', text: 'overall' },
+      { type: 'quote', quote: { text: 'second' } },
+    ] };
+    expect(parseStoredComposerDocument(JSON.parse(JSON.stringify(document)))).toEqual(document);
+    const sent = serializeComposerDocument(document);
+    const restored = composerDocumentFromEncodedMessage(sent.text);
+    expect(restored).toEqual(document);
+    expect(composerDocumentsEqual(document, restored)).toBe(true);
+  });
   it.each([
     [0, 2, 0, 1, 'voice'],
     [1, 1, 0, 1, 'avoiceb'],

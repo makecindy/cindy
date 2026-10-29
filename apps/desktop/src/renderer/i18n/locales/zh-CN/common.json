@@ -12627,6 +12627,11 @@
       "noText": "(未填写注释文字)"
     },
     "quote": {
+      "comment": "评论（可选）",
+      "commentLabel": "评论：",
+      "confirm": "加入草稿",
+      "save": "保存评论",
+      "cancel": "取消",
       "addToChat": "添加到对话",
       "remove": "移除引用",
       "selectionCount_one": "{{count}} 处引用",

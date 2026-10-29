@@ -153,7 +153,9 @@ describe('sent structured reference chips', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
-  it('keeps static message references in the quote-chip shape', () => {
+  // #7504 unit: the static message branch also reuses QuoteChip, which must
+  // not introduce its own detail action into a queue/collapsed projection.
+  it('keeps static message references in the quote-chip shape without focus or button semantics', () => {
     const { container } = render(
       <SentAgentReferenceChip
         interactive={false}
@@ -172,6 +174,8 @@ describe('sent structured reference chips', () => {
     expect(container.textContent).toContain('Quoted message');
     expect(container.querySelector('[data-inline-reference-chip]')).not.toBeNull();
     expect(container.querySelector('button')).toBeNull();
+    expect(container.querySelector('[role="button"]')).toBeNull();
+    expect(container.querySelector('[tabindex]')).toBeNull();
   });
 
   it('falls back to neutral labels instead of internal ids when text or title is missing', () => {

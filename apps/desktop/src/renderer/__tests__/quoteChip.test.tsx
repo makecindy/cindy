@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QuoteChip } from '@/components/chat/QuoteChip';
 
 afterEach(() => {
@@ -20,11 +20,37 @@ describe('QuoteChip', () => {
     expect(chip?.className).toContain('select-none');
   });
 
-  it('uses the compact primary-text shell without a close button', () => {
-    const { container } = render(<QuoteChip quote={{ text: 'quoted' }} />);
-    expect(screen.queryByRole('button')).toBeNull();
-    expect(
-      container.querySelector('[data-inline-reference-chip]')?.className,
-    ).toContain('text-[var(--text-primary)]');
+  // #7387 unit: real chip/form interactions, absent from the old read-only
+  // chip tests. Minimal failure: click a quote with a bound multiline comment.
+  it('opens the complete original and its comment in history', () => {
+    render(<QuoteChip quote={{ text: 'quoted\noriginal', comment: 'my\ncomment' }} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByRole('dialog').textContent).toContain('quoted\noriginal');
+    expect(screen.getByRole('dialog').textContent).toContain('my\ncomment');
+  });
+
+  it('cancels a local edit, saves multiline comments, and deletes the whole quote', async () => {
+    const edit = vi.fn();
+    const remove = vi.fn();
+    render(<QuoteChip quote={{ text: 'original', comment: 'old' }} onEditComment={edit} onDelete={remove} />);
+    const open = () => fireEvent.click(screen.getByRole('button', { name: 'original\nold' }));
+    open();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'discard' } });
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.cancel' }));
+    expect(edit).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'original\nold' })));
+    open();
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'old');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'one\n\ntwo\n' } });
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', isComposing: true });
+    expect(edit).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', shiftKey: true });
+    expect(edit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.save' }));
+    expect(edit).toHaveBeenCalledWith('one\n\ntwo\n');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'original\nold' })));
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.remove' }));
+    expect(remove).toHaveBeenCalledOnce();
   });
 });

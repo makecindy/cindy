@@ -407,7 +407,8 @@
     "countPreviewHint": "{{n}} 處引用，點選預覽",
     "remove": "移除引用",
     "closePreview": "關閉引用預覽",
-    "menuLabel": "新增到對話"
+    "menuLabel": "新增到對話",
+    "commentLabel": "評論："
   },
   "learning": {
     "memory": "已記住：{{title}}",

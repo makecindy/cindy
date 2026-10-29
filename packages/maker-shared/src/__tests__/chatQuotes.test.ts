@@ -11,6 +11,45 @@ import {
 } from '../chatQuotes';
 
 describe('formatQuotesForSend', () => {
+  // #7387 unit: protocol roundtrips previously had no comment field and confused
+  // source-looking text with metadata. Minimal failure: {text:'a', comment:'b'}.
+  it.each(['first\n\nsecond\n', '  keep spaces  ', '— comment:\n<!-- /cindy-quote-comment -->\n\\literal'])('round-trips a bound comment without trimming it: %j', (comment) => {
+    const quote = { text: 'original\nsecond line', comment, sourcePath: 'spec.md', startLine: 2, endLine: 3 };
+    const encoded = formatQuotesForSend([quote], 'overall request');
+    expect(parseChatQuoteSegments(encoded)).toEqual([{ kind: 'quote', quote }, { kind: 'text', text: 'overall request' }]);
+    expect(parseLeadingBlockquotes(encoded)).toEqual({ quotes: [quote], body: 'overall request' });
+    expect(stripChatQuoteMarkerLines(encoded)).toContain(`> — comment:\n${comment.split('\n').map((line) => line ? `> ${line}` : '>').join('\n')}`);
+  });
+
+  it('keeps reserved protocol lines literal in original text and copied text', () => {
+    const text = '<!-- cindy-composer-quote -->\n<!-- cindy-quote-text-v1 -->\n— comment:\n<!-- /cindy-quote-comment -->\n\\leading\n— source: literal.md';
+    const encoded = formatQuoteForSend({ text });
+    expect(parseChatQuoteSegments(encoded)).toEqual([{ kind: 'quote', quote: { text } }]);
+    expect(stripChatQuoteMarkerLines(encoded)).toBe(text.split('\n').map((line) => `> ${line}`).join('\n'));
+  });
+
+  it('keeps empty comments as ordinary quotes and preserves long selections and quote order', () => {
+    const quotes = [{ text: 'x'.repeat(5001), comment: 'first' }, { text: 'second', comment: ' \n ' }, { text: 'last', comment: 'third' }];
+    expect(formatQuoteForSend(quotes[1])).toBe(formatQuoteForSend({ text: 'second' }));
+    expect(parseLeadingBlockquotes(formatQuotesForSend(quotes, ''))).toEqual({
+      quotes: [quotes[0], { text: 'second' }, quotes[2]], body: '',
+    });
+  });
+
+  it('does not interpret comment delimiters in legacy unversioned history', () => {
+    expect(parseLeadingBlockquotes('> old\n> — comment:\n> literal\n> <!-- /cindy-quote-comment -->')).toEqual({
+      quotes: [{ text: 'old\n— comment:\nliteral\n<!-- /cindy-quote-comment -->' }], body: '',
+    });
+  });
+  // #7387 QA regression: a legacy selection can itself describe the new protocol.
+  it('keeps version-looking text in an old marked quote literal', () => {
+    const text = '<!-- cindy-quote-text-v1 -->\n\\literal\n— comment:\npart of original\n<!-- /cindy-quote-comment -->';
+    const raw = text.split('\n').map((line) => `> ${line}`).join('\n');
+    const content = `> <!-- cindy-composer-quote -->\n${raw}`;
+    expect(parseChatQuoteSegments(content)).toEqual([{ kind: 'quote', quote: { text } }]);
+    expect(parseLeadingBlockquotes(content)).toEqual({ quotes: [{ text }], body: '' });
+    expect(stripChatQuoteMarkerLines(content)).toBe(raw);
+  });
   it('encodes one standalone quote for inline composer serialization', () => {
     expect(formatQuoteForSend({ text: 'a\n\nb', sourcePath: 'docs/x.md' })).toBe(
       '> <!-- cindy-composer-quote -->\n> a\n>\n> b\n> — source: docs/x.md',
@@ -153,6 +192,22 @@ describe('parseChatQuoteSegments', () => {
       { kind: 'quote', quote: { text: 'old product quote' } },
       { kind: 'text', text: 'Here is user Markdown:\n> keep this editable' },
     ]);
+  });
+
+  it('does not let marker-looking prose disable legacy leading quotes', () => {
+    const content = '> old product quote\n\n正文：body > <!-- cindy-composer-quote -->';
+    expect(parseChatQuoteSegments(content)).toEqual([
+      { kind: 'quote', quote: { text: 'old product quote' } },
+      { kind: 'text', text: '正文：body > <!-- cindy-composer-quote -->' },
+    ]);
+  });
+
+  it('keeps a standalone marker-looking body line when no quote follows it', () => {
+    const content = `正文\n> <!-- cindy-composer-quote -->\n下一行`;
+    expect(parseChatQuoteSegments(content)).toEqual([
+      { kind: 'text', text: content },
+    ]);
+    expect(stripChatQuoteMarkerLines(content)).toBe(content);
   });
 
   it('never treats unmarked body blockquotes as product quotes when any explicit marker exists', () => {

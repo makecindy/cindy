@@ -12672,6 +12672,11 @@
       "noText": "(no comment text)"
     },
     "quote": {
+      "comment": "Comment (optional)",
+      "commentLabel": "Comment: ",
+      "confirm": "Add to draft",
+      "save": "Save comment",
+      "cancel": "Cancel",
       "addToChat": "Add to chat",
       "remove": "Remove quote",
       "selectionCount_one": "{{count}} selection",

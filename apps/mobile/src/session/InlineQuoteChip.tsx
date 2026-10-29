@@ -17,16 +17,16 @@ export function InlineQuoteChip({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const source = quoteSourceDisplayLabel(quote);
-  const label = compactQuoteLabel(quote.text);
+  const label = compactQuoteLabel([quote.text, quote.comment].filter(Boolean).join(' · '));
   return (
     <InlineReferenceChip
-      accessibilityLabel={quote.text}
+      accessibilityLabel={[quote.text, quote.comment].filter(Boolean).join('\n')}
       icon={<MessageSquareQuote color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
       label={label}
       onPress={interactive
         ? () => Alert.alert(
             t('message.quote.previewTitle'),
-            [`“${quote.text}”`, source].filter(Boolean).join('\n\n'),
+            [`“${quote.text}”`, quote.comment ? `${t('message.quote.commentLabel')}${quote.comment}` : null, source].filter(Boolean).join('\n\n'),
           )
         : undefined}
       testID="message.quoteChip"

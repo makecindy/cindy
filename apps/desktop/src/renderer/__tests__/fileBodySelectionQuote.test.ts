@@ -89,7 +89,7 @@ afterEach(() => {
 // not FileBodyView -> real CodeMirror -> quote action -> composer draft. Restore
 // this module's original unit file because it owns an editor/DOM lifecycle absent
 // from those helper tests. Minimal input: one rendered Markdown table whose DOM
-// text differs from its selected source, followed by one Add to chat click.
+// text differs from its selected source, followed by Add to chat and confirmation.
 describe('FileBodyView selection quotes', () => {
   // Issue #6655: the sidebar preload lacked the subscription required at mount.
   // Unit tier, no Electron process: exercise its exposed bridge and FileBodyView
@@ -141,6 +141,11 @@ describe('FileBodyView selection quotes', () => {
     } else {
       act(emitAddToChat);
     }
+
+    // #7387 opens a comment form first; only confirmation commits the captured
+    // source slice. An empty comment must retain the original quote metadata.
+    expect(getDraft(sessionId)).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.confirm' }));
 
     expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
       {

@@ -208,7 +208,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
     // 发给模型的上下文范围(条数 / 是否截断)不在气泡里展示:用户无从理解也无从操作。
     const messageContent = (
       <span className="inline-flex min-w-0 max-w-[min(240px,55vw)]">
-        <QuoteChip quote={{ text: visibleMessageLabel }} className="underline underline-offset-2" />
+        <QuoteChip quote={{ text: visibleMessageLabel }} interactive={false} className="underline underline-offset-2" />
       </span>
     );
     // items-center 保证 pill 保持自身高度(不被 align-items: stretch 撑成椭圆)。

@@ -10,7 +10,7 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
  * 预览是**锚定浮窗**(透明 Modal + measureInWindow 定位在胶囊上方,对齐桌面
  * hover 浮层的 bottom-full 语义):点胶囊弹出、点任意处关闭,不占布局流——
  * 不能把输入框 / 消息内容顶开(产品真机反馈)。逐条:引用文本中文引号包裹、
- * 截 3 行;文件来源条目附 FileText 图标 + basename/行号。
+ * 完整展示原文及 PC 批注评论;文件来源条目附 FileText 图标 + basename/行号。
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -130,9 +130,10 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
               <ScrollView bounces={false} style={styles.previewScroll}>
                 {quotes.map((quote, index) => (
                   <View key={index} style={[styles.previewItem, index > 0 && styles.previewItemGap]}>
-                    <Text numberOfLines={3} style={styles.previewText}>
+                    <Text style={styles.previewText}>
                       {`“${quote.text}”`}
                     </Text>
+                    {quote.comment && <Text style={styles.previewText}>{t('message.quote.commentLabel')}{quote.comment}</Text>}
                     {quote.sourcePath ? (
                       <View style={styles.previewSourceRow}>
                         <FileTypeIcon name={quote.sourcePath} color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />

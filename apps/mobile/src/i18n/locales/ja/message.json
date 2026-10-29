@@ -407,7 +407,8 @@
     "countPreviewHint": "{{n}} 件の引用、タップしてプレビュー",
     "remove": "引用を削除",
     "closePreview": "引用プレビューを閉じる",
-    "menuLabel": "チャットに追加"
+    "menuLabel": "チャットに追加",
+    "commentLabel": "コメント："
   },
   "learning": {
     "memory": "記憶しました：{{title}}",
