@@ -1168,6 +1168,20 @@ function officialPiRouteMatches(
   );
 }
 
+/** Anthropic's SDK adds /v1/messages; an OpenAI /v1 connection needs its origin for that model. */
+function anthropicRootForOpenAiV1(baseUrl: string): string | undefined {
+  try {
+    const url = new URL(baseUrl);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') ||
+        !/^\/v1\/?$/.test(url.pathname) || url.search || url.hash || url.username || url.password) {
+      return undefined;
+    }
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
 function configuredPiModel(model: {
   id: string;
   name?: string;
@@ -1440,17 +1454,23 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
-        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
-        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
-        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        // Bundled/official rows may lend capabilities, but never routing. Only an
+        // explicit model route or a proven SDK path relationship may override baseUrl.
+        // Google's public /v1beta/openai endpoint is one such relationship.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
+        // OpenAI clients use /v1 as their root; Anthropic appends /v1/messages.
+        // An absent model route may inherit the OpenAI /v1 endpoint, but a saved
+        // route remains authoritative even when it equals the provider endpoint.
+        const nativeAnthropicBaseUrl =
+          modelApi === 'anthropic-messages' &&
+          (runtimeApi === 'openai-completions' || runtimeApi === 'openai-responses') &&
+          authMethod !== 'oauth' && !rt.requestPath && !m.route
+            ? anthropicRootForOpenAiV1(rt.baseUrl) : undefined;
         const modelBaseUrl =
-          m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
+          nativeAnthropicBaseUrl ?? (m.api && m.route ? m.route.baseUrl :
+            m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),

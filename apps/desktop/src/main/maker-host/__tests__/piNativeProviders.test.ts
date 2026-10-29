@@ -510,6 +510,73 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('gives a Messages model its own root when an OpenAI /v1 provider also serves Chat models', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-gateway', name: 'Mixed Gateway', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl: 'http://127.0.0.1:8765/v1', wireProtocol: 'openai-chat',
+        models: [
+          { id: 'chat-model', name: 'Chat Model' },
+          { id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' },
+          { id: 'routed-messages', name: 'Routed Messages',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl: 'http://127.0.0.1:8765/custom-anthropic', wireProtocol: 'anthropic-messages' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0]).toMatchObject({ baseUrl: 'http://127.0.0.1:8765/v1', api: 'openai-completions' });
+    expect(providers[0].models).toMatchObject([
+      { id: 'chat-model' },
+      { id: 'messages-model', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8765' },
+      { id: 'routed-messages', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8765/custom-anthropic' },
+    ]);
+    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+  });
+
+  it('preserves an old same-endpoint Messages route whose source cannot be identified', () => {
+    const baseUrl = 'http://127.0.0.1:8765/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'ui-selected-gateway', name: 'UI Selected Gateway', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl, wireProtocol: 'openai-chat',
+        models: [
+          { id: 'chat-model', name: 'Chat Model' },
+          { id: 'messages-model', name: 'Messages Model',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'anthropic-messages' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0].baseUrl).toBe(baseUrl);
+    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
+    expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+  });
+
+  it('leaves an OpenAI proxy prefix intact for Messages models with or without selector routes', () => {
+    const baseUrl = 'https://proxy.example/custom/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'custom-proxy', name: 'Custom Proxy', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl, wireProtocol: 'openai-chat',
+        models: [
+          { id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' },
+          { id: 'selected-messages', name: 'Selected Messages',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'anthropic-messages' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0].baseUrl).toBe(baseUrl);
+    expect(providers[0].models[0]).toMatchObject({ api: 'anthropic-messages' });
+    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
+    expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+  });
+
   // Tier 2: the actual launch builder must carry a user's V6 selection, including
   // protocol limits, instead of reverting to the connection's Messages default.
   it.each(['anthropic-messages', 'openai-completions', 'openai-responses'] as const)(

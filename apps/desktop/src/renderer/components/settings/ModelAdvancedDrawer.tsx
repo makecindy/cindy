@@ -338,10 +338,21 @@ export function ModelAdvancedDrawer({
       if (agent === 'pi') model.piApi = api as PiModelApi;
       const wire = providerWireProtocolForApi(api);
       if (!wire) return;
-      model.route = {
-        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-        wireProtocol: wire,
-      };
+      // Pi gets the selected API from api/piApi. Do not save a redundant route
+      // for a new OpenAI selection: it would look explicit after a refresh and
+      // prevent a later Messages selection from deriving the /v1 root. Keep
+      // existing routes and endpoints that actually change for the selected API.
+      const inheritPiOpenAiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
+        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses') &&
+        (api === 'anthropic-messages' ||
+          ((api === 'openai-completions' || api === 'openai-responses') &&
+            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
+      if (!inheritPiOpenAiEndpoint) {
+        model.route = {
+          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+          wireProtocol: wire,
+        };
+      }
     }
     setProtocolSaving(true);
     try {
