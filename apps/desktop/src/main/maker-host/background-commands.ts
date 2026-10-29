@@ -321,6 +321,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         clearTimeout(timeoutTimer);
         running.delete(runId);
         let pending = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0);
+        if (pending === 0) {
+          reportOnce(exit);
+          return;
+        }
         const grace = setTimeout(() => reportOnce(exit), PIPE_GRACE_MS);
         grace.unref?.();
         const onEnd = () => {
