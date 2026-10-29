@@ -125,6 +125,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 export const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
+export const BGCMD_SCHEDULE_ID_PREFIX = 'bgcmd:';
 
 /**
  * Hook 渠道（Slack / X / 官方 Telegram）消息复用 scheduler 形态的 origin（scheduleId 为
@@ -136,6 +137,19 @@ export function isHookSchedulerOrigin(origin: unknown): boolean {
     record?.kind === 'scheduler' &&
     typeof record.scheduleId === 'string' &&
     record.scheduleId.startsWith(HOOK_SCHEDULE_ID_PREFIX)
+  );
+}
+
+/**
+ * 后台命令完成回注复用 scheduler 形态的 origin（scheduleId 为 `bgcmd:<runId>`），
+ * 是宿主回调不是自动化：正文自述「〔后台命令完成〕」，界面不出自动化标签。
+ */
+export function isBackgroundCommandSchedulerOrigin(origin: unknown): boolean {
+  const record = asRecord(origin);
+  return (
+    record?.kind === 'scheduler' &&
+    typeof record.scheduleId === 'string' &&
+    record.scheduleId.startsWith(BGCMD_SCHEDULE_ID_PREFIX)
   );
 }
 
@@ -250,7 +264,7 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
     const sessionId = readString(origin, 'senderSessionId');
     return sessionId ? [{ kind: 'session', id: sessionId }] : [];
   }
-  if (origin?.kind === 'scheduler' && !isHookSchedulerOrigin(origin)) {
+  if (origin?.kind === 'scheduler' && !isHookSchedulerOrigin(origin) && !isBackgroundCommandSchedulerOrigin(origin)) {
     const scheduleId = readString(origin, 'scheduleId');
     return scheduleId ? [{ kind: 'automation', id: scheduleId }] : [];
   }

@@ -11,7 +11,8 @@
  * - 现有覆盖缺口:新模块,无既有覆盖。
  * - 最小失败输入:退出码非 0 且带输出的短命令;启动参数缺失;不存在 cwd。
  * - tier:unit(真实短命子进程 + 临时目录,无网络/DB)。
- * - 实测耗时:见 PR 描述(本机 < 5s)。
+ * - 最小失败输入还包括:单条输出超过 5MB 上限的命令(验文件截断 + 内存尾部)。
+ * - 实测耗时:本机 < 2s(3 用例含 5MB 输出用例)。
  */
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -128,4 +129,4 @@ it('超上限的输出:文件截断到上限,完成报告仍带最后的输出(�
   const head = await readFile(logPath, 'utf8');
   expect(head.startsWith('x')).toBe(true);
   expect(head).toContain('[log truncated at');
-}, 60_000);
+});

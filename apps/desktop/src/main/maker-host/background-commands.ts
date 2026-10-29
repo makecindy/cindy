@@ -16,7 +16,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, mkdirSync } from 'node:fs';
-import { open, readdir, stat, unlink } from 'node:fs/promises';
+import { readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util.js';
@@ -35,6 +35,8 @@ const REPORT_RETRY_DELAY_MS = 60_000;
 const REPORT_RETRY_MAX = 10;
 /** 日志保留天数;过期文件在服务使用时清理(报告可能已消费,磁盘不应无限涨)。 */
 const LOG_RETENTION_DAYS = 14;
+/** exit 后等 pipe 收尾的宽限;shell 后代可能长期持有 pipe,不能等它们 EOF。 */
+const PIPE_GRACE_MS = 1000;
 
 export interface BackgroundCommandStartInput {
   sessionId: string;
@@ -86,6 +88,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
   function buildReport(input: {
     command: string;
     logPath: string;
+    logTruncated: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -108,11 +111,14 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
             ? `失败（exit ${input.exit.code}）`
             : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
+    const logLine = input.logTruncated
+      ? `日志文件（前 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节，后续输出已丢弃）：${input.logPath}`
+      : `完整日志：${input.logPath}`;
     const text =
       `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。\n` +
       `命令：${head}\n状态：${status}\n耗时：${duration}\n` +
       (input.tail.trim() ? `日志尾部：\n---\n${input.tail}\n---\n` : '') +
-      `完整日志：${input.logPath}\n` +
+      `${logLine}\n` +
       `请根据结果继续推进任务；不需要主人决策时向主人简短汇报即可。`;
     return { text, persistedContent: `后台命令完成 · ${status} · ${head}` };
   }
@@ -122,6 +128,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     runId: string;
     command: string;
     logPath: string;
+    logTruncated: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -279,31 +286,17 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (reportSent) return;
         reportSent = true;
-        const settledDurationMs = durationMs();
-        const reportTail = () => (tail.length ? tail.toString('utf8') : '');
-        if (writer && !writer.destroyed) {
-          writer.end(() =>
-            deliverReport({
-              sessionId: input.sessionId,
-              runId,
-              command,
-              logPath,
-              durationMs: settledDurationMs,
-              exit,
-              tail: reportTail(),
-            }),
-          );
-        } else {
-          deliverReport({
-            sessionId: input.sessionId,
-            runId,
-            command,
-            logPath,
-            durationMs: settledDurationMs,
-            exit,
-            tail: reportTail(),
-          });
-        }
+        writer?.end();
+        deliverReport({
+          sessionId: input.sessionId,
+          runId,
+          command,
+          logPath,
+          logTruncated: markerWritten,
+          durationMs: durationMs(),
+          exit,
+          tail: tail.length ? tail.toString('utf8') : '',
+        });
       };
 
       let timedOut = false;
@@ -313,17 +306,44 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }, timeoutMs);
       timeoutTimer.unref?.();
 
-      running.set(runId, { startedAt, timeoutTimer });
-      child.once('close', (code, signal) => {
+      // 结算以 exit(进程退出)为准:stdio 转 pipe 后,'close' 要等两条 pipe EOF,
+      // shell 留下的后代(如 `pnpm dev &`)持有 pipe 会让报告迟到甚至拖到超时。
+      // exit 后给 pipe 一个短宽限收尾部缓冲,不等于后代生命周期。
+      let settled = false;
+      const settle = (exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        timedOut: boolean;
+        spawnError?: string;
+      }) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeoutTimer);
         running.delete(runId);
-        reportOnce({ code, signal, timedOut });
+        let pending = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0);
+        const grace = setTimeout(() => reportOnce(exit), PIPE_GRACE_MS);
+        grace.unref?.();
+        const onEnd = () => {
+          pending -= 1;
+          if (pending === 0) {
+            clearTimeout(grace);
+            reportOnce(exit);
+          }
+        };
+        child.stdout?.on('end', onEnd);
+        child.stderr?.on('end', onEnd);
+        // end 只在两路都 EOF 时触发;任一路已提前结束时补一次计数,防 pending 卡住。
+        if (child.stdout?.readableEnded) onEnd();
+        if (child.stderr?.readableEnded) onEnd();
+      };
+
+      running.set(runId, { startedAt, timeoutTimer });
+      child.once('exit', (code, signal) => {
+        settle({ code, signal, timedOut });
       });
       child.once('error', (error) => {
-        clearTimeout(timeoutTimer);
-        running.delete(runId);
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });
-        reportOnce({ code: null, signal: null, timedOut: false, spawnError: error.message });
+        settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
       });
       return { ok: true, runId, logPath, pid: child.pid };
     },

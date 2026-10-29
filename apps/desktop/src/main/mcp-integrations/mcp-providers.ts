@@ -11,7 +11,7 @@ import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { routineTools } from '../routines/service.js';
 import { join as pathJoin } from 'node:path';
@@ -207,11 +207,7 @@ async function getBackgroundCommandService(): Promise<
   import('../maker-host/background-commands.js').BackgroundCommandService
 > {
   if (!backgroundCommandServiceSingleton) {
-    backgroundCommandServiceSingleton = Promise.all([
-      import('electron'),
-      import('../maker-host/background-commands.js'),
-      import('../appSessionState.js'),
-    ]).then(([{ app }, { createBackgroundCommandService }, { ownerScopedUserDataPath }]) =>
+    backgroundCommandServiceSingleton = import('../maker-host/background-commands.js').then(({ createBackgroundCommandService }) =>
       createBackgroundCommandService({
         enqueueReport: (req) =>
           import('../maker-ipc/register.js').then((m) => m.enqueueSchedulerPrompt(req)),
