@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
+import type { TeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 import type { MediaCapability } from '@cindy/model-providers';
 import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
 
@@ -20,6 +21,7 @@ interface MockTransitionInput {
 }
 
 const mocks = vi.hoisted(() => ({
+  teammateOverrides: null as TeammateMediaModels | null,
   localMode: false,
   currentUserId: 'media-user-0',
   ownerGeneration: 1,
@@ -54,6 +56,10 @@ const mocks = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(),
   failRequestLog: false,
   reportKeyRejected: vi.fn(),
+}));
+
+vi.mock('../../vision-bridge/teammate-media-models.js', () => ({
+  readSessionMediaModels: async (id?: string) => ({ scope: id ?? '', overrides: id === 'teammate-session' ? mocks.teammateOverrides : null }),
 }));
 
 vi.mock('../../authManager.js', () => ({
@@ -266,6 +272,7 @@ async function prepare(capability: MediaCapability = 'image.generate'): Promise<
 
 describe('Cindy Core media invocation state and security boundary', () => {
   beforeEach(() => {
+    mocks.teammateOverrides = null;
     mocks.recordBilling.mockReset().mockResolvedValue(undefined);
     mocks.finishBilling.mockReset();
     mocks.prepareBilling.mockReset().mockResolvedValue(
@@ -341,6 +348,43 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.videoConnection.mockReturnValue(connection);
     return connection;
   }
+
+  // New media overrides must reach the real prepare/guide boundary. The existing cases only
+  // exercised caller-selected global routes. Minimal same-model/different-account input; unit tier.
+  it.each(['image.generate', 'image.edit'] as const)('prepares %s with the teammate’s exact provider/model instead of a same-ID account', async capability => {
+    const selected = { id: 'selected-image', name: 'Selected', providerId: 'images-account', mode: 'image_generation' as const,
+      imageProtocol: 'openai' as const, modalities: { input: ['text', 'image'], output: ['image'] } };
+    mocks.models.mockResolvedValue([selected, { ...selected, providerId: 'different-account' }]);
+    mocks.providerModel.mockImplementation((provider, model) => provider === selected.providerId && model === selected.id ? selected : null);
+    mocks.teammateOverrides = { image: { providerId: selected.providerId, modelId: selected.id } };
+    const request = { action: 'prepare' as const, capability, providerId: 'different-account', modelId: selected.id };
+    const result = await callCindyMedia(request, undefined, 'teammate-session');
+    expect(result).toMatchObject({ ok: true, provider_id: selected.providerId, model_id: selected.id });
+    expect(mocks.providerModel).toHaveBeenCalledWith(selected.providerId, selected.id, capability);
+    if (capability === 'image.generate') {
+      mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+      mocks.teammateOverrides = { image: { providerId: 'different-account', modelId: selected.id } };
+      expect(await callCindyMedia({ action: 'request', invocationId: result.invocation_id as string, body: { prompt: 'a red circle' } }, undefined, 'teammate-session'))
+        .toMatchObject({ ok: true, status: 'complete' });
+      expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining({ providerId: selected.providerId, modelId: selected.id }));
+    }
+    // Other teammates/ordinary calls retain their own route. Clearing the override also restores it.
+    mocks.providerModel.mockReturnValue({ ...selected, providerId: 'different-account' });
+    expect(await callCindyMedia(request, undefined, 'ordinary-session')).toMatchObject({ provider_id: 'different-account' });
+    mocks.teammateOverrides = null;
+    expect(await callCindyMedia(request, undefined, 'teammate-session')).toMatchObject({ provider_id: 'different-account' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['video.generate', 'video.image_to_video'] as const)('uses the teammate’s video override for %s and refuses unavailable selected accounts', async capability => {
+    setupCustomVideo();
+    mocks.teammateOverrides = { video: { providerId: 'relay', modelId: 'private-video' } };
+    const request = { action: 'prepare' as const, providerId: 'xd', modelId: 'private-video', capability };
+    expect(await callCindyMedia(request, undefined, 'teammate-session')).toMatchObject({ ok: true, provider_id: 'relay', model_id: 'private-video' });
+    mocks.models.mockResolvedValue([{ id: 'private-video', providerId: 'xd', mode: 'video_generation' }]);
+    expect(await callCindyMedia(request, undefined, 'teammate-session')).toMatchObject({ ok: false, errorCode: 'MODEL_NOT_AVAILABLE' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
 
   it.each(['reference-read', 'claim'] as const)('rechecks custom video availability after %s before paying, and preserves prepared', async boundary => {
     setupCustomVideo();

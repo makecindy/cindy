@@ -2637,3 +2637,26 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
     });
   });
 });
+
+// New override contract through the real legacy slot entry: all generation/edit actions must
+// carry the exact provider; a missing selected account must never use the global same-ID route.
+// Existing tests cover only plugin payload selection. Unit tier, injected fake generators.
+it.each([
+  ['gen_image', 'image', 'generateImage'], ['edit_image', 'image', 'editImage'],
+  ['gen_video', 'video', 'generateVideo'], ['edit_video', 'video', 'editVideo'],
+] as const)('uses the trusted teammate selection for legacy %s without changing ordinary calls', async (kind, category, generator) => {
+  const config = { models: [{ id: 'same-model', label: 'Selected', providerId: 'selected-account' },
+    { id: 'same-model', label: 'Other', providerId: 'other-account' }],
+    defaults: { standard: 'same-model', draft: 'same-model', best: 'same-model' } };
+  const catalog = vi.fn((_action?: string, providerId?: string) => ({ ...config, models: config.models.filter(model => !providerId || model.providerId === providerId) }));
+  const fixture = makeSlot({ getImageConfig: catalog, getVideoConfig: catalog });
+  const payload = { kind, prompt: 'A red circle', ...(kind.startsWith('edit') ? { hashes: ['a'.repeat(64)] } : {}) };
+  const selection = { [category]: { providerId: 'selected-account', modelId: 'same-model' } };
+  const result = await fixture.slot.handleModelRequest('art', payload, selection);
+  expect(result.ok).toBe(true);
+  expect(catalog).toHaveBeenCalledWith(kind.startsWith('edit') ? 'edit' : 'generate', 'selected-account');
+  expect(fixture[generator]).toHaveBeenLastCalledWith(expect.objectContaining({ providerId: 'selected-account', model: 'same-model' }));
+  const bad = await fixture.slot.handleModelRequest('art', payload, { [category]: { providerId: 'missing-account', modelId: 'same-model' } });
+  expect(bad.ok).toBe(false);
+  expect(fixture[generator]).toHaveBeenCalledTimes(1);
+});

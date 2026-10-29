@@ -1,3 +1,5 @@
+import type { TeammateMediaCatalog } from '@cindy/maker-shared/teammate-media-models';
+import { parseTeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,10 +10,11 @@ import { RemoteResourceRegistryError, type RemoteResourceHostContext } from '../
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
 type Settings = Awaited<ReturnType<typeof getBotRemoteSettingsSource>>;
-type Operation = 'profile' | 'models' | 'memory' | 'permissions' | 'restart' | 'delete' | 'resume';
+type Operation = 'media' | 'profile' | 'models' | 'memory' | 'permissions' | 'restart' | 'delete' | 'resume';
 type Grant = { owner: string; controller: string; botId: string; version: number; revision: string; operation: Operation; expires: number };
 type BoundGrant = { owner: string; controller: string; ref: NonNullable<RemoteActionInvokeRequest['resourceRef']>; expires: number; check: () => Promise<void>; run: (request: RemoteActionInvokeRequest) => Promise<RemoteActionInvokeResponse> };
 export interface BotRemoteSettingsDeps {
+  mediaModels?(): Promise<TeammateMediaCatalog>;
   owner(): string;
   assertOwner(owner: string): void;
   read(botId: string): Promise<Settings>;
@@ -24,6 +27,14 @@ export interface BotRemoteSettingsDeps {
 const text = (fallback: string, cn: string, tw: string, ja: string, ko: string, additionalTranslations: Record<string, string> = {}): RemoteLocalizedText =>
   ({ fallback, translations: { 'zh-CN': cn, 'zh-TW': tw, ja, ko, ...additionalTranslations } });
 const copy = {
+  media: text("Media models", "媒体模型", "媒體模型", "メディアモデル", "미디어 모델"),
+  mediaVision: text("Vision Bridge model", "视觉桥模型", "視覺橋模型", "Vision Bridge モデル", "Vision Bridge 모델"),
+  mediaFallback: text("Vision Bridge fallback", "视觉桥备用模型", "視覺橋備用模型", "Vision Bridge の予備モデル", "Vision Bridge 예비 모델"),
+  mediaImage: text("Image generation model", "图像生成模型", "圖像生成模型", "画像生成モデル", "이미지 생성 모델"),
+  mediaVideo: text("Video generation model", "视频生成模型", "影片生成模型", "動画生成モデル", "동영상 생성 모델"),
+  mediaInherit: text("Use app settings", "使用应用设置", "使用應用程式設定", "アプリの設定を使用", "앱 설정 사용"),
+  mediaNone: text("No fallback", "不使用备用模型", "不使用備用模型", "予備モデルなし", "예비 모델 없음"),
+
   profile: text('Profile & Personality', '资料与性格', '資料與性格', 'プロフィールと性格', '프로필 및 성격', {"es":"Perfil y personalidad","fr":"Profil et personnalité","de":"Profil & Persönlichkeit","pt-PT":"Perfil e personalidade","pt-BR":"Perfil e personalidade","zh-Hant-x-lzh":"資料與性情","zh-Hans-x-lzh":"资料与性情"}),
   name: text('Name', '名字', '名字', '名前', '이름', {"es":"Nombre","fr":"Nom","de":"Name","pt-PT":"Nome","pt-BR":"Nome","zh-Hant-x-lzh":"名","zh-Hans-x-lzh":"名"}),
   description: text('About', '简介', '簡介', '紹介', '소개', {"es":"Acerca de","fr":"À propos","de":"Über","pt-PT":"Sobre","pt-BR":"Sobre","zh-Hant-x-lzh":"簡介","zh-Hans-x-lzh":"简介"}),
@@ -139,6 +150,25 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
           taskModel: serializeModelRoutes(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
       { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
     ];
+    if (deps.mediaModels) {
+      const media = parseTeammateMediaModels(settings.mediaModels);
+      const catalog = await deps.mediaModels();
+      deps.assertOwner(owner);
+      const encode = (ref: { providerId: string; modelId: string } | null | undefined) => ref ? JSON.stringify({ providerId: ref.providerId, modelId: ref.modelId }) : 'inherit';
+      const selections = [
+        ['vision', copy.mediaVision, media?.vision?.primary],
+        ['fallback', copy.mediaFallback, media?.vision?.fallback],
+        ['image', copy.mediaImage, media?.image],
+        ['video', copy.mediaVideo, media?.video],
+      ] as const;
+      resource.blocks.push(form('media', selections.filter(([id]) => id !== 'fallback' || media?.vision).map(([id, label, selected]) => {
+        const choices = catalog[id === 'fallback' ? 'vision' : id];
+        const options = [{ value: 'inherit', label: id === 'fallback' ? copy.mediaNone : copy.mediaInherit },
+          ...choices.map(ref => ({ value: encode(ref), label: { fallback: ref.label } }))];
+        if (selected && !choices.some(ref => encode(ref) === encode(selected))) options.push({ value: encode(selected), label: { fallback: `${selected.modelId} · ${selected.providerId}` } });
+        return { id, label, kind: 'select', options };
+      }), Object.fromEntries(selections.map(([id, , selected]) => [id, encode(selected)]))));
+    }
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
     try {
       const skills = await deps.skills(botId);
@@ -199,7 +229,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     };
     await guard();
     const input = request.input ?? {};
-    const allowed: readonly string[] = { models: ['followsDefault', 'modelChain', 'taskFollowsPrimary', 'taskModel'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
+    const allowed: readonly string[] = { media: ['vision', 'fallback', 'image', 'video'], models: ['followsDefault', 'modelChain', 'taskFollowsPrimary', 'taskModel'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
     if (Object.keys(input).some(key => !allowed.includes(key))) throwIpcError('INVALID_PARAMS', 'Unknown teammate field');
     const string = (key: string, max = 12_000) => {
       const value = input[key];
@@ -218,6 +248,23 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         ...('userContext' in input ? { userContextSource: string('userContext') } : {}),
         ...('memory' in input ? { capabilities: { memory: input.memory } } : {}),
       };
+    }
+    if (grant.operation === 'media') {
+      const settings = await deps.read(grant.botId); deps.assertOwner(grant.owner);
+      const previous = parseTeammateMediaModels(settings.mediaModels);
+      const selection = (id: string, before: unknown) => {
+        if (!(id in input)) return before;
+        const raw = string(id);
+        if (raw === 'inherit') return null;
+        try { return JSON.parse(raw); } catch { return throwIpcError('INVALID_PARAMS', 'Invalid media selection'); }
+      };
+      const primary = selection('vision', previous?.vision?.primary);
+      let mediaModels;
+      try { mediaModels = parseTeammateMediaModels({
+        vision: primary ? { primary, fallback: selection('fallback', previous?.vision?.fallback ?? null) } : null,
+        image: selection('image', previous?.image), video: selection('video', previous?.video),
+      }); } catch { return throwIpcError('INVALID_PARAMS', 'Invalid media selection'); }
+      patch = { capabilities: { mediaModels } };
     }
     if (grant.operation === 'models') {
       const settings = await deps.read(grant.botId); deps.assertOwner(grant.owner);

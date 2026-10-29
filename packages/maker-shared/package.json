@@ -8,6 +8,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./plugin-ui": "./src/pluginUiPublic.ts",
+    "./plugin-ui-host": "./src/pluginUi.ts",
+    "./teammate-media-models": "./src/teammateMediaModels.ts",
     "./model-route": "./src/modelRoute.ts",
     "./agent-capabilities": "./src/agentCapabilities.ts",
     "./agent-input-projection": "./src/agentInputProjection.ts",

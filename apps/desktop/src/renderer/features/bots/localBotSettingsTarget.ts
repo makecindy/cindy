@@ -113,6 +113,7 @@ function useHiddenVendors(): MakerVendor[] {
 /** This computer: the settings pages as they always were, behind the target interface. */
 export const localBotSettingsTarget: BotSettingsTarget = {
   kind: 'local',
+  mediaModels: () => api().mediaModels(),
   online: true,
   pages: new Set<string>(ALL_PAGES),
   // Store functions are read on use, so a module that never opens these pages never needs them.
