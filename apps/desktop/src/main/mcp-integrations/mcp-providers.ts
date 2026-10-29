@@ -687,6 +687,32 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const result = await executeTaskTags(request, callerSessionId);
         return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
       },
+      // 后台命令 + 完成回注:maker-host 服务在首次调用时懒构建(与 hookScript 同因,
+      // 避免模块顶层依赖 electron/register);完成报告走 scheduler 撞忙排队桥。
+      backgroundCommands: (() => {
+        let service: import('../maker-host/background-commands.js').BackgroundCommandService | null = null;
+        return async (request) => {
+          if (
+            request.sessionInstanceId
+            && deps.isCurrentLocalSessionInstance?.(request.sessionId, request.sessionInstanceId) === false
+          ) {
+            return { ok: false, errorCode: 'STALE_CALLER', message: 'This task instance is no longer current.' };
+          }
+          if (!service) {
+            const [{ app }, { createBackgroundCommandService }] = await Promise.all([
+              import('electron'),
+              import('../maker-host/background-commands.js'),
+            ]);
+            service = createBackgroundCommandService({
+              enqueueReport: (req) =>
+                import('../maker-ipc/register.js').then((m) => m.enqueueSchedulerPrompt(req)),
+              logDir: pathJoin(app.getPath('userData'), 'background-commands'),
+              logger: createLogger('mcp/background-commands'),
+            });
+          }
+          return service.start(request);
+        };
+      })(),
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },

@@ -36,6 +36,10 @@ import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/typ
 import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
+import {
+  registerBackgroundCommandTool,
+  type BackgroundCommandToolDeps,
+} from './xdt-helper/backgroundCommand.js';
 import { registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import { jsonObjectArg } from './json-object-arg.js';
 import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
@@ -755,6 +759,8 @@ export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
   appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
+  /** 后台命令 + 完成回注(maker-host/background-commands);注入后注册 run_command_background。 */
+  backgroundCommands?: BackgroundCommandToolDeps['start'];
   /** 代输入: hand an on-screen step to the owner; values stay on the host. */
   inputHandoff?: InputHandoffCallbacks;
   /**
@@ -910,6 +916,12 @@ export function createXdtHelperMcpServer(
   }
   if (deps.grokLogin)
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
+  if (deps.backgroundCommands) {
+    registerBackgroundCommandTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      start: deps.backgroundCommands,
+    });
+  }
   if (deps.inputHandoff)
     registerInputHandoffTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.inputHandoff);
   registerGetCurrentSessionIdTool(registry, {
