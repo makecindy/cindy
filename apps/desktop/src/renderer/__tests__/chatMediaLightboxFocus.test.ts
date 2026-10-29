@@ -10,6 +10,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ModelBlob } from '@/lib/model3d/readModel3DBlob';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -29,12 +30,15 @@ vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 const viewerLoad = vi.fn(async () => undefined);
 const viewerDispose = vi.fn();
 const createModelViewer = vi.fn(() => ({ load: viewerLoad, dispose: viewerDispose }));
+const loadModelViewerSdk = vi.fn(async () => ({ createModelViewer }));
 vi.mock('@/lib/model3d/modelViewerSdk', () => ({
-  loadModelViewerSdk: vi.fn(async () => ({ createModelViewer })),
+  loadModelViewerSdk: () => loadModelViewerSdk(),
 }));
-const readModel3DBlob = vi.fn(async () => ({
+const modelDispose = vi.fn();
+const readModel3DBlob = vi.fn<(...args: unknown[]) => Promise<ModelBlob>>(async () => ({
   blob: new Blob([new Uint8Array([1, 2, 3])]),
   fileName: 'f.glb',
+  dispose: modelDispose,
 }));
 vi.mock('@/lib/model3d/readModel3DBlob', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/model3d/readModel3DBlob')>()),
@@ -50,6 +54,8 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   viewerLoad.mockImplementation(async () => undefined);
+  loadModelViewerSdk.mockImplementation(async () => ({ createModelViewer }));
+  modelDispose.mockImplementation(() => undefined);
 });
 
 describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () => {
@@ -70,6 +76,7 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
     expect(onClose).not.toHaveBeenCalled();
     expect(host.isConnected).toBe(true);
+    expect(modelDispose).toHaveBeenCalledTimes(1);
   });
 
   it('tells the user when a model is too large to preview, without closing', async () => {
@@ -110,13 +117,16 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     });
     expect(JSON.stringify(options.theme)).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
     expect((viewerLoad.mock.calls[0] as unknown[])[1]).toEqual({ fileName: 'f.glb' });
+    expect(modelDispose).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
     expect(viewerDispose).not.toHaveBeenCalled();
     unmount();
     expect(viewerDispose).toHaveBeenCalledTimes(1);
+    expect(modelDispose).toHaveBeenCalledTimes(1);
   });
 
   it('does not create a viewer for a lightbox closed before the bytes arrive', async () => {
-    let resolveBytes: (v: { blob: Blob; fileName: string }) => void = () => undefined;
+    let resolveBytes: (v: ModelBlob) => void = () => undefined;
     readModel3DBlob.mockImplementationOnce(
       () => new Promise((resolve) => { resolveBytes = resolve as typeof resolveBytes; }),
     );
@@ -128,11 +138,70 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     );
     unmount();
     await act(async () => {
-      resolveBytes({ blob: new Blob([new Uint8Array([1])]), fileName: 'a.obj' });
+      resolveBytes({ blob: new Blob([new Uint8Array([1])]), fileName: 'a.obj', dispose: modelDispose });
       await Promise.resolve();
     });
     expect(createModelViewer).not.toHaveBeenCalled();
+    expect(modelDispose).toHaveBeenCalledTimes(1);
     expect(viewerDispose).not.toHaveBeenCalled();
+  });
+
+  // PR #7703 r4408561857: Promise.all previously lost the ModelBlob when the SDK
+  // failed. Unit tier mounts the real lightbox; both completion orders need one
+  // release and an aborted read. Existing focus tests did not exercise SDK failure.
+  it.each(['before', 'after'] as const)('disposes model bytes arriving %s SDK failure', async (order) => {
+    let resolveBytes: (v: ModelBlob) => void = () => undefined;
+    let rejectSdk: (error: Error) => void = () => undefined;
+    readModel3DBlob.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveBytes = resolve as typeof resolveBytes; }),
+    );
+    loadModelViewerSdk.mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectSdk = reject; }),
+    );
+    const { unmount } = render(
+      React.createElement(ModelLightbox, {
+        source: { kind: 'local', absPath: '/work/a.obj' },
+        onClose: vi.fn(),
+      }),
+    );
+    const resolveModel = () => resolveBytes({
+      blob: new Blob([new Uint8Array([1])]), fileName: 'a.obj', dispose: modelDispose,
+    });
+    if (order === 'before') {
+      await act(async () => { resolveModel(); });
+      expect(modelDispose).not.toHaveBeenCalled();
+    }
+    await act(async () => { rejectSdk(new Error('SDK failed')); });
+    const options = readModel3DBlob.mock.calls[0][1] as { signal: AbortSignal };
+    expect(options.signal.aborted).toBe(true);
+    if (order === 'after') {
+      expect(modelDispose).not.toHaveBeenCalled();
+      await act(async () => { resolveModel(); });
+    }
+    expect(modelDispose).toHaveBeenCalledTimes(1);
+    expect(createModelViewer).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
+    unmount();
+    expect(modelDispose).toHaveBeenCalledTimes(1);
+  });
+
+  // The model remains owned while viewer.load parses it. Closing during parsing
+  // must release it once even if the SDK load promise settles afterwards.
+  it('releases once when closed during model parsing', async () => {
+    let finishLoad: () => void = () => undefined;
+    viewerLoad.mockImplementationOnce(() => new Promise((resolve) => { finishLoad = resolve; }));
+    const { unmount } = render(React.createElement(ModelLightbox, {
+      source: { kind: 'local', absPath: '/work/a.obj' }, onClose: vi.fn(),
+    }));
+    await act(async () => {});
+    expect(viewerLoad).toHaveBeenCalledTimes(1);
+    expect(modelDispose).not.toHaveBeenCalled();
+    unmount();
+    expect(modelDispose).toHaveBeenCalledTimes(1);
+    expect(viewerDispose).toHaveBeenCalledTimes(1);
+    await act(async () => { finishLoad(); });
+    expect(modelDispose).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('Enter 打开图片预览:焦点进入 lightbox,Esc 延迟关闭后回到触发器', async () => {

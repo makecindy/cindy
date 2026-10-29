@@ -147,6 +147,11 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     let viewer: ModelViewerInstance | null = null;
     let model: ModelBlob | null = null;
     const controller = new AbortController();
+    const releaseModel = () => {
+      const current = model;
+      model = null;
+      current?.dispose();
+    };
     const fail = (error: unknown) => {
       if (cancelled) return;
       setLoadState('error');
@@ -157,17 +162,21 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
       );
     };
     void (async () => {
+      const modelPromise = readModel3DBlob(sourceRef.current, { signal: controller.signal }).then(
+        (loadedModel) => {
+          // 读取可能晚于 SDK 失败或弹窗卸载完成。完成时立即接管所有权，避免
+          // Promise.all 已拒绝后这个返回值失去唯一清理入口。
+          if (cancelled || controller.signal.aborted) {
+            loadedModel.dispose();
+            return loadedModel;
+          }
+          model = loadedModel;
+          return loadedModel;
+        },
+      );
       try {
-        const [sdk, loadedModel] = await Promise.all([
-          loadModelViewerSdk(),
-          readModel3DBlob(sourceRef.current, { signal: controller.signal }),
-        ]);
-        model = loadedModel;
-        if (cancelled) {
-          loadedModel.dispose();
-          model = null;
-          return;
-        }
+        const [sdk, loadedModel] = await Promise.all([loadModelViewerSdk(), modelPromise]);
+        if (cancelled || controller.signal.aborted) return;
         viewer = sdk.createModelViewer(host, {
           locale,
           // 颜色全部取 lightbox 工具栏那一族 token(图片预览浮在遮罩上的控件用的同一套,
@@ -199,22 +208,20 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           onLoadError: fail,
         });
         await viewer.load(loadedModel.blob, { fileName: loadedModel.fileName });
-        loadedModel.dispose();
-        model = null;
+        releaseModel();
         if (!cancelled) setLoadState('ready');
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
+        controller.abort();
         fail(error);
       } finally {
-        model?.dispose();
-        model = null;
+        releaseModel();
       }
     })();
     return () => {
       cancelled = true;
       controller.abort();
-      model?.dispose();
-      model = null;
+      releaseModel();
       viewer?.dispose();
       viewer = null;
     };
