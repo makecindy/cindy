@@ -11,7 +11,7 @@ export interface TeammateMediaModels {
   video?: MediaModelRef | null;
 }
 
-export type TeammateMediaCatalog = Record<'vision' | 'image' | 'video', Array<MediaModelRef & { label: string }>> & { unavailable?: Array<'image' | 'video'> };
+export type TeammateMediaCatalog = Record<'vision' | 'image' | 'video', Array<MediaModelRef & { label: string }>> & { unavailable?: Array<'vision' | 'image' | 'video'> };
 
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid media model selection');

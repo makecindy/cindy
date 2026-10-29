@@ -1,4 +1,4 @@
-import type { TeammateMediaCatalog } from '@cindy/maker-shared/teammate-media-models';
+import type { MediaModelRef, TeammateMediaCatalog } from '@cindy/maker-shared/teammate-media-models';
 import { parseTeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
@@ -11,7 +11,7 @@ import { throwIpcError } from '../../utils/ipcValidate.js';
 
 type Settings = Awaited<ReturnType<typeof getBotRemoteSettingsSource>>;
 type Operation = 'media' | 'profile' | 'models' | 'memory' | 'permissions' | 'restart' | 'delete' | 'resume';
-type Grant = { owner: string; controller: string; botId: string; version: number; revision: string; operation: Operation; expires: number };
+type Grant = { owner: string; controller: string; botId: string; version: number; revision: string; operation: Operation; expires: number; mediaRefs?: Map<string, MediaModelRef> };
 type BoundGrant = { owner: string; controller: string; ref: NonNullable<RemoteActionInvokeRequest['resourceRef']>; expires: number; check: () => Promise<void>; run: (request: RemoteActionInvokeRequest) => Promise<RemoteActionInvokeResponse> };
 export interface BotRemoteSettingsDeps {
   mediaModels?(): Promise<TeammateMediaCatalog>;
@@ -28,6 +28,7 @@ const text = (fallback: string, cn: string, tw: string, ja: string, ko: string, 
   ({ fallback, translations: { 'zh-CN': cn, 'zh-TW': tw, ja, ko, ...additionalTranslations } });
 const copy = {
   media: text("Media models", "媒体模型", "媒體模型", "メディアモデル", "미디어 모델"),
+  mediaUnavailable: text('Some models are unavailable. Saved choices are retained; you can reset them to app settings.', '部分模型暂不可用。已保存的选择会保留，你仍可恢复使用应用设置。', '部分模型暫時無法使用。已儲存的選擇會保留，你仍可恢復使用應用程式設定。', '一部のモデルを利用できません。保存済みの選択は保持され、アプリの設定に戻すことができます。', '일부 모델을 사용할 수 없습니다. 저장된 선택은 유지되며 앱 설정으로 되돌릴 수 있습니다.'),
   mediaVision: text("Vision Bridge model", "视觉桥模型", "視覺橋模型", "Vision Bridge モデル", "Vision Bridge 모델"),
   mediaFallback: text("Vision Bridge fallback", "视觉桥备用模型", "視覺橋備用模型", "Vision Bridge の予備モデル", "Vision Bridge 예비 모델"),
   mediaImage: text("Image generation model", "图像生成模型", "圖像生成模型", "画像生成モデル", "이미지 생성 모델"),
@@ -107,12 +108,12 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         ...(typeof data.actionId === 'string' ? { actionId: ids[data.actionId] } : {}) } };
     }) };
   };
-  const issue = (context: RemoteResourceHostContext, owner: string, settings: Settings, operation: Operation): string => {
+  const issue = (context: RemoteResourceHostContext, owner: string, settings: Settings, operation: Operation, mediaRefs?: Map<string, MediaModelRef>): string => {
     const { source } = settings;
     for (const [id, grant] of grants) if (grant.expires <= now()) grants.delete(id);
     while (grants.size >= 1024) grants.delete(grants.keys().next().value!);
     const id = randomUUID();
-    grants.set(id, { owner, controller: context.controllerDeviceId, botId: source.id, version: source.currentVersion, revision: settingsRevision(settings), operation, expires: now() + 15 * 60_000 });
+    grants.set(id, { owner, controller: context.controllerDeviceId, botId: source.id, version: source.currentVersion, revision: settingsRevision(settings), operation, expires: now() + 15 * 60_000, ...(mediaRefs ? { mediaRefs } : {}) });
     return id;
   };
   const get = async (context: RemoteResourceHostContext, botId: string): Promise<RemoteResource> => {
@@ -124,13 +125,13 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     const resource = botRemoteResourceFromSource(source);
     resource.revision = settingsRevision(settings);
     const actions: RemoteActionDescriptor[] = [];
-    const form = (operation: Operation, fields: RemoteActionDescriptor['fields'], values: Record<string, unknown>) => {
+    const form = (operation: Operation, fields: RemoteActionDescriptor['fields'], values: Record<string, unknown>, mediaRefs?: Map<string, MediaModelRef>) => {
       // A file-imported personality can exceed the portable editor's limit. Never expose a
       // truncated draft as editable: retaining the original is more important than a save button.
       if (Object.values(values).some(value => typeof value === 'string' && value.length > 12_000)) {
         return { id: operation, primitive: 'markdown', title: copy[operation], fallbackMarkdown: Object.values(values).filter(value => typeof value === 'string').join('\n\n').slice(0, 60_000) };
       }
-      const id = issue(context, owner, settings, operation);
+      const id = issue(context, owner, settings, operation, mediaRefs);
       const preparing = source.invitation && source.invitation.stage !== 'ready'
         && !(source.invitation.stage === 'avatar' && source.canonicalSessionId);
       actions.push({ id, label: copy[operation], fields,
@@ -152,9 +153,24 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     ];
     if (deps.mediaModels) {
       const media = parseTeammateMediaModels(settings.mediaModels);
-      const catalog = await deps.mediaModels();
+      let catalog: TeammateMediaCatalog;
+      try { catalog = await deps.mediaModels(); }
+      catch (error) {
+        deps.assertOwner(owner);
+        if ((error as { code?: string })?.code === 'PRECONDITION_FAILED') throw error;
+        catalog = { vision: [], image: [], video: [], unavailable: ['vision', 'image', 'video'] };
+      }
       deps.assertOwner(owner);
-      const encode = (ref: { providerId: string; modelId: string } | null | undefined) => ref ? JSON.stringify({ providerId: ref.providerId, modelId: ref.modelId }) : 'inherit';
+      // Keep option values compatible with existing mobile clients' 160-character limit.
+      // Exact route identities stay on this owner/controller/revision-bound action grant.
+      const mediaRefs = new Map<string, MediaModelRef>();
+      const encode = (ref: MediaModelRef | null | undefined) => {
+        if (!ref) return 'inherit';
+        const route = { providerId: ref.providerId, modelId: ref.modelId };
+        const token = createHash('sha256').update(JSON.stringify(route)).digest('hex');
+        mediaRefs.set(token, route);
+        return token;
+      };
       const selections = [
         ['vision', copy.mediaVision, media?.vision?.primary],
         ['fallback', copy.mediaFallback, media?.vision?.fallback],
@@ -167,7 +183,12 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
           ...choices.map(ref => ({ value: encode(ref), label: { fallback: ref.label } }))];
         if (selected && !choices.some(ref => encode(ref) === encode(selected))) options.push({ value: encode(selected), label: { fallback: `${selected.modelId} · ${selected.providerId}` } });
         return { id, label, kind: 'select', options };
-      }), Object.fromEntries(selections.map(([id, , selected]) => [id, encode(selected)]))));
+      }), Object.fromEntries(selections.map(([id, , selected]) => [id, encode(selected)])), mediaRefs));
+      if (catalog.unavailable?.length) {
+        const block = resource.blocks.at(-1)!;
+        block.fallbackMarkdown = copy.mediaUnavailable.fallback;
+        block.data = { ...block.data as Record<string, unknown>, notice: copy.mediaUnavailable };
+      }
     }
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
     try {
@@ -256,7 +277,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         if (!(id in input)) return before;
         const raw = string(id);
         if (raw === 'inherit') return null;
-        try { return JSON.parse(raw); } catch { return throwIpcError('INVALID_PARAMS', 'Invalid media selection'); }
+        const ref = grant.mediaRefs?.get(raw);
+        if (!ref) return throwIpcError('INVALID_PARAMS', 'Invalid media selection; refresh before retrying');
+        return ref;
       };
       const primary = selection('vision', previous?.vision?.primary);
       let mediaModels;
