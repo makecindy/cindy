@@ -34,6 +34,8 @@
 import type { AgentKind, Catalog } from '@cindy/model-providers';
 import {
   DEFAULT_MODEL_COMPACTION_PCT,
+  MAX_MODEL_COMPACTION_PCT,
+  MIN_MODEL_COMPACTION_PCT,
   modelCompactionTarget,
 } from '../../shared/modelContextLimit.js';
 
@@ -110,7 +112,13 @@ function normalize(raw: unknown): ModelContextLimitPrefs {
   const input = raw as ModelContextLimitPrefs;
   const compactionPcts = Object.fromEntries(
     Object.entries(input.compactionPcts ?? {})
-      .filter(([key, value]) => key && Number.isInteger(value) && value >= 50 && value <= 90)
+      .filter(
+        ([key, value]) =>
+          key &&
+          Number.isInteger(value) &&
+          value >= MIN_MODEL_COMPACTION_PCT &&
+          value <= MAX_MODEL_COMPACTION_PCT,
+      )
       .slice(0, MAX_ENTRIES),
   );
   return {
@@ -211,7 +219,12 @@ export async function writeModelCompactionWithRefresh(
   refresh: () => Promise<void>,
   refreshAfterRollback: () => Promise<void>,
 ): Promise<void> {
-  if (pct !== null && (!Number.isInteger(pct) || pct < 50 || pct > 90))
+  if (
+    pct !== null &&
+    (!Number.isInteger(pct) ||
+      pct < MIN_MODEL_COMPACTION_PCT ||
+      pct > MAX_MODEL_COMPACTION_PCT)
+  )
     throw new Error('invalid compaction percentage');
   const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
   const previous = { ...readPrefs().compactionPcts };

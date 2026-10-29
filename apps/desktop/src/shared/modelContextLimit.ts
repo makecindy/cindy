@@ -3,6 +3,9 @@ import type { ModelPriceOverrideTarget } from './modelPriceOverride';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 export const DEFAULT_MODEL_COMPACTION_PCT = 90;
+/** 逐模型自动压缩比例的可选范围；与 maker-core 的 auto-compact-controller 同口径。 */
+export const MIN_MODEL_COMPACTION_PCT = 50;
+export const MAX_MODEL_COMPACTION_PCT = 95;
 
 /** Match the model row identity, removing only the provider's declared bridge prefix. */
 export function modelCompactionTarget(
