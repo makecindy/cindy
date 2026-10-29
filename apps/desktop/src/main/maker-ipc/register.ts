@@ -9326,11 +9326,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   let mcpCredentialRevision = 0;
   const reportedCapabilityPhases = new Map<string, string>();
   function currentCapabilitySession(sessionId: string): WiredSession | undefined {
+    if (hasLocalAgentVisibleRuntime(sessionId)) return undefined;
     return maker.getSession(sessionId) ?? detachedCapabilitySessions.get(sessionId)?.session;
   }
   function captureCodexCapabilityRefreshIntents(): void {
     for (const session of maker.listActiveSessions()) {
-      if (session.agentKind !== 'codex' || session.remoteHostId || session.agentDeviceId) continue;
+      if (session.agentKind !== 'codex' || session.remoteHostId || session.agentDeviceId
+        || hasLocalAgentVisibleRuntime(session.id)) continue;
       detachedCapabilitySessions.set(session.id, { session, providerId: getSessionProvider(session.id) ?? null });
       capabilityMonitor.markChanged(session);
     }
@@ -9681,6 +9683,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (snapshot.mcpRevision) capabilityMcpRevisions.set(session, snapshot.mcpRevision);
   };
   trackSessionCapabilitiesHolder = session => {
+    // External apps retain their tool policy and native handle until explicit Cindy takeover.
+    if (hasLocalAgentVisibleRuntime(session.id)) return () => {};
     capabilityOwners.set(session, getActiveAppSession().generation);
     if (detachedCapabilitySessions.get(session.id)?.session !== session) detachedCapabilitySessions.delete(session.id);
     let disposed = false;

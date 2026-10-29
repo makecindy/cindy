@@ -6,6 +6,7 @@ import {
 import { createSessionCapabilityMonitor, type CapabilityResourceSnapshot } from '../sessionCapabilityMonitor';
 import { readCapabilityFiles, readForwardedCapabilitySnapshot, watchCapabilityPaths, watchRemoteCapabilityPaths } from '../sessionCapabilitySources';
 import type { RemoteFileBrowserManager } from '../../file-browser/remote';
+import { hasLocalAgentVisibleRuntime, registerLocalAgentVisibleRuntime, takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -419,21 +420,72 @@ describe('native resource discovery and send boundary', () => {
     const remote = { id: 'ssh', agentKind: 'codex', remoteHostId: 'ssh' };
     const device = { id: 'device', agentKind: 'codex', agentDeviceId: 'device' };
     const pi = { id: 'pi', agentKind: 'pi' };
-    let live: typeof local | undefined = local;
-    const maker = { listActiveSessions: () => [local, remote, device, pi], getSession: () => live };
-    const detachedCapabilitySessions = new Map();
-    const markChanged = vi.fn();
-    new Function('maker', 'detachedCapabilitySessions', 'getSessionProvider', 'capabilityMonitor',
-      body('captureCodexCapabilityRefreshIntents'))(maker, detachedCapabilitySessions,
-      () => 'account-provider', { markChanged });
-    expect([...detachedCapabilitySessions.keys()]).toEqual(['local']);
-    expect(markChanged).toHaveBeenCalledExactlyOnceWith(local);
-    expect(detachedCapabilitySessions.get('local').providerId).toBe('account-provider');
-    const current = new Function('maker', 'detachedCapabilitySessions', 'sessionId', body('currentCapabilitySession'));
-    live = undefined; // Existing shared-host code detached the native handle.
-    expect(current(maker, detachedCapabilitySessions, 'local')).toBe(local);
-    live = { id: 'local', agentKind: 'codex' };
-    expect(current(maker, detachedCapabilitySessions, 'local')).toBe(live);
+    const external = { id: 'application-owned', agentKind: 'codex' };
+    const unregister = registerLocalAgentVisibleRuntime(external.id, async () => {});
+    try {
+      let live: typeof local | undefined = local;
+      const maker = { listActiveSessions: () => [local, remote, device, pi, external], getSession: () => live };
+      const detachedCapabilitySessions = new Map();
+      const markChanged = vi.fn();
+      new Function('maker', 'detachedCapabilitySessions', 'getSessionProvider', 'capabilityMonitor', 'hasLocalAgentVisibleRuntime',
+        body('captureCodexCapabilityRefreshIntents'))(maker, detachedCapabilitySessions,
+        () => 'account-provider', { markChanged }, hasLocalAgentVisibleRuntime);
+      expect([...detachedCapabilitySessions.keys()]).toEqual(['local']);
+      expect(markChanged).toHaveBeenCalledExactlyOnceWith(local);
+      expect(detachedCapabilitySessions.get('local').providerId).toBe('account-provider');
+      const current = new Function('maker', 'detachedCapabilitySessions', 'sessionId', 'hasLocalAgentVisibleRuntime', body('currentCapabilitySession'));
+      live = undefined; // Existing shared-host code detached the native handle.
+      expect(current(maker, detachedCapabilitySessions, 'local', hasLocalAgentVisibleRuntime)).toBe(local);
+      live = { id: 'local', agentKind: 'codex' };
+      expect(current(maker, detachedCapabilitySessions, 'local', hasLocalAgentVisibleRuntime)).toBe(live);
+      live = external;
+      expect(current(maker, detachedCapabilitySessions, external.id, hasLocalAgentVisibleRuntime)).toBeUndefined();
+      unregister();
+      expect(current(maker, detachedCapabilitySessions, external.id, hasLocalAgentVisibleRuntime)).toBe(external);
+    } finally { unregister(); }
+  });
+
+  it('leaves an application-owned visible runtime untouched until explicit Cindy takeover', async () => {
+    const source = await fs.readFile(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('  trackSessionCapabilitiesHolder = session => {');
+    expect(start).toBeGreaterThan(0);
+    const end = source.indexOf('\n  };', start);
+    const session = { id: 'visible-app-owner', instanceId: 'native-app', onEvent: vi.fn(() => () => {}) };
+    const capabilityOwners = new WeakMap();
+    const read = vi.fn(async () => ({ revision: 'changed-global-skill', watchPaths: [] }));
+    const stopWatching = vi.fn();
+    const watch = vi.fn(async () => stopWatching);
+    const close = vi.fn(async () => { unregister(); });
+    const unregister = registerLocalAgentVisibleRuntime(session.id, close);
+    const bindings = { hasLocalAgentVisibleRuntime, capabilityOwners,
+      getActiveAppSession: () => ({ generation: 1 }), detachedCapabilitySessions: new Map(),
+      capabilityMonitor: { track: read, forget: vi.fn() }, maker: { getSession: () => session },
+      isAppSessionBoundaryPending: () => false, capabilityWatchers: new Map(),
+      watchCapabilityPaths: watch, settleSessionCapabilitiesHolder: vi.fn(),
+      getWiredSessionCloseReason: () => 'manual-close',
+    };
+    const tracker = new Function(...Object.keys(bindings), `let trackSessionCapabilitiesHolder;
+      ${source.slice(start, end + '\n  };'.length)}
+      return trackSessionCapabilitiesHolder;`)(...Object.values(bindings));
+    try {
+      const disposeExternal = tracker(session);
+      await Promise.resolve();
+      expect(read).not.toHaveBeenCalled();
+      expect(session.onEvent).not.toHaveBeenCalled();
+      expect(watch).not.toHaveBeenCalled();
+      expect(capabilityOwners.has(session)).toBe(false);
+      disposeExternal();
+      expect(close).not.toHaveBeenCalled();
+      // The existing API handoff, rather than automatic reload, releases ownership.
+      await takeOverLocalAgentVisibleSession(session.id);
+      expect(close).toHaveBeenCalledOnce();
+      const disposeCindy = tracker(session);
+      await vi.waitFor(() => expect(watch).toHaveBeenCalledOnce());
+      expect(read).toHaveBeenCalledExactlyOnceWith(session);
+      expect(capabilityOwners.get(session)).toBe(1);
+      disposeCindy();
+      expect(stopWatching).toHaveBeenCalledOnce();
+    } finally { unregister(); }
   });
 
   it('compares against the pre-launch receipt instead of silently adopting a startup edit', async () => {
