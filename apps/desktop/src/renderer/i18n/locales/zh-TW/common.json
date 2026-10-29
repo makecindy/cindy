@@ -9917,6 +9917,17 @@
       "done": "已完成",
       "unread": "未讀"
     },
+    "mediaModels": {
+      "unavailable": "無法載入可用模型，已保留儲存的選擇。",
+      "vision": "視覺橋模型",
+      "fallback": "視覺橋備用模型",
+      "image": "圖像生成模型",
+      "video": "影片生成模型",
+      "inherit": "使用應用程式設定",
+      "none": "不使用備用模型",
+      "title": "媒體模型",
+      "hint": "為此夥伴選擇模型。視覺橋沿用應用程式總開關和目標模型。變更後，重新啟動此夥伴以更新 Pi 工具。生成模型覆寫用於 Cindy 媒體工具，獨立服務仍使用各自設定。"
+    },
     "workbench": {
       "ownedMark": "所屬夥伴：{{names}}",
       "createdMark": "由 {{names}} 建立",

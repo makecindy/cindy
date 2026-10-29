@@ -7,6 +7,7 @@ function fixture() {
   const source = { id: 'bot-a', name: 'Cindy', description: 'Assistant', avatar: '', avatarColor: 'teal', status: 'active', canonicalSessionId: 'canonical-a', lastMessagePreview: null, lastMessageAt: null, lastMessageRole: null, needsAttention: false, hiddenAt: null, pinnedAt: null, activityAt: 1, currentVersion: 3, updatedAt: 1 };
   const settings = { source, identity: 'User-maintained personality', userContext: 'Prefers concise replies', memory: true, permissions: 'ask', modelChain: [{ harness: 'pi' as const, model: 'user-selected-model', providerId: 'connected-source', effort: 'high', fastMode: true }], followsDefault: false, skills: ['reference'], connections: ['connection'], toolsets: [], systemPrompt: 'PRIVATE', homeDir: '/PRIVATE', credentials: 'PRIVATE' };
   const deps: BotRemoteSettingsDeps = {
+    mediaModels: async () => ({ vision: [{ providerId: 'vision', modelId: 'read', label: 'Vision' }], image: [{ providerId: 'photos', modelId: 'draw', label: 'Image' }], video: [{ providerId: 'films', modelId: 'animate', label: 'Video' }] }),
     owner: () => owner, assertOwner: captured => { if (captured !== owner) throw new Error('OWNER_CHANGED'); },
     read: vi.fn(async () => settings), update: vi.fn(async () => { source.currentVersion++; }),
     lifecycle: vi.fn(async (_id, _op, _name, guard) => { await guard(); return {}; }),
@@ -214,4 +215,21 @@ it('keeps pending profile fields read-only while models remain available, includ
   Object.assign(f.source, { invitation: { stage: 'avatar' } });
   const portraitRetry = await f.get();
   expect(portraitRetry.actions?.find(action => action.id === actionId(portraitRetry, 'profile'))?.disabled).not.toBe(true);
+});
+
+// New feature coverage through the real portable action entry: older forms must preserve media
+// choices, while explicit selections/reset use the same versioned profile update. Unit tier.
+it('round-trips portable teammate media selections and resets without changing primary models', async () => {
+  const f = fixture();
+  const resource = await f.get();
+  const vision = { providerId: 'vision', modelId: 'read' };
+  const image = { providerId: 'photos', modelId: 'draw' };
+  const video = { providerId: 'films', modelId: 'animate' };
+  await f.host.invoke(f.context, f.request(actionId(resource, 'media'), {
+    vision: JSON.stringify(vision), fallback: 'inherit', image: JSON.stringify(image), video: JSON.stringify(video),
+  }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { mediaModels: { vision: { primary: vision, fallback: null }, image, video } } }, 3);
+  const refreshed = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(refreshed, 'media'), { vision: 'inherit', image: 'inherit', video: 'inherit' }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { mediaModels: null } }, 4);
 });

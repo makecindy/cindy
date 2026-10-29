@@ -5,6 +5,7 @@ import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, 
 import { ghostPermissionItems } from '../../shared/ghost.js';
 import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
+import { readSessionMediaModels } from '../vision-bridge/teammate-media-models.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
 import { deviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
@@ -4650,10 +4651,12 @@ function getCatalogMediaConfig(
 
 const getCatalogImageConfig = (
   action?: LegacyCindyMediaAction,
-): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image', action);
+  providerId?: string,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image', action, providerId);
 const getCatalogVideoConfig = (
   action?: LegacyCindyMediaAction,
-): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video', action);
+  providerId?: string,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video', action, providerId);
 const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
   getCatalogMediaConfig('embed');
 
@@ -9374,8 +9377,9 @@ export function registerGhostIpc(): void {
     if (type === 'cindy-request' || type === 'model-request') {
       const callId = (payload as { callId?: unknown } | null)?.callId;
       const sessionId = getPluginTaskSourceSessionId(id, typeof callId === 'string' ? callId : undefined);
+      const { overrides } = await readSessionMediaModels(sessionId);
       return withCindyMediaBillingSession(sessionId, () =>
-        getGhostCindySlot().handleModelRequest(id, payload),
+        getGhostCindySlot().handleModelRequest(id, payload, overrides),
       );
     }
     // fetch-request = network 槽代理 HTTP(invoke 返回值即响应,机制同上)。

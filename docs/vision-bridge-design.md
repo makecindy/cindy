@@ -271,6 +271,46 @@ describeWithFallback(input, prompt, signal):
 
 遵循 `docs/dev-rules/configuration-and-overrides.md`（可见性分层 + 默认/override 分离 + 只存 override）。
 
+### 伙伴的媒体模型覆盖
+
+伙伴模型页可独立选择视觉桥主／备后端及 Cindy 图像／视频生成模型。配置存入既有
+Profile 的 `mediaModels`，只含完整 provider/model 双键，不复制目录、端点或凭证：
+
+```ts
+mediaModels?: {
+  vision?: { primary: { providerId: string; modelId: string }; fallback: { providerId: string; modelId: string } | null } | null;
+  image?: { providerId: string; modelId: string } | null;
+  video?: { providerId: string; modelId: string } | null;
+} | null;
+```
+
+- 缺省／null 的类目使用应用设置；整个字段为 null 恢复全部继承，不保存默认值快照。
+  视觉桥覆盖是完整主／备组合；`fallback: null` 明确不用备用，不能与继承混淆。
+  应用的 `enabled`、`targetModels` 及其默认合并规则保持原样；伙伴选后端不会打开总开关。
+- A/B/D 每次操作按宿主核实的 Session 归属读取当前 Profile；同一伙伴的群／渠道／话题
+  专线共用选择，独立普通任务不因发起伙伴而继承。A 的上下文来自代理已有会话映射／Pi
+  认证，不读取请求体自报的伙伴 id。C 用同一有效配置生成启动 env；既有 Pi 进程保留启动
+  配置，重启该伙伴后应用新后端，与下文全局配置生命周期一致。
+- 描述缓存与在途去重同时区分账号／伙伴、主／备配置和实际后端。变更主／备组合、显式
+  取消备用或另一伙伴的请求不能借用旧策略结果。
+- 图像／视频覆盖作用于 Cindy Core `media` 的 prepare/guide 路由和旧 `cindy-request`
+  代办入口，包含改图与图生视频。覆盖优先于工具载荷的型号，随后按实际选中模型生成／
+  校验协议。已准备的操作保留原路由；设置变更不重放生成。已选账号不可用或不支持动作时
+  明确错误，不改用同名模型的其它账号。未覆盖时保留目录默认、档位和显式选型。
+- 自行直连外部服务的插件、Skill 或引擎原生媒体服务仍由各自管理；这不是任意工具参数
+  改写。媒体后端没有新增自动 fallback。
+- Desktop 本机／远程设置使用相同编辑器与执行端目录；Mobile 用既有 Remote Resource
+  form/select 原语修改同一 Profile。可选 `models.media` 操作未被旧主机声明时，远程
+  Desktop 隐藏编辑器；旧表单省略新字段时保留设置。无新增 relay 帧、channel 或 allowlist，
+  自建中转继续 opaque resource 转发。云端接管的能力同步合同未扩展。
+- Agent 用 `get_teammate_state` 读取自身覆盖与可选引用，再用 `update_teammate_profile`
+  的 `mediaModels` 提交／恢复继承；宿主核实调用方与版本，工具不能指定另一个伙伴。
+
+实现：`main/vision-bridge/teammate-media-models.ts`、`teammate-media-catalog.ts` 与共享
+`teammateMediaModels.ts`。回归：相邻测试、`vision-bridge.test.ts`、
+`pi-vision-bridge-env.test.ts`、`cindy-media/__tests__/invocationService.test.ts`、
+`localDb/ipc/__tests__/botRemoteSettingsResource.test.ts`。
+
 | 配置 | 层级 | 说明 |
 |---|---|---|
 | 视觉桥总开关 | 高级设置（设置页） | 默认关。层 A/B 关 = 立即不生效；**层 C（Pi 工具）仅新 Pi 会话/重启生效**（env 在会话启动时注入，已运行会话的工具保留到会话结束，详见"配置形态边界"） |

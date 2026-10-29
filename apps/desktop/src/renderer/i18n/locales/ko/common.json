@@ -9917,6 +9917,17 @@
       "done": "완료",
       "unread": "읽지 않음"
     },
+    "mediaModels": {
+      "unavailable": "사용 가능한 모델을 불러오지 못했습니다. 저장된 선택은 유지됩니다.",
+      "vision": "Vision Bridge 모델",
+      "fallback": "Vision Bridge 예비 모델",
+      "image": "이미지 생성 모델",
+      "video": "동영상 생성 모델",
+      "inherit": "앱 설정 사용",
+      "none": "예비 모델 없음",
+      "title": "미디어 모델",
+      "hint": "이 팀원의 모델을 선택하세요. Vision Bridge는 앱의 활성화 설정과 대상 모델을 따릅니다. Pi 도구에 변경 사항을 적용하려면 팀원을 다시 시작하세요. 생성 모델 설정은 Cindy 미디어 도구에 적용되며 독립 서비스는 자체 설정을 사용합니다."
+    },
     "workbench": {
       "ownedMark": "담당: {{names}}",
       "createdMark": "{{names}} 님이 생성",

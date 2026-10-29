@@ -1,3 +1,4 @@
+import { BotMediaModelEditor } from './BotMediaModelEditor';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -652,6 +653,10 @@ export function BotSettings({
                 }}
               />
             </div>
+            <BotMediaModelEditor value={capabilities.mediaModels ?? null} onChange={mediaModels => {
+              setCapabilities(current => ({ ...current, mediaModels }));
+              autosave.onEdit('instant');
+            }} />
             <BotTaskModelEditor value={capabilities.taskModelOverride ?? null}
               inheritedRoute={displayedModelChain[0]} hiddenVendors={hiddenVendors} deviceId={target.deviceId}
               onChange={taskModelOverride => {

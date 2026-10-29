@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
 import type { ControlResult, LiziMcpSessionContext } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
+import type { TeammateMediaModels, TeammateMediaCatalog } from '@cindy/maker-shared/teammate-media-models';
 
 export interface BotCapabilityCallbacks {
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
@@ -20,6 +21,7 @@ export interface BotCapabilityCallbacks {
     description?: string;
     identitySource?: string;
     modelChain?: { id: string; effort?: string; fastMode?: boolean | 'ultrafast' }[] | null;
+    mediaModels?: TeammateMediaModels | null;
   }): Promise<ControlResult<{ effective: "next-turn" }, string>>;
   list(params: {
     callerSessionId: string;
@@ -61,6 +63,7 @@ export interface AppDefaultModelRoute {
 }
 
 export interface BotControlState {
+  mediaModels?: { overrides: TeammateMediaModels | null; available?: TeammateMediaCatalog };
   conversations?: {
     scope: 'local';
     teammateId: string;
@@ -76,6 +79,10 @@ export interface BotControlState {
   systemSkillsOff?: string[];
   references: { skills: string[]; mcpServers: string[]; toolsets: string[] };
 }
+
+/** Same instructions in the runtime baseline and tool descriptions. */
+const MEDIA_MODEL_GUIDANCE = 'For this teammate’s Vision Bridge, image or video generation model settings, read get_teammate_state.mediaModels. update_teammate_profile accepts mediaModels with vision:{primary:{providerId,modelId},fallback:{providerId,modelId}|null}, image:{providerId,modelId}, video:{providerId,modelId}. Use exact available references; preserve unrequested overrides. null removes the whole override; omit/null a category to inherit app settings. Vision does not change the app enable switch or target models; Pi native tools apply changes on restart. Generation choices apply to Cindy media execution, not independent services with their own model settings.';
+
 
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
@@ -160,12 +167,20 @@ export function registerBotCapabilityTools(
   if (deps.callbacks.updateProfile) registry.register({
     name: "update_teammate_profile",
     category: "bots",
-    description: TEAMMATE_CONTROL_GUIDANCE,
+    description: TEAMMATE_CONTROL_GUIDANCE + '\n' + MEDIA_MODEL_GUIDANCE,
     inputShape: {
       expectedVersion: z.number().int().positive(),
       name: z.string().trim().min(1).max(200).optional(),
       description: z.string().max(12000).optional(),
       identitySource: z.string().max(12000).optional(),
+      mediaModels: z.strictObject({
+        vision: z.strictObject({
+          primary: z.strictObject({ providerId: z.string().trim().min(1).max(512), modelId: z.string().trim().min(1).max(2048) }),
+          fallback: z.strictObject({ providerId: z.string().trim().min(1).max(512), modelId: z.string().trim().min(1).max(2048) }).nullable(),
+        }).nullable().optional(),
+        image: z.strictObject({ providerId: z.string().trim().min(1).max(512), modelId: z.string().trim().min(1).max(2048) }).nullable().optional(),
+        video: z.strictObject({ providerId: z.string().trim().min(1).max(512), modelId: z.string().trim().min(1).max(2048) }).nullable().optional(),
+      }).nullable().optional().describe('Complete media overrides for this teammate. Omitted/null categories inherit app settings. null resets all media overrides.'),
       modelChain: z.array(z.strictObject({
         id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
         effort: z.string().max(64).optional(),
@@ -175,7 +190,7 @@ export function registerBotCapabilityTools(
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload("NOT_A_BOT_SESSION", "当前调用未绑定伙伴任务");
-      if (input.name === undefined && input.description === undefined && input.identitySource === undefined && input.modelChain === undefined)
+      if (input.name === undefined && input.description === undefined && input.identitySource === undefined && input.modelChain === undefined && input.mediaModels === undefined)
         return errorPayload("INVALID_PARAMS", "请选择要修改的资料");
       const result = await deps.callbacks.updateProfile!({ ...input, callerSessionId });
       return result.ok ? okPayload({ effective: result.effective }) : errorPayload(result.errorCode, result.message);

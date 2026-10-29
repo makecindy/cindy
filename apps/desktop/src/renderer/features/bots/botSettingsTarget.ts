@@ -39,6 +39,7 @@ export interface BotSettingsTarget {
   deviceName?: string;
   /** False while the computer cannot be reached: pages keep their content and writes are refused. */
   online: boolean;
+  mediaModels?: () => Promise<import('@cindy/maker-shared/teammate-media-models').TeammateMediaCatalog>;
   /** Pages whose host operations exist; the local target supports all of them. */
   pages: ReadonlySet<string>;
   profile: {
