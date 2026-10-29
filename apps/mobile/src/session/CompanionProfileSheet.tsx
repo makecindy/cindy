@@ -374,6 +374,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     disabled: blocked || !online || !dirty || conflict?.page === page, onPress: () => void submit(target) }} />;
   const formPanel = (target: ProfilePanel | undefined) => target?.action ? <>
     {(target.id === 'capability' || target.id === 'follow-up' || target.id === 'project') && target.text ? noteText(target.text) : null}
+    {target.notice ? noteText(label(target.notice)) : null}
     <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={changeValues} disabled={busy || !online || !!target.action.disabled} />
     {save(target, !!target.action.disabled)}
   </> : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? spinner : note('hostUpgrade');
@@ -386,7 +387,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       <RemoteCompanionAvatar avatar={data?.resource.display.avatar ?? resource?.display.avatar} deviceId={deviceId} name={name} online={online} size={AVATAR_SIZE} />
       <Text accessibilityRole="header" numberOfLines={2} style={styles.name}>{name}</Text>
     </View>
-    <View style={styles.group}>{row('profile', Info)}{row('memory', Brain)}{row('models', Sparkles)}{row('skills', Settings2)}</View>
+    <View style={styles.group}>{row('profile', Info)}{row('memory', Brain)}{row('models', Sparkles)}{actionPanel('media') ? row('media', Sparkles) : null}{row('skills', Settings2)}</View>
     {/* Device preference for every teammate's chat, not part of this teammate's host profile. */}
     <View style={styles.field}>
       <Text accessibilityRole="header" style={styles.groupLabel}>{t('devices.companionProfile.chat')}</Text>

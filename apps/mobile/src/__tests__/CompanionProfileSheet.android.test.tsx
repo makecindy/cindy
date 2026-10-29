@@ -4,11 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  sheet: null as any, model: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
+  platform: 'android', sheet: null as any, model: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
   close: vi.fn(), closed: vi.fn(), search: vi.fn(), created: vi.fn(),
 }));
 vi.mock('react-native', () => ({
-  Platform: { OS: 'android' }, StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 }, Alert: { alert: h.alert }, Image: () => null,
+  Platform: { get OS() { return h.platform; } }, StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 }, Alert: { alert: h.alert }, Image: () => null,
   View: ({ children, testID }: any) => <div data-testid={testID}>{children}</div>, ScrollView: 'div',
   Pressable: ({ children, onPress, disabled, testID }: any) => <button data-testid={testID} disabled={disabled} onClick={onPress}>{children}</button>,
   Switch: ({ accessibilityLabel, value, onValueChange, disabled }: any) => <input type="checkbox" aria-label={accessibilityLabel} checked={value} disabled={disabled} onChange={e => onValueChange(e.currentTarget.checked)} />,
@@ -37,11 +37,31 @@ vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifact
 vi.mock('@/session/CompanionPortraitPicker', async original => ({ ...await original<object>(), CompanionPortraitPicker: (p: any) => { h.portrait = p; return <span data-testid="portraits" />; } }));
 vi.mock('@/session/CompanionMemoryPage', () => ({ CompanionMemoryPage: () => <div data-testid="memoryPage" /> }));
 vi.mock('@/session/useCompanionMemory', () => ({ useCompanionMemory: () => ({ busy: false, dirty: false, flush: async () => true, back: async () => false }) }));
-vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: () => { throw new Error('iOS view on Android'); } }));
+vi.mock('@/session/CompanionProfileNativeView', async () => await import('@/session/CompanionProfileNativeView.ios'));
 vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: () => { throw new Error('iOS view on Android'); } }));
 vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: () => null }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
+
+// Real iOS page/menu is rendered too; only platform drawing controls are replaced with DOM.
+vi.mock('@/session/ComposerSheet', () => ({ ComposerSheet: (p: any) => { h.sheet = p; return p.visible ? <div>{p.children}</div> : null; } }));
+vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: (p: any) => <section>{p.children}</section> }));
+vi.mock('@/session/CompanionNativeContent.ios', () => ({ CompanionNativeContent: (p: any) => p.children }));
+vi.mock('@expo/ui/swift-ui', async () => {
+  const React = await import('react');
+  const control = (p: any) => <div>{p.children}</div>;
+  return { HStack: control, RNHostView: control, Spacer: () => null, Image: () => null, ProgressView: () => null,
+    Text: (p: any) => <span>{p.children}</span>, TextField: () => null,
+    Button: (p: any) => <button data-testid={p.testID} disabled={p.modifiers?.some((m: any) => m.disabled)} onClick={p.onPress}>{p.children}</button>,
+    Toggle: () => null,
+    Picker: (p: any) => { h.choices.push({ label: p.label, value: p.selection, onChange: p.onSelectionChange }); return <span data-choice={p.label} />; },
+    useNativeState: (initial: string) => React.useRef({ value: initial, get() { return this.value; }, set(value: string) { this.value = value; } }).current,
+  };
+});
+vi.mock('@expo/ui/swift-ui/modifiers', () => Object.fromEntries([
+  ...['accessibilityLabel', 'alignmentGuide', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'listRowInsets', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]),
+  ['shapes', { rectangle: () => ({}) }],
+]));
 import { CompanionCreateSheet, CompanionProfileSheet } from '@/session/CompanionProfileSheet';
 import { parseCompanionProfileData } from '@/session/companionProfileData';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -74,7 +94,7 @@ async function render(online = true) {
   await settle();
 }
 beforeEach(() => {
-  vi.clearAllMocks(); h.choices = []; h.sheet = null;
+  vi.clearAllMocks(); h.platform = 'android'; h.choices = []; h.sheet = null;
   h.read.mockImplementation(async () => home()); h.openLink.mockResolvedValue(undefined); h.invoke.mockResolvedValue({ effects: [] });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
@@ -313,4 +333,46 @@ it('keeps the Android model draft on save failure and blocks a conflicting heade
   expect(h.sheet.trailingAction.disabled).toBe(true);
   await act(async () => h.sheet.trailingAction.onPress());
   expect(h.invoke).toHaveBeenCalledOnce();
+});
+
+// Review P1: the production platform menu must actually reach the advertised form. Host reads
+// and actions use the real mobile parser and production host grant flow; native drawing is mocked.
+const { createBotRemoteSettingsResource } = await vi.importActual<{ createBotRemoteSettingsResource: (deps: any) => any }>(
+  '../../../desktop/src/main/localDb/ipc/botRemoteSettingsResource.ts');
+const { parseCompanionProfileData } = await import('@/session/companionProfileData');
+it.each(['android', 'ios'])('opens, saves and resets media settings from the %s menu, hiding them on older hosts', async platform => {
+  h.platform = platform;
+  const image = { providerId: 'images-account', modelId: 'draw' };
+  const settings: any = { source: { id: 'bot', name: 'Cindy', avatar: '', avatarColor: 'teal', description: 'Assistant', currentVersion: 1, status: 'active' }, identity: '', userContext: '', memory: true, permissions: 'ask', modelChain: [], followsDefault: true, skills: [], connections: [], toolsets: [] };
+  const update = vi.fn(async (input: any) => { Object.assign(settings, input.capabilities); settings.source.currentVersion++; });
+  const deps: any = { owner: () => 'owner', assertOwner() {}, read: async () => settings, update, skills: async () => [], lifecycle: async () => ({}),
+    mediaModels: async () => ({ vision: [], image: [{ ...image, label: 'Image account' }], video: [] }) };
+  const host = createBotRemoteSettingsResource(deps);
+  const context = { controllerDeviceId: 'phone' };
+  h.read.mockImplementation(async () => parseCompanionProfileData(await host.get(context, 'bot'), ref));
+  h.invoke.mockImplementation(async (_invoke: unknown, _target: unknown, request: unknown) => host.invoke(context, { ...(request as object), client: { protocolVersion: 1, primitives: ['form'] } }));
+  expect((await h.read()).panels.map((panel: any) => panel.id)).toContain('media');
+  await render();
+  expect(container.innerHTML).toContain('companionProfile.media');
+  await press(byTest('companionProfile.media'));
+  const imageChoice = () => h.choices.filter(choice => choice.label === 'Image generation model').at(-1);
+  expect(imageChoice().value).toBe('inherit');
+  const advertised = parseCompanionProfileData(await host.get(context, 'bot'), ref).panels.find(panel => panel.id === 'media')!;
+  const option = advertised.action!.fields!.find(field => field.id === 'image')!.options![1];
+  await act(async () => imageChoice().onChange(option.value));
+  await press(byText('devices.companionProfile.save')); await settle();
+  expect(settings.mediaModels).toEqual({ image });
+  // Closing/reopening proves the selection came back from the persisted host profile.
+  await act(async () => h.sheet.onBack()); await press(byTest('companionProfile.media'));
+  expect(imageChoice().value).toBe(option.value);
+  await act(async () => imageChoice().onChange('inherit'));
+  await press(byText('devices.companionProfile.save')); await settle();
+  expect(settings.mediaModels).toBeNull();
+  await act(async () => h.sheet.onBack());
+  delete deps.mediaModels;
+  await act(async () => h.sheet.onClose());
+  // A fresh mount reads an older host's resource: no media entry is advertised.
+  act(() => root.unmount()); root = createRoot(container);
+  await render();
+  expect(byTest('companionProfile.media')).toBeNull();
 });

@@ -122,7 +122,10 @@ Mobile 继续消费既有引用与状态，暂不新增管理界面。
 既有 Profile capabilities 追加可选 `mediaModels`；仅保存执行端 provider/model 引用，缺省
 继承应用设置。远程 Desktop 的既有 `management:settings` 添加可选 `models.media` 读取
 操作，用 `caps.ops` 协商；旧主机不声明时不展示新编辑器。Mobile 复用既有便携 form/select
-动作，旧客户端省略字段时保留现有覆盖。宿主仍通过同一 Profile 更新入口校验类型、目录、
+动作，iOS／Android 在主机声明 `media` 表单时显示媒体模型入口；旧客户端省略字段时保留现有覆盖。
+选项值改用宿主授权内保存完整路由映射的短引用（64 字符），保持旧手机 160 字符上限。
+可选 `data.notice` 为 RemoteText 不可用提示，旧客户端忽略；目录读取失败仍返回原选择和重置动作，
+账号切换／归属边界失败继续拒绝。宿主仍通过同一 Profile 更新入口校验类型、目录、
 归属与版本；视觉桥备用的 null 表示明确无备用，不是继承。
 
 无新 channel、relay 帧或 allowlist。官方与自建中转现有的 opaque resource 转发足够，不需

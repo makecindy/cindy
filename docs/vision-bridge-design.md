@@ -300,7 +300,11 @@ mediaModels?: {
 - 自行直连外部服务的插件、Skill 或引擎原生媒体服务仍由各自管理；这不是任意工具参数
   改写。媒体后端没有新增自动 fallback。
 - Desktop 本机／远程设置使用相同编辑器与执行端目录；Mobile 用既有 Remote Resource
-  form/select 原语修改同一 Profile。可选 `models.media` 操作未被旧主机声明时，远程
+  form/select 原语修改同一 Profile；iOS／Android 的「媒体模型」菜单只在主机提供
+  `media` 表单时出现，保存／恢复继承走同一版本化动作。表单选项使用不超过 160 字符
+  的短引用，由宿主的账号／控制端／版本绑定授权保存完整 provider/model 映射；不修改旧手机解析上限。
+  普通目录／账号信息读取失败只将对应类目标为不可用，保留已有选择、重置及其它设置；
+  账号切换／边界未完成仍拒绝读取。可选 `models.media` 操作未被旧主机声明时，远程
   Desktop 隐藏编辑器；旧表单省略新字段时保留设置。无新增 relay 帧、channel 或 allowlist，
   自建中转继续 opaque resource 转发。云端接管的能力同步合同未扩展。
 - Agent 用 `get_teammate_state` 读取自身覆盖与可选引用，再用 `update_teammate_profile`

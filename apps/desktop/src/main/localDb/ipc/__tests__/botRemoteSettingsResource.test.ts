@@ -226,10 +226,28 @@ it('round-trips portable teammate media selections and resets without changing p
   const image = { providerId: 'photos', modelId: 'draw' };
   const video = { providerId: 'films', modelId: 'animate' };
   await f.host.invoke(f.context, f.request(actionId(resource, 'media'), {
-    vision: JSON.stringify(vision), fallback: 'inherit', image: JSON.stringify(image), video: JSON.stringify(video),
+    vision: resource.actions!.find(action => action.id === actionId(resource, 'media'))!.fields!.find(field => field.id === 'vision')!.options![1].value,
+    image: resource.actions!.find(action => action.id === actionId(resource, 'media'))!.fields!.find(field => field.id === 'image')!.options![1].value,
+    video: resource.actions!.find(action => action.id === actionId(resource, 'media'))!.fields!.find(field => field.id === 'video')!.options![1].value,
   }));
   expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { mediaModels: { vision: { primary: vision, fallback: null }, image, video } } }, 3);
   const refreshed = await f.get();
   await f.host.invoke(f.context, f.request(actionId(refreshed, 'media'), { vision: 'inherit', image: 'inherit', video: 'inherit' }));
   expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { mediaModels: null } }, 4);
+});
+
+// Review regression: catalog failure must not remove unrelated profile/lifecycle actions or reset.
+it('retains settings and reset during a catalog outage, rejecting owner-boundary failures', async () => {
+  const f = fixture();
+  Object.assign(f.settings, { mediaModels: { image: { providerId: 'removed', modelId: 'old' } } });
+  f.deps.mediaModels = async () => { throw new Error('provider account info unavailable'); };
+  const resource = await f.get();
+  expect(resource.blocks!.map(block => block.id)).toEqual(expect.arrayContaining(['profile', 'permissions', 'restart', 'media']));
+  expect(resource.blocks!.find(block => block.id === 'media')!.fallbackMarkdown).toContain('unavailable');
+  await f.host.invoke(f.context, f.request(actionId(resource, 'media'), { image: 'inherit' }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { mediaModels: null } }, 3);
+  f.deps.mediaModels = async () => { throw Object.assign(new Error('Account changed'), { code: 'PRECONDITION_FAILED' }); };
+  await expect(f.get()).rejects.toThrow('Account changed');
+  f.deps.mediaModels = async () => { f.owner('other'); throw new Error('offline'); };
+  await expect(f.get()).rejects.toThrow('OWNER_CHANGED');
 });

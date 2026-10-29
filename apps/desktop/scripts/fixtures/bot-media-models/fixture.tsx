@@ -17,7 +17,8 @@ function Fixture() {
 void mountPage({ host: () => ({ localDb: { bots: { mediaModels: async () => {
   if (ctx.case === 'unavailable') throw new Error('Synthetic catalog unavailable');
   return ({
-  vision: [{ ...vision, label: 'Vision model · Vision account' }],
+  vision: ctx.case === 'vision-unavailable' ? [] : [{ ...vision, label: 'Vision model · Vision account' }],
+  ...(ctx.case === 'vision-unavailable' ? { unavailable: ['vision'] } : {}),
   image: [{ ...image, label: 'Image model with a long display name · Image account' }],
   video: [{ ...video, label: 'Video model · Video account' }],
 }); } } } }), render: () => <Fixture /> });

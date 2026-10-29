@@ -12,28 +12,33 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 /** Reuse the execution-owner catalogs; return labels and references only, never connection secrets. */
 export async function listTeammateMediaModels(): Promise<TeammateMediaCatalog> {
   const owner = activeOwnerScopeKey();
-  const vision = new Map<string, { providerId: string; modelId: string; label: string }>();
-  const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
-  for (const provider of providers) {
-    if (!provider.connected || provider.suspended || provider.modelDiscoveryFailure) continue;
-    for (const agent of ['claude-code', 'codex', 'pi'] as const) for (const model of provider.models[agent] ?? []) {
-      if (model.mode && model.mode !== 'chat') continue;
-      if (!isModelVisible(getModelVisibilityOverride(agent, provider.id, model.id), model.defaultEnabled)) continue;
-      if (!resolveVisionBackendRoute(provider.id, model.id, effectiveXdGatewayBaseUrl() || null)) continue;
-      const supportsImage = model.supportsImageInput ?? (model.modalities ? model.modalities.input.includes('image') : undefined);
-      if (supportsImage === false || (supportsImage === undefined && classifyVisionCapability(model.id) === 'no-vision')) continue;
-      const key = JSON.stringify([provider.id, model.id]);
-      vision.set(key, { providerId: provider.id, modelId: model.id, label: `${model.name ?? model.id} · ${provider.name}` });
+  const [visionResult, mediaResult] = await Promise.allSettled([(async () => {
+    const vision = new Map<string, { providerId: string; modelId: string; label: string }>();
+    const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+    for (const provider of providers) {
+      if (!provider.connected || provider.suspended || provider.modelDiscoveryFailure) continue;
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) for (const model of provider.models[agent] ?? []) {
+        if (model.mode && model.mode !== 'chat') continue;
+        if (!isModelVisible(getModelVisibilityOverride(agent, provider.id, model.id), model.defaultEnabled)) continue;
+        if (!resolveVisionBackendRoute(provider.id, model.id, effectiveXdGatewayBaseUrl() || null)) continue;
+        const supportsImage = model.supportsImageInput ?? (model.modalities ? model.modalities.input.includes('image') : undefined);
+        if (supportsImage === false || (supportsImage === undefined && classifyVisionCapability(model.id) === 'no-vision')) continue;
+        const key = JSON.stringify([provider.id, model.id]);
+        vision.set(key, { providerId: provider.id, modelId: model.id, label: `${model.name ?? model.id} · ${provider.name}` });
+      }
     }
-  }
-  const [result] = await Promise.allSettled([listAvailableMediaModels(undefined, { skipGateway: !getAppCapabilities().canUseCindyGateway })]);
-  const media = result.status === 'fulfilled' ? result.value : [];
+    return [...vision.values()];
+  })(), (async () => listAvailableMediaModels(undefined, { skipGateway: !getAppCapabilities().canUseCindyGateway }))()]);
   if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+  const media = mediaResult.status === 'fulfilled' ? mediaResult.value : [];
   const rows = (mode: string) => media.filter(model => model.mode === mode).map(model => ({
     providerId: model.providerId, modelId: model.id, label: `${model.name ?? model.id} · ${model.providerId}`,
   }));
-  return { vision: [...vision.values()], image: rows('image_generation'), video: rows('video_generation'),
-    ...(result.status === 'rejected' ? { unavailable: ['image', 'video'] as Array<'image' | 'video'> } : {}) };
+  const unavailable: NonNullable<TeammateMediaCatalog['unavailable']> = [];
+  if (visionResult.status === 'rejected') unavailable.push('vision');
+  if (mediaResult.status === 'rejected') unavailable.push('image', 'video');
+  return { vision: visionResult.status === 'fulfilled' ? visionResult.value : [], image: rows('image_generation'), video: rows('video_generation'),
+    ...(unavailable.length ? { unavailable } : {}) };
 }
 
 export async function validateTeammateMediaModels(value: unknown, previous?: unknown) {
