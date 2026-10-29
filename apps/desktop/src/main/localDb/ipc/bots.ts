@@ -1870,6 +1870,7 @@ async function prepareTaskOrigin(botId: string, assertCurrent: () => void) {
     assertCurrent();
     if (state.throughAt === undefined && state.pending.firstAt === undefined) {
       state.pending.firstAt = row.firstAt!;
+      state.throughAt = Math.max(0, row.firstAt! - 1);
       state.pending.turns += row.turns;
     }
     return state;

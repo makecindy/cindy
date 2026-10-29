@@ -77,7 +77,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { revertNightlyLearningItem, runNightlyLearning } from '../botNightlyLearning.js';
-import { readNightlyLearningState, recordNightlyLearningTurn } from '../botNightlyLearningState.js';
+import { readNightlyLearningState, recordNightlyLearningTurn, updateNightlyLearningState } from '../botNightlyLearningState.js';
 
 const turn = (n: number, text: string, createdAt: number) => ({
   sessionId: 'main', id: `reply${n}`, content: 'Done.', meta: JSON.stringify({ turnCompleted: true }), createdAt, role: 'canonical',
@@ -126,10 +126,18 @@ it('learns captured source history through the existing pipeline without later o
       ('late-a','late-a','source','assistant','Later.','{"turnCompleted":true}',4000,NULL),
       ('withdrawn','withdrawn','source','assistant','Gone.','{"turnCompleted":true}',5000,6000);
     INSERT INTO bot_task_origin_messages VALUES ('bot','u'),('bot','a'),('bot','withdrawn');`);
-  await recordNightlyLearningTurn(h.root, 'bot', 'source', 2000);
+  // Persisted creation frontier (also asserted through creation IPC): a new turn must not move it.
+  await updateNightlyLearningState(h.root, 'bot', state => {
+    state.pending = { turns: 1, sessions: {}, firstAt: 2000 }; state.throughAt = 1999; return state;
+  });
+  db.exec(`INSERT INTO sessions VALUES ('main','bot','active',NULL,NULL);
+    INSERT INTO bot_session_links VALUES ('main','bot','canonical',NULL);
+    INSERT INTO messages VALUES ('new-u','new-u','main','user','New discussion.','{}',7000,NULL),
+      ('new-a','new-a','main','assistant','Understood.','{"turnCompleted":true}',8000,NULL);`);
+  await recordNightlyLearningTurn(h.root, 'bot', 'main', 8000);
   reply({});
   await runNightlyLearning('bot', { manual: false });
-  expect(sentIds(0)).toEqual(['u', 'a']);
+  expect(sentIds(0)).toEqual(['u', 'a', 'new-u', 'new-a']);
   expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(0);
   await runNightlyLearning('bot', { manual: false });
   expect(h.model).toHaveBeenCalledOnce();

@@ -150,16 +150,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('name-only creation', () => {
-  it.each([false, true])('restores the provider-setup draft after unmount (inline=%s), then discards it on cancel', async inline => {
-    const first = render(<BotRosterView inline={inline} />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep me' } });
+  it.each([{ inline: false, fromSource: false }, { inline: true, fromSource: false }, { inline: false, fromSource: true }])('restores the provider-setup draft after unmount (%j), then discards it on cancel', async ({ inline, fromSource }) => {
+    const sourceTask = fromSource ? { id: 'source', title: 'Novel', agentKind: 'cc', model: 'original' } as import('@/lib/ccAgent.types').Session : undefined;
+    const first = render(<BotRosterView inline={inline} sourceTask={sourceTask} />);
+    fireEvent.change(screen.getByLabelText('bots.creationName'), { target: { value: 'Keep me' } });
     fireEvent.click(screen.getByTestId('portrait'));
     fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
     fireEvent.click(screen.getByRole('button', { name: 'connect-source' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=providers');
     first.unmount();
-    const returned = render(<BotRosterView />);
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Keep me');
+    const returned = render(<BotRosterView sourceTask={sourceTask} />);
+    expect((screen.getByLabelText('bots.creationName') as HTMLInputElement).value).toBe('Keep me');
     expect(screen.getByTestId('portrait').textContent).toBe('data:image/png;base64,bWFudWFs');
     expect(screen.getByTestId('selected-engine').textContent).toBe('pi');
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));

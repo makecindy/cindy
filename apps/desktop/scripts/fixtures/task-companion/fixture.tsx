@@ -18,7 +18,8 @@ void mountPage({
   route: '/bots/editor',
   host: {
     localDb: { bots: { list: async () => [], getModelChainSettings: async () => ({ modelChain: [], isCustomized: false }) },
-      messages: { list: async () => rows } },
+      messages: { list: async () => rows, onDeleted: subscription('deleted') },
+      sessionsPush: { onPatched: subscription('patched') }, subagentRuns: { onChanged: subscription('subagents') } },
     maker: { onBotProfileChanged: subscription('bots'), onProvidersChanged: subscription('providers'),
       listAvailableAgents: async () => ['codex'], getCapabilities: async () => ({ availableModels: [], permissionModes: [] }) },
   },

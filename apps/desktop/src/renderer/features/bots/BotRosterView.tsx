@@ -55,11 +55,11 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   const requestId = useRef(restoredDraft?.requestId);
   const [attempted, setAttempted] = useState(false);
   useEffect(() => { providerSetupDraft = null; }, []);
-  const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(sourceTask ? [{
+  const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(restoredDraft ? restoredDraft.modelOverride : sourceTask ? [{
     harness: sourceTask.agentKind === 'cc' ? 'claude' : sourceTask.agentKind ?? 'claude',
     model: sourceTask.model, providerId: sourceTask.providerId ?? null,
     effort: sourceTask.effort ?? '', fastMode: sourceTask.fastMode,
-  }] : restoredDraft?.modelOverride ?? null);
+  }] : null);
   const [importing, setImporting] = useState(false);
   const [name, setName] = useState(restoredDraft?.name ?? sourceTask?.title ?? '');
   const [description, setDescription] = useState(restoredDraft?.description ?? '');

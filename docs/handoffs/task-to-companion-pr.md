@@ -30,19 +30,24 @@
 以下为 `pnpm ui:check:publish` 发布的合成截图，不含真实创作、任务或账号资料。完整应用按钮流程另在隔离环境验收，私人截图不上传。
 
 <!-- 由 pnpm ui:check 生成；pnpm ui:check:publish 把截图发到作者 fork 并换上图片链接 -->
-- 截图来源：单页验证 `pnpm ui:check --page task-companion --case default --theme all`，Windows · Electron 42.11.12（Chromium 148.0.7778.280，与 Cindy 同一渲染内核）；真实组件与主题，场景数据，不是登录账号下的完整 Cindy
-- 版本：`c3049c6337b6`（含未提交改动）
-- 结果：2/2 个场景通过
+- 截图来源：单页验证 `pnpm ui:check --page task-companion --case all --theme all`，Windows · Electron 42.11.12（Chromium 148.0.7778.280，与 Cindy 同一渲染内核）；真实组件与主题，场景数据，不是登录账号下的完整 Cindy
+- 版本：`56e3efae79e6`（含未提交改动）
+- 结果：4/4 个场景通过
 - 页面 `task-companion`：light / dark · zh-CN · 720×800
   - `default`：Create from an existing writing task
+  - `history`：Read captured source messages within companion history
   - 未覆盖：Submission, model picker, plugin cards, real database, live device-link and model understanding
   - 场景替换的模块（未验证）：`src/renderer/contexts/AuthContext`、`src/renderer/hooks/useProviders`、`src/renderer/features/bots/BotModelChainEditor`、`src/renderer/components/chat/GhostToolCard`
 
-![单页验证截图 1/1](https://raw.githubusercontent.com/whoisjaja/cindy/a3a0b399b93f49ce7a6b351afca073b0e8e0d14c/task-companion-Oyt1Zx/overview.png)
+![单页验证截图 1/1](https://raw.githubusercontent.com/whoisjaja/cindy/57be18ee002536bbca18340c65d6697efb0b0533/task-companion-hsdzVN/overview.png)
 
 ## 怎么验证的
 
 ### 自动验证
+
+审阅修正沿用现有机制：来源初始化同时固定 `throughAt`，新交流不推进首次来源学习起点；设置返回优先恢复模型草稿；历史文件上下文显式携带目标设备；来源删除/清空/回退广播立即清空已加载页、递增代次并重读，迟到请求不能补回正文。
+
+本轮定向：创建 IPC 2 项通过（17.61 秒）；学习、草稿与历史组件共 26 项通过；新增历史组件文件单独 4 项、1.30 秒。该文件使用真实组件和文件上下文，隔离 IPC 延迟页验证四种失效事件与远端归档来源；因订阅/上下文环境与创建表单不同单独成文件。修复前 `56e3efae` 源码的测试加载覆层复现 7 项失败，未替换工作区或试聊数据。Desktop 类型检查、测试卫生与创建/历史 Light/Dark 4 项场景通过。
 
 复用已通过的检查；发布前只为发现的来源发送锁问题补定向回归，没有重跑整仓。
 
@@ -57,9 +62,9 @@ pnpm --filter desktop db:validate
 pnpm --filter desktop test:migration-replay
 0137–0139 静态检查通过，22 项回放通过（5.45 秒）。
 
-pnpm ui:check --page task-companion --case default --theme all
-pnpm ui:check:publish artifacts/ui-check/task-companion-Oyt1Zx --remote jaja-fork
-2/2 通过，已目检并仅发布合成截图。
+pnpm ui:check --page task-companion --case all --theme all
+pnpm ui:check:publish artifacts/ui-check/task-companion-hsdzVN --remote jaja-fork
+4/4 通过，已目检并仅发布合成截图。
 
 pnpm check:dco
 pnpm check:dev-docs
@@ -118,7 +123,7 @@ pnpm check:test-hygiene
 - 按同账号 owner、可信 renderer、任务身份及当前权限档校验；不恢复旧授权，不对共享访客开放，不自动重放远控写请求。
 - 回滚可撤下入口，保留来源数据和关系；不手工降级数据库，不删除历史 migration。开发迁移仅在隔离库运行。
 - 产品、数据库、权限与跨端边界交维护者正式审查，本 PR 不代表批准，不自动合并。
-- 最终生产代码 36 文件，约 580 行新增 / 41 行删除；10 个语言文件各增加一组文案。测试与场景 12 文件，约 331 行新增 / 12 行删除。迁移 SQL 3 文件共 24 行；快照与 journal 约 22,502 行新增，属于 Drizzle 生成元数据。
+- 最终生产代码 37 文件，约 612 行新增 / 42 行删除；10 个语言文件各增加一组文案。测试与场景 13 文件，约 416 行新增 / 18 行删除。迁移 SQL 3 文件共 24 行；快照与 journal 约 22,502 行新增，属于 Drizzle 生成元数据。
 
 ### 提交前检查
 

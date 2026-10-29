@@ -69,10 +69,12 @@ export function useChatSessionFileValue(
   sessionId: string | undefined,
   workingDir: string,
   remoteHostId: string | null | undefined,
+  knownDeviceId?: string | null,
 ): ChatSessionFileContextValue {
-  const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+  const inferredDeviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     sessionId ? getSessionDeviceId(sessionId) : undefined,
   );
+  const deviceId = knownDeviceId === undefined ? inferredDeviceId : knownDeviceId ?? undefined;
   return useMemo<ChatSessionFileContextValue>(
     () => ({
       sessionId,

@@ -275,6 +275,7 @@ import {
 } from '../../../maker-ipc/botDelegationDispatchOutcome';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../../shared/accountProviderReadiness';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
+import { readNightlyLearningState, recordNightlyLearningTurn } from '../../../maker-ipc/botNightlyLearningState';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
 import { parseBotDelegationPlanSnapshot } from '../../../../shared/botDelegation';
 import { readBotCollaborationMeta } from '../../../../shared/botCollaboration';
@@ -1505,6 +1506,8 @@ describe('Bot canonical Session lifecycle', () => {
       VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask',?,'pi','xd',1,1)`).run(source);
     h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
       VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('novel-a','novel-a','novel-source','assistant','"Agreed."',3)`).run();
     // The installed coordinator protects the source send lock and rejects a running source.
     configureBotCanonicalReplacementCoordinator(async (sessionId, operation) => {
       if (sessionId === 'novel-source') throw new Error('Source is running');
@@ -1528,7 +1531,10 @@ describe('Bot canonical Session lifecycle', () => {
       .toMatchObject({ version: 2, botId: created.id, sessionId: canonical.canonicalSessionId });
     expect(h.sqlite!.prepare("SELECT source,permission_mode FROM sessions WHERE id='novel-source'").get())
       .toEqual({ source, permission_mode: 'ask' });
-    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['novel-u']);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages ORDER BY message_id').pluck().all()).toEqual(['novel-a', 'novel-u']);
+    const learningRoot = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'));
+    await recordNightlyLearningTurn(learningRoot, created.id, canonical.canonicalSessionId, 1000);
+    expect((await readNightlyLearningState(learningRoot, created.id))?.throughAt).toBe(2);
     expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 1);
     agentHandoffPending.set(canonical.canonicalSessionId, 'Existing engine-switch context');
     const handoff = await agentHandoffPending.peek(canonical.canonicalSessionId);
@@ -1547,8 +1553,8 @@ describe('Bot canonical Session lifecycle', () => {
     });
     expect(secondCanonical.canonicalSessionId).not.toBe(canonical.canonicalSessionId);
     expect(secondCanonical.session.workingDir).not.toBe(canonical.session.workingDir);
-    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=?').pluck().all(created.id)).toEqual(['novel-u']);
-    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=?').pluck().all(second.id)).toEqual(['later-u']);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=? ORDER BY message_id').pluck().all(created.id)).toEqual(['novel-a', 'novel-u']);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=? ORDER BY message_id').pluck().all(second.id)).toEqual(['later-u', 'novel-a']);
     expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 2);
   });
 
