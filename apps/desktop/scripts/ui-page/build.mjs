@@ -99,15 +99,18 @@ function boundaries(stubs, replaced, overlay) {
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === 'ui-stub') return undefined;
+        const urlImport = args.path.endsWith('?url');
+        const importPath = urlImport ? args.path.slice(0, -4) : args.path;
         let candidate;
-        if (args.path.startsWith('@/')) candidate = path.join(renderer, args.path.slice(2));
-        else if (/^\.\.?\//.test(args.path) && args.resolveDir)
-          candidate = path.resolve(args.resolveDir, args.path);
+        if (importPath.startsWith('@/')) candidate = path.join(renderer, importPath.slice(2));
+        else if (/^\.\.?\//.test(importPath) && args.resolveDir)
+          candidate = path.resolve(args.resolveDir, importPath);
         if (!candidate) return undefined;
         const stub = stubs.get(withoutExtension(candidate));
         if (!stub) {
           // --compare: resolve as the old revision would (moved, deleted or re-extensioned files).
           const old = overlay?.resolve(candidate);
+          if (urlImport) return { path: old ?? candidate, namespace: 'ui-url-asset' };
           return old ? { path: old } : undefined;
         }
         const importers = (replaced[stub.key] ??= { kind: stub.kind, importers: [] }).importers;
@@ -115,6 +118,11 @@ function boundaries(stubs, replaced, overlay) {
         if (!importers.includes(importer)) importers.push(importer);
         return { path: stub.key, namespace: 'ui-stub', pluginData: stub };
       });
+      build.onLoad({ filter: /.*/, namespace: 'ui-url-asset' }, async (args) => ({
+        contents: overlay?.get(args.path) ?? await readFile(args.path),
+        loader: 'file',
+        watchFiles: [args.path],
+      }));
       build.onLoad({ filter: /.*/, namespace: 'ui-stub' }, async (args) => {
         const stub = args.pluginData;
         return stub.file
@@ -137,7 +145,7 @@ function boundaries(stubs, replaced, overlay) {
   };
 }
 
-const sourcePath = (file) => path.resolve(root, file.replace(/ with \{[^}]*\}$/, ''));
+const sourcePath = (file) => path.resolve(root, file.replace(/^ui-url-asset:/, '').replace(/ with \{[^}]*\}$/, ''));
 
 function entryContents(definition) {
   const entry = path.resolve(definition.dir, definition.entry);
