@@ -69,8 +69,16 @@ export function useSessionUsageLimitFallback(
     setStale(false);
     setLoading(true);
     setError(null);
-    void window.electronAPI.maker
-      .sessionUsageLimitFallbackGet(sessionId)
+    // 宿主可能比 renderer 老（preload 里没有这个方法）：同步 TypeError 进不了 .catch，
+    // 会在 effect 里直接抛掉，所以先确认可调用再发请求。
+    const read = window.electronAPI?.maker?.sessionUsageLimitFallbackGet;
+    if (typeof read !== 'function') {
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void read(sessionId)
       .then((state) => {
         if (cancelled) return;
         setTargetState(state.target);
@@ -111,7 +119,8 @@ export function useSessionUsageLimitFallback(
       setLoading(true);
       setError(null);
       try {
-        const result = await window.electronAPI.maker.sessionUsageLimitFallbackSet(sessionId, next);
+        const result = await window.electronAPI.maker.sessionUsageLimitFallbackSet?.(sessionId, next);
+        if (!result) return false;
         return applyMutation(result, sessionId);
       } catch (cause) {
         if (mountedRef.current && sessionIdRef.current === sessionId) setError(readErrorMessage(cause));
@@ -128,7 +137,8 @@ export function useSessionUsageLimitFallback(
     setLoading(true);
     setError(null);
     try {
-      const result = await window.electronAPI.maker.sessionUsageLimitFallbackClear(sessionId);
+      const result = await window.electronAPI.maker.sessionUsageLimitFallbackClear?.(sessionId);
+      if (!result) return false;
       return applyMutation(result, sessionId);
     } catch (cause) {
       if (mountedRef.current && sessionIdRef.current === sessionId) setError(readErrorMessage(cause));
