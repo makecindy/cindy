@@ -1,129 +1,130 @@
-# feat(bots): 从已有任务创建伙伴
-
 ## 这次改了什么
 
 ### 摘要
 
-普通任务菜单可创建长期伙伴。原任务、消息和附件保留原归属，新伙伴关联创建时的消息，
-在新主任务继续；来源历史可在桌面伙伴历史页分页浏览、按伙伴检索，并进入既有夜间学习。
-首次发送复用现有有界交接，不恢复旧执行句柄、工具或队列。
+普通任务可以创建长期伙伴，保留来源历史，在独立主任务接续工作。每次主动创建产生独立伙伴；同一次提交的连点或失败重试按请求 ID 返回同一结果。
 
-### 变更类型与范围
+来源消息、附件和项目文件保持原归属。每位伙伴保存创建时的消息成员范围，历史可浏览、检索并进入既有学习机制；首次发送复用有界上下文交接，不重放旧工具、队列或原生执行句柄。
 
-- `feat`；设计正本：[从已有任务创建伙伴](../task-to-companion.md)。
-- Desktop、本机 Agent 工具、同账号远控与手机创建入口共用服务。
-- 同一普通本机任务可多次创建独立伙伴；同一提交按请求 ID 去重，不含批量导入、通用迁移或人格分析。
-- 来源记录仍在来源电脑；更换伙伴主力电脑不自动搬迁来源历史。手机伙伴内来源分页视图未接入，原任务仍可打开。
-- 无来源的普通伙伴创建不变；远程创建先探测请求去重能力，旧端不显示。未修改系统提示词。
+### 变更类型
+
+- [x] `feat` 新功能
+- [x] `fix` 缺陷修复
+- [ ] `refactor` / `perf` 重构或性能优化
+- [x] `docs` / `test` / `chore` 文档、测试或工程维护
+
+### 范围
+
+- 需求与设计：`docs/task-to-companion.md`。
+- Desktop 菜单、普通 Agent 工具 `create_teammate_from_task`、同账号远控和 Mobile 创建入口共用服务。
+- 支持本机普通任务及本机导入的 `.cshare` 任务；不含实时共享协作任务、SSH 工作区、批量转换或通用迁移。
+- 独立档案、主任务、Home 和记忆；只引用来源历史，不复制整个工作区或项目共享记忆。删除伙伴不删除来源记录和文件。
+- 创建沿来源任务的发送锁与空闲检查；请求身份只负责去重。保留重名、队列、owner 与授权校验。
+- 模型必须已连接且启用；失效选择返回 `MODEL_SELECTION_UNAVAILABLE`，表单显示既有本地化操作提示并保留输入，不自动换模型。
+- 兼容性：无来源的普通创建不变；新增远控入口探测 `version: 2`，旧端不显示或明确拒绝。未修改 system prompt、原生配置或依赖。
 
 ### UI 变化
 
-复用伙伴创建表单、原消息渲染器和手机菜单表单。颜色沿语义 token；依据
-[DESIGN.md](../design-rules/DESIGN.md) §1、§5、§10、§11，手机复用现有文字与操作组件。
+引用的设计规范：`docs/design-rules/DESIGN.md` §1、§5、§10、§11。复用标准表单、Input、按钮和消息渲染器，颜色使用语义 token；手机复用现有菜单表单。
 
-离屏检查：`pnpm ui:check --page task-companion --case all --theme all --locale zh-CN,en --engine chromium`，
-8/8 通过，Light/Dark 截图已目检。证据目录为
-`artifacts/ui-check/task-companion-IoPcdc/`。场景替换了账号、供应商发现、模型选择器和插件卡；
-截图验证新增字段与历史正文，不代表真实发送或这些被替换组件已验收。
-`--changed` 因共享文案选中大量页面，运行后中止并改用上述定向检查。未发布截图。
-职责字段收敛到标准 `Input` 后，又定向检查创建表单：4/4 通过，已目检，证据为
-`artifacts/ui-check/task-companion-8Ta4Cg/`，包含实际填写职责字段的交互断言。工作区设计颜色检查无新增未分类项。
+以下为 `pnpm ui:check:publish` 发布的合成截图，不含真实创作、任务或账号资料。完整应用按钮流程另在隔离环境验收，私人截图不上传。
+
+<!-- 由 pnpm ui:check 生成；pnpm ui:check:publish 把截图发到作者 fork 并换上图片链接 -->
+- 截图来源：单页验证 `pnpm ui:check --page task-companion --case default --theme all`，Windows · Electron 42.11.12（Chromium 148.0.7778.280，与 Cindy 同一渲染内核）；真实组件与主题，场景数据，不是登录账号下的完整 Cindy
+- 版本：`c3049c6337b6`（含未提交改动）
+- 结果：2/2 个场景通过
+- 页面 `task-companion`：light / dark · zh-CN · 720×800
+  - `default`：Create from an existing writing task
+  - 未覆盖：Submission, model picker, plugin cards, real database, live device-link and model understanding
+  - 场景替换的模块（未验证）：`src/renderer/contexts/AuthContext`、`src/renderer/hooks/useProviders`、`src/renderer/features/bots/BotModelChainEditor`、`src/renderer/components/chat/GhostToolCard`
+
+![单页验证截图 1/1](https://raw.githubusercontent.com/whoisjaja/cindy/a3a0b399b93f49ce7a6b351afca073b0e8e0d14c/task-companion-Oyt1Zx/overview.png)
 
 ## 怎么验证的
 
 ### 自动验证
 
-| 验证 | 结果与保护的行为 |
-| --- | --- |
-| Desktop、Mobile `typecheck`；`@cindy/mcps`、`@cindy/device-link` `build`（均为 `tsc --noEmit`） | 通过；后两包没有独立 typecheck script |
-| Desktop `db:validate`、`test:migration-replay` | 通过；向前迁移 `0137`、空库与历史库升级；回放 21 项，墙钟 7.69 秒 |
-| `botTx.test.ts` | 40 项通过；新增来源事务用例保护队列拒绝、消息成员范围、重复创建和删除归属 |
-| `botCanonicalSession.test.ts` 定向创建与历史查询 | 通过；实际 IPC、创建服务、worker 事务、canonical 创建和重试；首次换模交接与来源交接同时保留，撤回后重新读取；定向墙钟约 20 秒，测试体约 65 ms，主要耗时在已有大文件收集 |
-| `remoteHistoryPagination.test.ts` 的来源快照用例 | SQL/原生向量两种模式通过；读取与检索只含捕获成员，撤回、清空及邻居窗口不泄漏隐藏内容；定向墙钟 10.26 秒，测试体约 50 ms |
-| `botNightlyLearning.test.ts` | 7 项通过；新增真实 SQL 来源用例证明来源进入既有学习流程，晚到与撤回内容不进入；未用模拟模型结果宣称理解质量 |
-| `botHistoryScope`、任务授权及 MCP 审批定向检查 | 通过；既有归属与权限档继续有效 |
-| helper MCP 入口、远程历史回执 | 35 / 17 项通过；普通 Agent 可发现创建工具，跨端历史范围须被接收端明确确认 |
-| device-link allowlist、自建中转 interop | 55 / 1 项通过；沿通用 invoke 转发，无需 relay 代码修改 |
-| i18n、术语表、测试卫生、Mobile scope | 通过；保留已有非阻断警告 |
+复用已通过的检查；发布前只为发现的来源发送锁问题补定向回归，没有重跑整仓。
 
-新增测试均并入既有文件，使用隔离数据库或临时 Home。未新增测试矩阵、外网测试账号或真实创作数据。
-canonical 全文件首轮出现两处旧调用参数预期差异，补齐新的 `teammateId` 范围后已定向复验；没有删减原断言。
+```text
+pnpm --filter desktop run typecheck
+pnpm --filter mobile run typecheck
+pnpm --filter @cindy/mcps run build
+pnpm --filter @cindy/device-link run build
+通过；后两包 build 为 tsc --noEmit。
 
-### 已知验证限制
+pnpm --filter desktop db:validate
+pnpm --filter desktop test:migration-replay
+0137–0139 静态检查通过，22 项回放通过（5.45 秒）。
 
-已补充[单次真实模型接续验收](../acceptance/task-to-companion-live-2026-10-29.md)：隔离实例中的
-`gpt-6.1-sol` 正确延续最终决定与待定目标，以新伙伴身份回复，并实际检索原消息。
+pnpm ui:check --page task-companion --case default --theme all
+pnpm ui:check:publish artifacts/ui-check/task-companion-Oyt1Zx --remote jaja-fork
+2/2 通过，已目检并仅发布合成截图。
 
-- `remoteHistoryPagination.test.ts` 全文件有 4 项既有断言与现行代码不一致：
-  `paginates the visible list without hidden rows consuming slots or cursors`
-  和 `projects parent references` 各在两种模式失败。期望隐藏记录为 `hidden`，现行未改动的
-  `botRemoteSessionAccess.ts` 将其视为主人可按 ID 读取的 `background`，并保留对应父任务引用。
-  原基线源码的同一组定向断言已运行，4 项均复现；详见上述验收记录。断言未放宽，交由独立修复处理。
-- 未做手机实机、macOS 目检及更多模型验收。真实接续使用生产 IPC，不声称完整 UI 输入路径端到端已通过。
-- 来源历史不会随伙伴切换主力电脑自动迁移。真实多电脑创建与手机表单仍需人工验收。
+pnpm check:dco
+pnpm check:dev-docs
+pnpm check:test-hygiene
+通过。此前 i18n、术语、Mobile scope、设计颜色检查通过。
+```
+
+定向 Vitest 均使用既有文件，最小输入及生产入口说明位于测试附近：
+
+| 文件 / 检查 | 保护的行为与最小输入 | 结果 |
+| --- | --- | --- |
+| `botTx.test.ts` | 普通任务与可见/撤回消息；事务保护队列拒绝、成员范围、请求唯一、删除归属 | 全文件 40 项及变更后定向通过 |
+| `botCanonicalSession.test.ts` | 实际 IPC → worker → 主任务；同源新请求创建独立伙伴，同请求回原结果；运行中来源被发送协调器拒绝 | 发布前 2 项通过，21.14 秒；收集 20.73 秒，测试体 70ms。发送锁回归先红后绿 |
+| `botRosterView.test.tsx` | 真组件按钮：失败重试保留请求、重新打开生成新请求；模型错误提示具体操作并保留名字 | 请求生命周期及两条模型错误分支通过，后者 2.64 秒 |
+| `migrationReplay.test.ts` | 真实迁移器与有数据的旧来源；升级保留消息/成员，清除旧 dev 补回的索引 | 22 项通过，5.45 秒 |
+| `remoteHistoryPagination.test.ts` 来源用例 | SQL/原生向量读取、搜索及邻居窗口；晚到/撤回/清空不越过成员范围 | 来源用例通过，10.26 秒；另有下述 4 项基线失败 |
+| `botNightlyLearning.test.ts` | 真实 SQL 来源交流进入既有学习，晚到与撤回不进入 | 7 项通过 |
+| `botHistoryScope.test.ts` | 已有归属范围查询接入来源参数，未新增独立用例 | 定向通过 |
+| helper MCP / `remoteChatHistory.test.ts` | 普通 Agent 发现与调用创建、请求 ID 透传；接收端须确认历史范围 | 35 / 17 项及后续请求 ID 定向通过 |
+| device-link allowlist / 自建中转 interop | 业务入口沿既有 invoke 转发，不增加隧道协议 | 55 / 1 项通过 |
+
+其余既有文件未另行逐文件计时，不宣称全部满足 5 秒预算。大文件收集成本已披露；没有放宽有效断言。
+
+### 手工验证
+
+- Windows 隔离实例：生产菜单 → 表单 → 实际按钮 → 新伙伴主任务，用户已试用通过。
+- 同一合成来源两次创建不同伙伴与 Home，历史范围分别为 1/2 条；同请求重试回第一位，连点不多建。
+- 用户选定单任务经产品导出/导入，801 条记录正文、角色、顺序、时间和工具结果逐条核对；799 条可见历史分页可读，原有撤回边界保留。旧授权凭据按既有导入规则移除。来源无媒体附件或 Worker。
+- 升级前后已有伙伴、消息及来源成员逐行哈希保留核对通过；未写正式数据库或原项目文件。
+- 真实来源表单的 Claude Code / OpenAI / GPT-6.1-Sol / low 路线起初默认未启用；查明后只在隔离设置启用用户所选路线，再按原表单实际创建并核对去重，没有更换引擎、账号、模型或推理档。
+- 单次真实 Codex `gpt-6.1-sol` 接续区分已否定方案、最终决定与待定目标，实际检索来源消息。合成输入与结果见 `docs/acceptance/task-to-companion-live-2026-10-29.md`，未用固定回复证明理解质量。
+
+### 未执行与已知失败
+
+- `remoteHistoryPagination.test.ts` 的 4 项基线失败：`paginates the visible list without hidden rows consuming slots or cursors` 与 `projects parent references using current source visibility without changing local history`，各在两种模式失败。原基线 `5f0b5f42` 的同一测试和源码已定向运行并复现：实际 `background` 而预期 `hidden`，实际保留父任务引用。断言未放宽；尚未验证最新主仓是否另行修复。
+- 未做 Mobile 实机、真实跨电脑创建/接管、macOS 目检或所有模型的长期学习验收。Mobile 代码与类型已检查，不冒充实机通过。
+- 手机伙伴内来源分页浏览尚未接入，可打开原任务；来源历史不随主力电脑切换自动搬迁。维护者需确认首版边界。
+- `ui:check --changed` 因共享依赖选中大量页面而中止，改用相关场景；菜单 UNCOVERED 部分在完整隔离应用 Light 目检，未宣称 Dark 菜单目检。
 
 ## 风险
 
-- SQLite / 用户数据：只新增来源关系与消息 ID 成员表；原记录和附件不搬迁。准备状态支持
-  初始化失败后补完，成功后的重试不重置用户设置。
-- 协议：新增同账号业务入口与可选历史范围回执，旧端拒绝／不显示，不自动重放写操作。
-- 回滚：可移除创建入口；已写入关系保留在数据库，不手工降级数据库或修改历史 migration。
-- 维护者重点确认：来源历史留在来源电脑的首版边界、手机入口体验；单次真实模型接续已验收。
+### 风险分类
 
-## 交付边界
+- [x] SQLite / migration
+- [x] 协议兼容
+- [x] 权限 / 安全 / 用户数据
+- [x] 跨平台差异
+- [ ] system prompt
+- [ ] 存量插件兼容
+- [ ] 原生层 / fingerprint / OTA
 
-### 单任务副本试用补充（2026-10-29）
+### 影响与回滚
 
-用户选定任务经正式导出、隔离 profile 的生产导入与创建入口完成试用。801 条记录逐条核对，
-正文、角色、顺序、时间、工具结果一致；导入按既有规则移除 `autoReviewUserText`，不恢复旧授权。
-伙伴历史分页读到 799 条不重复可见记录，原有 2 条撤回记录保持不可见；包中无媒体附件或 Worker。
-`gpt-6.1-sol`（Codex / OpenAI，low）完成一次接续，实际检索来源历史并引用有效消息 ID。
-创作正文、文件、任务标识和试用回执仅留本机隔离数据，不纳入仓库。
+- `0137` 增加来源与成员表；`0138` 解除来源唯一限制，增加请求唯一索引；`0139` 只移除隔离试用时旧进程按缓存 schema 补回的来源唯一索引。已执行迁移未重写，实际升级路径有回归。
+- 历史共享引用，各伙伴成员范围与学习状态独立；读取仍遵循来源当前撤回、清空、删除边界。
+- 按同账号 owner、可信 renderer、任务身份及当前权限档校验；不恢复旧授权，不对共享访客开放，不自动重放远控写请求。
+- 回滚可撤下入口，保留来源数据和关系；不手工降级数据库，不删除历史 migration。开发迁移仅在隔离库运行。
+- 产品、数据库、权限与跨端边界交维护者正式审查，本 PR 不代表批准，不自动合并。
+- 最终生产代码 36 文件，约 580 行新增 / 41 行删除；10 个语言文件各增加一组文案。测试与场景 12 文件，约 331 行新增 / 12 行删除。迁移 SQL 3 文件共 24 行；快照与 journal 约 22,502 行新增，属于 Drizzle 生成元数据。
 
-试用发现导入的 `source=shared` 被普通任务来源判断误拦。修正服务、事务和两端菜单的相同判断，
-保留实时共享事件、远程任务、队列等既有限制，不修改来源标签或所有权。
-将现有创建 IPC 用例参数化为 desktop/shared：修复前 shared 返回 PRECONDITION_FAILED，修复后 2 项通过。
-该已有大文件收集耗时较高，本次定向运行 22.61 秒，测试执行 55ms；未扩大测试范围。
-Desktop、Mobile 类型检查通过。手机实机未验证。
-本次 `ui:check --changed=HEAD --theme all` 报任务菜单 UNCOVERED；在完整隔离应用中打开导入任务菜单，
-确认「创建为伙伴」可见，并检查 Light 截图。此次没有视觉样式改动，Dark 菜单未目检。
-默认 `--changed` 扫入此前已验证的大范围页面，发现后中止，未计为通过；文档与测试卫生检查通过。
+### 提交前检查
 
-### 实际按钮回归补充
-
-用户最终确认：每次主动创建产生独立伙伴，仅同次提交重试去重。表单始终提供创建，不替换为打开已有伙伴。
-Desktop 表单与手机创建表单各生成稳定请求 ID；工具显式接收 `request_id`，新操作换 ID。
-主服务按请求查回既有结果，事务唯一约束防重复；不同请求各自保存历史成员、Home、档案和主任务。
-追加 Drizzle `0138`，只删除来源唯一索引、增加可空请求字段与索引；旧伙伴请求字段为空，资料及历史保留。
-既有 `0137` 未修改。远控探测 version 2，避免旧开发版的按来源去重行为。重名校验保持原规则。
-实际隔离试用中，运行中的旧开发进程先读取 `0138`，随后按旧内存 schema 补回来源唯一索引；
-日志记录了该修复 DDL。追加 `0139` 的一条 `DROP INDEX IF EXISTS` 清除此索引，
-不改已执行的 migration、不手写数据库；迁移回归包含这条实际升级路径。
-
-本轮验证：创建服务/事务/表单定向 4 项、工具入口 1 项通过；请求生命周期表单调整后再次定向通过。
-迁移静态检查与 22 项回放通过（5.45 秒）；Light/Dark 默认表单 2 项通过且已目检。
-真实隔离 UI 从同一合成来源两次提交得到不同伙伴、主任务和 Home，历史范围分别为 1/2 条；
-用第一份请求回查仍返回第一位。升级前 3 位伙伴、813 条消息及全部历史成员的逐行哈希保留核对通过，
-其中真实试聊仍为 9 条记录。手机/跨电脑实机未复验；本轮未再调用模型、写稿或改正式数据。
-最终 Desktop、Mobile 与 MCP 包的 TypeScript 检查通过（MCP 使用现有 `build: tsc --noEmit`）。
-本轮生产代码 10 文件，51 行新增、39 行删除；迁移 SQL 共 5 行。两份 Drizzle 完整快照约 1.5 万行，
-是工具生成元数据，未新增迁移框架。定向创建 IPC 的最新复验为 2 项通过、20.44 秒（收集 20.04 秒）。
-
-### 真实来源模型选择复验
-
-真实导入任务继承 Claude Code / OpenAI / `chatgpt/gpt-6.1-sol` / low，目录中该路线已连接但
-`defaultEnabled=false`，隔离偏好中没有显式覆盖。创建返回 `PRECONDITION_FAILED`（请选择可用的伙伴模型），
-未留下部分档案；此前 Codex 合成用例没有覆盖这条真实路线。此次只在隔离设置中通过现有模型显示服务启用
-用户已选路线，不切换引擎、模型、账号或档位，不修改目录默认和正式设置。
-产品修正复用 `MODEL_SELECTION_UNAVAILABLE` 与既有本地化映射，表单提示检查模型设置或重新选择，
-保留填写内容，继续拒绝未启用路线。错误提示定向 2 项通过（2.64 秒）、Desktop 类型检查、Light/Dark
-默认表单 2 项通过。真实来源同名、空职责、同模型的按钮连点只创建一位，799 条来源记录关联成功；
-相同请求回查返回该伙伴，原有消息和伙伴逐行校验保留。创建后未额外运行模型或写稿。
-
-分支 `cindy/cheerful-goldberg`，复用宿主分配的 worktree。正式来源仅只读核对并由用户通过产品导出；
-未改写正式任务、项目文件或部署，未操作其他任务。
-未 push、创建 PR、发布或打安装包。本文件是本地 PR 正文草稿，不代表维护者批准。
-
-规模：业务改动约 580 行新增，集中在 37 个入口和适配文件；测试与界面场景
-11 文件，约 240 行新增；十种端侧语言文件各增加一组文案。另有 Drizzle 自动生成
-的完整 schema snapshot 与 journal，约 7,492 行，属于迁移元数据，不是额外业务实现。
+- [x] 已 review 完整 diff，并补回来源发送锁回归
+- [x] 每个 PR commit 均带与作者一致的 DCO 签名
+- [x] UI 变化注明设计规范并附合成截图
+- [x] 未提交凭证、授权文件、真实创作正文、试聊导出包或个人路径
+- [x] 设计和协议说明统一为多伙伴、同请求去重的最终语义
+- [x] 已说明通过结果、基线失败及未验收边界

@@ -1808,7 +1808,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const requestId = readText(body.requestId, 'requestId', 128, true);
   const owner = captureBotOperationOwner();
   const client = getDbClient();
-  return coordinateBotCanonicalReplacement(`task-creation:${requestId}`, async () => {
+  return coordinateBotCanonicalReplacement(sourceSessionId, async () => {
     owner.assertCurrent();
     const existing = await client.queryOne<{ botId: string; sourceSessionId: string }>('SELECT bot_id AS botId, source_session_id AS sourceSessionId FROM bot_task_origins WHERE request_id=?', [requestId]);
     owner.assertCurrent();

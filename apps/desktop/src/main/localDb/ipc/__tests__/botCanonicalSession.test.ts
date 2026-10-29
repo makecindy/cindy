@@ -1505,6 +1505,15 @@ describe('Bot canonical Session lifecycle', () => {
       VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask',?,'pi','xd',1,1)`).run(source);
     h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
       VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
+    // The installed coordinator protects the source send lock and rejects a running source.
+    configureBotCanonicalReplacementCoordinator(async (sessionId, operation) => {
+      if (sessionId === 'novel-source') throw new Error('Source is running');
+      return operation();
+    });
+    await expect(invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'busy-request', name: 'Editor', avatar: 'E' }))
+      .rejects.toThrow('Source is running');
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before);
+    configureBotCanonicalReplacementCoordinator(async (_sessionId, operation) => operation());
     const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: ' request-1 ', name: 'Editor', description: 'Review prose', avatar: 'E' });
     expect(created.sourceTask).toMatchObject({ sourceSessionId: 'novel-source', title: 'Novel' });
     expect(created.invitation).toBeUndefined();
