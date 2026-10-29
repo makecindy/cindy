@@ -269,6 +269,14 @@ function mapExecServerSandbox(value: unknown, workspace: ExecutorWorkspace): unk
   if (!record || agentPrefixes.length === 0) return value;
   const mapping: SandboxMapping = { workspace, windowsAgent: /^(?:[A-Za-z]:|[\\/]{2})/.test(agentPrefixes[0]) };
   const sandbox = mapSandboxDirs(record, mapping);
+  // POSIX Agent 的 Windows 档位是 disabled，并不表示要求在 Windows 上裸跑。
+  // Codex 0.159.2 在 Windows 上据此选择 None 后以 -32602 拒绝所有受限命令。
+  // 只适配已知的跨平台默认值，选择非提权后端；权限、网络和本机审批保持不变。
+  // 显式后端、未知值以及 Windows Agent 的设置仍由 exec-server 自己验证，不能降级。
+  if (process.platform === 'win32' && !mapping.windowsAgent && agentPrefixes[0].startsWith('/')
+    && sandbox.windowsSandboxLevel === 'disabled' && asJsonRecord(sandbox.permissions)?.type === 'managed') {
+    sandbox.windowsSandboxLevel = 'restricted-token';
+  }
   const policyContext = asJsonRecord(sandbox.policyContext);
   if (policyContext) sandbox.policyContext = mapSandboxDirs(policyContext, mapping);
   const permissions = asJsonRecord(sandbox.permissions);
@@ -614,7 +622,7 @@ export class ExecServerRelay {
     connection.child.stdout.pause();
     const next = (connection.output ?? Promise.resolve()).then(async () => {
       if (connection.closed) return;
-      const projected = await this.projectOutbound(line);
+      const projected = await this.projectOutbound(line, connId);
       if (!connection.closed) this.sendMessage(connId, projected);
     }).catch(() => {
       // 不发送未投影的本机路径；只结束这条连接，不能影响同一设备上的其它任务。
@@ -631,13 +639,21 @@ export class ExecServerRelay {
     });
   }
 
-  private async projectOutbound(line: string): Promise<string> {
+  private async projectOutbound(line: string, connId: string): Promise<string> {
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch {
       const projection = await this.deps.workspace.prepareAgentProjection();
       return projection.mapTextForAgent(line);
+    }
+    const message = asJsonRecord(value);
+    const error = asJsonRecord(message?.error);
+    if (message && error?.code === -32602 && error.message === 'sandbox intent cannot be enforced on this executor') {
+      // 只记连接和本机平台，不记录 argv、权限路径、环境变量或原始请求。
+      this.deps.log?.warn('remote agent: exec-server sandbox unavailable', { connId, executorPlatform: process.platform, code: -32602 });
+      value = { ...message, error: { ...error, message: error.message
+        + '. The command was not started. Check sandbox support and the Codex version on the computer that owns this task. Do not retry without the sandbox.' } };
     }
     return JSON.stringify(await mapExecServerResult(value, this.deps.workspace));
   }
