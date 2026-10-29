@@ -716,6 +716,8 @@ describe('Bot settings profile consolidation', () => {
   it.each([
     ['DEVICE_LINK_TIMEOUT', 'bots.remoteSettings.saveFailed'],
     ['DEVICE_LINK_DEVICE_OFFLINE', 'bots.profileSaveOffline'],
+    ['DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'bots.autosave.remoteUnconfirmed'],
+    ['DESKTOP_UNAVAILABLE', 'bots.autosave.remoteUnconfirmed'],
     ['PRECONDITION_FAILED', 'ipcError.PRECONDITION_FAILED'],
     ['INVALID_PARAMS', 'ipcError.INVALID_PARAMS'],
   ] as const)(
@@ -731,7 +733,8 @@ describe('Bot settings profile consolidation', () => {
       fireEvent.click(screen.getAllByTestId('current-model')[0]);
       await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
       expect(screen.queryByText('bots.autosave.saved')).toBeNull();
-      await act(async () => { rejectSave(createIpcError(code, 'fixture failure')); });
+      await act(async () => { rejectSave(code === 'DESKTOP_UNAVAILABLE'
+        ? new Error(code) : createIpcError(code, 'fixture failure')); });
       await screen.findByRole('button', { name: 'bots.autosave.retry' });
       expect(screen.getByText(message)).toBeTruthy();
       fireEvent.blur(screen.getByLabelText('bots.nameLabel'));

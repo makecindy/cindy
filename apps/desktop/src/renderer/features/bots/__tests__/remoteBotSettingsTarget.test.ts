@@ -167,7 +167,7 @@ it('saves and reads back distinct primary and task model routes without local de
   expect(profiles.get()).toMatchObject({ currentVersion: 2, capabilities });
 });
 
-it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'PRECONDITION_FAILED'] as const)(
+it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'PRECONDITION_FAILED'] as const)(
   'preserves a remote %s failure, rolls back optimism and permits an explicit retry', async (code) => {
     const { target, profiles } = create();
     host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
