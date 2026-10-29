@@ -1260,6 +1260,9 @@ importers:
 
   packages/maker-core:
     dependencies:
+      '@cindy/model-compat':
+        specifier: workspace:*
+        version: link:../model-compat
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.292
         version: 0.3.292(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)

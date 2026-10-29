@@ -101,6 +101,35 @@ Pi / Codex 的检测在任务所在电脑的 Session 上，用的是受邀者自
 回归见 `loop-guard.test.ts`、`tool-loop-review.test.ts`、`session.tool-loop.test.ts`、
 Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-reviewer.test.ts`。
 
+## 文本形式的工具调用
+
+工具标记的识别与对账复用 `@cindy/model-compat/tool-call-markup`，不得按模型名各加一套正则。
+Chat bridge 在响应内对账；Codex 原生 Responses 在反向工具转换后、SDK 读取前对账；
+Claude Code、Codex、Pi 的主任务事件投影共同处理正文、思考和终态。子代理/后台事件
+不得混入主任务的调用证据。真实工具事件与参数保持原样，投影不把文本解析结果执行成工具。
+工具名经过命名空间或别名转换时，只用本请求正向转换得到、且与还原后的命名空间、名称及
+工具类型一致的别名对账；不能跨请求复用或通过拼接字符串猜测身份。
+
+完整标记与同一响应的结构化调用名、参数一致时，仅删除重复可见文本；没有结构化调用时，
+删除该可见标记并以 `unexecuted-tool-markup` 明确失败、`silentStop: false` 收口。
+该 reason 不加入自动续跑白名单。Stop、SDK/上游失败及截断诊断保持原有优先级。
+代码、引用、缩进、转义、未知/不完整块、参数不匹配的真实调用不推定为可执行指令。
+缓冲与扫描须有上限，超限原样放行；不修改 SDK 原始历史，也不回填旧记录的执行事实。
+投影在 Codex 权威接纳 turn、重放早到 item 前初始化；迟到或重复的 started 不得清掉当前调用证据或失败标记。
+Claude/Pi 的宿主侧断连、进程退出、关闭队列也必须排空同一暂存，保留原始部分文字与终态；
+已投影的 SDK 终态不得二次对账，后台终态不得排空主任务暂存。释放说明性伪起始标记后须继续扫描后缀，
+Chat 首段正文即使全被暂存也须保留原来的输出位置，不能让后来工具调用抢到前面。
+Claude Stop 在发出 SDK interrupt 前排空暂存；后来的部分 assistant 保留原文。仅明确带 isFullText 的权威快照
+已含暂存后缀时才能省略 delta；局部 isFinal 确认仍须补发普通尾部，保证实时气泡和持久化一致。
+非终止重试只保留失败采样的部分文字，恢复采样须重置对账状态。Codex app-server 不提供并发工具的可靠
+采样归属，原生兜底不得借 root tool_use/tool_result 推定同响应证据或全局采样边界；同响应正向去重
+在 Chat/Responses wire 层完成，原生未能核实的文本调用明确未完成，不声称整轮没有任何工具执行。
+批量标记内须按调用次数一一匹配实际调用；正文/思考各自的独立回声仍可描述同一次实际调用。
+新增失败 reason 的实时与历史展示须同时接入 Desktop/Mobile 的本地化映射，避免退回泛化错误。
+
+回归见 model-compat 的 `tool-call-markup.test.ts`、`tool-markup-response.test.ts`，
+Chat translator/handler 与三引擎 translator/`tool-markup-projection.test.ts`。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；

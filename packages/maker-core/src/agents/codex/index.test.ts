@@ -21469,6 +21469,48 @@ describe('CodexAgent MCP thread context hooks', () => {
 });
 
 describe('CodexAgent final assistant result', () => {
+  it.each(['retry', 'overlap'])('does not accept unowned tool evidence after %s', async mode => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'markup-overlap' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'markup-overlap', model: 'gpt-5.4', workingDir: '/repo' });
+    const handlers = host.getThreadHandlers()!;
+    const events: AgentEvent[] = [];
+    const collected = (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      await handle.send({ type: 'user', content: 'read' });
+      const base = { threadId: 'start-thread-id', turnId: 'markup-overlap' };
+      if (mode === 'retry') {
+        handlers.error!({ ...base, willRetry: true, error: { message: 'Missing bearer token' } });
+      } else handlers.itemStarted!({ ...base, item: { id: 'old-call', type: 'mcpToolCall', server: 'fixture', tool: 'read', arguments: {}, pluginId: null } });
+      handlers.agentMessageDelta!({ ...base, itemId: 'new-answer', delta: '<tool_call>{"name":"mcp:fixture:read","arguments":{}}</tool_call>' });
+      if (mode === 'overlap') handlers.itemCompleted!({ ...base, item: { id: 'old-call', type: 'mcpToolCall', server: 'fixture', tool: 'read', arguments: {}, pluginId: null, status: 'completed', result: { content: [{ type: 'text', text: 'old result' }] } } });
+      handlers.turnCompleted!({ ...base, turn: { id: 'markup-overlap', status: 'completed' } });
+      await waitForExpectation(() => expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', reason: 'unexecuted-tool-markup' }));
+      expect(JSON.stringify(events)).not.toContain('<tool_call>');
+    } finally { await handle.close(); await collected; }
+  });
+  // #6545: real response-first adoption must initialize reconciliation before
+  // item deltas, so a delayed started notification cannot erase the failure.
+  it('fails text-only markup received before a delayed turnStarted', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'markup-late-start' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'markup-late-start', model: 'gpt-5.4', workingDir: '/repo' });
+    const handlers = host.getThreadHandlers()!;
+    const events: AgentEvent[] = [];
+    const collected = (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      await handle.send({ type: 'user', content: 'read' });
+      handlers.agentMessageDelta!({ threadId: 'start-thread-id', turnId: 'markup-late-start', itemId: 'answer',
+        delta: '<tool_call>{"name":"read","arguments":{}}</tool_call>' });
+      handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'markup-late-start' } });
+      handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'markup-late-start', status: 'completed' } });
+      await waitForExpectation(() => expect(events.find(event => event.type === 'done')?.data)
+        .toMatchObject({ status: 'failed', reason: 'unexecuted-tool-markup', silentStop: false }));
+      expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain('<tool_call>');
+    } finally { await handle.close(); await collected; }
+  });
   it('uses final_answer for done.result and falls back to the last unphased message', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
@@ -28055,7 +28097,9 @@ describe('CodexAgent turn lifecycle', () => {
     expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
     await handle.close();
   });
-  it('does NOT emit a fallback error for an interrupted turn without error message', async () => {
+  // #6545 unit: exercise the actual interrupted done producer with a held
+  // complete markup delta, not only the projection's generic status shape.
+  it.each([false, true])('does NOT emit a fallback error for interrupted turn (pending markup=%s)', async pendingMarkup => {
     // interrupted = 用户主动停止, 不算失败, 不该弹"执行失败"。
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -28073,6 +28117,10 @@ describe('CodexAgent turn lifecycle', () => {
       threadId: 'start-thread-id',
       turn: { id: 'turn-1' },
     });
+    const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+    if (pendingMarkup) handlers.agentMessageDelta?.({
+      threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'msg-stop', delta: markup,
+    });
     handlers.turnCompleted?.({
       threadId: 'start-thread-id',
       turn: {
@@ -28081,6 +28129,7 @@ describe('CodexAgent turn lifecycle', () => {
       },
     });
 
+    if (pendingMarkup) expect(await nextEvent(iterator)).toMatchObject({ type: 'text', data: { text: markup } });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'done',
       data: { cancelled: true },

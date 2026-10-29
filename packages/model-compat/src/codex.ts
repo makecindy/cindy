@@ -65,6 +65,9 @@ export function createCodexResponsesCompatibilityAdapter() {
       lowered.releaseResponse(requestId);
       selected.delete(requestId);
     },
+    getResponseToolAliases(requestId: number) {
+      return selected.get(requestId)?.adapter.getResponseToolAliases(requestId);
+    },
     createResponseTransform(requestId: number, response: { contentType: string; contentEncoding: string }) {
       const upstream = selected.get(requestId)?.adapter;
       selected.delete(requestId);

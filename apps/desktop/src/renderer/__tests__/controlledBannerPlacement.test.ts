@@ -41,7 +41,11 @@ describe('controlled banner placement', () => {
       '{!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (',
     );
     expect(sessionViewSource).not.toContain('<BotWorkingStatus');
-    expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
+    // #6531: retain the plan-card suppression contract while explicit tool-call
+    // failure also suppresses stale SDK Done text; the collapsed control stays.
+    expect(sessionViewSource).toContain(
+      "suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}",
+    );
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );

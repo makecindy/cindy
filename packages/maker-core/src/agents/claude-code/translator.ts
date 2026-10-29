@@ -1,3 +1,4 @@
+import { toolMarkupProjection, structuredCallsOf } from '../shared/tool-markup-projection.js';
 import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
@@ -752,6 +753,33 @@ interface TranslateContext {
 }
 
 export function translateSdkMessage(
+  rawMsg: unknown,
+  queue: EventQueue,
+  ctx: TranslateContext,
+): void {
+  const raw = rawMsg as unknown as { type?: string; parent_tool_use_id?: string | null;
+    event?: { type?: string }; message?: { content?: unknown }; error?: unknown };
+  // Child SDK streams have their own lifecycle; do not contaminate the root response.
+  if (raw.parent_tool_use_id) return translateSdkMessageInternal(rawMsg, queue, ctx);
+  const projection = toolMarkupProjection(ctx.rt);
+  if (raw.type === 'stream_event' && raw.event?.type === 'message_start') projection.begin(queue);
+  if (raw.type === 'assistant') {
+    if (!projection.active) projection.begin(queue);
+    // Interrupt may produce a partial assistant before its aborted result. Keep
+    // that partial text now; the later result cannot restore discarded bytes.
+    projection.setCalls(structuredCallsOf(raw.message?.content), Boolean(raw.error) || ctx.turn.interruptRequested);
+  }
+  const textBefore = ctx.turn.text;
+  translateSdkMessageInternal(rawMsg, projection.queue(queue), ctx);
+  if (raw.type === 'assistant') {
+    // The result fallback uses this per-turn accumulator. Keep the visible
+    // projection here too, without rewriting the SDK's original transcript.
+    if (!raw.error) ctx.turn.text = textBefore + projection.projectText(ctx.turn.text.slice(textBefore.length));
+    projection.finish(queue, Boolean(raw.error));
+  }
+}
+
+function translateSdkMessageInternal(
   rawMsg: unknown,
   queue: EventQueue,
   ctx: TranslateContext,

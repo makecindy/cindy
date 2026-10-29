@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { ChatBridgeToolContext } from './tool-context.js';
+import { SerializedToolCallEcho, UNEXECUTED_TOOL_MARKUP_MESSAGE, UNEXECUTED_TOOL_MARKUP_REASON } from '@cindy/model-compat/tool-call-markup';
 
 interface ToolState {
   outputIndex: number;
@@ -14,6 +15,7 @@ interface ToolState {
 }
 
 interface ReasoningState {
+  echo: SerializedToolCallEcho;
   outputIndex: number;
   itemId: string;
   text: string;
@@ -164,6 +166,7 @@ export class ChatSseTranslator {
   private serviceTier = '';
   private inlineThinkMode: 'undecided' | 'reasoning' | 'text' = 'undecided';
   private inlineThinkBuffer = '';
+  private readonly serializedEcho = new SerializedToolCallEcho();
   private readonly toolContext?: ChatBridgeToolContext;
   private readonly zeroUsageOnMissing: boolean;
   private readonly inlineReasoning: boolean;
@@ -251,20 +254,31 @@ export class ChatSseTranslator {
     const out: unknown[] = [];
     this.ensureStarted(out);
     this.flushInlineThinkAtBoundary(out);
+    if (this.flushSerializedEcho(out)) {
+      out.push(...this.fail(UNEXECUTED_TOOL_MARKUP_MESSAGE, UNEXECUTED_TOOL_MARKUP_REASON));
+      return out;
+    }
     this.complete(this.pendingFinishReason ?? 'stop', out);
     return out;
   }
 
-  fail(message: string): unknown[] {
+  fail(message: string, code = 'upstream_stream_error'): unknown[] {
     if (this.terminal) return [];
     const out: unknown[] = [];
     this.ensureStarted(out);
     this.flushInlineThinkAtBoundary(out);
+    // Tools are not dispatched on a failed turn, so the held text is the only copy.
+    for (const state of this.reasoningItems) {
+      const text = state.echo.drain();
+      if (text) this.emitReasoning(state, text, out);
+    }
+    const held = this.serializedEcho.drain();
+    if (held) this.pushText(held, out);
     this.closeOpenItems(out);
     this.terminal = true;
     out.push({
       type: 'response.failed',
-      response: this.responseObject('failed', { error: { code: 'upstream_stream_error', message } }),
+      response: this.responseObject('failed', { error: { code, message } }),
     });
     return out;
   }
@@ -282,6 +296,7 @@ export class ChatSseTranslator {
     if (current) return current;
     const outputIndex = this.nextOutputIndex++;
     const state: ReasoningState = {
+      echo: new SerializedToolCallEcho(),
       outputIndex,
       itemId: deterministicId('rs', this.responseId, outputIndex),
       text: '',
@@ -307,6 +322,11 @@ export class ChatSseTranslator {
 
   private appendReasoning(reasoning: string, out: unknown[]): void {
     const state = this.ensureReasoning(out);
+    const visible = state.echo.push(reasoning);
+    if (visible) this.emitReasoning(state, visible, out);
+  }
+
+  private emitReasoning(state: ReasoningState, reasoning: string, out: unknown[]): void {
     state.text += reasoning;
     out.push({
       type: 'response.reasoning_summary_text.delta',
@@ -318,7 +338,7 @@ export class ChatSseTranslator {
   }
 
   private closeReasoning(state: ReasoningState, out: unknown[]): void {
-    if (state.done) return;
+    if (state.done || state.echo.hasPending) return;
     state.done = true;
     out.push({
       type: 'response.reasoning_summary_text.done',
@@ -405,6 +425,15 @@ export class ChatSseTranslator {
 
   private pushText(content: string, out: unknown[]): void {
     this.closeActiveReasoning(out);
+    // Reserve the original Chat position even while every text byte is held.
+    // A later tool delta must not move surviving prose behind its tool card.
+    this.ensureMessage(out);
+    const visible = this.serializedEcho.push(content);
+    if (!visible) return;
+    this.emitText(visible, out);
+  }
+
+  private emitText(content: string, out: unknown[]): void {
     this.ensureText(out);
     this.text += content;
     out.push({
@@ -415,6 +444,30 @@ export class ChatSseTranslator {
       content_index: this.textContentIndex,
       delta: content,
     });
+  }
+
+  /** Resolve the held echo once every structured call in the response is known. */
+  private flushSerializedEcho(out: unknown[]): boolean {
+    const structured = [...this.tools.values()].map(state => ({
+      name: state.name,
+      arguments: state.arguments,
+      input: this.toolContext?.lookupChatName(state.name)?.kind === 'custom'
+        ? customInput(state.arguments) : undefined,
+    }));
+    const preserve = this.pendingFinishReason === 'length'
+      || this.pendingFinishReason === 'content_filter';
+    let unexecuted = false;
+    for (const state of this.reasoningItems) {
+      const result = preserve ? { text: state.echo.drain(), unexecuted: false }
+        : state.echo.resolveReport(structured, true);
+      if (result.text) this.emitReasoning(state, result.text, out);
+      unexecuted ||= result.unexecuted;
+      this.closeReasoning(state, out);
+    }
+    const result = preserve || this.annotations.length > 0 ? { text: this.serializedEcho.drain(), unexecuted: false }
+      : this.serializedEcho.resolveReport(structured, true);
+    if (result.text) this.emitText(result.text, out);
+    return unexecuted || result.unexecuted;
   }
 
   private ensureMessage(out: unknown[]): void {

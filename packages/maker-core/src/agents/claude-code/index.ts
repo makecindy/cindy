@@ -183,6 +183,7 @@ import { findClaudeSessionJsonl } from './claude-projects-fs.js';
 import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
+import { toolMarkupProjection } from '../shared/tool-markup-projection.js';
 import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import { clampEffortToSupported } from '@cindy/model-providers/effort-resolution';
@@ -3283,6 +3284,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       nextRequestPriceVariant: 'standard',
     };
     const runtimeState: RuntimeState = newRuntimeState();
+    toolMarkupProjection(runtimeState).attachTerminalQueue(eventQueue);
     const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
@@ -6964,6 +6966,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const generation = turnState.generation;
         turnState.interruptRequested = true;
         turnState.interruptGeneration = generation;
+        toolMarkupProjection(runtimeState).finish(eventQueue, true);
         autoReviewDecisionCache.clear();
         cancelIdleHostAutoCompact('host_auto_compact_graceful_stop');
         dismissAllPending('graceful_stop', 'deny');
@@ -7077,6 +7080,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (turnInFlight || awaitingContinuationAtUserStop?.state === 'awaiting') {
           turnState.interruptRequested = true;
           turnState.interruptGeneration = turnState.generation;
+          // Drain before interrupt can close the visible stream. A later partial
+          // assistant is only a block confirmation, not an authoritative snapshot.
+          toolMarkupProjection(runtimeState).finish(eventQueue, true);
         }
         // 保持 turnInFlight 为 true 直到 interrupt 返回(或超时关 query)：
         // 提前清掉会让 Session.isTurnRunning() 报 idle，并发 send 通过守卫后

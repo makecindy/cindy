@@ -2463,3 +2463,100 @@ it('retains tool image bytes and a video resource alongside text', () => {
   });
   disposePiTranslateContext(ctx);
 });
+
+// #6531 unit: native Pi bypasses the Chat bridge; streamed text/thinking must still reconcile.
+describe('native Pi serialized calls', () => {
+  // #6545 review unit: existing retry tests end the failed message or have no
+  // pending text. Without message_end, a silent retry must preserve the failed
+  // text/thinking now, then independently reject unexecuted recovered markup.
+  // Minimal input: held markup -> silent auto_retry_start -> new assistant.
+  it.each([
+    { channel: 'text', errorMessage: 'HTTP status 529: overloaded' },
+    { channel: 'thinking', errorMessage: 'provider 500 from upstream' },
+  ])('preserves failed $channel on silent retry and reconciles recovery', ({ channel, errorMessage }) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+    const failedText = 'before.' + markup + 'after.';
+    try {
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: channel + '_delta', contentIndex: 0, delta: failedText,
+      } }), queue, ctx);
+      translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage }), queue, ctx);
+      expect(events.filter(event => event.type === channel).map(event => (event.data as { text?: string }).text ?? '').join(''))
+        .toBe(failedText);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop',
+        content: [{ type: 'text', text: markup }],
+      } }), queue, ctx);
+      translatePiEvent(ev({ type: 'auto_retry_end', success: true }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(events.filter(event => event.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'unexecuted-tool-markup' }) }),
+      ]);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      expect(events.filter(event => event.type === 'tool_use')).toHaveLength(0);
+    } finally { disposePiTranslateContext(ctx); }
+  });
+
+  // #6545 follow-up unit: input-wrapper evidence must be available when the
+  // message_end final text precedes Pi's separate tool_execution_start event.
+  it('reconciles freeform input before Pi starts executing the tool', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const input = 'text("ok")';
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'toolUse', content: [
+      { type: 'text', text: 'before.<tool_call><function=exec>' + input + '</tool_call>after.' },
+      { type: 'toolCall', id: 'exec-1', name: 'exec', arguments: { input } },
+    ] } }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'exec-1', toolName: 'exec', args: { input } }), queue, ctx);
+    expect(events.find(e => e.type === 'text')?.data).toMatchObject({ text: 'before.after.' });
+    expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
+    expect(events.find(e => e.type === 'tool_use')?.data).toMatchObject({ input: { input } });
+    disposePiTranslateContext(ctx);
+  });
+  // #6545 review unit: message_end used to delete diagnostics before finish
+  // learned that the provider failed/truncated or the host requested Stop.
+  it.each(['error', 'aborted', 'length', 'host-stop'])('preserves markup diagnostics on %s', reason => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: markup } }), queue, ctx);
+    if (reason === 'host-stop') markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: reason === 'host-stop' ? 'stop' : reason, content: [{ type: 'text', text: markup }] } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(e => e.type === 'text').some(e => (e.data as { text: string }).text === markup)).toBe(true);
+    expect(events.some(e => (e.data as { reason?: string }).reason === 'unexecuted-tool-markup')).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+  it.each(['text', 'thinking'])('reconciles %s and does not silently complete text-only calls', channel => {
+    for (const structured of [true, false]) {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const markup = '<tool_call>{"name":"read","arguments":{"path":"a"}}</tool_call>';
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: channel + '_delta', contentIndex: 0, delta: markup } }), queue, ctx);
+      if (channel === 'thinking') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: markup } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [
+        channel === 'text' ? { type: 'text', text: markup } : { type: 'thinking', thinking: markup },
+        ...(structured ? [{ type: 'toolCall', id: 'r', name: 'read', arguments: { path: 'a' } }] : []),
+      ] } }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(JSON.stringify(events)).not.toContain('<tool_call>');
+      if (structured) expect(events.some(e => e.type === 'error')).toBe(false);
+      else {
+        expect(events).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({ reason: 'unexecuted-tool-markup', isTerminal: true }) }));
+        expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', silentStop: false });
+      }
+      disposePiTranslateContext(ctx);
+    }
+  });
+});

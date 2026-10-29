@@ -10,6 +10,7 @@ import { GHOST_SETUP_MAX_INTERACTION_STEPS, GHOST_SETUP_MAX_STEPS } from '../../
 import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
+import { ToolMarkupProjection } from '../../../../../packages/maker-core/src/agents/shared/tool-markup-projection';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -2073,6 +2074,47 @@ describe('makerChatStore text delta batching', () => {
         content: 'a',
       }),
     ]);
+  });
+
+  // #6545 review unit: the existing Claude consumer ignores confirmation text
+  // once a streamed bubble exists. Projection must deliver the held suffix delta.
+  it('keeps the suffix of a reconciled Claude stream before its tool card', () => {
+    const projection = new ToolMarkupProjection();
+    const sink = { push: (event: Parameters<typeof projection.push>[0]) => {
+      onEvent?.({ sessionId: SESSION_ID, event: { ...event, source: 'claude-code' }, persistId: 'assistant-1' });
+      return true;
+    } };
+    projection.begin(sink);
+    const markup = '<tool_call>{"name":"Read","arguments":{}}</tool_call>';
+    projection.push({ type: 'text', data: { text: 'before.' + markup + 'after.', isFinal: false } }, sink);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('before.');
+    // translateSdkMessage supplies the assistant message's complete call list
+    // before emitting its text confirmations and tool cards.
+    projection.setCalls([{ name: 'Read', arguments: {} }]);
+    projection.push({ type: 'text', data: { text: 'before.' + markup + 'after.', isFinal: true } }, sink);
+    projection.push({ type: 'tool_use', data: { toolName: 'Read', input: {} } }, sink);
+    projection.finish(sink);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(m => m.role === 'assistant').map(m => m.content)).toEqual(['before.after.']);
+  });
+
+  it('keeps a stopped Claude suffix when the final event is only a block confirmation', () => {
+    const projection = new ToolMarkupProjection();
+    const sink = { push: (event: Parameters<typeof projection.push>[0]) => {
+      onEvent?.({ sessionId: SESSION_ID, event: { ...event, source: 'claude-code' }, persistId: 'assistant-1' });
+      return true;
+    } };
+    projection.begin(sink);
+    const text = 'before.<tool_call>{"name":"Read","arguments":{}}</tool_call>after.';
+    projection.push({ type: 'text', data: { text, isFinal: false } }, sink);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('before.');
+    projection.setCalls([], true);
+    projection.push({ type: 'text', data: { text, isFinal: true } }, sink);
+    projection.push({ type: 'done', data: { status: 'cancelled' } }, sink);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(m => m.role === 'assistant').map(m => m.content)).toEqual([text]);
   });
 
   it('does not append a second bubble when a DB snapshot arrives before the first batched delta', () => {

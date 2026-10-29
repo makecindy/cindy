@@ -392,7 +392,9 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
-  return reason === 'empty-response'
+  return reason === 'unexecuted-tool-markup'
+    ? i18n.t('logic.errors.unexecutedToolMarkup')
+    : reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')

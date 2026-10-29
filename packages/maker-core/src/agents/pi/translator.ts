@@ -1,3 +1,4 @@
+import { toolMarkupProjection, structuredCallsOf } from '../shared/tool-markup-projection.js';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
 /**
  * pi RPC 事件 → AgentEvent 翻译层。
@@ -683,6 +684,27 @@ export function isFailedOrAbortedPiCompaction(event: Pick<PiRpcEvent, 'type'> & 
 }
 
 export function translatePiEvent(
+  event: PiRpcEvent,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
+  const projection = toolMarkupProjection(ctx);
+  if (event.type === 'auto_retry_start') {
+    // Failed requests may omit message_end and retry without a visible error.
+    // Drain their original output before resetting the recovered sample.
+    projection.finish(queue, true);
+    projection.begin(queue);
+  }
+  const message = event.message as PiAssistantMessage | undefined;
+  if (event.type === 'agent_start' || (event.type === 'message_start' && (!message || message.role === 'assistant'))) projection.begin(queue);
+  const preserveText = message?.stopReason === 'error' || message?.stopReason === 'aborted'
+    || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.setCalls(structuredCallsOf(message.content), preserveText);
+  translatePiEventInternal(event, projection.queue(queue), ctx);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserveText);
+}
+
+function translatePiEventInternal(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,

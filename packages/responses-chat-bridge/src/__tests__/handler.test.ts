@@ -1334,3 +1334,47 @@ describe('createResponsesChatHandler', () => {
   });
 
 });
+
+describe('serialized tool-call echo over the bridge', () => {
+  const body = 'const r = await tools.exec_command({ cmd: "ls" }); text(r.output);';
+  const echo = `<tool_call><function=exec>${body}</tool_call>`;
+
+  it('streams the prose and the executed call without the MiMo echo', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse([
+      { id: 'chat_1', choices: [{ delta: { content: `done.${echo}` } }] },
+      {
+        id: 'chat_1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: JSON.stringify({ input: body }) },
+            }],
+          },
+        }],
+      },
+      { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    ]));
+    const handler = createResponsesChatHandler(
+      { upstreamBase: 'https://api.xiaomimimo.com/v1', buildHeaders: async () => ({}) },
+      { fetchImpl },
+    );
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'mimo-v2.6-flash',
+        input: [{ type: 'message', role: 'user', content: 'go' }],
+        tools: [{ type: 'custom', name: 'exec' }],
+      },
+      res: res as never,
+    });
+    expect(res.status).toBe(200);
+    const wire = res.chunks.join('');
+    expect(wire).not.toContain('<tool_call>');
+    expect(wire).toContain('"delta":"done."');
+    expect(wire).toContain('"type":"custom_tool_call"');
+    expect(wire).toContain('"name":"exec"');
+    expect(wire).toContain(JSON.stringify(body).slice(1, -1));
+  });
+});

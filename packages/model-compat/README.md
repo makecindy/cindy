@@ -63,6 +63,27 @@ Missing fields on terminal items are not filled, and no `done` events or tool ca
 This addresses item registration failures from #4509, not the separate missing-terminal-event,
 wrong-tool-type or upstream multi-turn 502 failures. Existing null-array repairs remain unchanged.
 
+## Serialized tool-call markup
+
+`./tool-call-markup` owns the bounded grammar registry and streaming text reconciliation
+used by Chat translation and maker-core's native output projection. It recognizes complete MiMo,
+DeepSeek/CodeBuddy DSML, Hermes/Qwen, GLM and plain invoke blocks without matching model names.
+A block is removed only when its name and arguments match a structured call from the same response.
+A complete block without any structured call is suppressed and ends the turn with
+`unexecuted-tool-markup`; it is never converted into an executable call.
+
+The Codex proxy additionally applies `createToolMarkupResponseTransform` after existing reverse tool
+conversion, so native custom-tool input is available before SDK projection loses the outer exec call.
+It changes visible text/reasoning summaries, not tool IDs/input, usage or encrypted reasoning.
+Code, quotes, escaped text, unknown/incomplete grammars and mismatched real calls remain unchanged.
+Annotation-bearing and failed/truncated Responses keep their original text and diagnostics.
+
+The scanner accepts at most 128 Ki characters; streamed prefix/candidate holds are each capped at
+64 Ki, closed-block trailing prose at 8 Ki, and call/stream counts at 128. Responses frames/deferred
+payloads also have limits. On overflow the original text is released, rather than blocking the stream.
+This is output compatibility, not a promise to repair arbitrary malformed or unbounded model text.
+Native SDK transcripts and existing imported history are not rewritten.
+
 ## Imported provider policy
 
 `src/upstream-profiles.json` contains compatibility declarations extracted statically from all

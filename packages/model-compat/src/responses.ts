@@ -7,7 +7,7 @@ import { collectSelfNamedNamespaceScrubAuthorization, createSelfNamedToolCallNam
 import { Transform, type TransformCallback } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { rewriteRoutedCustomToolsForUpstream, restoreRoutedCustomCallsInJson } from './upstream/responses/custom-tool-compat';
-import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson } from './upstream/responses/namespace-tool-compat';
+import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson, type RoutedNamespaceToolAliases, type RoutedNamespaceToolIdentity } from './upstream/responses/namespace-tool-compat';
 import { rewriteRoutedToolSearchForUpstream, restoreRoutedToolSearchCallsInJson } from './upstream/responses/tool-search-compat';
 import { collectFunctionCallRepairSchemas, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
 import { createRoutedCustomToolRestoreBlockRewrite } from './upstream/server/responses-custom-tool-repair';
@@ -40,12 +40,13 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names)
-    : { body: search.body, aliases: new Map() };
+    : { body: search.body, aliases: new Map<string, RoutedNamespaceToolIdentity>() };
   const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body) : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
   return {
+    namespaceAliases: namespace.aliases,
     body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(namespace.body, false) : namespace.body,
     needsResponseTransform: Boolean(policy.itemIdRepair || policy.snapshotRepair || policy.contentChannelReasoning) || custom.names.size > 0 || custom.repairNames.size > 0 || search.names.size > 0 || namespace.aliases.size > 0 || schemas.size > 0 || policy.backfillResponseFields === true,
     restoreJson(text: string): string {
@@ -146,6 +147,9 @@ export function createResponsesCompatibilityAdapter(policy: ResponsesCompatibili
       return prepared.body === body ? null : prepared.body;
     },
     releaseResponse(requestId: number): void { pending.delete(requestId); },
+    getResponseToolAliases(requestId: number): RoutedNamespaceToolAliases | undefined {
+      return pending.get(requestId)?.prepared.namespaceAliases;
+    },
     createResponseTransform(requestId: number, response: { contentType: string; contentEncoding: string }): Transform | null {
       const entry = pending.get(requestId);
       pending.delete(requestId);

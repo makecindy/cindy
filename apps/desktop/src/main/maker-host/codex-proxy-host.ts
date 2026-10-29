@@ -1,3 +1,4 @@
+import { createToolMarkupResponseTransform } from '@cindy/model-compat';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
@@ -3524,9 +3525,13 @@ async function createCodexProxyHandle(
       };
       // Repair runs first so items with `null` arrays reach the custom-tool adapter (and Codex)
       // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
+      // Capture request-owned aliases before the adapter consumes their state;
+      // reconcile only after custom inputs have been restored.
+      const toolAliases = execAdapter.getResponseToolAliases(ctx.reqId);
       return chainResponseTransforms(
         createResponsesNullArrayRepairTransform(response),
         execAdapter.createResponseTransform(ctx.reqId, response),
+        createToolMarkupResponseTransform(response, toolAliases),
       );
     },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时

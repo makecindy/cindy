@@ -5710,6 +5710,65 @@ describe('codex proxy host', () => {
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
+  // #6545 unit: real request/response transform wiring must keep wire aliases
+  // after reverse namespace conversion, without regressing Code Mode restoration.
+  it.each([
+    ['https://api.x.ai/v1', 'grok-4.6'],
+    ['https://api.deepseek.com', 'deepseek-v4-pro'],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'production-deployment'],
+  ])('reconciles lowered namespace and exec echoes for %s', async (baseUrl, model) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([buildUserProvider({ id: 'alias-fixture', name: 'Alias fixture', runtimes: {
+      codex: { baseUrl, wireProtocol: 'openai-responses', models: [{ id: model, name: 'Fixture' }] },
+    } })]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({url:'http://127.0.0.1:43210',dispose:vi.fn(async()=>undefined)});
+    host.registerComposed('session-alias-markup', 'thread-alias-markup', 'PRODUCT_PROMPT');
+    setSessionProvider('session-alias-markup', 'alias-fixture');
+    try {
+      await host.ensureCodexProxyReady();
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      let request: unknown = { model, tools: [
+        {type:'custom',name:'exec',description:'Run JavaScript'},
+        {type:'namespace',name:'server',tools:[{type:'function',name:'read',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}]},
+      ] };
+      for (const transform of config.transformRequest) request = transform(request, {
+        reqId:9167,method:'POST',url:'/responses',headers:{'thread-id':'thread-alias-markup'},
+      }) ?? request;
+      expect(request).toMatchObject({tools:[expect.objectContaining({name:'exec'}),expect.objectContaining({name:'server__read'})]});
+      const input = 'text("ok")';
+      const markup = '<tool_call>{"name":"server__read","arguments":{"path":"a"}}</tool_call>'
+        + '<tool_call><function=exec>' + input + '</tool_call>';
+      const call = {type:'function_call',id:'fc_read',call_id:'read1',name:'server__read',arguments:'{"path":"a"}'};
+      const exec = {type:'function_call',id:'fc_exec',call_id:'exec1',name:'exec',arguments:JSON.stringify({input})};
+      const item = {type:'message',id:'msg1',content:[{type:'output_text',text:'before.'+markup+'after.'}]};
+      const response = config.transformResponse({reqId:9167,responseHeaders:{'content-type':'text/event-stream'}});
+      const chunks: Buffer[] = [];
+      response.on('data',(chunk:Buffer)=>chunks.push(chunk));
+      const ended = new Promise<void>((resolve,reject)=>{response.on('end',resolve);response.on('error',reject);});
+      const separator = String.fromCharCode(10,10);
+      response.end([
+        {type:'response.output_text.delta',item_id:'msg1',content_index:0,delta:'before.'+markup+'after.'},
+        {type:'response.output_item.done',item:call},
+        {type:'response.output_item.done',item:exec},
+        {type:'response.output_item.done',item},
+        {type:'response.completed',response:{output:[item,call,exec]}},
+      ].map(e=>'data: '+JSON.stringify(e)+separator).join(''));
+      await ended;
+      const events = Buffer.concat(chunks).toString().split(String.fromCharCode(10)).filter(l=>l.startsWith('data: ')).map(l=>JSON.parse(l.slice(6)));
+      expect(events.filter(e=>e.type==='response.output_text.delta').map(e=>e.delta).join('')).toBe('before.after.');
+      expect(events.at(-1)).toMatchObject({type:'response.completed',response:{output:[
+        expect.objectContaining({content:[{type:'output_text',text:'before.after.'}]}),
+        { ...call, namespace:'server', name:'read' },
+        expect.objectContaining({type:'custom_tool_call',call_id:'exec1',name:'exec',input}),
+      ]}});
+    } finally {
+      host.unregister('session-alias-markup');clearSessionProvider('session-alias-markup');setCustomProviders([]);
+    }
+  });
+
   it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');

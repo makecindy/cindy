@@ -5637,7 +5637,9 @@ function CCAgentSessionContent({
                     backgroundBash.stopping ||
                     remoteBackground.stopping
                   }
-                  suppressContent={Boolean(pendingPlanReview)}
+                  // A failed serialized call must not linger with the SDK's
+                  // generic Done label above its explicit failure banner.
+                  suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}
                   onStopBackgroundTasks={() => {
                     if (remoteDeviceId) void remoteBackground.stopAll();
                     else if (backgroundActivity.active) void backgroundActivity.stopAll();

@@ -1692,6 +1692,14 @@ it('keeps durable coordination hidden on phone history without hiding user-facin
   expect(JSON.stringify(rendered)).toContain('Final result');
 });
 
+// #6531 unit: use the real remote-message normalization entry, not a map-key assertion.
+it('explains unexecuted tool markup in remote message history', () => {
+  const items = normalizeRemoteMessages([message({ id: 'markup', role: 'error', content: JSON.stringify({
+    message: 'SDK wrapped tool markup error', reason: 'unexecuted-tool-markup',
+  }) })]);
+  expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.unexecutedToolMarkup') });
+  expect(items[0].body).toContain('无法确认执行结果');
+});
 
 // Unit regression: historical machine inputs used to expose JSON escapes in bubbles/copy.
 // Same bytes from a human must remain untouched; source content still drives replay.

@@ -5,6 +5,14 @@
 > 配置、system prompt 之前必读本文件。PI(github.com/earendil-works/pi)被定位为 Cindy
 > 未来的基座 harness,集成原则与其余 harness 有别 —— 详见「设计原则」。
 
+## 文本工具标记的展示边界
+
+Pi 的消息/工具执行仍由原生 SDK 决定。translator 使用共享 `ToolMarkupProjection`，
+从完整 assistant 消息取得真实 `toolCall` 参数，对账正文与思考；重复标记只从 Cindy 可见投影移除。
+只有文本标记而没有结构化调用时，以 `unexecuted-tool-markup` 失败收口，不静默续跑，
+不把文本变成工具、不重写 Pi transcript、不增加对正常原生工具的审批或限制。
+Stop、原生错误、重试和压缩仍沿用原终态；代码/引用/未知与超限内容保留原样。
+
 ## 1. 架构总览
 
 Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi 事件映射进

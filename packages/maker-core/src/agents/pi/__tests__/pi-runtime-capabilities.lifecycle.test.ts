@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentEvent } from '../../../types/events.js';
 
 const captured = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -10,6 +11,9 @@ const captured = vi.hoisted(() => ({
     args: string[];
     requests: Array<Record<string, unknown>>;
     closed: boolean;
+    disconnectOnAbort: boolean;
+    onEvent?: (event: unknown) => void;
+    onDisconnect?: (reason: string) => void;
     onExit?: (info: { code: number | null; signal: string | null }) => void;
   }>,
   catalogs: {} as Record<string, unknown>,
@@ -32,6 +36,9 @@ vi.mock('../transport.js', () => ({
       args: [...opts.args],
       requests: [] as Array<Record<string, unknown>>,
       closed: false,
+      disconnectOnAbort: false,
+      onEvent: undefined as undefined | ((event: unknown) => void),
+      onDisconnect: undefined as undefined | ((reason: string) => void),
       onExit: undefined as undefined | ((info: { code: number | null; signal: string | null }) => void),
     };
     captured.instances.push(state);
@@ -55,14 +62,17 @@ vi.mock('../rpc-client.js', () => ({
     isClosed = false;
     constructor(opts: {
       onEvent: (event: unknown) => void;
+      onDisconnect?: (reason: string) => void;
       onExit?: (info: { code: number | null; signal: string | null }) => void;
     }) {
       this.state = captured.instances[captured.instances.length - 1];
       this.state.onExit = opts.onExit;
-      void opts.onEvent;
+      this.state.onEvent = opts.onEvent;
+      this.state.onDisconnect = opts.onDisconnect;
     }
     async request(command: Record<string, unknown>): Promise<{ type?: string; command?: string; success: boolean; data?: unknown; error?: string }> {
       this.state.requests.push(command);
+      if (command.type === 'abort' && this.state.disconnectOnAbort) this.state.onDisconnect?.('fixture EOF');
       if (command.type === 'get_state') {
         if (captured.rewindStateFailure && this.state.requests.some((request) => request.type === 'fork')) {
           return { success: false, error: 'rewind state unavailable' };
@@ -139,6 +149,37 @@ describe('Pi runtime capability lifecycle', () => {
   }
 
   const catalog = (name: string) => ({ commands: [{ name, source: 'skill', sourceInfo: { source: 'auto', scope: 'user', baseDir: '/tmp' } }] });
+
+  // #6545 unit: actual PiAgent host callbacks must drain pending model text
+  // without message_end, preserving Stop/transport failure instead of success.
+  // The stdio RPC reproducer is also exercised separately as runtime evidence.
+  it.each(['disconnect', 'exit', 'stop'])('keeps held text across out-of-band %s', async mode => {
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 'markup-terminal', workingDir: cwd, model: 'm' });
+    const instance = captured.instances[0]!;
+    const events: AgentEvent[] = [];
+    const collected = (async () => {
+      for await (const event of handle.events()) {
+        events.push(event);
+        if (event.type === 'error' || event.type === 'done') break;
+      }
+    })();
+    const text = 'before <tool_call>{"name":"read","arguments":{}}</tool_call>';
+    try {
+      await handle.send({ type: 'user', content: 'read' });
+      instance.onEvent!({ type: 'agent_start' });
+      instance.onEvent!({ type: 'message_start', message: { role: 'assistant', content: [] } });
+      instance.onEvent!({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: text } });
+      if (mode === 'stop') { instance.disconnectOnAbort = true; await handle.abort(); }
+      else if (mode === 'exit') instance.onExit!({ code: 23, signal: null });
+      else instance.onDisconnect!('fixture EOF');
+      await collected;
+      expect(events.filter(event => event.type === 'text').map(event => (event.data as { text: string }).text).join('')).toBe(text);
+      if (mode === 'stop') {
+        expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+        expect(events.some(event => event.type === 'error')).toBe(false);
+      } else expect(events.find(event => event.type === 'error')?.data).not.toMatchObject({ reason: 'unexecuted-tool-markup' });
+    } finally { await handle.close(); }
+  });
 
   it('captures once after ready, exposes a stable per-session query/event contract, and clears on close', async () => {
     captured.catalogs.s1 = catalog('skill:s1');

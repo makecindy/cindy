@@ -16178,6 +16178,7 @@
       "steerFailed": "Steer failed: {{message}}",
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
+      "unexecutedToolMarkup": "The model wrote tool calls as text. Their execution could not be verified, so this turn is incomplete.",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",

@@ -124,3 +124,10 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 });
+
+// #6531 unit: the persisted card previously hid this known failure behind a generic summary.
+it('states that serialized tool text was not executed in persisted history', () => {
+  render(createElement(ErrorMessageCard, { reason: 'unexecuted-tool-markup', message: 'SDK wrapped tool markup error' }));
+  expect(screen.getByText('logic.errors.unexecutedToolMarkup')).toBeTruthy();
+  expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+});

@@ -671,3 +671,329 @@ describe('ChatSseTranslator', () => {
     expect(completed.response.service_tier).toBe('flex');
   });
 });
+
+// #6531 unit regression: a raw freeform echo must not duplicate a structured call.
+const BODY = 'const r = await tools.exec_command({ cmd: "ls" }); text(r.output);';
+
+function customExecContext(): ChatBridgeToolContext {
+  return ChatBridgeToolContext.fromRequest({
+    model: 'mimo-v2.6-flash',
+    input: [],
+    tools: [{ type: 'custom', name: 'exec' }],
+  });
+}
+
+function echo(body = BODY, close = '</function>'): string {
+  return `<tool_call><function=exec>${body}${close}</tool_call>`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function textOf(events: unknown[]): string {
+  return events
+    .map(asRecord)
+    .filter((event): event is Record<string, unknown> => event?.type === 'response.output_text.delta')
+    .map((event) => String(event.delta))
+    .join('');
+}
+
+function completedItem(
+  events: unknown[],
+  type: string,
+): Record<string, unknown> | undefined {
+  return events
+    .map(asRecord)
+    .filter((event): event is Record<string, unknown> => event?.type === 'response.output_item.done')
+    .map((event) => asRecord(event.item))
+    .find((item) => item?.type === type);
+}
+
+describe('ChatSseTranslator serialized tool-call echo', () => {
+  it('fails an under-counted batch without inventing a second structured call', () => {
+    const translator = new ChatSseTranslator('m');
+    const invoke = '<invoke name="read"><parameter name="path" string="true">a</parameter></invoke>';
+    const events = [
+      ...translator.push({ choices: [{ delta: { content: '<tool_calls>' + invoke + invoke + '</tool_calls>' } }] }),
+      ...translator.push({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: 'only-call', function: { name: 'read', arguments: '{"path":"a"}' } },
+      ] }, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    expect(events.at(-1)).toMatchObject({ type: 'response.failed' });
+    expect(events.filter(e => e.type === 'response.output_item.done' && (e.item as { type: string }).type === 'function_call')).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain('<tool_calls>');
+  });
+  // #6545: holding the first text delta cannot give a later tool its output index.
+  it('reserves message order before holding a leading tool echo', () => {
+    const translator = new ChatSseTranslator('m');
+    const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+    const first = translator.push({ choices: [{ delta: { content: markup + 'after' } }] });
+    expect(JSON.stringify(first)).not.toContain('<tool_call>');
+    const events = [...first, ...translator.push({ choices: [{ delta: { tool_calls: [
+      { index: 0, id: 'c', function: { name: 'read', arguments: '{}' } },
+    ] }, finish_reason: 'tool_calls' }] }), ...translator.finish()] as Array<Record<string, unknown>>;
+    const completed = events.at(-1) as { response: { output: Array<{ type: string; content?: Array<{ text: string }> }> } };
+    expect(completed.response.output.map(item => item.type)).toEqual(['message', 'function_call']);
+    expect(completed.response.output[0].content?.[0].text).toBe('after');
+    expect(events.filter(event => event.type === 'response.output_item.added').map(event => event.output_index)).toEqual([0, 1]);
+  });
+  it.each(['length', 'content_filter', 'citation'])(
+    'keeps original text for %s so truncation and citation offsets stay intact', (reason) => {
+      const translator = new ChatSseTranslator('fixture', { toolContext: customExecContext() });
+      const events = [
+        ...translator.push({ choices: [{ delta: { content: echo(),
+          ...(reason === 'citation' ? { annotations: [{ type: 'url_citation',
+            url_citation: { url: 'https://example.com', start_index: 2, end_index: 8 } }] } : {}),
+        } }] }),
+        ...translator.push({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1',
+          function: { name: 'exec', arguments: JSON.stringify({ input: BODY }) },
+        }] }, finish_reason: reason === 'citation' ? 'tool_calls' : reason }] }),
+        ...translator.finish(),
+      ];
+      expect(textOf(events)).toBe(echo());
+      expect(completedItem(events, 'custom_tool_call')).toMatchObject({ input: BODY });
+    },
+  );
+
+  it('drops the echo that duplicates an executed custom call', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: 'done.' } }] }),
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: echo() } }] }),
+      ...translator.push({
+        id: 'c1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: JSON.stringify({ input: BODY }) },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe('done.');
+    const custom = completedItem(events, 'custom_tool_call');
+    expect(custom).toMatchObject({ name: 'exec', input: BODY });
+    expect(events.at(-1)).toMatchObject({ type: 'response.completed' });
+  });
+
+  it('drops a prose-adjacent echo on the same line', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: `migrated.${echo(BODY, '')}` } }] }),
+      ...translator.push({
+        id: 'c1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: JSON.stringify({ input: BODY }) },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe('migrated.');
+    expect(completedItem(events, 'custom_tool_call')).toMatchObject({ input: BODY });
+  });
+
+  it('keeps the echo when the structured input does not match', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: echo() } }] }),
+      ...translator.push({
+        id: 'c1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: JSON.stringify({ input: 'other()' }) },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe(echo());
+  });
+
+  it('fails a markup-only turn without inventing a tool execution', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: echo() } }] }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe('');
+    expect(completedItem(events, 'custom_tool_call')).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({ type: 'response.failed', response: { error: { code: 'unexecuted-tool-markup' } } });
+  });
+
+  it('does not match a JSON function call even when the name agrees', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash');
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: echo() } }] }),
+      ...translator.push({
+        id: 'c1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: '{"cmd":"ls"}' },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe(echo());
+  });
+
+  it('recognizes the echo when it is split across many deltas', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events: unknown[] = [];
+    const stream = `done.${echo()}`;
+    for (let offset = 0; offset < stream.length; offset += 3) {
+      events.push(...translator.push({
+        id: 'c1',
+        choices: [{ delta: { content: stream.slice(offset, offset + 3) } }],
+      }));
+    }
+    events.push(...translator.push({
+      id: 'c1',
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: 'call_1',
+            function: { name: 'exec', arguments: JSON.stringify({ input: BODY }) },
+          }],
+        },
+      }],
+    }));
+    events.push(...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }));
+    events.push(...translator.finish());
+
+    expect(textOf(events)).toBe('done.');
+    expect(completedItem(events, 'custom_tool_call')).toMatchObject({ input: BODY });
+  });
+
+  it('releases held text when the turn fails before tools dispatch', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: `done.${echo()}` } }] }),
+      ...translator.fail('upstream broke'),
+    ] as Array<Record<string, unknown>>;
+
+    expect(textOf(events)).toBe(`done.${echo()}`);
+    expect(events.at(-1)).toMatchObject({ type: 'response.failed' });
+  });
+
+  it('emits prose before the tool call it belongs to', () => {
+    const translator = new ChatSseTranslator('mimo-v2.6-flash', {
+      toolContext: customExecContext(),
+    });
+    const events = [
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: 'done.' } }] }),
+      ...translator.push({ id: 'c1', choices: [{ delta: { content: echo() } }] }),
+      ...translator.push({
+        id: 'c1',
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              function: { name: 'exec', arguments: JSON.stringify({ input: BODY }) },
+            }],
+          },
+        }],
+      }),
+      ...translator.push({ id: 'c1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    const textIndex = events.findIndex((event) => event.type === 'response.output_text.delta');
+    const toolIndex = events.findIndex(
+      (event) => event.type === 'response.output_item.added'
+        && (event.item as Record<string, unknown>).type === 'custom_tool_call',
+    );
+    expect(textIndex).toBeGreaterThanOrEqual(0);
+    expect(toolIndex).toBeGreaterThan(textIndex);
+  });
+});
+
+// #6531: both native reasoning_content and ordinary content must agree with tool_calls.
+describe('cross-grammar reasoning and terminal reconciliation', () => {
+  // #6545 review unit: answer citations do not exempt independent reasoning.
+  it('preserves cited answer offsets but fails unexecuted reasoning markup', () => {
+    const t = new ChatSseTranslator('any-model');
+    const events = [
+      ...t.push({ choices: [{ delta: { reasoning_content: echo(), content: 'cited answer', annotations: [{ type: 'url_citation',
+        url_citation: { url: 'https://example.com', start_index: 0, end_index: 5 } }] }, finish_reason: 'stop' }] }),
+      ...t.finish(),
+    ];
+    expect(events).toContainEqual(expect.objectContaining({ type: 'response.output_text.delta', delta: 'cited answer' }));
+    expect(JSON.stringify(events)).not.toContain('<tool_call>');
+    expect(events.at(-1)).toMatchObject({ type: 'response.failed' });
+  });
+  it.each(['content', 'reasoning_content'])(
+    'projects DSML in %s, retaining one structured function call', channel => {
+      const markup = '<｜DSML｜tool_calls><｜DSML｜invoke name="read"><｜DSML｜parameter name="path" string="true">file.txt</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
+      const t = new ChatSseTranslator('any-model');
+      const events: Array<Record<string, unknown>> = [];
+      for (const delta of ['before.', markup.slice(0, 14), markup.slice(14)]) {
+        events.push(...t.push({ choices: [{ delta: { [channel]: delta } }] }) as Array<Record<string, unknown>>);
+      }
+      events.push(...t.push({ choices: [{ delta: { content: channel === 'reasoning_content' ? 'answer' : '', tool_calls: [
+        { index: 0, id: 'read1', function: { name: 'read', arguments: '{"path":"file.txt"}' } },
+      ] }, finish_reason: 'tool_calls' }] }) as Array<Record<string, unknown>>);
+      events.push(...t.finish() as Array<Record<string, unknown>>);
+      expect(JSON.stringify(events)).not.toContain('DSML');
+      expect(events.at(-1)).toMatchObject({ type: 'response.completed' });
+      expect(completedItem(events, 'function_call')).toMatchObject({ name: 'read', arguments: '{"path":"file.txt"}' });
+    },
+  );
+  it('fails a reasoning-only serialized call and preserves ordinary reasoning', () => {
+    const t = new ChatSseTranslator('any-model');
+    const events = [
+      ...t.push({ choices: [{ delta: { reasoning_content: 'think.' + echo() } }] }),
+      ...t.push({ choices: [{ delta: { content: 'I finished' }, finish_reason: 'stop' }] }),
+      ...t.finish(),
+    ];
+    expect(JSON.stringify(events)).not.toContain('<tool_call>');
+    expect(events.at(-1)).toMatchObject({ type: 'response.failed' });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'response.reasoning_summary_text.delta', delta: 'think.' }));
+  });
+});
