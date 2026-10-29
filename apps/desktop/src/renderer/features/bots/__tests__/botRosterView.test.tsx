@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   onboarding: false,
   availableVendors: new Set(['cc', 'codex', 'pi']),
-  profiles: [] as Array<{ id: string; name: string; invitation: { stage: string } }>,
+  profiles: [] as Array<{ id: string; name: string; invitation: { stage: string }; sourceTask?: { sourceSessionId: string } }>,
 }));
 vi.mock('@/state/newMakerDraft', () => ({
   getDraftForPreferenceSync: () => ({
@@ -211,6 +211,19 @@ describe('name-only creation', () => {
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
     expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith({ name: 'Mika', description: '', avatarImageBase64: 'cG9ydHJhaXQ=', prepareInvitation: true });
     expect(mocks.generateDraft).not.toHaveBeenCalled();
+  });
+
+  // Real trial: retrying an associated task looked like a failed creation. Unit UI regression:
+  // one linked profile must show its name and open it, without another create request.
+  it('offers the existing source companion explicitly and closes after opening it', async () => {
+    mocks.profiles = [{ id: 'existing', name: 'Editor', invitation: { stage: 'ready' }, sourceTask: { sourceSessionId: 'source' } }];
+    const onClose = vi.fn();
+    await act(async () => { render(<BotRosterView sourceTask={{ id: 'source', title: 'Novel' } as import('@/lib/ccAgent.types').Session} onClose={onClose} />); });
+    expect(screen.queryByRole('button', { name: 'bots.guided.generate' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /bots.market.open.*Editor/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/existing');
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(mocks.addBotProfileAndWait).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('keeps default-chain inheritance but saves only the visible explicit model: selected=%s', async selected => {

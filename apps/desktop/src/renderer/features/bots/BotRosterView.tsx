@@ -50,6 +50,8 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     && isDataOwnerGenerationCurrent(providerSetupDraft.owner) ? providerSetupDraft : null);
   const sourceTask = requestedSource ?? restoredDraft?.sourceTask;
   const remoteDeviceId = sourceTask?.deviceLinkDeviceId;
+  const existingSourceBot = !remoteDeviceId && sourceTask
+    ? bots.find(bot => bot.sourceTask?.sourceSessionId === sourceTask.id) : undefined;
   useEffect(() => { providerSetupDraft = null; }, []);
   const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(sourceTask ? [{
     harness: sourceTask.agentKind === 'cc' ? 'claude' : sourceTask.agentKind ?? 'claude',
@@ -105,7 +107,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
       if (alive.current) setCreating(false);
     }
   };
-  const title = t(importing ? 'bots.import.title' : 'bots.guided.title');
+  const title = t(existingSourceBot ? 'bots.market.open' : importing ? 'bots.import.title' : 'bots.guided.title');
   const content = (
     <>
       <div className="mb-8 flex shrink-0 items-center justify-between gap-4">
@@ -127,7 +129,11 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
           </Button>
         )}
     </div>
-    {importing ? <BotImportForm key={dataOwnerId} onBusy={setCreating} onBack={() => setImporting(false)} onCreated={botId => { const bot = bots.find(bot => bot.id === botId); if (onCreated && bot) onCreated(bot); else navigate(`/bots/${botId}`); onClose?.(); }} /> : <form onSubmit={event => { event.preventDefault(); void create(); }}>
+    {existingSourceBot ? <Button variant="cta" size="lg" className="max-w-full" onClick={() => {
+      if (onCreated) onCreated(existingSourceBot); else navigate(`/bots/${existingSourceBot.id}`);
+      onClose?.();
+    }}><span className="truncate">{t('bots.market.open')} · {existingSourceBot.name}</span></Button>
+    : importing ? <BotImportForm key={dataOwnerId} onBusy={setCreating} onBack={() => setImporting(false)} onCreated={botId => { const bot = bots.find(bot => bot.id === botId); if (onCreated && bot) onCreated(bot); else navigate(`/bots/${botId}`); onClose?.(); }} /> : <form onSubmit={event => { event.preventDefault(); void create(); }}>
       <div className="flex items-center gap-5">
         <BotPortraitPicker value={portrait} disabled={creating} onChange={setPortrait} />
         <label className="min-w-0 flex-1 text-13 text-[var(--text-secondary)]">
