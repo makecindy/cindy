@@ -24,6 +24,15 @@ export const ui = {
     interactiveCommandUnsupported: (cmd: string) =>
       `钉钉暂不支持 ${cmd} 的交互选择，请在 Cindy 桌面端完成对应设置。`,
   },
+  error: {
+    ...sharedUi.error,
+    // 钉钉没有 /permission 交互卡，改为指路桌面端。群任务处于「完全访问」时
+    // 只放行主人的轮次，其他成员的请求会落到这里。
+    permissionModeUnsupported:
+      '🤔 这条群任务开着「完全访问」，只有主人能直接使用。' +
+      '如需让群里其他人也能用，请主人在 Cindy 桌面端把这条任务的权限换成「自动审批」，' +
+      '或在钉钉设置里打开「群成员也使用「完全访问」」。',
+  },
 } satisfies ImUiTextPack;
 
 function replaceChannelLabel<T>(value: T): T {

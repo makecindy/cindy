@@ -19,6 +19,7 @@ export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-auth
 
 export * from './cindy_feishuBotMcpServer.js';
 export * from './cindy_wechatMcpServer.js';
+export * from './cindy_dingtalkMcpServer.js';
 export * from './cindy_feishuBotToolRegistry.js';
 
 export * from './cindy_schedulerMcpServer.js';

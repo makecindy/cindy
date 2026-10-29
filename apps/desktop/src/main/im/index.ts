@@ -137,6 +137,7 @@ export function registerBotImConnectionIpc(): void {
 }
 export {
   registerTelegramBotConfigIpc,
+  registerDingTalkBotConfigIpc,
   im,
   feishuIm,
   discordIm,
@@ -384,11 +385,12 @@ export function startImOrchestrators(): void {
           await wecomIm.clearCredentials();
         },
       },
+      // 只移机器人应用那份凭证; 「钉钉账号(dws)」方式不受移交影响, 正在用 dws 时不停它。
       dingtalk: {
-        identity: () => dingtalkIm.getPublicState().appKey,
-        stop: () => dingtalkIm.dispose(),
-        start: () => dingtalkIm.init(),
-        clear: () => dingtalkIm.clearCredentials(),
+        identity: () => dingtalkIm.robot.getPublicState().appKey,
+        stop: () => dingtalkIm.robot.dispose(),
+        start: () => (dingtalkIm.getMode() === 'robot' ? dingtalkIm.robot.init() : Promise.resolve()),
+        clear: () => dingtalkIm.robot.clearCredentials(),
       },
       discord: {
         identity: () => {

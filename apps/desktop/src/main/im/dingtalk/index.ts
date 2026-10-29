@@ -4,7 +4,7 @@
  * 把钉钉传输层接到共享编排器。设置页那份个人 bot 与伙伴自有连接都走这里:
  * 后者每条连接一份传输层实例, 带 `instanceKey` 与 `companionBotId`。
  */
-import type { DingTalkIM } from '@cindy/im';
+import type { DingTalkChannelIM, DingTalkIM } from '@cindy/im';
 
 import { createImOrchestrator, type ImOrchestrator } from '../shared/orchestrator';
 import type { ImOrchestratorConfig } from '../shared/types';
@@ -18,7 +18,7 @@ export interface WireDingTalkOrchestratorOptions {
 }
 
 export function wireDingTalkOrchestrator(
-  dingtalkIm: DingTalkIM,
+  dingtalkIm: DingTalkChannelIM | DingTalkIM,
   config: ImOrchestratorConfig,
   options: WireDingTalkOrchestratorOptions = {},
 ): ImOrchestrator {

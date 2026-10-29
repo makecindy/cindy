@@ -16,6 +16,8 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 import {
   createIM,
   createDiscordIM,
+  createDingTalkChannelIM,
+  createDingTalkDwsIM,
   createDingTalkIM,
   createFeishuIM,
   createTelegramIM,
@@ -42,6 +44,9 @@ import {
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
+import { createDwsRunner } from './dingtalk/dwsRunner';
+import { patchDingTalkAccess, readDingTalkAccess } from './dingtalk/accessStore';
+import { patchDingTalkPersona, readDingTalkPersona } from './dingtalk/personaStore';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
 import {
@@ -83,6 +88,8 @@ const host: IMHost = {
     discordMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'discord-media'),
     telegramMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'telegram-media'),
     wecomMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'wecom-media'),
+    // 钉钉账号（dws）方式收到的非媒体文件（PDF/docx/zip…）；图片走媒体总仓。
+    dingtalkMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'dingtalk-media'),
   },
   // cindy-media 媒体总仓回调(规则 25):IM 入站图片按平台 token
   // 免重下、内容寻址去重、isCache=true 吃缓存回收策略;包侧只摸字节和字符串。
@@ -221,6 +228,17 @@ export const telegramIm = createTelegramIM(host, {
   commandMenu: buildPersonalBotCommandMenu((key) => t(key)),
 });
 /**
+ * 钉钉渠道 = 机器人应用 / 钉钉账号（dws CLI）二选一的路由；编排层只看到
+ * 'dingtalk' 一个渠道。
+ */
+export const dingtalkIm = createDingTalkChannelIM(
+  host,
+  createDingTalkIM(host, {
+    fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
+  }),
+  createDingTalkDwsIM(host, createDwsRunner()),
+);
+/**
  * 伙伴自有 Telegram 连接的传输层实例: 与设置页那份同一套宿主能力, 但凭证按连接
  * 前缀隔离、不注册设置卡 IPC、对外开放私聊(陌生人消息带非主人标记进业务层)。
  * 行为配置由连接记录给(群参与模式按连接各一份, 表情 / 引用档位用默认值 —— 伙伴的
@@ -242,9 +260,6 @@ export function createBotTelegramIM(
     guestDm: true,
   });
 }
-export const dingtalkIm = createDingTalkIM(host, {
-  fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
-});
 export const wecomIm = createWecomIM(host);
 /**
  * 伙伴自有企业微信 / 钉钉 / Discord 连接的传输层实例: 与设置页那份同一套宿主能力,
@@ -326,6 +341,29 @@ export function registerTelegramBotConfigIpc(): void {
       profileSynced = await telegramIm.syncBotProfileName(persona.botName);
     }
     return { persona, ...(profileSynced !== undefined ? { profileSynced } : {}) };
+  });
+}
+
+/**
+ * 钉钉渠道「人格」配置 IPC（设置卡数据面）。与 registerTelegramBotConfigIpc 同期由
+ * bootstrap 显式调用，不放模块顶层；payload 在 store 内白名单校验、截断。
+ */
+export function registerDingTalkBotConfigIpc(): void {
+  ipcMain.handle('dingtalkBot:get-persona', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readDingTalkPersona();
+  });
+  ipcMain.handle('dingtalkBot:set-persona', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    return patchDingTalkPersona(payload);
+  });
+  ipcMain.handle('dingtalkBot:get-access', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readDingTalkAccess();
+  });
+  ipcMain.handle('dingtalkBot:set-access', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    return patchDingTalkAccess(payload);
   });
 }
 

@@ -289,6 +289,7 @@ import {
   prepareImDefaultSettingsChange,
   registerBotImConnectionIpc,
   registerTelegramBotConfigIpc,
+  registerDingTalkBotConfigIpc,
   startImOrchestrators,
   startImConnection,
   stopImConnection,
@@ -9848,6 +9849,8 @@ app.on('ready', async () => {
   // Telegram 个人 bot 行为/人格/群参与配置的 IPC(设置卡数据面),与 im.registerIpc
   // 同期无条件注册;不能放 host.ts 模块顶层(mock electron 的单测收集期会炸)。
   registerTelegramBotConfigIpc();
+  // 钉钉渠道人格配置 IPC，同上无条件注册。
+  registerDingTalkBotConfigIpc();
   // 伙伴自有 IM 机器人连接的 IPC(伙伴设置「消息平台」页数据面), 同期无条件注册。
   registerBotImConnectionIpc();
   // 把 telegram transport 注入 device-link 的跨设备上下线执行器。用注入而非

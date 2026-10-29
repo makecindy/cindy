@@ -4886,4 +4886,79 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       }
     });
   });
+
+  // 钉钉账号「任务进行中允许插话」：忙时到达的消息插进当前一轮，只在完全访问下生效。
+  describe('steer while busy (DingTalk account opt-in)', () => {
+    async function sendWhileBusy(permissionMode: string) {
+      const h = createSessionHarness(async () => ({ accepted: true }), 'feishu-session', {
+        capabilities: { sameTurnSteer: { supported: true } } as unknown as Capabilities,
+      });
+      const steer = vi.fn(async (_message: unknown, _opts?: Record<PropertyKey, unknown>) => undefined);
+      (h.session as unknown as { steer: typeof steer }).steer = steer;
+      mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+      mocks.peekSessionById.mockImplementation(async () => ({
+        id: 'feishu-session',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode,
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      }) as ImSessionRow);
+      const localRunner = createTurnRunner(
+        { ...fakeAdapter, steerWhileBusy: () => true },
+        fakeRepo,
+        fakeCards,
+      );
+      const base = { botContextId: 'cli_test_bot', userId: 'ou_user', attachments: [] };
+      await localRunner.runAgentTurn({ ...base, userMessageId: 'msg-first', text: 'first' });
+      h.isTurnRunning.mockReturnValue(true);
+      const onTurnComplete = vi.fn();
+      await localRunner.runAgentTurn({
+        ...base,
+        userMessageId: 'msg-second',
+        text: 'second',
+        onTurnComplete,
+      });
+      return { h, steer, onTurnComplete, localRunner };
+    }
+
+    afterEach(() => {
+      mocks.peekSessionById.mockImplementation(async () => null);
+    });
+
+    it('steers into the running turn under Full access and persists it as a steer', async () => {
+      const { h, steer, onTurnComplete, localRunner } = await sendWhileBusy('bypassPermissions');
+      try {
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(steer).toHaveBeenCalledTimes(1);
+        expect(steer.mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+          origin: { kind: 'im', channel: 'feishu', taskId: 'msg-second' },
+          rawChannelText: 'second',
+        });
+        expect(mocks.persistUserMessage).toHaveBeenLastCalledWith(
+          expect.objectContaining({ text: 'second', delivery: 'steer' }),
+        );
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    it('keeps queueing when the task is not in Full access', async () => {
+      const { h, steer, onTurnComplete, localRunner } = await sendWhileBusy('auto');
+      try {
+        expect(steer).not.toHaveBeenCalled();
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(onTurnComplete).not.toHaveBeenCalled();
+        h.isTurnRunning.mockReturnValue(false);
+        h.emit({ type: 'done', data: {} });
+        await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(2));
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+  });
 });

@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { DingTalkIM, IMMessageEvent } from '@cindy/im';
+import type { DingTalkChannelIM, DingTalkIM, IMMessageEvent } from '@cindy/im';
 
 const holder = vi.hoisted(() => ({ drizzle: null as unknown }));
 
@@ -77,7 +77,10 @@ describe('dingtalk session identity', () => {
 });
 
 describe('dingtalk turn permission boundary', () => {
-  const adapter = buildDingTalkAdapter({} as DingTalkIM, CONFIG);
+  const adapter = buildDingTalkAdapter(
+    { getMode: () => 'robot' } as unknown as DingTalkChannelIM,
+    CONFIG,
+  );
   const baseEvent = {
     channelName: 'dingtalk',
     senderId: 'owner-user',
