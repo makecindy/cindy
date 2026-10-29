@@ -15,7 +15,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
 import type { CloseHandler, LineHandler, Transport } from '../app-server/transport.js';
-import { withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
+import { codexGuestFeatureOverrides, withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
 import { CodexAgent } from '../index.js';
 
 vi.mock('../app-server/stdioTransport.js', () => ({
@@ -113,6 +113,7 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 interface Fixture {
   guest: boolean;
+  userAgent?: string;
   codexHomeInstructions?: string;
   resume?: boolean;
   /**
@@ -163,8 +164,11 @@ async function startHosted(fixture: Fixture) {
   if (fixture.codexHomeInstructions !== undefined) {
     await fs.writeFile(path.join(codexHome, 'AGENTS.md'), fixture.codexHomeInstructions);
   }
+  const guestHome = (fixture.guestHome ?? fixture.guest)
+    ? path.join(await makeTempDir('maker-core-guest-home-'), 'c1')
+    : undefined;
   const hostSkill = path.join(codexHome, 'skills', 'private', 'SKILL.md');
-  const systemSkill = path.join(codexHome, 'skills', '.system', 'imagegen', 'SKILL.md');
+  const systemSkill = path.join(guestHome ? path.join(guestHome, 'codex') : codexHome, 'skills', '.system', 'imagegen', 'SKILL.md');
   const pluginSkill = path.join(codexHome, 'plugins', 'cache', 'personal', 'secret-plugin', '1.0.0', 'skills', 's', 'SKILL.md');
   const guestSkill = path.join(workingDir, '.agents', 'skills', 'guest', 'SKILL.md');
 
@@ -175,9 +179,6 @@ async function startHosted(fixture: Fixture) {
   const prepareCodexResumeSession = vi.fn(async () => undefined);
   const resolveCodexThreadStorage = vi.fn(async () => undefined);
   const recordCodexThreadLocation = vi.fn(async () => {});
-  const guestHome = (fixture.guestHome ?? fixture.guest)
-    ? path.join(await makeTempDir('maker-core-guest-home-'), 'c1')
-    : undefined;
   const deps: AgentDeps = {
     auth: {
       async getState() { return { authenticated: true }; },
@@ -270,8 +271,8 @@ async function startHosted(fixture: Fixture) {
     activeSubscriptions: 0,
     retire: vi.fn(async () => {}),
     notifySubscribersOfForcedRetire: vi.fn(),
-    ensureStarted: vi.fn(async () => ({ userAgent: 'mock-codex/0.159.2', codexHome: reportedHome })),
-    ensureStartedWithTimeout: vi.fn(async () => ({ userAgent: 'mock-codex/0.159.2', codexHome: reportedHome })),
+    ensureStarted: vi.fn(async () => ({ userAgent: fixture.userAgent ?? 'mock-codex/0.159.2', codexHome: reportedHome })),
+    ensureStartedWithTimeout: vi.fn(async () => ({ userAgent: fixture.userAgent ?? 'mock-codex/0.159.2', codexHome: reportedHome })),
     request,
     subscribeThread: vi.fn(() => ({ release: vi.fn() })),
     unsubscribeThread: vi.fn(async () => {}),
@@ -384,6 +385,7 @@ describe('Codex device-hosted guest sessions', () => {
           'features.apps': false,
           'features.hooks': false,
           'features.future_local_tool': false,
+          'features.image_generation': false,
           'memories.use_memories': false,
         },
       });
@@ -468,11 +470,13 @@ describe('Codex device-hosted guest sessions', () => {
     // Codex 功能按白名单：名单外的(本机开着的、关着的、Codex 新增的)都写 false；名单内的、已移除的、
     // 关着的旧开关不动。功能清单逐页取完。
     expect(config).toMatchObject({
-      'features.image_generation': false,
       'features.in_app_local_automation': false,
       'features.network_proxy': false,
       'features.future_local_tool': false,
     });
+    // The verified remote execution environment owns reference reads; the
+    // provider still controls tool availability and image-model authorization.
+    expect(config['features.image_generation']).toBeUndefined();
     // shell 快照由执行环境在受邀者电脑上生成，保持开启。
     for (const key of ['features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
       expect(config[key]).toBeUndefined();
@@ -481,13 +485,14 @@ describe('Codex device-hosted guest sessions', () => {
       .map(([, params]) => (params as { cursor?: string }).cursor)).toEqual([undefined, 'page-2']);
     // 项目说明经执行环境从受邀者电脑读取，项目根的判定与同账号一致。
     expect(config.project_root_markers).toBeUndefined();
-    // 本机用户的技能关闭；Codex 自带的与受邀者带来的保留。
+    // #7677: system scope does not make a provider-local file readable by the
+    // guest's execution environment. Check the real start/resume config (unit).
     const skills = config['skills.config'] as Array<{ path: string; enabled: boolean }>;
     expect(skills).toEqual(expect.arrayContaining([
       { path: fixture.hostSkill, enabled: false },
       { path: fixture.pluginSkill, enabled: false },
+      { path: fixture.systemSkill, enabled: false },
     ]));
-    expect(skills.map((entry) => entry.path)).not.toContain(fixture.systemSkill);
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.guestSkill);
     // 不带本机的插件清单、通讯录说明与技能偏好。
     expect(String(params.developerInstructions ?? '')).not.toContain(GHOST_ROSTER);
@@ -535,6 +540,26 @@ describe('Codex device-hosted guest sessions', () => {
     const fixture = await startHosted({ guest: true, noFeatureList: true });
     await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
     expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
+  it('keeps image generation disabled on an older remote runtime', async () => {
+    const userAgent = 'mock-codex/0.159.1';
+    const fixture = await startHosted({ guest: true, userAgent });
+    const handle = await fixture.started;
+    expect(threadParams(fixture.request, Method.ThreadStart).config).toMatchObject({
+      'features.image_generation': false,
+    });
+    await handle.close();
+  });
+
+  it.each([
+    { userAgent: undefined, remoteExecution: true },
+    { userAgent: 'unrecognized-runtime', remoteExecution: true },
+    { userAgent: 'mock-codex/0.159.2', remoteExecution: false },
+  ])('does not grant image access without a verified version and execution environment (%j)', (environment) => {
+    expect(codexGuestFeatureOverrides([
+      { name: 'image_generation', stage: 'stable', enabled: true },
+    ], environment)).toEqual({ 'features.image_generation': false });
   });
 
   it('refuses a shared user without its own Codex home', async () => {
@@ -812,15 +837,19 @@ describe('Codex device-hosted guest sessions', () => {
 
   it.each([
     ['guest', true, 'private', false],
+    // #7677: an explicit slash command must not re-enable an unreachable skill.
+    ['guest', true, 'imagegen', false],
     ['guest', true, 'guest', true],
     ['same-account', false, 'private', true],
-  ] as const)('resolves a leading slash Skill for a %s session only from allowed Skills (/%s)', async (_label, guest, name, resolved) => {
+    ['same-account', false, 'imagegen', true],
+  ] as const)('resolves allowed Skills for %s (shared: %s, /%s)', async (_label, guest, name, resolved) => {
     const fixture = await startHosted({ guest, guestHome: guest });
     const handle = await fixture.started;
     await handle.send({ type: 'user', content: `/${name} go` });
     const turn = threadParams(fixture.request, Method.TurnStart);
     const skillInputs = (turn.input as Array<{ type: string; path?: string }>).filter((item) => item.type === 'skill');
-    const expectedPath = name === 'guest' ? fixture.guestSkill : fixture.hostSkill;
+    const expectedPath = name === 'guest' ? fixture.guestSkill
+      : name === 'imagegen' ? fixture.systemSkill : fixture.hostSkill;
     expect(skillInputs.map((item) => item.path)).toEqual(resolved ? [expectedPath] : []);
     await handle.close();
   });

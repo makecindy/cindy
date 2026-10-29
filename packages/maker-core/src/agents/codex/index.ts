@@ -1937,7 +1937,7 @@ export class CodexAgent extends BaseAgent {
 
   /**
    * 本机的 Skill、插件与 MCP 逐项关闭(线程级覆盖)。不传 keep 时全部关闭(Review)；受邀者的
-   * 托管会话用 keep 保留它自己的 Skill、Codex 自带 Skill 与经隧道的 MCP。
+   * 托管会话用 keep 保留它自己带来的 Skill 与经隧道的 MCP。
    */
   private async buildLocalCapabilityIsolationConfig(
     host: AppServerHost,
@@ -3585,12 +3585,14 @@ assertRouteCurrent();
     if (hostedGuest && !hosted?.guestHome) {
       throw new Error('[REMOTE_AGENT_UNSUPPORTED] Cannot start Codex for a shared user without its own Codex home on this computer.');
     }
-    /** 受邀者能用的技能：Codex 自带的，以及受邀者带来的(会话目录内)。 */
+    /**
+     * 受邀者的文件与命令在任务电脑执行，只能读取已映射的会话目录内的技能。
+     * Codex 的 system 技能仍位于供应商电脑的 CODEX_HOME；scope 不代表跨电脑可读(#7677)。
+     */
     const guestSkillAllowed = hosted && hostedGuest
       ? (() => {
         const guestRoot = deviceHostedGuestSessionRoot(hosted, opts.workingDir);
-        return (skillPath: string, scope?: SkillMetadata['scope']): boolean =>
-          scope === 'system' || isInsideDeviceHostedRoot(skillPath, guestRoot);
+        return (skillPath: string): boolean => isInsideDeviceHostedRoot(skillPath, guestRoot);
       })()
       : undefined;
     const botSkillGrants = !opts.remoteHostId && !reviewMode
@@ -5392,13 +5394,13 @@ assertRouteCurrent();
     }
     if (hosted && hostedGuest) {
       // 受邀者(另一个账号)：本机用户的全局说明、Skill、插件与 MCP 不进入会话。受邀者带来的
-      // Skill(会话目录内)、Codex 自带 Skill 与经隧道的 MCP 保留，与同账号托管会话一致。
+      // Skill(会话目录内)与经隧道的 MCP 保留；供应商电脑上的 system Skill 同样不进入会话。
       try {
         assertCurrentHost('Shared-user capability isolation');
         // 受邀者目录里没有本机用户的全局说明；没有受邀者目录(旧接线)时仍按 fail-closed 检查。
         await assertNoCodexUserInstructions(sessionCodexHome);
         const guestCapabilityConfig = await this.buildLocalCapabilityIsolationConfig(host, opts.workingDir, {
-          skill: (skillPath, scope) => guestSkillAllowed!(skillPath, scope),
+          skill: (skillPath) => guestSkillAllowed!(skillPath),
           mcpServer: (serverName) => hosted.mcpServers.includes(serverName),
         });
         capabilityRoutingConfig = mergeCodexSkillConfigOverrides(capabilityRoutingConfig, guestCapabilityConfig);
@@ -6664,9 +6666,9 @@ assertRouteCurrent();
 
       try {
         const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
-        // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
+        // 受邀者：斜杠同样只解析会话目录内的技能，不能重新启用执行端不可读的宿主技能。
         const skill = selectInvocableCodexSkill(
-          guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
+          guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path)) : skills,
           slash.name,
         );
         if (!skill) return toAppServerInput(content, opts.workingDir);
@@ -7078,7 +7080,7 @@ assertRouteCurrent();
           hostedGuestFeatureConfig = codexGuestFeatureOverrides(await listCodexFeatures((cursor) => host.request(
             Method.ExperimentalFeatureList, { limit: 200, ...(cursor ? { cursor } : {}) },
             { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
-          )));
+          )), { userAgent: initResp.userAgent, remoteExecution: true });
         } catch (error) {
           throw new Error(`Cannot start Codex for a shared user safely: ${String(error)}`);
         }
