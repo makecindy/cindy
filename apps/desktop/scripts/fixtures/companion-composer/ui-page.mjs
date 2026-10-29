@@ -6,7 +6,7 @@ export default {
   viewport: { width: 760, height: 360 },
   real: 'ChatInput, Tiptap editor, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
   notCovered:
-    'Microphone/ASR, live companion tasks and speech synthesis; host services, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
+    'Microphone/ASR, live companion tasks and speech synthesis; host services, model catalog and dictation hook use scenario data. Windows runtime is not exercised. App/root keyboard listeners are covered separately by scripts/composer-keyboard-e2e.mjs.',
   stubs: {
     'src/renderer/hooks/useProviders': `const providers = [{ id: 'openai', name: 'OpenAI', source: 'builtin', connected: true, agents: ['codex'], auth: { method: 'oauth' }, routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } }, models: { codex: [{ id: 'fixture-chat', name: 'Fixture', contextWindow: 200000, efforts: [], defaultEffort: null }] } }]; export const useProviders = () => ({ providers, loading: false });`,
     'src/renderer/hooks/useDeviceProviders': {
@@ -27,6 +27,10 @@ export default {
     'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
+    'nested-lists': {
+      about: 'Tab nests a new list item and sending retains Markdown indentation',
+      viewport: { width: 760, height: 460 },
+    },
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
@@ -44,6 +48,32 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'nested-lists') {
+      const editor = page.locator('.ProseMirror[contenteditable="true"]');
+      for (const [kind, parent, expected] of [
+        ['bullet', '- parent', '- parent\n  - child'],
+        ['ordered', '1. parent', '1. parent\n   1. child'],
+        ['task', '- [x] parent', '- [x] parent\n  - [ ] child'],
+        ['plus', '+ parent', '+ parent\n  + child'],
+        ['parenthesized', '7) parent', '7) parent\n   1) child'],
+        ['cjk', '3、parent', '3、parent\n  1、child'],
+      ]) {
+        await editor.click();
+        await page.keyboard.type(parent);
+        await editor.press('Shift+Enter');
+        await editor.press('Tab');
+        await page.keyboard.type('child');
+        assert.equal(await editor.evaluate((node) => node.contains(document.activeElement)), true);
+        assert.equal(await editor.locator('li li').count(), 1);
+        await ui.capture(`nested-${kind}`);
+        await editor.press('Enter');
+        await page.waitForFunction(
+          (text) => document.querySelector('[data-testid="sent"]')?.textContent === text,
+          expected,
+        );
+      }
+      return;
+    }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
       const hint = page.getByTestId('composer-voice-hint');
