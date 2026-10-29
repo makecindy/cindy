@@ -667,7 +667,7 @@ describe('Bot settings profile consolidation', () => {
 
   // Real shared settings page, remote target boundary: no silent navigation retry after
   // a rejected/timeout write, no saved indicator, and no detached re-send after discard.
-  it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'PRECONDITION_FAILED', 'INVALID_PARAMS'] as const)(
+  it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'DESKTOP_UNAVAILABLE', 'PRECONDITION_FAILED', 'INVALID_PARAMS'] as const)(
     'lets a remote %s failure leave without waiting for another save', async code => {
       let rejectSave!: (error: unknown) => void;
       const update = vi.fn().mockImplementation(() => new Promise((_, reject) => { rejectSave = reject; }));
@@ -680,7 +680,8 @@ describe('Bot settings profile consolidation', () => {
       fireEvent.click(screen.getAllByTestId('current-model')[0]);
       await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
       expect(screen.queryByText('bots.autosave.saved')).toBeNull();
-      await act(async () => { rejectSave(createIpcError(code, 'fixture failure')); });
+      await act(async () => { rejectSave(code === 'DESKTOP_UNAVAILABLE'
+        ? new Error(code) : createIpcError(code, 'fixture failure')); });
       await screen.findByRole('button', { name: 'bots.autosave.retry' });
       expect(screen.getByText('bots.autosave.remoteUnconfirmed')).toBeTruthy();
       fireEvent.blur(screen.getByLabelText('bots.nameLabel'));
