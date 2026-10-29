@@ -8,6 +8,18 @@ export interface UsageLimitFallbackRoute {
 }
 
 /**
+ * 控制面投影：备用目标、它锁定时的原组合，以及它现在还会不会触发。
+ * `active === false` 就表示“配了但已失效”（任务现在跑的不是当时那个组合）。
+ * 扁平结构与 MCP 侧的 `SessionUsageLimitFallback` 一一对应，避免多一层嵌套。
+ */
+export interface UsageLimitFallbackProjection {
+  providerId: string;
+  model: string;
+  source: SessionRuntimeProfile;
+  active: boolean;
+}
+
+/**
  * 任务级「额度用尽自动换路」策略：只对账号额度耗尽生效。
  *
  * 这是用户显式选择，不是自动降级：`source` 记下配置时任务实际使用的组合，只有任务仍在

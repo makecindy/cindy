@@ -17440,7 +17440,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : readSessionRuntimeFallbackSettings().enabled,
-        usageLimitFallback: readSessionUsageLimitFallback(sessionId)?.target ?? null,
+        usageLimitFallback: (() => {
+          const policy = readSessionUsageLimitFallback(sessionId);
+          if (!policy) return null;
+          return {
+            providerId: policy.target.providerId,
+            model: policy.target.model,
+            source: policy.source,
+            // 控制面要能区分“配了”与“配了但当前组合已变”：与触发端同一个谓词。
+            active: matchesUsageLimitFallbackSource(policy, profiles.effective),
+          };
+        })(),
       };
     },
     setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {

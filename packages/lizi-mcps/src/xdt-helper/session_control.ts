@@ -41,6 +41,16 @@ export interface SessionRuntimeProfile {
 export interface SessionUsageLimitFallback {
   providerId: string;
   model: string;
+  /** 锁定时任务跑的组合（与触发匹配用的那一份）。 */
+  source: SessionRuntimeProfile;
+  /** 这条策略现在还会不会触发；false = 配了但当前组合已经变了。 */
+  active: boolean;
+}
+
+/** set 的入参：写的是目标路线，不是一份投影。 */
+export interface SessionUsageLimitFallbackRoute {
+  providerId: string;
+  model: string;
 }
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
@@ -122,7 +132,7 @@ export interface SessionControlDeps {
       providerId?: string | null;
       effort?: Effort;
       fastMode?: boolean | 'ultrafast';
-      usageLimitFallback?: SessionUsageLimitFallback | null;
+      usageLimitFallback?: SessionUsageLimitFallbackRoute | null;
     };
   }): Promise<
     ControlResult<
@@ -132,7 +142,7 @@ export interface SessionControlDeps {
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
-        usageLimitFallback?: SessionUsageLimitFallback | null;
+        usageLimitFallback?: SessionUsageLimitFallbackRoute | null;
       },
       'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
     >
@@ -421,7 +431,13 @@ export function registerGetSessionRuntimeTool(
 const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 
 function usageLimitFallbackPayload(fallback: SessionUsageLimitFallback | null) {
-  return fallback === null ? null : { provider_id: fallback.providerId, model: fallback.model };
+  if (fallback === null) return null;
+  return {
+    provider_id: fallback.providerId,
+    model: fallback.model,
+    active: fallback.active,
+    source: runtimeProfilePayload(fallback.source),
+  };
 }
 
 function runtimeProfilePayload(profile: SessionRuntimeProfile) {
@@ -530,7 +546,18 @@ export function registerSetSessionRuntimeTool(
           : null,
         effective_boundary: result.effectiveBoundary ?? (result.status === 'deferred' ? 'next_turn' : 'immediate'),
         ...(result.usageLimitFallback !== undefined
-          ? { usage_limit_fallback: usageLimitFallbackPayload(result.usageLimitFallback) }
+          ? {
+              // 刚写完的策略一定锁在当前组合上（写时就取的是 effective），所以 active 为真。
+              usage_limit_fallback:
+                result.usageLimitFallback === null
+                  ? null
+                  : {
+                      provider_id: result.usageLimitFallback.providerId,
+                      model: result.usageLimitFallback.model,
+                      active: true,
+                      source: runtimeProfilePayload(result.effectiveProfile),
+                    },
+            }
           : {}),
       });
     },

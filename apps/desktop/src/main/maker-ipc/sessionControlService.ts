@@ -12,7 +12,10 @@ import type {
   PendingSessionRuntimeMutation,
   SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
-import type { UsageLimitFallbackRoute } from './sessionUsageLimitFallback.js';
+import type {
+  UsageLimitFallbackProjection,
+  UsageLimitFallbackRoute,
+} from './sessionUsageLimitFallback.js';
 
 import {
   updateQueuedMessageText,
@@ -57,7 +60,7 @@ export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   pendingMutation: PendingSessionRuntimeMutation | null;
   fallbackEnabled: boolean;
   /** 任务级额度备用路线（用户显式配置）；null = 沿用等额度重置。 */
-  usageLimitFallback: UsageLimitFallbackRoute | null;
+  usageLimitFallback: UsageLimitFallbackProjection | null;
 }
 
 export type SessionRuntimeResult =

@@ -216,12 +216,29 @@ describe('cindy_helper session control tools', () => {
         lastActivityAtMs: null,
         currentActionSummary: null,
         gracefulStopState: 'none' as const,
-        usageLimitFallback: { providerId: 'xd', model: 'deepseek-v4-flash' },
+        usageLimitFallback: {
+          providerId: 'xd',
+          model: 'deepseek-v4-flash',
+          active: false,
+          source: {
+            agentKind: 'codex' as const,
+            model: 'gpt-5.6-sol',
+            providerId: 'openai',
+            effort: 'high' as const,
+            fastMode: false,
+          },
+        },
       },
     });
     expect(parse(await registry.call('get_session_runtime', {}))).toMatchObject({
       ok: true,
-      usage_limit_fallback: { provider_id: 'xd', model: 'deepseek-v4-flash' },
+      usage_limit_fallback: {
+        provider_id: 'xd',
+        model: 'deepseek-v4-flash',
+        // 控制面要能看出「配了但已失效」：active=false + 锁定时的那份组合。
+        active: false,
+        source: { harness: 'codex', model: 'gpt-5.6-sol', provider_id: 'openai' },
+      },
     });
 
     vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({

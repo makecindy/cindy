@@ -62,8 +62,9 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
 - 只保存策略，不改 baseline 与当前生效组合，也不登记待切换选择；`null` 清除。
 - 目标必须在同一个 Harness 下可用（来源已连接、目录里有该模型），且不能与原组合相同。
   适用范围同 [usage-limit-auto-continue.md](usage-limit-auto-continue.md)，这里不重复枚举。
-- `get_session_runtime` 只投影备用目标 `{provider_id, model}`；配置时记下的原组合只用于触发匹配，
-  不对外投影。
+- `get_session_runtime` 投影 `usage_limit_fallback`：目标 `{provider_id, model}`、锁定时任务跑的
+  原组合 `source`，以及 `active`（这条策略现在还会不会触发；false = 配了但当前组合已变）。
+  失效信息必须对 Agent 可见，否则它分不清“没配”与“配了但不生效”。
 - 真正触发时复用原子选模路径换路，再走额度重置后的同一条自动继续入口；
   不是自动降级的白名单，也不占自动降级的换路次数；但它走 Agent 显式选模语义，会顺带把本轮
   自动降级的换路次数与已访路轨迹清零（额度事件重新计两跳）。
