@@ -1645,6 +1645,11 @@
     }
   },
   "settings": {
+    "conversation": {
+      "open": "在新視窗查看對話",
+      "hint": "將對話視窗與設定並排放置，邊看步驟邊設定。",
+      "openFailed": "無法開啟對話視窗，請重試。"
+    },
     "imConnection": {
       "reconnect": "重新連線",
       "savedNote": "繫結資訊已保留，可直接重試連線。",

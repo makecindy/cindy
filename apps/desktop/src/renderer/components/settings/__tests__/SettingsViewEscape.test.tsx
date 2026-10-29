@@ -3,12 +3,27 @@
  * 再按一次才退出设置。各分区内容与本测试无关，统一替换为空壳。
  * @vitest-environment jsdom
  */
-import { act, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
+import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
+import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { toast } from '@/lib/toast';
+
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (id: string) => id === 'remote-task' ? 'remembered-device' : undefined,
+}));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/features/bots/useRemoteBots', () => ({
+  useRemoteBots: () => [
+    { id: 'bot-a', deviceId: 'other-device', sessionId: 'wrong-chat', online: true },
+    { id: 'bot-a', deviceId: 'remote-a', sessionId: 'remote-chat', online: true },
+    { id: 'bot-a', deviceId: 'offline-device', sessionId: 'cached-chat', online: false },
+  ],
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -148,5 +163,101 @@ describe('SettingsView Escape', () => {
 
     pressEscape();
     expect(location()).toBe('/');
+  });
+});
+
+// Regression: opening Settings used to leave no way to consult the originating
+// chat without abandoning the form. Exercise real navigation history + SettingsView;
+// only the native-window boundary is faked. Existing Escape cases did not cover it.
+// Minimal input: task -> settings -> open chat. Tier: unit (no Electron required).
+function ReferenceLayout() {
+  useActiveMainView();
+  const navigate = useNavigate();
+  return <>
+    <button onClick={() => navigate('/settings?tab=help')}>Configure</button>
+    <Outlet />
+    <LocationProbe />
+  </>;
+}
+
+function renderReference(entry: string, owner = 'account-a') {
+  const tree = (ownerKey: string) => (
+    <MainViewHistoryProvider ownerKey={ownerKey}>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route element={<ReferenceLayout />}>
+            <Route path="/settings" element={<SettingsView />} />
+            <Route path="*" element={<p>Conversation</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </MainViewHistoryProvider>
+  );
+  const result = render(tree(owner));
+  if (!entry.startsWith('/settings')) fireEvent.click(screen.getByText('Configure'));
+  return { changeOwner: () => result.rerender(tree('account-b')) };
+}
+
+describe('SettingsView conversation reference', () => {
+  const label = 'settings.conversation.open';
+
+  it.each([
+    ['/cc-agent/task-a', 'task-a', undefined],
+    ['/cc-agent/task-a?device=remote-a', 'task-a', 'remote-a'],
+    ['/cc-agent/remote-task', 'remote-task', 'remembered-device'],
+    ['/bots/bot-a/session/chat-a', 'chat-a', undefined],
+    // PR #7274: normal sidebar routes omit the session; match both bot and device.
+    ['/bots/remote/remote-a/bot-a', 'remote-chat', 'remote-a'],
+    ['/bots/remote/remote-a/bot-a/session/chat-a', 'chat-a', 'remote-a'],
+  ])('opens the originating conversation and keeps the settings route: %s', async (entry, sessionId, deviceId) => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI.maker = { openSessionInNewWindow: open } as unknown as typeof window.electronAPI.maker;
+    renderReference(entry!);
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(sessionId, deviceId));
+    expect(location()).toBe('/settings?tab=help');
+    expect(screen.getByRole('button', { name: 'Ask help' })).toBeTruthy();
+  });
+
+  it.each(['/settings', '/cc-agent/new', '/cc-agent/scheduled', '/bots/roster', '/bots/remote/unknown-device/bot-a'])('does not offer a non-conversation target: %s', (entry) => {
+    window.electronAPI.maker = { openSessionInNewWindow: vi.fn() } as unknown as typeof window.electronAPI.maker;
+    renderReference(entry);
+    expect(screen.queryByRole('button', { name: label })).toBeNull();
+  });
+
+  it('clears the reference when the account changes', () => {
+    window.electronAPI.maker = { openSessionInNewWindow: vi.fn() } as unknown as typeof window.electronAPI.maker;
+    const app = renderReference('/cc-agent/private-task');
+    expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    app.changeOwner();
+    expect(screen.queryByRole('button', { name: label })).toBeNull();
+  });
+
+  // PR #7274 review: an offline cloud chat retains a cached session ID, but a
+  // new device-link session window cannot display that cloud conversation.
+  it('does not offer an offline cached companion session as a window target', () => {
+    const open = vi.fn();
+    window.electronAPI.maker = { openSessionInNewWindow: open } as unknown as typeof window.electronAPI.maker;
+    renderReference('/bots/remote/offline-device/bot-a');
+    expect(screen.queryByRole('button', { name: label })).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(location()).toBe('/settings?tab=help');
+  });
+
+  it('prevents duplicate opens and allows retry after failure without leaving settings', async () => {
+    let rejectOpen!: (reason: Error) => void;
+    const open = vi.fn().mockImplementationOnce(() => new Promise<void>((_, reject) => { rejectOpen = reject; }))
+      .mockResolvedValue(undefined);
+    window.electronAPI.maker = { openSessionInNewWindow: open } as unknown as typeof window.electronAPI.maker;
+    renderReference('/cc-agent/task-a');
+    const button = screen.getByRole('button', { name: label });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(open).toHaveBeenCalledTimes(1);
+    await act(async () => rejectOpen(new Error('window unavailable')));
+    expect(toast.error).toHaveBeenCalledWith('settings.conversation.openFailed');
+    expect(location()).toBe('/settings?tab=help');
+    fireEvent.click(button);
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(2));
   });
 });

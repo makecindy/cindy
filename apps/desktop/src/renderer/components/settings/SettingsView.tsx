@@ -9,6 +9,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
+import { SettingsConversationButton } from './SettingsConversationButton';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import {
   SETTINGS_CARD_CLASS,
@@ -292,6 +293,7 @@ export function SettingsView() {
             </h1>
           </div>
 
+          <SettingsConversationButton />
           <SettingsSidebarNav
             tabIds={visibleTabIds}
             searchContext={searchContext}
