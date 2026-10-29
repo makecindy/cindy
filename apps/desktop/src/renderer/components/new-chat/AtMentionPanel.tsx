@@ -527,6 +527,9 @@ export function AtMentionPanel({
   return (
     <div
       ref={rootRef}
+      // 面板根标记:宿主(ChatInput)用它判定「关闭时焦点是否仍在本面板内」,
+      // 决定要不要把焦点交还编辑器(搜索框退格/Esc 收起 vs 用户 Tab 走)。
+      data-composer-suggestion-panel=""
       onMouseDown={(event) => {
         // 点面板空白/分组标题时别把焦点挪到面板容器:容器可聚焦(tabIndex=-1)且没有键盘
         // 处理,焦点落它身上会让 ↑↓/Enter 无人接收(打字黑洞)。行与输入框不受影响。

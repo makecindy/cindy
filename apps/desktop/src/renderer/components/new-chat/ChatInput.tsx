@@ -5457,13 +5457,24 @@ export function ChatInput({
     [closeAtPanel, editor, insertAtResource, resolveEffectiveAtRange],
   );
 
+  // 合成「+」面板的统一关闭:收面板 + 按焦点位置决定是否把焦点交还编辑器。
+  // 面板内收起(搜索框空框退格 / Esc)时焦点还在面板里:立刻接管回编辑器,否则
+  // MorphPopover 的收合快照会判定「键盘关闭」,动画结束把焦点还给「+」按钮,
+  // 用户接着打的字被按钮吃掉。焦点已被用户挪到面板外(Tab 出去 / 点了其他
+  // 控件)则不抢,否则就是偷走用户刚聚焦的控件。搜索框退格走的 onClose 不经过
+  // MorphPopover 的 onOpenChange,所以面板的 onClose 也必须接到这里。
+  const closeComposerSuggestionPanel = useCallback(() => {
+    setSyntheticAtAnchor(null);
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest('[data-composer-suggestion-panel]')) {
+      editorRef.current?.commands.focus();
+    }
+  }, [setSyntheticAtAnchor]);
+
   const handleComposerSuggestionOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen) {
-        setSyntheticAtAnchor(null);
-        // 面板的焦点在它自己的搜索框上;若不管,收合动画结束后 MorphPopover 会按
-        // 「键盘关闭」把焦点还给「+」按钮,用户接着打的字会被按钮吃掉。
-        editorRef.current?.commands.focus();
+        closeComposerSuggestionPanel();
         return;
       }
       if (!editor || editor.isDestroyed || composerMutationLocked) return;
@@ -5477,7 +5488,7 @@ export function ChatInput({
       // 不在这里抢编辑器焦点:面板的搜索框自己会拿焦点(面板浮在编辑器上方,
       // 焦点留在编辑器等于让人对着看不见的输入框打字)。
     },
-    [composerMutationLocked, editor, setSyntheticAtAnchor, trigger],
+    [closeComposerSuggestionPanel, composerMutationLocked, editor, trigger],
   );
   const composerSuggestionFocusTarget = useCallback(() => {
     if (!editor || editor.isDestroyed) return null;
@@ -9808,7 +9819,7 @@ export function ChatInput({
                       focusedIndex={atFocus}
                       onFocusedIndexChange={setAtFocus}
                       onSelect={handleComposerSuggestionSelect}
-                      onClose={closeAtPanel}
+                      onClose={closeComposerSuggestionPanel}
                       onRetry={() => runAtScan(atQuery)}
                       referenceDirs={
                         !settingsLocked && onExtraDirsChange
