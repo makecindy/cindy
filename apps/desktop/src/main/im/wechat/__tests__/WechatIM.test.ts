@@ -28,6 +28,27 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+  it('clears reconnecting after an empty successful poll', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.spyOn(transport, 'poll');
+    poll.mockRejectedValueOnce(new WechatIlinkError('NETWORK_ERROR', 'offline', true));
+    poll.mockResolvedValueOnce({ cursor: 'recovered', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(poll).toHaveBeenCalledTimes(3);
+      expect(im.getState().phase).toBe('connected');
+      expect(im.getState().errorCode).toBeUndefined();
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
 
   // Exercise the durable inbox through the public host lifecycle. Only the
   // credential-verified owner can request native permissions on a resolved companion route.
@@ -53,7 +74,11 @@ describe('WechatIM host boundary', () => {
     const dispatchAgentTurn = vi.fn(async (_input: {
       turnPermissionPolicy?: { confirmationSurface: string }; requesterIsOwner?: boolean;
       inheritCompanionOwnerPermissions?: boolean;
-    }) => ({ kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) }));
+      groupHistoryAccess?: { access: string; lane: { chatId: string; threadId: string } };
+    }) => {
+      void _input;
+      return { kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) };
+    });
     im.attachTurnRuntime({ runner: {
       companionBotIdFor: () => companion ? 'cindy' : undefined,
       dispatchAgentTurn,
@@ -65,6 +90,7 @@ describe('WechatIM host boundary', () => {
       expect(input.inheritCompanionOwnerPermissions).toBe(true);
       expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
       expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
+      expect(input.groupHistoryAccess).toMatchObject({ access: 'lane', lane: { chatId: peer, threadId: '' } });
     } finally { await im.dispose(); }
   });
 

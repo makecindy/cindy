@@ -212,7 +212,7 @@ export function rememberScheduleFormPrefs(form: ScheduleFormState): void {
     workingDir: workspaceKind === 'project' ? form.workingDir : '',
     useWorktree: workspaceKind === 'project' && form.useWorktree,
     // 另一台电脑上的选择属于那台的目录,不作为本机新建任务的默认记忆。
-    lastByAgent: form.agentDeviceId ? current.lastByAgent : {
+    lastByAgent: (form.modelAgentDeviceId ?? form.agentDeviceId) ? current.lastByAgent : {
       ...current.lastByAgent,
       [form.agentKind]: {
         model: form.model,
@@ -264,6 +264,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     manual: s.manual,
     agentKind: s.modelAgentKind ?? s.agentKind,
     modelAgentKind: s.modelAgentKind,
+    modelAgentDeviceId: s.modelAgentDeviceId,
     boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
     model: s.model ?? '',
     providerId: s.providerId ?? '',
@@ -293,7 +294,7 @@ export type Destination = 'local' | 'worktree' | 'thread';
 export interface UseScheduleFormResult {
   form: ScheduleFormState;
   selectModelConfiguration: (
-    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId' | 'effort' | 'fastMode'> | null,
+    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'modelAgentDeviceId'> | null,
     followedAgentKind?: ScheduleFormState['agentKind'],
   ) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
@@ -308,7 +309,7 @@ export interface UseScheduleFormResult {
    */
   selectBoundSession: (session: Session | null) => void;
   /** 应用模板里的 agent/model/provider/effort/fast 字段,并在跨 agent 时重建成目标 agent 的默认组合。 */
-  applyTemplateAgentFields: (template: ScheduleTemplate) => void;
+  applyTemplateAgentFields: (template: ScheduleTemplate, providers?: readonly ProviderView[]) => void;
   reset: (s?: Schedule | null, overrides?: Partial<ScheduleFormState>) => void;
   /**
    * 把表单转成 CreateScheduleInput；
@@ -354,7 +355,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
           ? form.boundAgent.agentKind : form.agentKind);
       const boundAgent = followedAgentKind && form.targetSessionId
         ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
-      return { ...form, agentKind, boundAgent, model: '', providerId: '', agentDeviceId: '', effort: '', fastMode: false, modelAgentKind: undefined };
+      return { ...form, agentKind, boundAgent, model: '', providerId: '', agentDeviceId: '', effort: '', fastMode: false,
+        modelAgentKind: undefined, modelAgentDeviceId: undefined };
     });
   }, []);
 
@@ -367,17 +369,18 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     setForm(next);
   }, []);
 
-  const applyTemplateAgentFields = useCallback((template: ScheduleTemplate) => {
+  const applyTemplateAgentFields = useCallback((template: ScheduleTemplate, providers?: readonly ProviderView[]) => {
     setForm((f) => {
       const selection = resolveTemplateAgentFields(f, template, {
         getDefaultRoute: (agentKind, preferredProviderId) =>
-          getScheduleDefaultRoute(agentKind, undefined, preferredProviderId),
+          getScheduleDefaultRoute(agentKind, providers, preferredProviderId),
         getAgentPrefs: getScheduleAgentPrefs,
       });
       // A template that supplies a model is an explicit selection, even while following a bound task.
       // 模板的模型与来源属于本机目录;路由变了就回到本机运行。
       const sameRoute = selection.agentKind === f.agentKind && selection.model === f.model && selection.providerId === f.providerId;
-      return { ...f, ...selection, agentDeviceId: sameRoute ? f.agentDeviceId : '', modelAgentKind: selection.model.trim() ? selection.agentKind : undefined };
+      return { ...f, ...selection, agentDeviceId: sameRoute ? f.agentDeviceId : '',
+        modelAgentKind: selection.model.trim() || selection.modelAgentDeviceId === '' ? selection.agentKind : undefined };
     });
   }, []);
 
@@ -430,6 +433,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         boundAgent: { sessionId: session.id, agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind) },
         model: '',
         modelAgentKind: undefined,
+        modelAgentDeviceId: undefined,
         // 绑定会话 = 跟随其模型/来源,providerId 一并清空(与 model/effort 同语义)。
         providerId: '',
         agentDeviceId: '',
@@ -445,6 +449,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
     if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };
+    }
+    if ((form.executionMode ?? 'agent') === 'agent' && form.modelAgentKind && !form.model.trim()) {
+      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: form.providerId } };
     }
     if (form.executionMode === 'script' && !form.scriptCommand?.trim()) {
       return { key: 'scheduler.editor.validation.scriptCommandRequired' };

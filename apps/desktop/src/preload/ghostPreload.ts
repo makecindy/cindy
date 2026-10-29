@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { PluginModelPickerOptions, PluginModelPickerResult } from '../shared/pluginModelPicker';
 
 /**
  * 意识电子脑的最小管子桥(脑机接口;docs/dev-rules/plugin-security-and-authoring.md)。
@@ -120,6 +121,8 @@ contextBridge.exposeInMainWorld('cindy', {
   },
   pick: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'pick-request' }),
+  pickModel: (req: PluginModelPickerOptions = {}): Promise<PluginModelPickerResult> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'model-picker-request' }),
   preview: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
   // 在任务右侧栏打开 / 聚焦本插件的任务页(taskView);缺省落台前任务,回执带回落点任务。

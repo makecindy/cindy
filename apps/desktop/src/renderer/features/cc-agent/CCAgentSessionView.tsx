@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { voiceTaskFailure } from '../bots/voice/VoiceReplyTracker';
@@ -8,6 +9,7 @@ import { BotFollowUpInvitation } from '@/features/bots/BotFollowUpInvitation';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
+import { canContinueFailedTurn } from '@cindy/maker-shared/synthetic-trigger';
 /**
  * CCAgentSessionView
  * ---------------------------------------------------------------------------
@@ -23,7 +25,6 @@ import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-mod
  * F-FP-5:   workingDir read-only display
  */
 
-import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import {
   Profiler,
   useCallback,
@@ -43,7 +44,7 @@ import {
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
-import { sideChatTaskRoute } from '@/features/right-sidebar/plugins/side-chat/state';
+import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
@@ -165,7 +166,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
-import { ContextWindowBudgetChip } from '@/components/status/ContextWindowBudgetChip';
+import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
@@ -217,6 +218,7 @@ import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionT
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
+import { WorkingDirectoryTip } from './WorkingDirectoryTip';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
 import {
@@ -280,6 +282,7 @@ import {
   getSessionRouteOwnerId,
   isOrcaLeadSession,
   isOrcaWorkerSession,
+  orcaWorkerSessionRoute,
   resolveSessionRoute,
 } from '@/lib/orcaSessionIdentity';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -304,7 +307,7 @@ import {
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
-import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
+import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import {
@@ -506,6 +509,8 @@ function parseOrcaWorkersRevealState(state: unknown): OrcaWorkersRevealState | n
 }
 
 interface CCAgentSessionViewProps {
+  /** Topic root and reply divider, inside the existing message scroller. */
+  messageStreamHeader?: ReactNode;
   sessionIdProp?: string;
   /** Host-read metadata for an embedded remote task intentionally absent from task lists. */
   sessionSnapshotProp?: Session | null;
@@ -556,6 +561,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
+  focusComposerOnOpen?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -822,6 +829,7 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
 }
 
 function CCAgentSessionContent({
+  messageStreamHeader,
   sessionIdProp,
   sessionSnapshotProp,
   routeOwner,
@@ -838,6 +846,7 @@ function CCAgentSessionContent({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  focusComposerOnOpen = false,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -1418,9 +1427,15 @@ function CCAgentSessionContent({
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
   const vendorAuthGate = useVendorAuthGate();
   const { confirmWithCheckbox } = useConfirmDialog();
+  const [workerRouteChecked, setWorkerRouteChecked] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId || !searchJump) return;
+    if (ownsWindowRoute && !session) return;
+    // The route owner hands Worker jumps to the Lead sidebar. Do not consume
+    // the anchor in this temporary view while its workflow read is in flight.
+    if (ownsWindowRoute && !isOrcaMode && !isCompactRail && session
+      && isOrcaWorkerSession(session) && workerRouteChecked !== location.key) return;
     if (searchJump.sessionId !== sessionId) {
       if (!session) return;
       // 仅路由主权实例回收「跳转目标 ≠ 当前会话」的陈旧状态：分屏的嵌入 pane
@@ -1489,12 +1504,15 @@ function CCAgentSessionContent({
     clearSearchJumpState,
     isOrcaLeadSessionView,
     isOrcaMode,
+    isCompactRail,
+    location.key,
     ownsWindowRoute,
     requestFocusMessage,
     searchJump,
     session,
     sessionId,
     t,
+    workerRouteChecked,
   ]);
 
   // 后台任务面板行点击 → 聊天流定位对应任务卡:sessionId 匹配当前会话才消费;
@@ -1540,15 +1558,21 @@ function CCAgentSessionContent({
     void orcaWorkflowsFor(session.id)
       .getByWorkerSession(session.id)
       .then((workflow) => {
-        if (!cancelled && workflow) {
-          navigate(`/cc-agent/${workflow.leadSessionId}?worker=${sessionId}`, { replace: true });
+        if (cancelled) return;
+        if (workflow) {
+          navigate(orcaWorkerSessionRoute(workflow.leadSessionId, sessionId, location.search), {
+            replace: true,
+            state: location.state,
+          });
+        } else {
+          setWorkerRouteChecked(location.key);
         }
       })
-      .catch(() => undefined);
+      .catch(() => { if (!cancelled) setWorkerRouteChecked(location.key); });
     return () => {
       cancelled = true;
     };
-  }, [isOrcaMode, isCompactRail, navigate, ownsWindowRoute, session, sessionId]);
+  }, [isOrcaMode, isCompactRail, location.key, location.search, location.state, navigate, ownsWindowRoute, session, sessionId]);
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -1844,6 +1868,7 @@ function CCAgentSessionContent({
     cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
+    errorCanContinue,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -1902,6 +1927,10 @@ function CCAgentSessionContent({
     updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  useBotIslandVisibleSession(
+    viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,
+    ownsWindowRoute && !isCompactRail && !isOrcaMode,
+  );
   const clearQueueComposerEditDraft = useCallback(
     (edit: NonNullable<typeof queueComposerEdit>, files: readonly AttachedFile[]) => {
       const originalIds = new Set(edit.originalAttachmentIds);
@@ -2874,7 +2903,7 @@ function CCAgentSessionContent({
           toast.info(t('chat.sideChat.mainTaskOnly'));
           return;
         }
-        void openSideChatTab(sessionId, { prompt: payload.args, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) });
+        void openSideChatTab(sessionId, { prompt: payload.args });
         return;
       }
       if (payload.command === 'cmd') {
@@ -3567,7 +3596,6 @@ function CCAgentSessionContent({
         const accepted = await openSideChatTab(sessionId, {
           prompt: args,
           attachments: files,
-          onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)),
         });
         return { handled: true, accepted, message };
       }
@@ -3951,6 +3979,8 @@ function CCAgentSessionContent({
       mentions?: MentionedResource[],
       opts?: {
         deliveryMode?: MessageDeliveryMode;
+        providerId?: string | null;
+        baselineRecovery?: boolean;
         literalText?: boolean;
         independent?: boolean;
         beforeEnqueue?: () => Promise<boolean>;
@@ -4107,7 +4137,13 @@ function CCAgentSessionContent({
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
-      if (!remoteDeviceId) {
+      // The old Harness may no longer be authenticated. Only the unchanged
+      // host-offered route may defer this UI precheck to main's recovery.
+      const recoveringBaseline = opts?.baselineRecovery === true && session?.source === 'bot' &&
+        session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
+        model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
+        (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
+      if (!remoteDeviceId && !recoveringBaseline) {
         const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
@@ -4316,6 +4352,8 @@ function CCAgentSessionContent({
       readOnly,
       t,
       vendorAuthGate,
+      displayAgentKind,
+      agentSwitchIntent,
       confirmWithCheckbox,
       remoteDeviceId,
       sessionHandoffPreparing,
@@ -4634,6 +4672,20 @@ function CCAgentSessionContent({
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
   }, [continueAfterSilentStop]);
+
+  const canContinueError = canContinueFailedTurn({
+    error,
+    retryText: errorRetryText,
+    running: isAgentBusy || errorIsRecoverable || !!credentialSwitchWait || syntheticContinuationPending,
+    hostCanContinue: errorCanContinue === true,
+  });
+  const handleContinueAfterError = useCallback(async () => {
+    if (!sessionId || !canContinueError || isHistoryRecoveryPending()) return;
+    invalidateHistoryRecoveryNavigation();
+    await rebuildClaudeSubscriptionSessionBeforeRetry(errorReason);
+    await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT);
+  }, [canContinueError, errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending,
+    rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
 
   // 点击 Cancel 关闭报错 banner 同样是处置(用户选择不管它了)。
   const handleDismissError = useCallback(() => {
@@ -5228,6 +5280,7 @@ function CCAgentSessionContent({
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
+      header={messageStreamHeader}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5236,6 +5289,7 @@ function CCAgentSessionContent({
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
       sessionSource={session?.source}
+      onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
@@ -5250,7 +5304,7 @@ function CCAgentSessionContent({
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
-        ? (quote) => openSideChatTab(sessionId, { quote, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) }) : undefined}
+        ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
       historyLoaded={historyLoaded}
@@ -5747,6 +5801,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
@@ -5768,6 +5823,7 @@ function CCAgentSessionContent({
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
+                onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}
                 usageLimitWait={usageLimitWait}
                 onCancelUsageLimitWait={cancelUsageLimitWait}
@@ -6036,6 +6092,8 @@ function CCAgentSessionContent({
                     <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
                       getMessage={getQuoteMessage} names={botQuoteNames} />
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  // Picking 「回复」 brings the caret here, ready to type the reply.
+                  focusRequest={pendingReplyQuote}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
@@ -6048,6 +6106,7 @@ function CCAgentSessionContent({
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
                   runtimeEffective={session?.runtimeEffective}
+                  allowBaselineRecovery={session?.source === 'bot' && session.runtimeBaselineRecoveryPending === true}
                   baselineEffort={session?.runtimeBaseline?.effort ?? null}
                   runtimePending={session?.runtimePending}
                   // session 未加载时保留 undefined 未知态；Orca 原地切换与换电脑分别门控。
@@ -6099,7 +6158,7 @@ function CCAgentSessionContent({
                       : botChatIdentity
                       ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
-                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
+                          device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
@@ -6130,8 +6189,8 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail || disableAutofocus}
-                  focusOnStorageKeyChange={ownsRoute}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
                   // (worker 自己不能再开协同)。
@@ -6249,24 +6308,11 @@ function CCAgentSessionContent({
                       </div>
                     </Tip>
                   ) : (
-                    <Tip
-                      text={
-                        composerDir ? (
-                          session?.remoteHostId ? (
-                            // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
-                            // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
-                            // SSH alias (HostConfig.id), 不需要额外 lookup。
-                            <>
-                              <div>Host: {session.remoteHostId}</div>
-                              <div>{composerDir}</div>
-                            </>
-                          ) : (
-                            composerDir
-                          )
-                        ) : null
-                      }
-                      mono
-                      side="top"
+                    <WorkingDirectoryTip
+                      path={composerDir}
+                      deviceId={remoteDeviceId ?? session?.deviceLinkDeviceId}
+                      deviceName={session?.deviceLinkDeviceName}
+                      remoteHostId={session?.remoteHostId}
                     >
                       {isRemoteWorktreeSession ? (
                         <div className="flex min-w-0 items-center gap-1.5">
@@ -6282,7 +6328,7 @@ function CCAgentSessionContent({
                           {workingDirChipContent}
                         </button>
                       )}
-                    </Tip>
+                    </WorkingDirectoryTip>
                   )}
 
                   {/* Right: Context capacity indicator */}
@@ -6309,29 +6355,12 @@ function CCAgentSessionContent({
                       deviceLinkDeviceId={remoteDeviceId ?? null}
                       usageAccount={usageAccount}
                     />
-                    {/* device-link 远程任务的档位走 maker:set-context-window-budget 隧道命令，
-                        在偏好文件落盘并应用到活实例；老被控端不支持时由 chip 提示版本不支持。
-                        当前档位与可选档位一起来自权威边界查询（本地 main / 远程被控端）。 */}
-                    {sessionId && (
-                      <ContextWindowBudgetChip
-                        sessionId={sessionId}
-                        contextTokens={agentStatus.contextTokens}
-                        model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                        providerId={
-                          agentSwitchIntent
-                            ? agentSwitchIntent.providerId
-                            : (session?.providerId ?? null)
-                        }
-                        agentKind={normalizeDbAgentKind(displayAgentKind)}
-                        providers={{ providers }}
-                        deviceId={remoteDeviceId}
-                        disabled={readOnly || !session}
-                      />
-                    )}
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
-                      providerId={session?.providerId}
+                      providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
+                      providers={{ providers }}
+                      disabled={readOnly || !session}
                       contextTokens={agentStatus.contextTokens}
                       model={agentSwitchIntent?.model ?? session?.model ?? ''}
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
@@ -6911,197 +6940,4 @@ function RunningStatusBar({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ContextCapacityRing — circular token usage indicator
-// ---------------------------------------------------------------------------
-
-/** Format a token count with K/M suffix: 200000 → "200K", 1000000 → "1M". */
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
-  }
-  return n.toString();
-}
-
-/**
- * 从 maker capabilities cache 查模型 contextWindow。
- * 拿不到时返回 undefined，由 display resolver 兜底到 200K。
- */
-function getModelContextWindow(
-  model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
-  deviceId?: string,
-): number | undefined {
-  const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
-  return found?.contextWindow;
-}
-
-function ContextCapacityRing({
-  isRunning,
-  sessionId,
-  providerId,
-  contextTokens,
-  model,
-  vendorKey,
-  sdkContextWindow,
-  verifiedContextWindow,
-  deviceId,
-  onCompact,
-}: {
-  isRunning?: boolean;
-  sessionId?: string;
-  providerId?: string | null;
-  contextTokens: number;
-  model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
-  /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
-  sdkContextWindow: number;
-  verifiedContextWindow?: number | null;
-  /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
-  deviceId?: string;
-  /** 提供时圆环可点击 — 点击后(经用户确认)向 agent 发送 /compact 压缩上下文。 */
-  onCompact?: () => void;
-}) {
-  const { t } = useTranslation();
-  const [contextInspection, setContextInspection] = useState(0);
-  const codexContext = useCodexContextWindow({
-    enabled: vendorKey === 'codex' && !deviceId && Boolean(sessionId),
-    providerId,
-    modelId: model,
-    sessionId,
-    reportedWindow: sdkContextWindow,
-    refreshKey: `${isRunning}:${contextInspection}`,
-  });
-  const contextWindow = resolveDisplayContextWindow({
-    sdkContextWindow,
-    verifiedContextWindow,
-    runtimeWindowAuthoritative: vendorKey === 'codex',
-    nativeContextWindow: codexContext?.contextWindow,
-    nativeContextPending: codexContext?.pendingApply,
-    modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
-  });
-  const pct =
-    contextWindow > 0
-      ? Math.min(Math.max(Math.round((contextTokens / contextWindow) * 100), 0), 100)
-      : 0;
-
-  // Ring geometry: outer diameter 20px, strokeWidth 2.5
-  const size = 20;
-  const strokeWidth = 2.5;
-  const radius = (size - strokeWidth) / 2; // 8.75
-  const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (circumference * pct) / 100;
-
-  // Color thresholds per spec
-  const fillColor =
-    pct > 90
-      ? 'var(--error-flat)'
-      : pct > 70
-        ? 'var(--warning-fg)'
-        : 'var(--msg-tool-card-chevron)';
-
-  const usedTokens = Math.max(0, contextTokens);
-  const tooltipText =
-    contextWindow > 0
-      ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`
-      : 'No context data yet';
-
-  const ringContent = (
-    <>
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        className="shrink-0"
-        aria-hidden="true"
-        focusable="false"
-      >
-        {/* Track (background circle) */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--msg-tool-card-border)"
-          strokeWidth={strokeWidth}
-        />
-        {/* Fill arc — starts at 12 o'clock, sweeps clockwise */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={fillColor}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </svg>
-      <span className="text-12 font-medium leading-none" style={{ color: fillColor }}>
-        {contextWindow > 0 ? `${pct}%` : '—'}
-      </span>
-    </>
-  );
-
-  return (
-    <Tip
-      text={
-        onCompact ? (
-          <>
-            <div>{tooltipText}</div>
-            <div>{t('ccAgent.layout.contextRing.compactHint')}</div>
-          </>
-        ) : vendorKey === 'codex' ? (
-          // Native Codex manages compaction; this control only reads its capacity.
-          <>
-            <div>
-              {codexContext?.pendingApply
-                ? t('ccAgent.layout.contextRing.codexPendingHint')
-                : tooltipText}
-            </div>
-            <div>
-              {codexContext
-                ? t('settings.providers.models.advanced.codexContextValues', {
-                    total: codexContext.contextWindow.toLocaleString(),
-                    usable: codexContext.usableContextWindow.toLocaleString(),
-                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
-                  })
-                : t('settings.providers.models.advanced.codexContextUnknown')}
-            </div>
-            <div>{t('ccAgent.layout.contextRing.codexAutoHint')}</div>
-          </>
-        ) : (
-          tooltipText
-        )
-      }
-    >
-      {onCompact ? (
-        <button
-          type="button"
-          onClick={onCompact}
-          aria-label={t('ccAgent.layout.contextRing.compactHint')}
-          className="flex shrink-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-75 active:opacity-60"
-        >
-          {ringContent}
-        </button>
-      ) : (
-        <div
-          className="flex shrink-0 items-center gap-1"
-          onMouseEnter={() => {
-            if (vendorKey === 'codex') setContextInspection((n) => n + 1);
-          }}
-        >
-          {ringContent}
-        </div>
-      )}
-    </Tip>
-  );
-}
 import { isSharedTaskPeer } from '@cindy/device-link';

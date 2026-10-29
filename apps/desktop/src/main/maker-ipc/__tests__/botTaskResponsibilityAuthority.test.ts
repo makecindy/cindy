@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { botDelegations, botProfiles, botSessionLinks, sessions } from '../../localDb/schema.js';
+import { createBotWorkbenchAccess, type WorkbenchCallerResult } from '../botWorkbenchAccess.js';
 
 // Exercise the real authority queries against SQLite, without Electron startup.
 // PR #6813 inserted another exported function between the queried functions, breaking
@@ -89,7 +90,7 @@ function fixture(role: string) {
   };
   const api = new Function(...Object.keys(deps), js)(...Object.values(deps)) as {
     captureBotCreatedTaskResponsibility(id: string): Promise<null | ((id: string) => Promise<void>)>;
-    resolveWorkbenchCaller(id: string): Promise<{ ok: boolean; errorCode?: string }>;
+    resolveWorkbenchCaller(id: string): Promise<WorkbenchCallerResult>;
   };
   return { sqlite, save, broadcast, remoteBroadcast, ...api };
 }
@@ -107,7 +108,34 @@ it.each(['canonical', 'thread', 'channel', 'group'])(
       expect(f.remoteBroadcast).toHaveBeenCalledWith('hihi');
       // Recognizing a creator must not grant a channel/group conversation workbench access.
       if (role === 'channel' || role === 'group') {
-        expect(await f.resolveWorkbenchCaller('caller')).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });
+        // #6965: the real caller query must explain the recovery path, including for reads.
+        // Existing coverage only checked the code. Minimum input: active group/channel link; unit.
+        const denied = await f.resolveWorkbenchCaller('caller');
+        expect(denied).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });
+        if (denied.ok) throw new Error('Expected workbench denial');
+        expect(denied.message).toContain('未读取或修改');
+        expect(denied.message).toContain('私聊主聊天');
+        expect(denied.message).toContain('私聊话题');
+        expect(denied.message).toContain('不要在当前入口重试');
+        // Every operation must stop before touching business records or sending a message,
+        // otherwise the shared denial's no-read/no-change statement would be false.
+        const untouched = vi.fn(() => { throw new Error('Business operation reached'); });
+        const access = createBotWorkbenchAccess({
+          resolveCaller: f.resolveWorkbenchCaller,
+          schedulerBotId: untouched, readWatched: untouched,
+          readResponsibleSessionIds: untouched, saveResponsibility: untouched,
+          listDelegations: untouched, readTarget: untouched, readGlance: untouched,
+          readSessionTranscript: untouched, readRemoteTranscript: untouched,
+          sendToSession: untouched, sendToRemoteSession: untouched, notifyChanged: untouched,
+        });
+        const params = { callerSessionId: 'caller', taskId: 'created' };
+        expect(await access.get(params)).toEqual(denied);
+        expect(await access.read(params)).toEqual(denied);
+        expect(await access.setResponsibility({ ...params, responsible: true })).toEqual(denied);
+        expect(await access.continueTask({ ...params, message: 'Continue' })).toEqual(denied);
+        expect(untouched).not.toHaveBeenCalled();
+      } else {
+        expect(await f.resolveWorkbenchCaller('caller')).toEqual({ ok: true, botId: 'hihi' });
       }
     } finally { f.sqlite.close(); }
   },

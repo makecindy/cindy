@@ -1,3 +1,4 @@
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
  * ---------------------------------------------------------------------------
@@ -15,6 +16,7 @@
  * 视觉与实时错误共用 ErrorNotice，中性底色与正文，红色仅标识状态图标。
  */
 
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
 import {
@@ -36,8 +38,10 @@ export function ErrorMessageCard({
   toolLoop,
   sessionSource,
   kind = 'reply-error',
+  onDiagnose,
 }: {
   message: string;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   /** Blocked input has not reached the agent; its explanation is already user-facing. */
   kind?: 'reply-error' | 'blocked-input';
   reason?: string;
@@ -50,7 +54,7 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
@@ -88,6 +92,7 @@ export function ErrorMessageCard({
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}
+      onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
       data-testid="error-message-card"
     />
   );

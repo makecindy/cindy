@@ -93,6 +93,8 @@ describe('Cindy native provider refresh bridge', () => {
     await adapter.refresh(snapshot, h.ctx, new Set());
     allowed = false;
     await expect(request()).rejects.toThrow('not authorized');
+    fetchGrant.mockResolvedValueOnce({ ok: true, json: async () => ({ allowed: false, code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED' }) });
+    await expect(request()).rejects.toThrow('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]');
     fetchGrant.mockRejectedValueOnce(new Error('disconnected'));
     await expect(request()).rejects.toThrow('disconnected');
     expect(stream).toHaveBeenCalledTimes(1);

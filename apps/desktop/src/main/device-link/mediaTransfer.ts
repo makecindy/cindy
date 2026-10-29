@@ -32,13 +32,14 @@ import path from 'node:path';
 import { net } from 'electron';
 import type { AttachmentIntegrity } from '@cindy/device-link';
 
-import { serverApiFetch } from '../serverApiClient.js';
 import { requireAppCapability } from '../appCapabilities.js';
-import { deviceLinkApiBase } from './index.js';
+import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
 import { sourceFileReadError, withSourceFileHandleContext } from './sourceFileError';
+import { mimeOf, MIME_BY_EXT } from './mediaMime';
+export { mimeOf } from './mediaMime';
 
 const log = createLogger('device-link:mediaTransfer');
 
@@ -55,42 +56,10 @@ const PRESIGN_PUT_PATH = '/api/device-link/media/presign-put';
 const PRESIGN_GET_PATH = '/api/device-link/media/presign-get';
 const DELETE_PATH = '/api/device-link/media';
 
-/**
- * device-link 媒体关心的 ext→mime(覆盖图片/视频/音频/常见文档)。
- * 仅作 OSS 存储 Content-Type 的 best-effort 兜底;入方向权威 mime 来自被控端
- * cache-store resolver(readFile 返回),不依赖本表。未知 → octet-stream。
- */
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  mkv: 'video/x-matroska',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  m4a: 'audio/mp4',
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  json: 'application/json',
-};
-
 /** 从文件路径取裸扩展名(无点、小写),无扩展名 → 'bin'。 */
 function extOf(localPath: string): string {
   const e = path.extname(localPath).replace(/^\.+/, '').toLowerCase();
   return e || 'bin';
-}
-
-/** ext → mime,未知回落 application/octet-stream。 */
-export function mimeOf(ext: string): string {
-  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
 }
 
 interface PresignPutResponse {
@@ -119,10 +88,9 @@ async function presignPut(
   contentType: string,
 ): Promise<PresignPutResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return serverApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
+  return deviceLinkApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
     body: { size, ext, contentType, ...(sharedTaskMediaId() ? { sharedTaskId: sharedTaskMediaId() } : {}) },
-    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -141,10 +109,9 @@ const REMOVE_REMOTE_TIMEOUT_MS = 15_000;
 /** 向 relay server 申请下载预签名(server 校验请求方 == key 内嵌 userId)。 */
 async function presignGet(key: string): Promise<PresignGetResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return serverApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
+  return deviceLinkApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
     method: 'POST',
     body: { key },
-    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -737,10 +704,9 @@ export async function downloadToFile(
 export async function removeRemote(key: string): Promise<void> {
   try {
     requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-    await serverApiFetch<{ deleted: boolean }>(DELETE_PATH, {
+    await deviceLinkApiFetch<{ deleted: boolean }>(DELETE_PATH, {
       method: 'DELETE',
       body: { key },
-      baseUrl: deviceLinkApiBase,
       // Best-effort (the OSS lifecycle rule is the backstop): never let an unresponsive relay
       // hold up the upload failure or copy cancellation waiting on it.
       timeoutMs: REMOVE_REMOTE_TIMEOUT_MS,

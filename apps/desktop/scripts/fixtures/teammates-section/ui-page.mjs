@@ -19,13 +19,13 @@ export default {
     'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>({});` },
     'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
-    'src/renderer/features/bots/botGroupStore': { partial: 'export const useBotGroupList=()=>({groups:[],loaded:true});' },
+    'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
     'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
     'src/renderer/state/agentIslandActivity': { partial: 'const activity=new Map(); export const useAgentIslandActivityMap=()=>activity;' },
     'src/renderer/features/bots/BotCreateMenu': 'export const BotCreateMenu=()=>null;',
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
-  cases: Object.fromEntries([
+  cases: { ...Object.fromEntries([
     ['default', '/bots/mate-6'],
     ['session', '/bots/mate-6/session/session-6'],
     ['history', '/bots/mate-6/history/session-6'],
@@ -47,7 +47,54 @@ export default {
       data: { profiles: localProfiles, remoteBots, route },
     }];
   })),
+    ...Object.fromEntries([11, 999].map(count => [`long-speakers-${count}`, {
+      about: 'Long speaking member names ellipsize before the unread count in a narrow sidebar',
+      data: { profiles: [], remoteBots: [], route: count === 11 ? '/bots' : '/bots/groups/long-speakers', groups: [{
+        id: 'long-speakers', name: 'Cindy开发', replyMode: 'all', speakingMode: 'auto',
+        members: ['Cindy (dash)', 'orik (kiro)', '另一个名字很长的伙伴'].map((name, index) => ({
+          botId: `speaker-${index}`, name, avatar: '', avatarColor: 'violet', status: 'active',
+        })),
+        speakingBotIds: ['speaker-0', 'speaker-1', 'speaker-2'],
+        organizerBotId: 'speaker-0', projectDir: null, lastMessage: null,
+        planningBotId: null, openPlan: null, createdAt: 1, updatedAt: 1,
+        serverUnread: { count, mentioned: count > 99 },
+      }] },
+    }])),
+    'device-names': {
+      about: 'Duplicate and missing computer names never expose device fingerprints in teammate rows',
+      data: { profiles: [], route: '/bots', remoteBots: [
+        { id: 'writer', name: 'Writer', deviceId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deviceName: 'Mac Studio', online: true, preview: 'Ready', activityAt: 0 },
+        { id: 'researcher', name: 'Researcher', deviceId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', deviceName: 'Mac Studio', online: true, preview: 'Ready', activityAt: 0 },
+        { id: 'designer', name: 'Designer', deviceId: 'cccccccccccccccccccccccccccccccc', deviceName: '', online: false, preview: 'Ready', activityAt: 0 },
+      ] },
+    },
+  },
   async check(page, ui) {
+    if (ui.case.startsWith('long-speakers-')) {
+      const running = page.getByTestId('bot-group-running');
+      const label = running.locator('[title]');
+      const badge = page.getByLabel(await ui.t('sidebar.teammateUnreadCount', { count: ui.data.groups[0].serverUnread.count }));
+      const metrics = await label.evaluate(node => ({
+        width: node.clientWidth, fullWidth: node.scrollWidth,
+        right: node.getBoundingClientRect().right, overflow: getComputedStyle(node).overflow,
+        textOverflow: getComputedStyle(node).textOverflow,
+      }));
+      const badgeBox = await badge.boundingBox();
+      assert.ok(metrics.width > 0 && metrics.fullWidth > metrics.width, 'long names reach the text boundary');
+      assert.equal(metrics.overflow, 'hidden');
+      assert.equal(metrics.textOverflow, 'ellipsis');
+      assert.ok(badgeBox && metrics.right < badgeBox.x, 'preview leaves space before the unread badge');
+      assert.equal(await badge.innerText(), ui.data.groups[0].serverUnread.count > 99 ? '99+' : '11');
+      return;
+    }
+    if (ui.case === 'device-names') {
+      const text = await page.locator('body').innerText();
+      assert.match(text, /Mac Studio \(1\)/);
+      assert.match(text, /Mac Studio \(2\)/);
+      assert.ok(text.includes(await ui.t('bots.cloud.unknownDevice')));
+      assert.doesNotMatch(text, /[abc]{32}/);
+      return;
+    }
     const rows = page.getByText('Ready', { exact: true });
     assert.equal(await rows.count(), 5);
     assert.equal(await page.getByText('Translator', { exact: true }).count(), 0);

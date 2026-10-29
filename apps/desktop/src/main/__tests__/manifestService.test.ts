@@ -93,6 +93,23 @@ describe('manifestService cache channel identity', () => {
     clearCachedManifest();
   });
 
+  // Optional binary preparation observes metadata; it cannot change the result
+  // of the application's update lookup, even if the observer fails. Tier: unit.
+  it('isolates optional metadata observers and honors unsubscribe', async () => {
+    const service = await import('../manifestService');
+    const observer = vi.fn(() => { throw new Error('optional prefetch failed'); });
+    const unsubscribe = service.onManifestFetched(observer);
+    try {
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+      unsubscribe();
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); }
+  });
+
   it('discards a cached release manifest after the shared channel switches to beta', async () => {
     mockManifestResponse(RELEASE_MANIFEST);
     const service = await import('../manifestService');

@@ -1678,7 +1678,7 @@ describe('new session model', () => {
 
     expect(parseNewSessionDeviceOptions(encoded)).toEqual([
       { deviceId: 'pc', name: 'PC' },
-      { deviceId: 'mac', name: 'mac' },
+      { deviceId: 'mac', name: '另一台电脑' },
     ]);
   });
 
@@ -1687,7 +1687,7 @@ describe('new session model', () => {
       { deviceId: 'pc', name: 'PC' },
     ]);
     expect(parseNewSessionDeviceOptions('not-json', { deviceId: 'pc', name: '' })).toEqual([
-      { deviceId: 'pc', name: 'pc' },
+      { deviceId: 'pc', name: '另一台电脑' },
     ]);
     expect(parseNewSessionDeviceOptions('')).toEqual([]);
   });

@@ -50,7 +50,7 @@ describe('remote Agent catalogs', () => {
       keepDeviceIds: [],
       revokedDeviceIds: new Set(['revoked']),
     })).toEqual([
-      { deviceId: 'unnamed', name: 'unnamed', canOpen: true },
+      { deviceId: 'unnamed', name: 'another computer', canOpen: true },
       { deviceId: 'office', name: 'Office PC', canOpen: true },
       { deviceId: 'studio', name: 'Studio Mac', canOpen: true },
     ]);

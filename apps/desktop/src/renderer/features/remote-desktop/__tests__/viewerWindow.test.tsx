@@ -97,6 +97,7 @@ it.each(clipboardNotices)('shows %s briefly without retry', async (notice) => {
     caps: null,
     preferences: {
       audio: true,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: true,
@@ -206,6 +207,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     ready: true,
     preferences: {
       audio: true,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -288,6 +290,7 @@ it('hides view-only controls and enables desktop actions only after control is c
   const state: ViewerSnapshot = {
     preferences: {
       audio: true,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -447,6 +450,7 @@ it.each([
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: false,
@@ -496,6 +500,7 @@ it('announces an active privacy screen without a banner or toolbar setting marke
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: true,
         hostMute: false,
         clipboardSync: true,
@@ -675,6 +680,7 @@ it('splits display size into a ratio choice and recommended resolutions for this
     ready: true,
     preferences: {
       audio: false,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -772,6 +778,7 @@ it('explains why a manual clipboard transfer failed and clears it on the next at
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: false,

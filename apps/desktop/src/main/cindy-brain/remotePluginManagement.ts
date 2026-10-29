@@ -1,6 +1,7 @@
 import { extractIpcError } from '../../shared/ipcError.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionInvokeRequest, RemoteActionInvokeResponse } from '@cindy/device-link';
+import { parseLocalPluginShareSnapshot, type LocalPluginShareSnapshot } from '@cindy/plugin-protocol';
 import {
   isGhostInstallApprovalToken,
   ghostInstallApprovalToken,
@@ -67,6 +68,11 @@ export interface RemotePluginManagementDeps {
     assertCurrent: () => void,
   ): Promise<void>;
   uninstall(id: string, approval: string, assertCurrent: () => void): Promise<void>;
+  installShare?(
+    snapshot: LocalPluginShareSnapshot,
+    prompt: GhostInstallConsentPrompt,
+    assertScope: () => void,
+  ): Promise<void>;
   installFile?(
     peer: string,
     attachment: string,
@@ -196,6 +202,7 @@ export class RemotePluginManagement {
         market,
         ...(this.deps.preferences ? { hostPreferences: true } : {}),
         ...(this.deps.settingsPage ? { settingsPage: true } : {}),
+        ...(this.deps.installShare ? { localShares: true } : {}),
         ...(scopeProjects ? { projects: scopeProjects.map(({ id, name, path }) => ({ id, name, ...(path ? { path } : {}) })) } : {}),
         ...(this.deps.projects?.resolve ? { projectBrowse: true } : {}),
       });
@@ -304,6 +311,7 @@ export class RemotePluginManagement {
             'expectedReleaseId',
             'expectedInstalledApproval',
             'expectedManifest',
+            'expectedSnapshot',
             'attachment',
             'projectId',
             'expectedProjectRevision',
@@ -313,7 +321,7 @@ export class RemotePluginManagement {
       return invalid();
     const id = str(input.operationId, 128);
     const kind = str(input.kind, 32);
-    if (!['install', 'enable', 'disable', 'uninstall', 'install-file'].includes(kind))
+    if (!['install', 'enable', 'disable', 'uninstall', 'install-file', 'install-share'].includes(kind))
       return invalid();
     const projectId = input.projectId === undefined ? undefined : str(input.projectId);
     const projectRevision =
@@ -325,6 +333,13 @@ export class RemotePluginManagement {
     )
       return invalid();
     const target = request.resourceRef?.id;
+    let sharedSnapshot: LocalPluginShareSnapshot | undefined;
+    if (kind === 'install-share') {
+      if (!this.deps.installShare || target || Object.keys(input).some(key =>
+        !['operationId', 'kind', 'expectedSnapshot'].includes(key))) return invalid();
+      try { sharedSnapshot = parseLocalPluginShareSnapshot(input.expectedSnapshot); }
+      catch { return invalid(); }
+    } else if (input.expectedSnapshot !== undefined) return invalid();
     const fingerprint = JSON.stringify([target ?? null, input]);
     const previous = this.operations.get(id);
     if (previous) {
@@ -340,7 +355,7 @@ export class RemotePluginManagement {
     if (target) {
       ghost = this.find(target);
       if (installedApproval !== ghostInstallApprovalToken(ghost.approval)) return unavailable();
-    } else if (!['install', 'install-file'].includes(kind)) return invalid();
+    } else if (!['install', 'install-file', 'install-share'].includes(kind)) return invalid();
     const pluginId = kind === 'install' ? str(input.pluginId, 1024) : undefined;
     const releaseId = kind === 'install' ? str(input.expectedReleaseId, 1024) : undefined;
     if (kind === 'install-file' && (!this.deps.installFile || typeof input.attachment !== 'string'))
@@ -396,6 +411,9 @@ export class RemotePluginManagement {
       try {
         assertCurrent();
         switch (kind) {
+          case 'install-share':
+            await this.deps.installShare!(sharedSnapshot!, prompt, () => this.assertScope(op));
+            break;
           case 'install':
             await this.deps.market.install(
               pluginId!,

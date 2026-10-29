@@ -53,6 +53,7 @@ vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({ ...await original<typeof import('@/device-link/remoteResourceAvailability')>(), isRemoteResourceHostOnline: () => true, readRemoteCollectionCache: () => [], writeRemoteCollectionCache: () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
+  peekRemoteResourceSnapshot: () => null,
   cacheRemoteResourceItems: vi.fn(), readRemoteResourceSnapshot: async () => ({ items: {} }),
   isRemoteResourceUnread: () => true, markRemoteResourceRead: h.markRead,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,

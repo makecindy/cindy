@@ -56,6 +56,21 @@ export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
 export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
+export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+
+/** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
+export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const result: Record<string, number | string | null> = {};
+  for (const key of ['toolCount', 'messageCount']) {
+    const count = row[key];
+    if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 && count <= 1_000_000) result[key] = count;
+  }
+  result.wireEffort = typeof row.wireEffort === 'string' &&
+    ['none', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(row.wireEffort)
+    ? row.wireEffort : null;
+  return result;
+}
 
 /** Cindy-enforced bash bound when the model omits timeout or passes a non-positive number. */
 export const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS = 300;
@@ -73,6 +88,9 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { once } from 'node:events';
+import { connect as connectTcp } from 'node:net';
+import { connect as connectTls } from 'node:tls';
 import path from 'node:path';
 import {
   createBashTool,
@@ -155,6 +173,7 @@ const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
 const MAX_PI_PACKAGE_SOURCE_LENGTH = 2_048;
 const projectPiPackageCommandDiagnostic = ${projectPiPackageCommandDiagnostic.toString()};
 const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString()};
+const projectPiRequestDiagnostics = ${projectPiRequestDiagnostics.toString()};
 
 // Pi 的模型鉴权、localhost proxy 与 MCP bearer 需要留在父进程 env 供 runtime
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
@@ -2628,10 +2647,162 @@ function isAllowedMcpUrl(url: URL): boolean {
   return url.protocol === 'http:' && isLoopbackMcpHostname(url.hostname);
 }
 
+/** Authenticated loopback MCP must use a socket, not Bun fetch's environment proxy. */
+async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: string, signal: AbortSignal): Promise<Response> {
+  const parsed = new URL(url);
+  if (!isLoopbackMcpHostname(parsed.hostname)) throw new McpBridgeError('URL outside security boundary');
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  const socket = parsed.protocol === 'https:'
+    ? connectTls({ host, port, servername: host === 'localhost' ? host : undefined })
+    : connectTcp({ host, port });
+  const abort = () => socket.destroy(new Error('request cancelled'));
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  const close = () => {
+    signal.removeEventListener('abort', abort);
+    socket.destroy();
+  };
+
+  try {
+    await once(socket, parsed.protocol === 'https:' ? 'secureConnect' : 'connect');
+    const remoteAddress = socket.remoteAddress || '';
+    if (remoteAddress !== '::1' && !/^(?:::ffff:)?127\./i.test(remoteAddress)) {
+      throw new McpBridgeError('URL outside security boundary');
+    }
+    const requestHeaders = new Headers(headers);
+    requestHeaders.set('host', parsed.host);
+    requestHeaders.set('content-length', String(Buffer.byteLength(body)));
+    requestHeaders.set('connection', 'close');
+    requestHeaders.set('accept-encoding', 'identity');
+    requestHeaders.delete('transfer-encoding');
+    const requestPath = (parsed.pathname || '/') + parsed.search;
+    const head = 'POST ' + requestPath + ' HTTP/1.1\r\n'
+      + Array.from(requestHeaders, ([name, value]) => name + ': ' + value + '\r\n').join('')
+      + '\r\n';
+    const iterator = socket[Symbol.asyncIterator]();
+    socket.write(head + body);
+
+    let pending = Buffer.alloc(0);
+    const readMore = async (): Promise<boolean> => {
+      const next = await iterator.next();
+      if (next.done) return false;
+      pending = Buffer.concat([pending, Buffer.from(next.value)]);
+      return true;
+    };
+    let status = 0;
+    let responseHeaders = new Headers();
+    for (;;) {
+      let boundary = pending.indexOf('\r\n\r\n');
+      while (boundary < 0) {
+        if (pending.length > 64 * 1024 || !(await readMore())) throw new Error('invalid HTTP response');
+        boundary = pending.indexOf('\r\n\r\n');
+      }
+      if (boundary > 64 * 1024) throw new Error('invalid HTTP response');
+      const lines = pending.subarray(0, boundary).toString('latin1').split('\r\n');
+      pending = pending.subarray(boundary + 4);
+      const match = /^HTTP\/1\.[01] ([0-9]{3})(?: |$)/.exec(lines.shift() || '');
+      if (!match) throw new Error('invalid HTTP response');
+      status = Number(match[1]);
+      responseHeaders = new Headers();
+      for (const line of lines) {
+        const colon = line.indexOf(':');
+        if (colon < 1) throw new Error('invalid HTTP response');
+        responseHeaders.append(line.slice(0, colon), line.slice(colon + 1).trim());
+      }
+      if (status >= 100 && status < 200 && status !== 101) continue;
+      break;
+    }
+    if (status < 200 || status > 599) throw new Error('invalid HTTP response');
+    if (status === 204 || status === 205 || status === 304) {
+      close();
+      return new Response(null, { status, headers: responseHeaders });
+    }
+
+    const chunked = /(?:^|,)\s*chunked\s*(?:,|$)/i.test(responseHeaders.get('transfer-encoding') || '');
+    const lengthText = responseHeaders.get('content-length');
+    const length = lengthText === null ? null : Number(lengthText);
+    if (!chunked && length !== null && (!Number.isSafeInteger(length) || length < 0)) {
+      throw new Error('invalid HTTP response');
+    }
+    const requireMore = async (): Promise<void> => {
+      if (!(await readMore())) throw new Error('incomplete HTTP response');
+    };
+    async function* readBody(): AsyncGenerator<Uint8Array> {
+      if (chunked) {
+        for (;;) {
+          let end = pending.indexOf('\r\n');
+          while (end < 0) {
+            if (pending.length > 8192) throw new Error('invalid HTTP response');
+            await requireMore();
+            end = pending.indexOf('\r\n');
+          }
+          const sizeText = pending.subarray(0, end).toString('ascii').split(';', 1)[0];
+          pending = pending.subarray(end + 2);
+          if (!/^[0-9a-f]+$/i.test(sizeText)) throw new Error('invalid HTTP response');
+          let remaining = parseInt(sizeText, 16);
+          if (!Number.isSafeInteger(remaining)) throw new Error('invalid HTTP response');
+          if (remaining === 0) return;
+          while (remaining > 0) {
+            if (pending.length === 0) await requireMore();
+            const count = Math.min(remaining, pending.length);
+            yield pending.subarray(0, count);
+            pending = pending.subarray(count);
+            remaining -= count;
+          }
+          while (pending.length < 2) await requireMore();
+          if (pending[0] !== 13 || pending[1] !== 10) throw new Error('invalid HTTP response');
+          pending = pending.subarray(2);
+        }
+      }
+      if (length !== null) {
+        let remaining = length;
+        while (remaining > 0) {
+          if (pending.length === 0) await requireMore();
+          const count = Math.min(remaining, pending.length);
+          yield pending.subarray(0, count);
+          pending = pending.subarray(count);
+          remaining -= count;
+        }
+        return;
+      }
+      if (pending.length) yield pending;
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    }
+    const chunks = readBody();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await chunks.next();
+          if (next.done) {
+            close();
+            controller.close();
+          } else {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          close();
+          controller.error(error);
+        }
+      },
+      cancel() { close(); },
+    });
+    return new Response(stream, { status, headers: responseHeaders });
+  } catch (error) {
+    close();
+    throw error;
+  }
+}
+
 class McpHttpClient {
   private nextId = 1;
   private sessionId: string | null = null;
   private readonly requestUrl: string;
+  private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
   private startupDeadlineAt: number | null;
 
@@ -2652,6 +2823,7 @@ class McpHttpClient {
       throw new McpBridgeError('URL outside security boundary');
     }
     this.requestUrl = parsed.href;
+    this.directLoopback = isLoopbackMcpHostname(parsed.hostname);
     const configuredTimeout = server.remote?.requestTimeoutMs;
     this.requestTimeoutMs = Number.isInteger(configuredTimeout)
       && configuredTimeout! > 0
@@ -2714,16 +2886,16 @@ class McpHttpClient {
     if (signal?.aborted) controller.abort();
     const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
-      const res = await fetch(this.requestUrl, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(body),
-        redirect: 'error',
-        signal: controller.signal,
-        // Bun's idle timer must not preempt the explicit request deadline while
-        // a local MCP tool is waiting for a user's card interaction.
-        timeout: false,
-      });
+      const headers = this.headers();
+      const payload = JSON.stringify(body);
+      const res = this.directLoopback
+        ? await fetchDirectLoopbackMcp(this.requestUrl, headers, payload, controller.signal)
+        : await fetch(this.requestUrl, {
+          method: 'POST', headers, body: payload, redirect: 'error', signal: controller.signal,
+          // Bun's idle timer must not preempt the explicit request deadline while
+          // a local MCP tool is waiting for a user's card interaction.
+          timeout: false,
+        });
       const sid = res.headers.get('mcp-session-id');
       if (sid) this.sessionId = sid;
       // consume 在同一个 AbortController 生命周期内完成，故 200/SSE 响应头后卡住的
@@ -2847,7 +3019,7 @@ class McpHttpClient {
   }
 }
 
-function mcpContentToPi(content: unknown): Array<Record<string, unknown>> {
+function mcpContentToPi(content: unknown, structuredContent?: unknown): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   if (Array.isArray(content)) {
     for (const item of content) {
@@ -2861,6 +3033,17 @@ function mcpContentToPi(content: unknown): Array<Record<string, unknown>> {
         out.push({ type: 'text', text: JSON.stringify(rec) });
       }
     }
+  }
+  // Pi details are for rendering/state, not model input. Keep MCP's structured
+  // result visible without duplicating the JSON text supplied by many servers.
+  if (structuredContent !== undefined) {
+    const text = JSON.stringify(structuredContent);
+    const alreadyIncluded = out.some((item) => {
+      if (item.type !== 'text' || typeof item.text !== 'string') return false;
+      if (item.text === text) return true;
+      try { return JSON.stringify(JSON.parse(item.text)) === text; } catch { return false; }
+    });
+    if (!alreadyIncluded) out.push({ type: 'text', text });
   }
   if (out.length === 0) out.push({ type: 'text', text: '(empty result)' });
   return out;
@@ -2956,12 +3139,16 @@ function schemaHint(schema: Record<string, unknown>): string {
 }
 
 class CindyMcpGateway {
+  // Older Pi ignores execute-result isError but supports tool_result overrides.
+  // Weak identities keep the status private without retaining completed calls.
+  private readonly failedResults = new WeakMap<object, { content: object; details: unknown }>();
   private readonly tools = new Map<string, ConnectedMcpTool>();
   private readonly unavailableServers = new Map<string, string>();
   /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
   private readonly disclosedSchemas = new Map<string, string>();
   /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
+  private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
 
@@ -3236,6 +3423,26 @@ class CindyMcpGateway {
   }
 
   /**
+   * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
+   * only tools that still exist AND whose stored fingerprint still matches the
+   * live schema — a removed or schema-drifted tool must not be advertised as
+   * safe to call directly (the gate would re-close on it and waste a round-trip).
+   */
+  disclosedKeysForPrompt(limit = 48): string {
+    const all: string[] = [];
+    for (const [key, fingerprint] of this.disclosedSchemas) {
+      const tool = this.tools.get(key);
+      if (!tool || this.schemaFingerprint(tool) !== fingerprint) continue;
+      const sep = key.indexOf('\u0000');
+      all.push(sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1));
+    }
+    all.sort();
+    const shown = all.slice(0, limit);
+    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
+    return shown.join(', ');
+  }
+
+  /**
    * 按当前 schema 记一次披露并落盘。披露判定按 schema 指纹而非 Pi 版本：Pi 升级不会
    * 作废未变 schema 的披露；schema 真变动时指纹失配，门重新武装。
    */
@@ -3353,9 +3560,21 @@ class CindyMcpGateway {
         unavailableServers,
       };
     } else {
+      const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const offset = Number.isSafeInteger(input.offset) && Number(input.offset) >= 0 ? Number(input.offset) : 0;
+      const limit = Number.isSafeInteger(input.limit) && Number(input.limit) > 0 ? Math.min(Number(input.limit), 50) : 50;
+      const matches = query ? tools.filter((tool) =>
+        [tool.server, tool.name, tool.description].some((value) => value.toLowerCase().includes(query))) : tools;
+      const page = matches.slice(offset, offset + limit);
       payload = {
         ok: true,
-        tools,
+        tools: page.map((tool) => ({ ...tool, description: tool.description.length > 240
+          ? tool.description.slice(0, 240) + '…' : tool.description })),
+        total: matches.length,
+        offset,
+        ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
+        availableServers: this.availableServers(),
+        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -3381,6 +3600,7 @@ class CindyMcpGateway {
   private async executeResolvedCall(resolved: ResolvedMcpGatewayCall, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
+    isError?: boolean;
   }> {
     let result: any;
     try {
@@ -3396,17 +3616,14 @@ class CindyMcpGateway {
           ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : ''),
       );
     }
-    const content = mcpContentToPi(result?.content);
+    const content = mcpContentToPi(result?.content, result?.structuredContent);
+    const details = result?.structuredContent ?? {};
     if (result?.isError) {
-      const message = content
-        .map((item) => (typeof item.text === 'string' ? item.text : ''))
-        .join('\n')
-        .trim();
-      throw new Error(
-        message.length > 0 ? message : 'MCP tool returned an error',
-      );
+      const failure = { content, details };
+      this.failedResults.set(content, failure);
+      if (details !== null && typeof details === 'object') this.failedResults.set(details, failure);
     }
-    return { content, details: result?.structuredContent ?? {} };
+    return { content, details, ...(result?.isError ? { isError: true } : {}) };
   }
 
   private async executeCall(params: unknown, signal?: AbortSignal, toolCallId?: string): Promise<{
@@ -3494,10 +3711,46 @@ class CindyMcpGateway {
   }
 
   register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
+    pi.on?.('tool_result', (event: any) => {
+      const failure = this.failedResults.get(event.content) ?? this.failedResults.get(event.details);
+      if (failure) {
+        this.failedResults.delete(failure.content);
+        if (failure.details !== null && typeof failure.details === 'object') {
+          this.failedResults.delete(failure.details);
+        }
+        return { isError: true };
+      }
+    });
     // Host-owned Bot identity enables native shortcuts; execution uses the scoped helper entry.
     this.botHelperFacadeEnabled = options.botMemoryFacade === true;
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
+    // Token hygiene: post-compaction the model loses the memory of which MCP tools
+    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
+    // one-shot custom message into the first run after each successful compaction
+    // instead of editing the system prompt every run; the message then lives in
+    // context like any other turn until the next compaction summarizes it away.
+    this.disclosureNotePending = false;
+    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
+    pi.on?.('before_agent_start', () => {
+      if (!this.disclosureNotePending) return undefined;
+      this.disclosureNotePending = false;
+      const keys = this.disclosedKeysForPrompt();
+      if (!keys) return undefined;
+      return {
+        message: {
+          customType: 'cindy-mcp-disclosure-state',
+          content: [{
+            type: 'text',
+            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
+              + keys + '. Call them directly while you still remember their parameter shapes. If compaction '
+              + 'blurred the details, re-inspect just the tools you need via cindy_mcp_list_tools instead of '
+              + 'guessing parameters. (One-shot reminder after context compaction.)',
+          }],
+          display: false,
+        },
+      };
+    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({
@@ -3761,16 +4014,19 @@ class CindyMcpGateway {
       name: CINDY_MCP_LIST_TOOLS,
       label: 'Discover Cindy MCP tools',
       description:
-        'List every connected Cindy/MCP capability without loading their parameter schemas into startup context. ' +
-        'Omit arguments to discover names and descriptions. Before invoking a tool, pass its exact server and tool ' +
+        'Discover connected Cindy/MCP tools in pages of at most 50 short descriptions. Use query or server to narrow ' +
+        'results, or offset=nextOffset for more. Before invoking a tool, pass its exact server and tool ' +
         'names here once to inspect that single input schema, then use cindy_mcp_call_tool.',
       parameters: {
         type: 'object',
         properties: {
           server: {
             type: 'string',
-            description: 'Optional exact server name. Omit to list tools from every connected server.',
+            description: 'Optional exact server name. Omit to search across connected servers.',
           },
+          query: { type: 'string', description: 'Search tool names and full descriptions, case-insensitively.' },
+          offset: { type: 'integer', minimum: 0, description: 'Use the previous nextOffset to continue browsing.' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Page size; default 50.' },
           tool: {
             type: 'string',
             description: 'Optional exact tool name. Requires server and returns that tool\'s input schema.',
@@ -3986,7 +4242,7 @@ function astraResponsesPayload(payload, model) {
 
 async function nativeFastPayload(payload, model, ctx) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
-  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
   let models;
   try { models = JSON.parse(process.env.CINDY_PI_FAST_MODELS || '[]'); } catch { return undefined; }
   if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
@@ -4265,7 +4521,23 @@ export default async function cindyBridge(piApi: any) {
   }
   pi.on('before_provider_request', async (event, ctx) => {
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    return learnedCachePayload((await nativeFastPayload(payload, ctx.model, ctx)) ?? payload, ctx.model);
+    const next = learnedCachePayload((await nativeFastPayload(payload, ctx.model, ctx)) ?? payload, ctx.model);
+    // A one-way native notification adds no host round trip. This is the payload
+    // preparation hook, not proof that HTTP was sent or accepted upstream.
+    const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (token) {
+      try {
+        const messages = next?.messages ?? next?.input ?? next?.contents;
+        ctx.ui.notify(${JSON.stringify(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)} + token + ':' + JSON.stringify(
+          projectPiRequestDiagnostics({
+            toolCount: Array.isArray(next?.tools) ? next.tools.length : undefined,
+            messageCount: Array.isArray(messages) ? messages.length : undefined,
+            wireEffort: next?.reasoning_effort ?? next?.reasoning?.effort ?? next?.output_config?.effort,
+          }),
+        ), 'info');
+      } catch { /* Diagnostics must never block a model request. */ }
+    }
+    return next;
   });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,

@@ -102,6 +102,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
+    errorCanContinue: record?.errorCanContinue === true,
     autoResumePending: readRecord(record?.autoResumePending),
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,

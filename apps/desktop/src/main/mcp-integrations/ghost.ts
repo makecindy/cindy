@@ -1,3 +1,5 @@
+import * as community from '../plugin-contributions/host.js';
+import { contributionOwnerKey, assertContributionOwner, getPreparedContribution } from '../plugin-contributions/prepared.js';
 import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
 import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import {
@@ -468,6 +470,8 @@ async function packForgeSource(
  * ──────────────────────────────────────────────────────────────────────── */
 
 export interface GhostGrantLiveSessionState {
+  /** Rechecks accepted account input and the existing plugin-managed helper surface. */
+  contributionAccountAllowed?: (acceptedOperation?: boolean) => Promise<boolean>;
   permissionMode: PermissionMode | null;
   remoteHostId: string | null;
   /** Includes the captured permission/Plan generations and forbids active or unknown Plan. */
@@ -1788,11 +1792,99 @@ export function getCindyGhostsMcpDeps(
       return { assertCurrent, release: () => undefined, consentPrompt: installConsentPrompt() };
     },
   });
+  const contributionAuthority = async (write: boolean) => {
+    const context = resolveSessionContext();
+    const owner = contributionOwnerKey();
+    const live = context?.sessionId && context.sessionInstanceId
+      ? hostDeps.getLiveSessionGrantState?.(context.sessionId, context.sessionInstanceId) : null;
+    const assert = async (acceptedOperation = false) => {
+      assertContributionOwner(owner);
+      if (!live || await live.contributionAccountAllowed?.(acceptedOperation) !== true || (write && (live.isCurrent?.() !== true || !live.permissionMode || workdirWriteVerdict(live.permissionMode, false) === 'deny'))) {
+        throwIpcError('PERMISSION_DENIED', 'Community contributions require a current account task; shared-task guests cannot borrow the Host account');
+      }
+      assertContributionOwner(owner);
+    };
+    await assert();
+    return { context: context!, assert: () => assert(), assertAccepted: () => assert(true) };
+  };
   return {
     ...(marketTools ? {
       searchMarket: (query: string) => marketTools.search(query),
       installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),
     } : {}),
+    async communityContribution(input) {
+      try {
+        const authority = await contributionAuthority(['prepare', 'submit', 'cancel', 'cancel-review'].includes(input.action));
+        let result: unknown;
+        if (input.action === 'prepare') {
+          const resolved = resolveInstalledGhost(getGhostManager().list(), input.ghostId, input.namespace);
+          if (resolved.status !== 'unique') return { ok: false, errorCode: resolved.status === 'ambiguous' ? 'GHOST_AMBIGUOUS' : 'GHOST_NOT_FOUND' };
+          result = await community.prepareContribution(installedGhostStoragePart(resolved.ghost), 'ai');
+        } else if (input.action === 'submit' || input.action === 'cancel-review') {
+          const cancelTarget = input.action === 'cancel-review' ? await community.myPluginReviewTarget(input.pluginId, input.release.releaseId) : null;
+          if (input.action === 'cancel-review' && (!cancelTarget || cancelTarget.release.sha256 !== input.release.sha256 || cancelTarget.release.revision !== input.release.revision)) throwIpcError('CONTRIBUTION_REVISION_STALE', 'Refresh this version before cancelling its review');
+          if (input.action === 'cancel-review' && cancelTarget && ['approved', 'rejected', 'cancelled'].includes(cancelTarget.release.reviewStatus ?? '')) {
+            await authority.assert();
+            return { ok: true, result: cancelTarget.release };
+          }
+          const toolName = input.action === 'cancel-review' ? 'ghost_cancel_plugin_review' : 'ghost_contribution_submit';
+          const prepared = input.action === 'cancel-review' && cancelTarget ? { preparedId: cancelTarget.release.releaseId, ghostId: input.pluginId, version: cancelTarget.release.version, sha256: cancelTarget.release.sha256, name: cancelTarget.name, description: t('settings.ghosts.contribution.cancelReviewDescription').replaceAll('{{version}}', cancelTarget.release.version) } : input.action === 'submit' ? getPreparedContribution(input.id).summary : undefined;
+          if (!prepared) throwIpcError('PRECONDITION_FAILED', 'Contribution preparation is unavailable');
+          const context = authority.context;
+          const live = hostDeps.getLiveSessionGrantState!(context.sessionId!, context.sessionInstanceId!);
+          let allowed = live?.permissionMode === 'bypassPermissions';
+          if (!allowed && live?.permissionMode === 'auto' && live.reviewAction) {
+            const decision = await live.reviewAction(toolAutoReviewAction(toolName, {
+              prepared_id: prepared.preparedId, ghost_id: prepared.ghostId, version: prepared.version, sha256: prepared.sha256, public: true,
+            }));
+            await authority.assert();
+            if (decision.verdict === 'block') return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: decision.reason ?? 'Automatic review denied this action; no publishing or cancellation request was sent.',
+            };
+            allowed = decision.verdict === 'allow';
+          }
+          if (!allowed) {
+            if (!hostDeps.requestHostPermission) throwIpcError('PRECONDITION_FAILED', 'Contribution confirmation is unavailable');
+            const decision = await hostDeps.requestHostPermission(context.sessionId!, context.sessionInstanceId!, {
+              kind: 'permission', requestId: randomUUID(), toolName,
+              input: { prepared_id: prepared.preparedId, ghost_id: prepared.ghostId, version: prepared.version, sha256: prepared.sha256 },
+              title: t(input.action === 'cancel-review' ? 'settings.ghosts.contribution.cancelReview' : 'settings.ghosts.contribution.confirmSubmit'),
+              description: [
+                input.action === 'cancel-review' ? '' : t('settings.ghosts.contribution.confirmPublic'),
+                `${prepared.name} · ${prepared.version}`,
+                prepared.description,
+                ...('releaseNotes' in prepared && typeof prepared.releaseNotes === 'string' && prepared.releaseNotes.trim()
+                  ? [t('settings.ghosts.contribution.releaseNotes'), prepared.releaseNotes] : []),
+                input.action === 'cancel-review' ? '' : t('settings.ghosts.contribution.versionConsumedHint'),
+              ].filter(Boolean).join('\n'),
+              metadata: { hostOwnedConfirmation: 'plugin_contribution' },
+            }, AbortSignal.timeout(10 * 60_000));
+            allowed = decision?.kind === 'permission' && decision.behavior === 'allow';
+          }
+          await authority.assert();
+          if (!allowed) return { ok: false, errorCode: 'MUTATION_CANCELLED' };
+          result = input.action === 'cancel-review' ? await community.cancelPluginReview(input.pluginId, input.release, authority.assert) : await community.submitContribution(input.id, authority.assertAccepted);
+        } else if (input.action === 'status') result = await community.contributionTransferStatus(input.id);
+        else if (input.action === 'cancel') result = community.cancelContribution(input.id);
+        else if (input.action === 'list') result = await community.listMyPlugins({ query: input.query ?? '', filter: input.filter ?? 'all', cursor: input.cursor });
+        else if (input.action === 'submission') result = await community.myPluginSubmission(input.pluginId, input.submissionId);
+        else if (input.action === 'detail') result = await community.myPluginDetail(input.pluginId, input.cursor);
+        await authority.assert();
+        return { ok: true, result };
+      } catch (error) {
+        try { community.mapContributionError(error); } catch (safe) {
+          return {
+            ok: false,
+            errorCode: isIpcError(safe) ? safe.code : 'INTERNAL',
+            message: isIpcError(safe) && safe.code !== 'INTERNAL'
+              ? safe.message
+              : 'Community contribution action could not complete; query the original operation before retrying.',
+          };
+        }
+      }
+    },
     connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);

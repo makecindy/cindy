@@ -188,6 +188,7 @@ export function getPublicState(): FeishuPublicState {
   // across get-state ↔ init). storage.readOwnerOpenId is the source of truth.
   return {
     status: wsClient.getCurrentStatus(),
+    error: wsClient.getCurrentError(),
     appId: creds?.appId ?? null,
     appSecret: creds?.appSecret ?? null,
     hasSecret: creds != null,

@@ -10,6 +10,7 @@ import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposer
 import { captureNewSessionOwner } from '@/session/newSessionForm';
 import { reconcileNewSessionSubmitDraft } from '@/session/newSessionRuntimeReconciliation';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { deviceDisplayName } from '@/device-link/deviceName';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -47,6 +48,7 @@ function newHarness(text = '/goal target') {
   const noop = vi.fn();
   const draft = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider', workspaceKind: 'dialogue', workingDir: '', firstMessage: text, agentDeviceId: 'agent-device' };
   const bindings = {
+    deviceDisplayName,
     parseGoalCommand, parseMobileDesktopCommand,
     firstMessageRef: { current: text }, slashCommands: [], pendingGoalSkillRef: { current: null as string | null },
     creatingRef: { current: false }, voiceIsBusy: false, attachmentsRef: { current: [] as unknown[] }, pendingUploads: [] as unknown[],
@@ -88,6 +90,8 @@ function existingHarness(args = 'target') {
     maker: { goal: { set: vi.fn(async () => {}), clear: vi.fn(async () => {}), getStatus: vi.fn(async () => ({ status: 'active', objective: 'target' })) } },
     remoteSessionStore: { setGoalStatus: vi.fn(), acquireSessionMessageWork: vi.fn(() => ({ release })), getSessionDeviceId: () => 'host' }, setContextSheetView: vi.fn(), setContextSheetOpen: vi.fn(),
     setGoalRestore: vi.fn(), router: { setParams: vi.fn() }, composerDocumentRef: { current: initial },
+    // Native editors have a mounted handle without the optional WebView flush.
+    composerInputRef: { current: {} },
     composerDocumentsEqual: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
     applyComposerDocument: vi.fn(), normalizeComposerDocument, humanizeRemoteError,
     composerDraftHydrated: true, voiceState: 'idle', slashCommandsRef: { current: [] }, queueEditingRef: { current: null },

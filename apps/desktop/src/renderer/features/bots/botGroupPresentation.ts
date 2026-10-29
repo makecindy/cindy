@@ -31,7 +31,7 @@ export {
   projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
-  sortBotGroups,
+  botGroupActivityAt,
   type BotGroupComposerPlanState,
   type BotGroupPlanFollowUp,
   type BotGroupSidebarPlanPreview,

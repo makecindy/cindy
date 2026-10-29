@@ -36,7 +36,7 @@ describe('cloud companion rows', () => {
     expect(rows.find(item => item.item.ref.id === 'dash')?.host.deviceName).toBe('Studio');
     // A new phone that never saw the main computer still gets an entry for the cloud conversation.
     const mia = rows.find(item => item.item.ref.id === 'mia')!;
-    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'mac-c' });
+    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'another computer' });
     expect(mia.item.display).toMatchObject({ title: 'mia', avatar: { kind: 'emoji', value: '🦊' } });
     expect(cloudActorForRow(actors, mia)?.id).toBe(id(5));
     expect(cloudCompanionRows(items, []).map(item => item.key)).toEqual(items.map(item => item.key));

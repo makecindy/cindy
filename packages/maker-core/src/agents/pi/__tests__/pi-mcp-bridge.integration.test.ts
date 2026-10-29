@@ -37,7 +37,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
+const PI_BINARY = process.env.CINDY_PI_MCP_TEST_BINARY || path.join(
   REPO_ROOT,
   'apps',
   'pi-bin',
@@ -184,6 +184,17 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('verify MCP structured result')) {
+    const scenario = requestBody.includes('structured failure') ? 'failure'
+      : requestBody.includes('rich failure') ? 'rich-failure' : 'success';
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'result_payload' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'result_payload', args: { scenario } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(3, 'Result received');
+  }
   if (requestBody.includes('local host tool isolation')) {
     const calls = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -625,6 +636,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           })}]};
         });
       } else if (isWorkspace) {
+        server.registerTool('result_payload', {
+          description: 'Return structured workspace data', inputSchema: { scenario: z.enum(['success', 'failure', 'rich-failure']) },
+        }, async ({ scenario }) => ({
+          content: scenario === 'rich-failure' ? [
+            { type: 'text' as const, text: 'Screenshot of the failing input' },
+            { type: 'image' as const, mimeType: 'image/png',
+              data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' },
+            { type: 'text' as const, text: 'Correct the highlighted field' },
+          ] : [],
+          structuredContent: { status: scenario, resultCanary: 'MCP_STRUCTURED_MODEL_CANARY' },
+          ...(scenario !== 'success' ? { isError: true } : {}),
+          _meta: { privateCanary: 'MCP_CLIENT_ONLY_CANARY' },
+        }));
         server.registerTool(
           'status',
           { description: 'Read the workspace status', inputSchema: {} },
@@ -1133,6 +1157,32 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     },
   );
 
+  it.each(['success', 'failure', 'rich-failure'] as const)(
+    'preserves MCP structured %s data in the real Pi model request',
+    { timeout: 90_000 },
+    async (scenario) => {
+      const { requests, events } = await runOneTurn('bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'allow' }), 'local-multi',
+        'verify MCP structured result ' + (scenario === 'failure' ? 'structured failure'
+          : scenario === 'rich-failure' ? 'rich failure' : 'success'));
+      expect(requests).toHaveLength(3);
+      const messages = requests.at(-1)!.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      const result = messages.flatMap(message => message.content).filter(block => block.type === 'tool_result').at(-1)!;
+      expect(JSON.stringify(result.content)).toContain('MCP_STRUCTURED_MODEL_CANARY');
+      expect(Boolean(result.is_error)).toBe(scenario !== 'success');
+      const toolResult = events.filter(event => event.type === 'tool_result_full').at(-1)!;
+      expect((toolResult.data as { isError: boolean }).isError).toBe(scenario !== 'success');
+      if (scenario === 'rich-failure') {
+        const blocks = result.content as Array<Record<string, unknown>>;
+        expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
+        expect(blocks[0].text).toBe('Screenshot of the failing input');
+        expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
+        expect(blocks[2].text).toBe('Correct the highlighted field');
+      }
+      expect(JSON.stringify(requests)).not.toContain('MCP_CLIENT_ONLY_CANARY');
+    },
+  );
+
   it(
       "sends a typed teammate message directly without MCP discovery",
       { timeout: 90_000 },
@@ -1577,13 +1627,43 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     },
   );
 
-  it(
-    'direct remote HTTP: uses env-backed bearer/custom headers instead of the localhost bridge token',
-    { timeout: 90_000 },
-    async () => {
+  // #7632 integration regression: PiAgent.startSession -> real Pi -> authenticated IPv6 MCP
+  // must bypass HTTP_PROXY. The previous real-Pi test covered only 127.0.0.1; an empty
+  // inherited NO_PROXY plus http://[::1] is the minimal case that could leak credentials
+  // after removing the bracketed token from Pi's automatic NO_PROXY additions.
+  for (const loopbackHost of ['127.0.0.1', '::1'] as const) {
+    it(
+      `direct remote HTTP on ${loopbackHost}: keeps authenticated MCP traffic out of HTTP_PROXY`,
+      { timeout: 90_000 },
+      async (context) => {
       echoCalls.length = 0;
       seenMcpUrls.length = 0;
       seenRemoteHeaders.length = 0;
+      const previousMcpUrl = mcpUrl;
+      const ipv6Mcp = loopbackHost === '::1'
+        ? createServer((req, res) => { mcpHttp.emit('request', req, res); })
+        : undefined;
+      if (ipv6Mcp) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            ipv6Mcp.once('error', reject);
+            ipv6Mcp.listen(0, '::1', () => {
+              ipv6Mcp.off('error', reject);
+              resolve();
+            });
+          });
+        } catch (error) {
+          // IPv6 loopback is optional on CI hosts; other bind failures remain test failures.
+          if (['EAFNOSUPPORT', 'EADDRNOTAVAIL', 'EPROTONOSUPPORT'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        const address = ipv6Mcp.address();
+        if (typeof address !== 'object' || !address) throw new Error('IPv6 MCP did not listen');
+        mcpUrl = `http://[::1]:${address.port}/mcp`;
+      }
       let proxyHits = 0;
       const proxy = createServer((_req, res) => {
         proxyHits += 1;
@@ -1610,11 +1690,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           'remote',
         );
       } finally {
+        mcpUrl = previousMcpUrl;
         for (const name of Object.keys(previous)) delete process.env[name];
         for (const [name, value] of Object.entries(previous)) {
           if (value !== undefined) process.env[name] = value;
         }
         await new Promise<void>((resolve) => proxy.close(() => resolve()));
+        if (ipv6Mcp) await new Promise<void>((resolve) => ipv6Mcp.close(() => resolve()));
       }
 
       expect(turn).toBeDefined();
@@ -1635,7 +1717,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
     },
-  );
+    );
+  }
 
   it(
     'persistent SSE: registers on the matching event without waiting for stream close, then uses the long tool timeout',

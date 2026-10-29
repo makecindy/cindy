@@ -48,6 +48,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
   'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
   'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'RUNTIME_TIMEOUT', 'RUNTIME_ERROR',
+  'REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT',
 ] as const;
 export type BotGroupRuntimeFailureCode = typeof BOT_GROUP_RUNTIME_FAILURE_CODES[number];
 export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupRuntimeFailureCode {
@@ -430,6 +431,11 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
+  executionId?: string;
+  startedAt?: number;
+  stopping?: boolean;
+  executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
@@ -507,6 +513,10 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
+  historyRevision?: string;
+  /** Current authorized versions of already displayed messages, including deletion tombstones. */
+  messageUpdates?: BotGroupMessageView[];
   /** Room-wide; bumped when a reset skipped realtime events or the chat runtime was recreated, so every message's reactors count as changed. */
   reactionRevision?: number;
   /** Per message id; bumped by realtime reaction changes, so a same-count change of who reacted is noticed. */
@@ -630,6 +640,8 @@ export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
 }
 
 export interface BotGroupGetOptions {
+  /** Local display snapshot only; callers separately request current server state. */
+  cacheOnly?: boolean;
   conversationKind?: 'direct';
   /** Load messages with a smaller sequence (older page). */
   beforeSequence?: number;
@@ -829,6 +841,9 @@ export interface ChatServerApi {
    */
   thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[]; markRead?: boolean }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Same room generation as the main timeline; reset before merging older pages. */
+    historyRevision?: string;
+    messageUpdates?: BotGroupMessageView[];
     /** Same authoritative state as the main timeline; root and replies use one projection. */
     executionFailures?: BotGroupExecutionFailureView[];
     readBefore?: number;

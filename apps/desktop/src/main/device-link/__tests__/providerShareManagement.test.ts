@@ -1,10 +1,20 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ipcMain } from 'electron';
+import { REMOTE_AGENT_CHANNEL, type ProviderShareOwned } from '@cindy/device-link';
 
 import type { ProviderShareManagementCommand } from '../../../shared/providerManagement';
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+vi.mock('electron', () => ({
+  app: { getPath: () => 'test-provider-share-user-data' },
+  ipcMain: { handle: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [] },
+  Notification: class { show() {} },
+}));
 const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
@@ -12,7 +22,9 @@ const host = vi.hoisted(() => ({
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn() }));
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(),
+  enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
+  actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -45,8 +57,12 @@ vi.mock('../../usage/turnCostCalculator.js', () => ({ computePriceQuoteTurnMoney
 vi.mock('../../usage/providerPartyUsageStore.js', () => ({
   currentProviderPartyUsageStore: () => ({ history: usageStores.ownHistory }),
 }));
-vi.mock('../providerShareUsageStore.js', () => ({
-  getProviderShareUsageStore: () => ({ history: usageStores.memberHistory }),
+vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../providerShareUsageStore.js')>(),
+  getProviderShareUsageStore: () => usageStores.actual ?? ({ history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
+    enqueueDirectCleanup: usageStores.enqueueDirectCleanup,
+    listPendingDirectCleanup: usageStores.listPendingDirectCleanup,
+    acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
 vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: vi.fn() }));
@@ -55,19 +71,32 @@ vi.mock('../providerShareApi.js', () => ({
   fetchIdentityCard: identityCard,
   sha256Hex: (value: string) => value,
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
+  providerShareOwnerKey: () => state.owner,
 }));
 vi.mock('../dispatch.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
-  revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(), setProviderShareAccess: vi.fn(),
+  revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(async () => undefined), setProviderShareAccess: vi.fn(),
+}));
+vi.mock('../providerShareReshare.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../providerShareReshare.js')>(),
+  pruneProviderShareReshares: vi.fn(async () => undefined),
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
-  providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), providerShareGuestDenial: vi.fn(), ensureProviderSharePeerKnown: vi.fn(),
+  providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
+  providerShareGuestDenial: vi.fn(), ensureProviderSharePeerKnown: vi.fn(),
   quietProviderShareRequests: host.quiet, markProviderShareHostActive: host.active,
   applyLocalRequestDecision: host.decision, applyLocalMemberChange: host.member,
+  providerShareMemberMatcher: (member: { shareId: string; memberId: string }) => (controller: string) => {
+    try {
+      const parts = JSON.parse(controller.replace(/~+$/, '')) as unknown;
+      return Array.isArray(parts) && parts[0] === 'provider-share' && parts[1] === member.shareId
+        && parts[2] === 'guest' && parts[3] === member.memberId;
+    } catch { return false; }
+  },
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
 vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareReceivedRevision: () => guest.revision }));
@@ -82,6 +111,9 @@ import {
   stopProviderShareRuntime,
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
+import { startProviderShareHost } from '../providerShareHost';
+import { createProviderShareUsageStore } from '../providerShareUsageStore';
+import { revokeProviderShareControllers } from '../dispatch';
 
 const createLink: ProviderShareManagementCommand = { action: 'create-link', providerId: 'anthropic' };
 const LINK_ID = 'a'.repeat(64);
@@ -108,6 +140,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   state.owner = 'owner-a';
   state.boundaryPending = false;
+  usageStores.actual = null;
   listProviders.mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', connected: true, agents: ['claude-code'] }]);
   identityCard.mockResolvedValue({ card: 'test-identity-card' });
   api.createLink.mockResolvedValue({ invitation: 'test-invitation', linkId: LINK_ID });
@@ -125,10 +158,100 @@ beforeEach(() => {
   host.snapshot.mockReturnValue([{ requests: [{ requestId: 'r1' }], members: [{ memberId: 'm1' }] }]);
   usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [] }, relays: [] });
   usageStores.memberHistory.mockReturnValue([]);
+  usageStores.memberTokenSnapshot.mockReturnValue({ available: true, models: [],
+    windowStart: '2026-10-11', windowEnd: '2026-10-17', nextWindowAt: new Date(2026, 9, 18).getTime() });
+  usageStores.enqueueDirectCleanup.mockResolvedValue(undefined);
+  usageStores.listPendingDirectCleanup.mockReturnValue([]);
+  usageStores.acknowledgeDirectCleanup.mockResolvedValue(undefined);
   startProviderShareRuntime(vi.fn());
 });
 
 afterEach(() => stopProviderShareRuntime());
+
+/* Deleting a member must use the live host callback and retain offline M until it ACKs. tier: unit. */
+describe('direct guest deletion delivery', () => {
+  // Unit tier: production runtime callbacks + real durable ledger; only transport
+  // and local host are controlled. O misses remove/reapprove while stopped.
+  it('blocks a reapproved member until local purge and the old M forget complete after restart', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-share-rejoin-'));
+    try {
+      stopProviderShareRuntime();
+      const file = path.join(dir, 'usage.json');
+      let store = usageStores.actual = createProviderShareUsageStore(file);
+      const route = { ownerScope: 'owner-a', ownerDeviceId: 'host-device', shareId: 'share-1', memberId: 'm1',
+        memberJoinedAt: 'g1', guestDeviceId: 'G', sessionId: 'old-task', executorDeviceId: 'M',
+        executorProviderId: 'local', agentKind: 'codex', providerId: 'p', memberKey: 'M', model: 'gpt',
+        generation: '11111111-1111-4111-8111-111111111111', expiresAt: Date.now() + 30 * 60_000 };
+      const snapshot = (joinedAt: string, status: 'active' | 'paused' = 'active'): ProviderShareOwned[] => [{
+        shareId: route.shareId, providerId: 'p', providerLabel: 'P', hostDeviceId: 'host-device', createdAt: 'x', requests: [],
+        members: [{ memberId: 'm1', joinedAt, status, displayName: 'Guest', avatarUrl: null, region: 'global' }],
+      }];
+      startProviderShareRuntime(vi.fn());
+      let callbacks = vi.mocked(startProviderShareHost).mock.lastCall![0];
+      await callbacks.prepareSnapshot!(snapshot('g1'));
+      await store.registerDirectReceiptRoute(route);
+      await store.commitDirectReceiptRoute(route);
+      await callbacks.prepareSnapshot!(snapshot('g1', 'paused'));
+      await callbacks.prepareSnapshot!(snapshot('g1'));
+      expect(revokeProviderShareControllers).not.toHaveBeenCalled();
+      expect(store.findDirectTaskLocation(route)?.executorDeviceId).toBe('M');
+      stopProviderShareRuntime();
+      store = usageStores.actual = createProviderShareUsageStore(file);
+      let acknowledge!: (result: { ok: true; result: object }) => void;
+      const invoke = vi.fn(() => new Promise<{ ok: true; result: object }>((resolve) => { acknowledge = resolve; }));
+      startProviderShareRuntime(vi.fn(), { invoke });
+      callbacks = vi.mocked(startProviderShareHost).mock.lastCall![0];
+      await callbacks.prepareSnapshot!(snapshot('g2'));
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+      expect(store.findDirectTaskLocation(route)).toBeNull();
+      expect(callbacks.memberReady!({ shareId: route.shareId, memberId: 'm1', joinedAt: 'g2' })).toBe(false);
+      const renewed = { ...route, memberJoinedAt: 'g2', generation: '22222222-2222-4222-8222-222222222222' };
+      await expect(store.registerDirectReceiptRoute(renewed)).rejects.toThrow('cleanup is pending');
+      // A missing host handler returning successfully is not proof of local cleanup.
+      expect(store.listPendingMemberCleanup('owner-a', 'host-device')).toHaveLength(1);
+      await store.acknowledgeMemberCleanup(store.listPendingMemberCleanup('owner-a', 'host-device')[0]!);
+      expect(callbacks.memberReady!({ shareId: route.shareId, memberId: 'm1', joinedAt: 'g2' })).toBe(false);
+      expect(invoke).toHaveBeenCalledWith('M', REMOTE_AGENT_CHANNEL, [expect.objectContaining({
+        op: 'forget', directGuest: expect.objectContaining({ shareId: 'share-1', memberId: 'm1', guestDeviceId: 'G' }),
+      })], expect.any(Object));
+      acknowledge({ ok: true, result: {} });
+      await vi.waitFor(() => expect(callbacks.memberReady!({ shareId: route.shareId, memberId: 'm1', joinedAt: 'g2' })).toBe(true));
+      expect(store.findDirectTaskLocation(route)).toBeNull();
+      await store.registerDirectReceiptRoute(renewed);
+    } finally {
+      stopProviderShareRuntime();
+      usageStores.actual = null;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sends a scoped, retryable forget to the recorded executor', async () => {
+    const target = { ownerScope: 'owner-a', shareId: 'share-1', memberId: 'm1',
+      guestDeviceId: 'guest-pc', executorDeviceId: 'executor-pc',
+      pendingId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', cleanupEpoch: 1 };
+    usageStores.listPendingDirectCleanup.mockReturnValue([target]);
+    const invoke = vi.fn().mockResolvedValueOnce({ ok: false, error: { code: 'DEVICE_OFFLINE' } })
+      .mockResolvedValue({ ok: true, result: {} });
+    stopProviderShareRuntime();
+    startProviderShareRuntime(vi.fn(), { invoke });
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(usageStores.acknowledgeDirectCleanup).not.toHaveBeenCalled();
+
+    const callbacks = vi.mocked(startProviderShareHost).mock.lastCall![0];
+    callbacks.revoked({ shareId: target.shareId, memberId: target.memberId }, true);
+    await vi.waitFor(() => expect(usageStores.enqueueDirectCleanup).toHaveBeenCalledWith(
+      'owner-a', expect.any(Function)));
+    const matcher = usageStores.enqueueDirectCleanup.mock.lastCall![1];
+    expect(matcher(target)).toBe(true);
+    expect(matcher({ ...target, memberId: 'another' })).toBe(false);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke).toHaveBeenLastCalledWith('executor-pc', REMOTE_AGENT_CHANNEL, [{
+      op: 'forget', directGuest: { shareId: 'share-1', memberId: 'm1', guestDeviceId: 'guest-pc',
+        forgetId: target.pendingId, cleanupEpoch: 1 },
+    }], expect.objectContaining({ preSend: expect.any(Function) }));
+    await vi.waitFor(() => expect(usageStores.acknowledgeDirectCleanup).toHaveBeenCalledWith(target));
+  });
+});
 
 const historyRow = (index: number, model = 'model-' + index): ProviderUsageHistoryView['self']['days'][number] => ({
   day: '2026-10-17',
@@ -151,6 +274,40 @@ const historyWithRows = (rows: ProviderUsageHistoryView['self']['days']): Provid
   self: { lastUsedAt: null, days: rows },
   relays: [],
   members: [],
+});
+
+// PR #7772: settings classification must not renew the management page's fast-poll window
+// or calculate usage. Existing management tests only read full owned/usage responses.
+// Minimal input: active, paused, pending-only and duplicate-provider shares. Tier: unit.
+describe('shared provider classification', () => {
+  it.each(['local', 'same-account'] as const)('reads only established provider IDs without activating polling (%s)', async (entry) => {
+    host.snapshot.mockReturnValue([
+      { providerId: 'anthropic', members: [{ memberId: 'm1', status: 'active' }] },
+      { providerId: 'openai', members: [{ memberId: 'm2', status: 'paused' }] },
+      { providerId: 'anthropic', members: [{ memberId: 'm3', status: 'active' }] },
+      { providerId: 'pending-only', members: [], requests: [{ requestId: 'r1' }] },
+    ]);
+    const raw = { action: 'shared-provider-ids' } as const;
+    let result: unknown;
+    if (entry === 'local') {
+      const handle = vi.spyOn(ipcMain, 'handle');
+      try {
+        registerProviderShareIpc();
+        const handler = handle.mock.calls.find(([channel]) => channel === 'provider-share:command')![1];
+        result = await handler({} as Electron.IpcMainInvokeEvent, raw);
+      } finally {
+        handle.mockRestore();
+      }
+    } else {
+      result = await executeProviderShareManagementCommand(parseProviderShareCommand(raw) as ProviderShareManagementCommand);
+    }
+    expect(result).toEqual({ ready: true, providerIds: ['anthropic', 'openai'] });
+    expect(host.active).not.toHaveBeenCalled();
+    expect(host.refresh).not.toHaveBeenCalled();
+    expect(memberNotes.read).not.toHaveBeenCalled();
+    expect(usageStores.memberTokenSnapshot).not.toHaveBeenCalled();
+    expect(listProviders).not.toHaveBeenCalled();
+  });
 });
 
 describe('provider share usage history wire budget', () => {
@@ -256,6 +413,7 @@ describe('same-account share management during account transitions', () => {
     { action: 'set-run-limits', limits: { perDevice: 16, total: 64 } },
     { action: 'reset-run-limits' },
     { action: 'owned', range: '7d' },
+    { action: 'shared-provider-ids' },
     { action: 'own-usage', providerId: 'anthropic', range: '7d' },
     { action: 'usage-history', providerId: 'anthropic' },
   ] satisfies ProviderShareManagementCommand[])('refuses $action at entry while teardown is pending', async (command) => {
@@ -326,6 +484,16 @@ describe('same-account share management during account transitions', () => {
     expect(remember).toHaveBeenCalledExactlyOnceWith('https://cindy.app/s#test-link', expect.any(String));
   });
 
+  // PR #7744: exercise the production share-management entry, not only the scrubber.
+  // provider-sharing.md §6 forbids sending org identity to the sharing service.
+  it('uploads only the generic Cindy AI brand when creating an enterprise share link', async () => {
+    listProviders.mockResolvedValue([{ id: 'xd', name: 'Cindy AI · Example Studio', connected: true, agents: ['codex'] }]);
+    await executeProviderShareManagementCommand({ action: 'create-link', providerId: 'xd' });
+    expect(api.createLink).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: { card: 'test-identity-card' },
+    });
+  });
+
   it('rejects an old server before exposing or registering a remote link', async () => {
     api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
@@ -367,7 +535,7 @@ describe('remote model access management', () => {
   it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
     const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
     const result = await executeProviderShareManagementCommand(command);
-    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function));
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined);
     expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
     expect(api.setMember).not.toHaveBeenCalled();
   });

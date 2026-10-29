@@ -8,6 +8,7 @@ import {
   scheduleTodoDeferralRefresh,
   createTodoDueComparator,
   todoOverdue,
+  todoDueSoon,
   todoVisible,
   validateTodoDeadline,
   type TodoPatch,
@@ -25,6 +26,33 @@ const patch: TodoPatch = {
     instruction: '按已授权范围排查并准备修复',
   },
 };
+// Glance's deadline-only rule: old ideas, completed items and tentative dates must not
+// reappear as urgent owner affairs. Both clients consume this production selector (unit).
+it('shows only visible open affairs with a confirmed deadline, respecting cleared overrides', () => {
+  const state = emptyTodoState();
+  const item = applyTodoPatch(state, { ...patch, sourceDeadline: { kind: 'date', date: '2026-10-10', timeZone: 'UTC' } }, 'due', now);
+  expect(todoDueSoon(item, now)).toBe(true);
+  expect(todoDueSoon({ ...item, status: 'done' }, now)).toBe(false);
+  expect(todoDueSoon({ ...item, decision: { kind: 'deleted' } }, now)).toBe(false);
+  expect(todoDueSoon({ ...item, decision: { kind: 'muted' } }, now)).toBe(false);
+  expect(todoDueSoon({ ...item, decision: { kind: 'later', until: '2026-10-11T12:00:00Z' } }, now)).toBe(false);
+  expect(todoDueSoon({ ...item, deadlineOverride: { value: null } }, now)).toBe(false);
+  expect(todoDueSoon({ ...item, sourceDeadline: null, suggestedDate: '2026-10-10',
+    deadlineCandidate: { value: item.sourceDeadline!, reason: 'Unconfirmed' } }, now)).toBe(false);
+  expect(state.items[0]).toEqual(item);
+});
+
+it('includes overdue and the seven-day boundary using the source calendar or exact timestamp', () => {
+  const item = applyTodoPatch(emptyTodoState(), patch, 'one', now);
+  const at = new Date('2026-10-10T23:30:00Z');
+  const dateItem = (date: string) => ({ ...item, sourceDeadline: { kind: 'date' as const, date, timeZone: 'Asia/Shanghai' } });
+  expect(todoDueSoon(dateItem('2026-10-01'), at)).toBe(true);
+  expect(todoDueSoon(dateItem('2026-10-18'), at)).toBe(true);
+  expect(todoDueSoon(dateItem('2026-10-19'), at)).toBe(false);
+  const exact = { ...item, sourceDeadline: { kind: 'instant' as const, date: '2026-10-17', timeZone: 'UTC', at: '2026-10-17T23:30:00Z' } };
+  expect(todoDueSoon(exact, at)).toBe(true);
+  expect(todoDueSoon(exact, new Date(at.getTime() - 1))).toBe(false);
+});
 describe('teammate affairs contract', () => {
   it('works without projects and merges source evidence into the same affair', () => {
     const s = emptyTodoState(),

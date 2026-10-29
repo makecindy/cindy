@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Redirect, useIsFocused } from 'expo-router';
 import { AppState } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -12,6 +12,8 @@ import { remoteSessionStore } from './remoteSessionStore';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useNewSessionCreationTask } from './newSessionCreation';
 import { SessionEntryStatus } from './SessionEntryRecovery';
+import { useCachedCompanionSession } from './useCachedCompanionSession';
+import { forgetRemoteResource } from '@/device-link/remoteResourceCache';
 
 export const SESSION_ENTRY_LOOKUP_TIMEOUT_MS = 20_000;
 type Lookup = { key: string; status: 'loading' | 'failed' | 'missing' | 'timedOut' | 'loaded' };
@@ -25,7 +27,7 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
   ownsSessionSubscription?: boolean;
 }) {
   const { t } = useTranslation();
-  const { accountGeneration } = useAuth();
+  const { user, accountGeneration } = useAuth();
   const { openLink, connectionEpoch, unsubscribe, status: relayStatus, getPresenceAvailability } = useDeviceLink();
   const focused = useIsFocused();
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
@@ -35,6 +37,8 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
   }, []);
   const sessions = useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getSessions);
   const deviceId = routeDeviceId ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
+  const cachedCompanion = useCachedCompanionSession(deviceId, sessionId);
+  const cachedRef = useRef(cachedCompanion); cachedRef.current = cachedCompanion;
   const maker = useMobileMakerTransport(deviceId);
   const presence = getPresenceAvailability(deviceId);
   // The creation pipeline registers this owner before navigating here. The gate
@@ -54,12 +58,13 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
   const scope = JSON.stringify([sessionId, deviceId, accountGeneration]);
   const key = JSON.stringify([sessionId, deviceId, accountGeneration, connectionEpoch, relayStatus, presence, focused, foreground, attempt]);
   const [lookup, setLookup] = useState<Lookup | null>(null);
+  const [blockedScope, setBlockedScope] = useState<string | null>(null);
   // Reconnecting must not unmount content whose source was already confirmed for this owner.
   const [loaded, setLoaded] = useState<{ scope: string; source: string | null } | null>(null);
 
   useEffect(() => {
     if (CINDY_MAKE_ENABLED) return;
-    if (knownSource !== undefined) {
+    if (knownSource !== undefined && blockedScope !== scope) {
       // A mirror confirmation is as authoritative as a direct lookup. Preserve
       // the latest source for this scope when reconnecting clears the mirror.
       setLoaded({ scope, source: knownSource });
@@ -94,12 +99,26 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
     })
       .then(session => {
         if (cancelled()) return;
-        if (session?.id === sessionId) setLoaded({ scope, source: session.source ?? null });
+        if (session?.id === sessionId) { setBlockedScope(null); setLoaded({ scope, source: session.source ?? null }); }
+        else if (cachedRef.current) {
+          setBlockedScope(scope);
+          if (user?.id) void forgetRemoteResource(user.id, cachedRef.current.ref.id);
+        }
         setLookup(session?.id === sessionId
           ? { key, status: 'loaded' }
           : { key, status: 'missing' });
       })
-      .catch(() => { if (!cancelled()) setLookup({ key, status: 'failed' }); })
+      .catch(error => {
+        if (cancelled()) return;
+        const code = (error as { code?: string })?.code;
+        const deniedCodes = ['NOT_FOUND', 'FORBIDDEN', 'PERMISSION_DENIED', 'ACCESS_REVOKED', 'DEVICE_REVOKED'];
+        const denied = deniedCodes.includes(code ?? '') || deniedCodes.some(value => String(error).includes(`[${value}]`));
+        if (denied) {
+          setBlockedScope(scope);
+          if (user?.id && cachedRef.current) void forgetRemoteResource(user.id, cachedRef.current.ref.id);
+        }
+        setLookup({ key, status: denied ? 'missing' : 'failed' });
+      })
       .finally(() => clearTimeout(timeout));
     return () => { controller.abort(); clearTimeout(timeout); };
   }, [key, scope, sessionId, deviceId, knownSource, maker, openLink, creationBlocked, focused, foreground, relayStatus, presence]);
@@ -112,8 +131,13 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
   // that screen mounted; it also owns automatic draft recovery after failure.
   // File routes still require confirmed remote metadata.
   if (localCreation && ownsSessionSubscription) return children;
-  if (!CINDY_MAKE_ENABLED && source === undefined) {
-    const status = lookup?.key === key ? lookup.status : 'loading';
+  // Notification routes can precede the home/session mirror on a cold launch.
+  // Mount the real chat so its history cache hydrates while metadata is checked.
+  // A raw push resourceId never grants this path: the saved device/session link must match.
+  if (ownsSessionSubscription && cachedCompanion && source === undefined && blockedScope !== scope
+    && !(lookup?.key === key && lookup.status === 'missing')) return children;
+  if (blockedScope === scope || (!CINDY_MAKE_ENABLED && source === undefined)) {
+    const status = blockedScope === scope ? 'missing' : lookup?.key === key ? lookup.status : 'loading';
     return <SessionEntryStatus title={t('session.entry.title')}
       copy={t(`session.entry.${status}`)} loading={status === 'loading'}>
       {status !== 'loading' ? <MainWindowActionButton action={{

@@ -41,6 +41,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 // Native WebView lifecycle has separate coverage; this suite exercises Provider subscriptions.
 vi.mock('@/device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
+vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
 vi.mock('@/debug/visualMock', () => ({ prepareVisualMockDeviceLinkContext: vi.fn() }));

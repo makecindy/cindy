@@ -234,6 +234,15 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
       return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
     }),
+    'routines.saveWithModel': call => routineCall(() => {
+      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
+      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
+    }),
+    // Advertised separately: older hosts accept `saveWithModel` but drop `sessionMode`.
+    'routines.saveWithSessionMode': call => routineCall(() => {
+      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
+      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
+    }),
     'routines.runNow': call => routineCall(() => deps.routines.runNow(botOf(call), text(call.args.id, 'id', 128))),
     'routines.remove': call => routineCall(async () => {
       await deps.routines.remove(botOf(call), text(call.args.id, 'id', 128));

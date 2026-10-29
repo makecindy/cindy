@@ -1,4 +1,4 @@
-import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
+import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps, providerShareGuestPeer } from '@cindy/device-link';
 import type { RemoteAgentFastPolicy } from '@cindy/device-link';
 import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../device-link/index.js';
@@ -8,6 +8,8 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readProviderGroup, listProviderGroups } from './store.js';
 import { groupFastPolicyStore } from './fastPolicyStore.js';
+import { checkProviderShareDelegation } from '../device-link/providerShareApi.js';
+import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 
 const eligible = (group: string) =>
   supportsSubscriptionFastPolicy(getActiveCatalog().providers.find((p) => p.id === group));
@@ -76,11 +78,28 @@ export async function receiveGroupFastPolicy(
   command: RemoteAgentFastPolicy,
 ): Promise<unknown> {
   const assertCurrent = captureProviderManagementScope();
+  const delegated = command.binding?.providerShareGuest;
+  let directTask: string | undefined;
+  if (delegated && command.binding) {
+    const guest = providerShareGuestPeer(delegated.shareId, delegated.memberId, delegated.guestDeviceId);
+    const self = getSelfDeviceId();
+    if (!self) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
+    // Prebind before M grants an executable task lease. Only the server-approved
+    // O may name this guest's task; an unrelated same-account device is not O.
+    const approved = await checkProviderShareDelegation({ ...delegated, executorDeviceId: self });
+    assertCurrent();
+    if (getSelfDeviceId() !== self || !approved.active || approved.ownerDeviceId !== origin
+      || !approved.expiresAt || approved.expiresAt <= Date.now()) {
+      throw new Error('[REMOTE_AGENT_INVALID] Provider-share Fast binding requires an active owner delegation');
+    }
+    directTask = hostSessionIdFor(guest, command.binding.sessionId);
+  }
   const result = await groupFastPolicyStore.receive(
     origin,
     command,
     getSelfDeviceId(),
     assertCurrent,
+    directTask,
   );
   await notifySubscriptionFastPolicyChanged();
   assertCurrent();
@@ -118,6 +137,7 @@ export async function bindGroupFastPolicy(input: {
   sessionId: string;
   controllerDeviceId?: string;
   relay?: string;
+  providerShareGuest?: { shareId: string; memberId: string; guestDeviceId: string };
 }): Promise<void> {
   if (!eligible(input.group)) return;
   const assertCurrent = captureProviderManagementScope();
@@ -136,6 +156,7 @@ export async function bindGroupFastPolicy(input: {
       sessionId: input.sessionId,
       ...(input.controllerDeviceId ? { controllerDeviceId: input.controllerDeviceId } : {}),
       ...(input.relay ? { relay: input.relay } : {}),
+      ...(input.providerShareGuest ? { providerShareGuest: input.providerShareGuest } : {}),
     },
   };
   if (input.deviceId) {
@@ -149,8 +170,10 @@ export async function bindGroupFastPolicy(input: {
       );
     } catch (error) {
       assertCurrent();
-      // Allowed-by-default groups retain compatibility with old executors. A prohibition requires explicit support.
-      if (!state.allowFast) throw error;
+      // A delegated direct task needs a durable per-task binding even while
+      // Fast is allowed, so a later group prohibition can reach this task.
+      // Legacy same-account relays retain allowed-by-default compatibility.
+      if (!state.allowFast || input.providerShareGuest) throw error;
     }
   } else {
     const self = getSelfDeviceId();

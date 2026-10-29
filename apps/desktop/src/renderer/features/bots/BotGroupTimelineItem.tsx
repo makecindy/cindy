@@ -244,6 +244,8 @@ export interface BotGroupTimelineItemProps {
   locale: string;
   shareScope: string;
   sharing: boolean;
+  /** Context-only roots have no action owner; do not offer sharing or mutations. */
+  showActions?: boolean;
   /** Server group id: reactions and the toolbar's reaction picker. */
   reactionGroupId?: string;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
@@ -389,7 +391,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
-  const actions = shareable ? (
+  const actions = shareable && props.showActions !== false ? (
     <ChatMessageHoverActions
       groupId={props.reactionGroupId}
       shareScope={shareScope}

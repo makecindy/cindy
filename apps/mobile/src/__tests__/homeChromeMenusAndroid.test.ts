@@ -127,7 +127,8 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
     // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
-    expect(androidHeader).toContain("<HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>");
+    // Display selection is exercised through the rendered platform component in
+    // nativeGlassControls.test.tsx; do not freeze its JSX prop list here.
     const iosHeader = home.slice(home.indexOf("<HomeNativeStackHeader"), home.indexOf("/>", home.indexOf("<HomeNativeStackHeader")));
     expect(iosHeader).toContain("scopeActions={homeScopePullDownActions}");
     // iOS 系统顶栏的菜单项属于顶栏选项:传结构稳定的同一份菜单,后台同步不重建顶栏(会关掉菜单)。

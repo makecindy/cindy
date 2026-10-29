@@ -1,6 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 import { Tip, type TipProps } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 import '../ui/button.css';
 
 /**
@@ -21,6 +22,7 @@ export function ChromeIconButton({
   children,
   className,
   tooltip,
+  disabledTooltip,
   tooltipSide,
   tooltipDelay,
   title,
@@ -28,12 +30,17 @@ export function ChromeIconButton({
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   children?: ReactNode;
   tooltip?: ReactNode;
+  /** 置灰时的 tooltip：说明为什么不可用（DESIGN §14.6），不传则沿用 tooltip。 */
+  disabledTooltip?: ReactNode;
   tooltipSide?: TipProps['side'];
   tooltipDelay?: number;
 }) {
   const accessibleLabel = rest['aria-label'];
   const tooltipText =
-    tooltip ?? title ?? (typeof accessibleLabel === 'string' ? accessibleLabel : undefined);
+    (rest.disabled ? disabledTooltip : undefined) ??
+    tooltip ??
+    title ??
+    (typeof accessibleLabel === 'string' ? accessibleLabel : undefined);
   const disabledLabel =
     typeof tooltipText === 'string'
       ? tooltipText
@@ -43,7 +50,7 @@ export function ChromeIconButton({
   const button = (
     <button
       type="button"
-      className={[CHROME_ICON_BUTTON_CLASS, className].filter(Boolean).join(' ')}
+      className={cn(CHROME_ICON_BUTTON_CLASS, className)}
       {...rest}
       aria-hidden={rest.disabled ? true : undefined}
     >

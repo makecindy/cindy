@@ -13,6 +13,15 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { LocalAgentError, type LocalAgentOpen, type LocalAgentRuntime } from './server.js';
+import { LOCAL_AGENT_ROUTE } from './catalog.js';
+import { localAgentResumeId, readLocalAgentResumeId, type LocalAgentExecutionRoute, type LocalAgentRouteResolver } from './groupRoute.js';
+import type { LocalAgentLoadTracker } from './load.js';
+import {
+  localAgentVisibleSessionHost,
+  registerLocalAgentVisibleRuntime,
+} from './visibleSessions.js';
+import { withSendToSessionLock } from '../maker-ipc/sendToSessionLock.js';
+import { buildMessageSourceNote } from '@cindy/maker-shared/message-source';
 
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
@@ -203,16 +212,45 @@ export async function openLocalAgentRuntime(
   input: LocalAgentOpen,
   bridge: { url: string; token: string; emit(event: unknown): void },
   localize = (_code: string, fallback: string) => fallback,
+  resolveRoute?: LocalAgentRouteResolver,
+  trackLoad?: LocalAgentLoadTracker,
 ): Promise<LocalAgentRuntime> {
+  let resumeBinding: ReturnType<typeof readLocalAgentResumeId>;
+  try { resumeBinding = readLocalAgentResumeId(input.resume); }
+  catch { throw new LocalAgentError('RESUME_UNAVAILABLE', 'Cindy 原会话无法恢复，请在调用应用中开始新的任务。'); }
   let instructions = input.instructions;
   // The effort last applied by send.effort survives an instructions rebuild.
   let effort = input.effort;
-  const sessionId = `local-agent-${randomUUID()}`;
-  let handle: Session;
+  const visibleHost = input.visibleSession
+    ? localAgentVisibleSessionHost(maker as Maker)
+    : undefined;
+  if (input.visibleSession && !visibleHost)
+    throw new LocalAgentError('SESSION_UNAVAILABLE', 'Cindy 任务入口尚未就绪。');
+  const sessionId = visibleHost ? randomUUID() : `local-agent-${randomUUID()}`;
+  const source = input.visibleSession
+    ? { pluginId: `local-app:${input.visibleSession.clientId}`, name: input.visibleSession.title }
+    : undefined;
+  const wireMessage = (message: UserMessage): UserMessage => {
+    if (!source) return message;
+    const note = buildMessageSourceNote({ kind: 'plugin', ...source })!;
+    return {
+      ...message,
+      content: [
+        ...(typeof message.content === 'string'
+          ? [{ type: 'text' as const, text: message.content }]
+          : message.content),
+        { type: 'text', text: note },
+      ],
+    };
+  };
+  // start assigns this under the send lock; close also handles failed startup.
+  let handle!: Session;
+  let notifyLoad = () => {};
   let closed = false,
     busy = false,
     preparing = false,
     resumed = false;
+  let closing: Promise<void> | undefined;
   // Instructions are read when a Session starts; only that applied version is clean.
   let instructionsVersion = 0,
     appliedInstructions = 0;
@@ -227,12 +265,62 @@ export async function openLocalAgentRuntime(
   await fs.mkdir(applicationDirectory, { recursive: true, mode: 0o700 });
   const temporary = await fs.mkdtemp(path.join(applicationDirectory, 'input-'));
   const projection = createEventProjection(bridge.emit, input.mcpName, localize);
-  const start = async (resume?: string, expected = epoch) => {
+  // Pin the actual execution location across instruction rebuilds/native resume.
+  // A thread id must never be resumed on a newly selected group member.
+  let selectedRoute: Promise<LocalAgentExecutionRoute> | undefined;
+  let executionRoute: LocalAgentExecutionRoute;
+  // Only stable public remote codes cross the API, never peer diagnostics.
+  const remoteFailure = (error: unknown): never => {
+    const code = error instanceof Error ? /^\[(REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_SHARE_PAUSED|REMOTE_AGENT_SHARE_REMOVED|REMOTE_AGENT_PROVIDER_NOT_ALLOWED|REMOTE_AGENT_UNAVAILABLE)\]/.exec(error.message)?.[1] : undefined;
+    if (code) throw new LocalAgentError(code, localize(code, '远程供应商暂不可用，请在 Cindy 中检查连接或更新远端版本。'));
+    throw error;
+  };
+  const locked = <T>(task: () => Promise<T>) =>
+    visibleHost ? withSendToSessionLock(sessionId, task) : task();
+  let unregisterVisibleRuntime: (() => void) | undefined;
+  const close = (sendLockHeld = false): Promise<void> => {
+    // Fence app calls immediately, even while waiting for a Cindy send/route lock.
+    closed = true;
+    ++epoch;
+    busy = false;
+    const finish = () => {
+      // Assign only after acquiring the lock. A normal close queued behind a
+      // takeover must not make that takeover await its own lock release.
+      if (closing) return closing;
+      closing = (async () => {
+        if (handle) {
+          if (visibleHost) await visibleHost.close(sessionId, handle);
+          else await handle.close({ reason: 'account-boundary' });
+        }
+        await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+        unregisterVisibleRuntime?.();
+      })().catch((error) => {
+        closing = undefined;
+        throw error;
+      });
+      return closing;
+    };
+    return sendLockHeld ? finish() : locked(finish);
+  };
+  const startUnlocked = async (resume?: string, expected = epoch) => {
     assertCurrent(expected);
+    const initialRoute: LocalAgentExecutionRoute = {
+      providerId: input.model[LOCAL_AGENT_ROUTE]?.providerId ?? input.model.provider,
+      agentDeviceId: input.model[LOCAL_AGENT_ROUTE]?.deviceId,
+    };
+    const route = await (selectedRoute ??= resumeBinding.native
+      // A pre-group binding ran directly on its original source. Never assign
+      // a new location to an existing native thread, including legacy bindings.
+      ? Promise.resolve(resumeBinding.route ?? initialRoute)
+      : resolveRoute
+        ? resolveRoute({ ...initialRoute, sessionId, agentKind: input.model.engine, model: input.model.model })
+        : Promise.resolve(initialRoute)).catch(remoteFailure);
+    assertCurrent(expected);
+    executionRoute = route;
     const opts: StartSessionOptions = {
       sessionId,
       workingDir: input.cwd,
-      providerId: input.model.provider,
+      providerId: route.providerId,
       model: input.model.model,
       effort: effort as StartSessionOptions['effort'],
       userPrompt: instructions,
@@ -240,11 +328,13 @@ export async function openLocalAgentRuntime(
       permissionMode: 'bypassPermissions',
       resumeSessionId: resume,
       [LOCAL_AGENT_CLIENT]: {
+        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+        ...(route.groupAssigned ? { groupAssigned: true } : {}),
         url: bridge.url,
         token: bridge.token,
         hostToolsOnly: input.access === 'none',
         mcpName: input.mcpName,
-        ...(input.legacyRuntime
+        ...(input.legacyRuntime && !input.model[LOCAL_AGENT_ROUTE]
           ? {}
           : { storageDirectory: path.join(applicationDirectory, input.model.engine) }),
       },
@@ -254,7 +344,17 @@ export async function openLocalAgentRuntime(
       },
     };
     resumed = Boolean(resume);
-    const next = await maker.startLocalAgentSession(input.model.engine, opts);
+    const next = visibleHost
+      ? await visibleHost.open({
+          ...opts,
+          agentDeviceId: route.agentDeviceId,
+          id: sessionId,
+          agentKind: input.model.engine,
+          title: input.visibleSession!.title,
+          workspaceKind: 'dialogue',
+        }).catch(remoteFailure)
+      : await maker.startLocalAgentSession(input.model.engine, opts).catch(remoteFailure);
+    handle = next;
     try {
       assertCurrent(expected);
     } catch (error) {
@@ -268,9 +368,13 @@ export async function openLocalAgentRuntime(
         'Cindy 原会话已不存在，请在调用应用中开始新的任务。未重放旧消息。',
       );
     }
-    handle = next;
+    notifyLoad = trackLoad?.(sessionId, route, next) ?? (() => {});
     next.setInteractionListener(async (request) => {
       if (request.kind === 'permission') {
+        if (request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') {
+          projection.failAtEnd(localize('INTERACTION_UNAVAILABLE', '分享供应商的凭据访问需要本人确认，当前应用无法接收。'));
+          return { kind: 'permission', behavior: 'deny', reason: 'host_interaction_unavailable' };
+        }
         const hostTool = input.tools.some((tool) =>
           [`mcp__${input.mcpName}__${tool.name}`, `mcp:${input.mcpName}:${tool.name}`].includes(
             request.toolName,
@@ -315,9 +419,13 @@ export async function openLocalAgentRuntime(
     });
     return next;
   };
+  const start = (resume?: string, expected = epoch) => locked(() => startUnlocked(resume, expected));
+  if (visibleHost) unregisterVisibleRuntime = registerLocalAgentVisibleRuntime(sessionId, close);
   try {
-    handle = await start(input.resume);
+    handle = await start(resumeBinding.native);
   } catch (error) {
+    if (visibleHost && handle) await close();
+    else unregisterVisibleRuntime?.();
     await fs.rm(temporary, { recursive: true, force: true });
     throw error;
   }
@@ -387,8 +495,9 @@ export async function openLocalAgentRuntime(
     }
   };
   return {
+    ...(visibleHost ? { visibleSessionId: sessionId } : {}),
     get id() {
-      return handle.sdkSessionId;
+      return localAgentResumeId(handle.sdkSessionId, executionRoute);
     },
     get resumed() {
       return resumed;
@@ -401,6 +510,7 @@ export async function openLocalAgentRuntime(
         try {
           await handle.abort();
         } finally {
+          notifyLoad();
           if (epoch === interrupted) {
             busy = false;
             preparing = false;
@@ -427,7 +537,16 @@ export async function openLocalAgentRuntime(
         try {
           assertCurrent(current);
           if (!busy) throw new LocalAgentError('NOT_RUNNING', '当前没有正在运行的回答。');
-          await handle.steer(content);
+          await handle.steer(wireMessage(content), visibleHost ? {
+            beforeProviderStart: () =>
+              visibleHost.persistInput(
+                sessionId,
+                content,
+                randomUUID(),
+                () => assertCurrent(current),
+                source!,
+              ),
+          } : undefined);
           turnInputs.push(content);
         } catch (error) {
           await discard(content);
@@ -464,9 +583,25 @@ export async function openLocalAgentRuntime(
         releaseInputs();
         turnInputs.push(sending);
         void (async () => {
-          const result = await handle.send(sending);
-          if (!result.accepted) await discard(sending);
-          assertSendDispatched(result, 'local-agent/send');
+          try {
+            const result = await handle.send(wireMessage(sending), visibleHost ? {
+              onAccepted: (signal) =>
+                visibleHost.persistInput(
+                  sessionId,
+                  sending,
+                  randomUUID(),
+                  () => {
+                    assertCurrent(current);
+                    signal?.throwIfAborted();
+                  },
+                  source!,
+                ),
+            } : undefined);
+            if (!result.accepted) await discard(sending);
+            assertSendDispatched(result, 'local-agent/send');
+          } finally {
+            notifyLoad();
+          }
         })().catch(() => {
           if (closed || turn !== generation) return;
           if (epoch === current) {
@@ -477,6 +612,8 @@ export async function openLocalAgentRuntime(
             projection.fail('', 'interrupted');
           }
         });
+        // send reserves the turn before its first await, even without engine output.
+        notifyLoad();
         return {};
       } catch (error) {
         if (epoch === current) {
@@ -487,13 +624,6 @@ export async function openLocalAgentRuntime(
         throw error;
       }
     },
-    async close() {
-      closed = true;
-      ++epoch;
-      busy = false;
-      await handle.close({ reason: 'account-boundary' });
-      // The engine is confirmed closed; leftover input files must not report it as still running.
-      await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
-    },
+    close: () => close(),
   };
 }

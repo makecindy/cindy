@@ -227,4 +227,47 @@ describe('detect — hooks', () => {
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
     expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
   });
+
+  it('to-claude: source has only hooks.json (no hooks/ dir) and target has hooks config → no item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
+  });
+
+  it('to-claude: source has only hooks.json and target lacks hooks → 1 item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-claude: target has legacy nested settings.hooks.hooks → item so the repair can run', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { hooks: { Stop: [] } } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-codex: target has legacy flat hooks.json → item so the wrapper upgrade can run', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: [] }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-codex: target already has wrapped hooks.json → no item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
+  });
 });

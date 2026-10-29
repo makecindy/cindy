@@ -1267,6 +1267,11 @@ describe("cindy_ghosts · server 构建", () => {
     };
     expect(Object.keys(server._registeredTools).sort()).toEqual([
       "ghost_call",
+      "ghost_cancel_plugin_review",
+      "ghost_contribution_prepare",
+      "ghost_contribution_status",
+      "ghost_contribution_stop",
+      "ghost_contribution_submit",
       "ghost_forge_guide",
       "ghost_forge_install",
       "ghost_forge_pack",
@@ -1276,6 +1281,7 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_info",
       "ghost_list",
       "ghost_manual",
+      "ghost_my_plugins",
       "media",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
@@ -2207,5 +2213,93 @@ describe("portable legacy plugin media", () => {
       expect(payload.hint).not.toContain("已自动送达");
       expect(payload.hint).not.toContain("媒体已由聊天气泡自动渲染");
     }
+  });
+});
+
+describe('personal community author MCP transport', () => {
+  async function connected(deps: CindyGhostsMcpDeps) {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const server = createCindyGhostsMcpServer(deps);
+    const client = new Client({ name: 'personal-author-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    await client.connect(ct);
+    return { client, close: async () => { await client.close(); await server.close(); } };
+  }
+
+  it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
+    const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));
+    const forgePublish = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution, forgePublish }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', namespace: null }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation' }],
+        ['ghost_contribution_status', { local_id: 'original-operation' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' }],
+        ['ghost_my_plugins', { query: 'hello', filter: 'needs_action', cursor: 'list-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', cursor: 'history-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', submission_id: 'submission-1' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).not.toBe(true);
+      }
+      expect(communityContribution.mock.calls.map(([input]) => input)).toEqual([
+        { action: 'prepare', ghostId: 'hello', namespace: null },
+        { action: 'submit', id: 'original-operation' },
+        { action: 'status', id: 'original-operation' },
+        { action: 'cancel', id: 'original-operation' },
+        { action: 'cancel-review', pluginId: 'plugin-1', release: { releaseId: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' } },
+        { action: 'list', query: 'hello', filter: 'needs_action', cursor: 'list-cursor' },
+        { action: 'detail', pluginId: 'plugin-1', cursor: 'history-cursor' },
+        { action: 'submission', pluginId: 'plugin-1', submissionId: 'submission-1' },
+      ]);
+      expect(forgePublish).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('rejects arbitrary paths, replacement identities and incomplete exact submission reads before Host', async () => {
+    const communityContribution = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', file: '/private/package.cindy' }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', resume: true }],
+        ['ghost_contribution_status', {}],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', authority: 'other-issuer' }],
+        ['ghost_contribution_status', { local_id: 'original-operation', token: 'not-a-host-token' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation', membershipId: 'other' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'bad', revision: 'not-a-date' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z', token: 'override' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', scope: 'organization' }],
+        ['ghost_my_plugins', { submission_id: 'submission-without-plugin' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).toBe(true);
+      }
+      expect(communityContribution).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('reports unavailable capabilities and sanitized Host failures as MCP errors without enterprise fallback', async () => {
+    const absent = await connected(fakeDeps());
+    try {
+      const result = await absent.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('UNSUPPORTED_CAPABILITY');
+    } finally { await absent.close(); }
+    const communityContribution = vi.fn()
+      .mockResolvedValueOnce({ ok: false, errorCode: 'CONTRIBUTION_NOT_AUTHORIZED', message: 'This account cannot publish this plugin.' })
+      .mockRejectedValueOnce(new Error('private-transport-token'));
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      const denied = await transport.client.callTool({ name: 'ghost_contribution_submit', arguments: { prepared_id: 'original-operation' } });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toContain('CONTRIBUTION_NOT_AUTHORIZED');
+      expect(JSON.stringify(denied)).toContain('This account cannot publish this plugin.');
+      const failed = await transport.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-transport-token');
+    } finally { await transport.close(); }
   });
 });

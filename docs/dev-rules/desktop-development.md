@@ -58,6 +58,10 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
 
+停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
+TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
+实现与回归见 `scripts/restart-desktop-remote.mjs` 和 `scripts/__tests__/restart-desktop-remote.test.mjs`。
+
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
 「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
 `local` mode）不是同一个概念。Agent 不得自行改用
@@ -71,6 +75,16 @@ worktree 时可以起隔离沙箱；从另一个 checkout 的 desktop dev 里起
 checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户。
 
 ## 可选启动参数
+
+只调试本机设备互联服务、仍使用真实账号登录时，保持 `restart:desktop:remote`，
+仅在本次启动环境按账号区域设置 `XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:<端口>`
+和／或 `XDT_DEVICE_LINK_GLOBAL_LOCAL_URL=http://127.0.0.1:<另一个端口>`。
+此覆盖只供未打包的开发版使用，只接受带显式端口、无凭据/路径的 IPv4/IPv6 回环地址，
+仅作用于对应区域的当前会话及按区域读取的设备互联端点。旧 `XDT_DEVICE_LINK_LOCAL_URL`
+只作为 CN 的兼容别名，不能把 Global Access Token 发往 CN 服务。正式版忽略这些覆盖；认证、SSO 双区发现、
+模型与其他服务仍按原清单和账号区域运行。跨电脑可使用经明确授权的临时回环隧道。
+不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
+本机服务，不能承载真实双区企业 SSO。
 
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
@@ -258,6 +272,15 @@ pnpm ui:check:selftest
 一段带图片链接的「UI 变化」：命令、平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的
 改前／改后数值，原样写进 PR 正文。登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附
 完整 Cindy 截图。
+
+公开截图（PR 正文、评论、发到 fork 的图）的原则：
+
+- 能证明改动就够；不公开能认出真实的人、电脑、账号的信息，以及他人的私密内容；
+  数值和界面状态照常展示。
+- 优先用 `ui:check` 或 `--mock` 的模拟数据；`--mock` 只在没登录过账号的模拟沙箱里生效。
+- 必须用真实账号时，截图前把身份信息换成示例数据（比如通过开发版的 CDP 端口修改页面文字），
+  换不掉的部分避开或裁掉，发出前人工确认一遍。
+- 发到 fork 的图按提交 SHA 仍能公开访问，删分支撤不回。
 
 `ui:check` 通过只说明列出的场景在真实组件上渲染正确；报告里 `not covered` 列出的行为仍须按
 对应流程验收，正式 PR 前的真实运行验收要求不变。

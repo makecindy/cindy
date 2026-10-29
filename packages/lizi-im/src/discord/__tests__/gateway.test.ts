@@ -146,6 +146,13 @@ describe('discord gateway pure logic', () => {
     });
   });
 
+  it('maps invalid intents close code to a readable error', () => {
+    expect(mapDiscordCloseCodeToStatus(4013)).toEqual({
+      kind: 'error',
+      reason: 'Discord gateway rejected configured intents',
+    });
+  });
+
   it('maps disallowed intents close code to a readable error', () => {
     expect(mapDiscordCloseCodeToStatus(4014)).toEqual({
       kind: 'error',
@@ -166,6 +173,15 @@ describe('discord gateway pure logic', () => {
       kind: 'error',
       reason: 'Discord authentication failed: invalid bot token',
     });
+  });
+
+  it('maps discord.js InvalidIntents login errors to error status', () => {
+    for (const code of ['InvalidIntents', 4013]) {
+      expect(mapDiscordLoginErrorToStatus({ code })).toEqual({
+        kind: 'error',
+        reason: 'Discord gateway rejected configured intents',
+      });
+    }
   });
 
   it('maps discord.js DisallowedIntents login errors to error status', () => {

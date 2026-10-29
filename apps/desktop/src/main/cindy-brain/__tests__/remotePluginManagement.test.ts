@@ -740,3 +740,61 @@ describe('remote plugin management receipt boundaries', () => {
     expect((await f.invoke('operation', { operationId: 'pending' })).phase).toBe('cancelled');
   });
 });
+
+// Fixed share installs reuse Host receipts and consent. Unit tier: fake I/O and
+// virtual timers. Exact bytes and peer cancellation are the contract under test.
+describe('remote local share installation', () => {
+  const snapshot = { schemaVersion: 1 as const, snapshotId: 'a'.repeat(32), ghostId: 'shared', name: 'Shared',
+    version: '1.0.0', sha256: 'a'.repeat(64), sizeBytes: 123, description: null, author: null,
+    icon: null, createdAt: '2026-10-28T00:00:00.000Z' };
+  const input = { operationId: 'share-operation', kind: 'install-share', expectedSnapshot: snapshot };
+  it('advertises support only when the target installer exists', async () => {
+    const f = fixture();
+    expect(await f.invoke('snapshot', {})).not.toHaveProperty('localShares');
+    f.deps.installShare = vi.fn();
+    expect(await f.invoke('snapshot', {})).toHaveProperty('localShares', true);
+  });
+  it('installs the clicked fixed package after original consent and replays only its receipt', async () => {
+    const f = fixture();
+    const placed: string[] = [];
+    f.deps.installShare = vi.fn(async (expected, prompt, current) => {
+      if (!await prompt({ initiator: 'user', origin: 'local-file', facts: {
+        kind: 'install', name: expected.name, version: expected.version, permissions: [],
+      } })) throw { code: 'MUTATION_CANCELLED' };
+      current(); placed.push(expected.sha256);
+    });
+    await f.invoke('begin', input);
+    const receipt = await f.invoke('operation', { operationId: input.operationId });
+    expect(receipt.phase).toBe('confirmation');
+    expect(placed).toEqual([]);
+    await f.invoke('answer', { operationId: input.operationId, requestId: receipt.consent!.requestId, confirmed: true });
+    await flush();
+    expect((await f.invoke('begin', input)).phase).toBe('succeeded');
+    expect(placed).toEqual([snapshot.sha256]);
+    expect(f.deps.installShare).toHaveBeenCalledOnce();
+    await expect(f.invoke('begin', { ...input, expectedSnapshot: { ...snapshot, sha256: 'b'.repeat(64) } }))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  it.each(['cancel', 'revoke', 'owner'] as const)('fences %s before the target places the package', async action => {
+    const f = fixture();
+    let resume!: () => void;
+    const placed: string[] = [];
+    f.deps.installShare = vi.fn(async (expected, _prompt, current) => {
+      await new Promise<void>(resolve => { resume = resolve; });
+      current(); placed.push(expected.sha256);
+    });
+    await f.invoke('begin', input);
+    if (action === 'cancel') await f.invoke('cancel', { operationId: input.operationId });
+    else if (action === 'revoke') f.revoke('desktop-a');
+    else f.switchOwner();
+    resume(); await flush();
+    expect(placed).toEqual([]);
+  });
+  it('rejects a URL or a malformed package binding before starting a target install', async () => {
+    const f = fixture();
+    f.deps.installShare = vi.fn();
+    await expect(f.invoke('begin', { ...input, url: 'https://other.test/package' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(f.invoke('begin', { ...input, expectedSnapshot: { ...snapshot, sha256: 'bad' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(f.deps.installShare).not.toHaveBeenCalled();
+  });
+});

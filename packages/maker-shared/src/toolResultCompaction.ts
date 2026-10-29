@@ -39,12 +39,34 @@ export function parseToolResultCompactionMarker(
   };
 }
 
+const COMPACTED_BYTE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
+
 export function formatToolResultCompactionBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
+  // 先取整字节数,再交替换档位:1048575 B 属于 MB 档,不该停在 KB 档被四舍五入成
+  // "1024 KB" —— 那一档的合法最大值是 1023,超过就该升到下一档。
+  let value = Math.round(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < COMPACTED_BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  for (;;) {
+    // 展示值也可能因为取整跨过 1024(1023.6 KB → "1024"),此时同样要升档。
+    // 各档原有精度保持不变:KB 小于 10 保留一位小数、其余取整;MB 与 GB 始终一位小数。
+    const text =
+      unit === 0
+        ? `${value}`
+        : unit === 1
+          ? value < 10
+            ? value.toFixed(1)
+            : `${Math.round(value)}`
+          : value.toFixed(1);
+    if (Number(text) < 1024 || unit === COMPACTED_BYTE_UNITS.length - 1) {
+      return `${text} ${COMPACTED_BYTE_UNITS[unit]}`;
+    }
+    value = Number(text) / 1024;
+    unit += 1;
+  }
 }
+

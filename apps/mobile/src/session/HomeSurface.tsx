@@ -1,3 +1,8 @@
+import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
+import { cloudCompanionRows } from '@/chat/cloudCompanion';
+import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
+import { readTeammateTasks } from './readTeammateTasks';
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { TaskTagDots } from '@/session/TaskTags';
@@ -109,7 +114,7 @@ import {
   openHomeRemoteCollection,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
-import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
+import { HomeDisplayMenu } from '@/session/HomeDisplayMenu';
 import type { NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
 import {
   activeContentFilterCount,
@@ -118,6 +123,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from '@/session/homeDisplaySettings';
@@ -173,7 +179,6 @@ import {
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
 import {
   conversationSearchAllowsLocalWrites,
-  conversationSearchCompanionParams,
   conversationSearchOriginsFromDeviceModels,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
@@ -294,7 +299,7 @@ import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
-import { TaskFollowMark, taskFollowerNames, useTaskFollowers } from '@/session/TaskFollowMark';
+import { TaskCreatorMark, TaskFollowMark, taskFollowerNames, useTaskFollowers } from '@/session/TaskFollowMark';
 import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
@@ -500,13 +505,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const preferenceOwnerRef = useRef(preferenceOwner);
   preferenceOwnerRef.current = preferenceOwner;
   const saveHomeViewPreferences = useCallback((
-    patch: Omit<HomeViewPreferencePatch, 'projectFilter'> & { projectFilter?: HomeProjectFilter },
+    patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeTeammateFilter },
   ) => {
     const owner = getMobileAuthOwner();
-    const { projectFilter, ...rest } = patch;
-    const stored: HomeViewPreferencePatch = projectFilter === undefined
-      ? rest
-      : { ...rest, projectFilter: { owner: preferenceOwnerRef.current, value: projectFilter } };
+    const { projectFilter, teammateFilter, ...rest } = patch;
+    const stored: HomeViewPreferencePatch = { ...rest,
+      ...(projectFilter === undefined ? {} : { projectFilter: { owner: preferenceOwnerRef.current, value: projectFilter } }),
+      ...(teammateFilter === undefined ? {} : { teammateFilter: { owner: preferenceOwnerRef.current, value: teammateFilter } }),
+    };
     return persistHomeViewPreferences(stored).catch(() => {
       if (isMobileAuthOwnerCurrent(owner)) {
         Alert.alert(t('devices.list.alert.actionFailed'), t('models.unified.saveFailed'));
@@ -677,6 +683,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
+  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeTeammateFilter>(viewSession, 'teammateFilter', 'all');
   const [projectFilter, setProjectFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'projectFilter', 'all');
   const [vendorFilter, setVendorFilter] = useRetainedHomeState<HomeVendorFilter>(viewSession, 'vendorFilter', 'all');
   const [lastActivityFilter, setLastActivityFilter] = useRetainedHomeState<HomeLastActivityFilter>(viewSession, 'lastActivityFilter', 'all');
@@ -974,7 +981,21 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               requestedListFilter,
               { includePinned: true, fresh: true },
             ]);
-            return [list, epoch] as const;
+            const enriched = await readTeammateTasks({ invoke, deviceId: device.deviceId, deviceName: device.name,
+              scope: JSON.stringify([expectedAccountGeneration, expectedHomeSyncGeneration, device.deviceId]),
+              sessions: Array.isArray(list) ? list : [], previous: remoteSessionStore.getHomeSessions(),
+              status: requestedListFilter, limit: LIST_LIMIT,
+              publishInitial: rows => {
+                assertCurrentScope();
+                if (remoteSessionStore.isDeviceSessionListMutationEpochCurrent(device.deviceId, epoch)) {
+                  remoteSessionStore.setDeviceSessions(device.deviceId, device.name, rows);
+                }
+              },
+              current: () => homeAccountGenerationRef.current === expectedAccountGeneration
+                && isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration),
+            });
+            assertCurrentScope();
+            return [enriched, epoch] as const;
           },
           async () => {
             assertCurrentScope();
@@ -1425,6 +1446,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       setProjectOrder(preferences.projectOrder);
       setManualProjectOrder(preferences.manualProjectOrder);
       setProjectFilter(preferences.projectFilter);
+      setTeammateFilter(preferences.teammateFilter);
       setVendorFilter(preferences.vendorFilter);
       setLastActivityFilter(preferences.lastActivityFilter);
       setViewMode(preferences.viewMode);
@@ -2121,11 +2143,25 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const sharedGroup = useMemo(() => splitSharedHomeGroup(home, ownedSharedTasks, {
     sessions: homeSessions, searchQuery, statusFilter,
   }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
+  const cloudTeammates = useCloudCompanionHome(false);
+  const cloudTeammateIds = useMemo(() => new Set(cloudTeammates.actors.filter(actor => actor.kind === 'bot').map(actor => actor.externalId)), [cloudTeammates.actors]);
+  const cindyTeammateIds = useMemo(() => new Set(cloudTeammates.cindyIds), [cloudTeammates.cindyIds]);
+  const effectiveTeammateFilter = useMemo(() => normalizeTaskTeammateSelection(teammateFilter, cloudTeammateIds, cindyTeammateIds), [teammateFilter, cloudTeammateIds, cindyTeammateIds]);
+  const teammateOptions = useMemo(() => taskTeammateOptions(
+    cloudCompanionRows(teammatesSectionContext.shared?.roster.items ?? [], cloudTeammates.actors, cloudTeammates.deviceNames),
+    cloudTeammateIds, i18nInstance.language, cindyTeammateIds,
+  ), [teammatesSectionContext.shared?.roster.items, cloudTeammates.actors, cloudTeammates.deviceNames, cloudTeammateIds, i18nInstance.language, cindyTeammateIds]);
   const contentFilters = useMemo<HomeContentFilters>(() => ({
     lastActivity: lastActivityFilter,
     projects: projectFilter,
+    teammates: effectiveTeammateFilter,
+    teammateKey: item => {
+      const session = item.session as RemoteSession;
+      const id = session.taskTeammate?.id ?? session.companion?.id;
+      return id ? taskTeammateKey(id, session.deviceLinkDeviceId ?? '', cloudTeammateIds, cindyTeammateIds) : undefined;
+    },
     vendor: vendorFilter,
-  }), [lastActivityFilter, projectFilter, vendorFilter]);
+  }), [lastActivityFilter, projectFilter, effectiveTeammateFilter, cloudTeammateIds, cindyTeammateIds, vendorFilter]);
   // 「最近活跃」按当前时间截断:列表没有新数据时也要让越过截止线的任务按时移出。
   const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);
   const filteredSharedRows = useMemo(
@@ -2382,10 +2418,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       pathname: '/sessions/[sessionId]',
       params: {
         deviceId,
-        deviceName: session.deviceLinkDeviceName ?? deviceId,
+        deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
         sessionId: session.id,
         ...(focusClientId ? { focusClientId } : {}),
-        ...conversationSearchCompanionParams(item),
       },
     } as const;
     rememberTask(href);
@@ -2399,7 +2434,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const openNewSession = useCallback((project?: MobileHomeProjectGroup, suggestion?: RemoteTaskSuggestionId, explicitDeviceId?: string, origin?: ComposerMorphOrigin) => {
     const { primaryDevice, newSessionDeviceOptions, selectedDeviceId } = newSessionTargetRef.current;
     const deviceId = project?.deviceId ?? explicitDeviceId ?? primaryDevice?.deviceId;
-    const deviceName = project?.deviceName ?? newSessionDeviceOptions.find((device) => device.deviceId === deviceId)?.name ?? primaryDevice?.label ?? deviceId ?? '';
+    const deviceName = deviceDisplayName(deviceId ?? '', project?.deviceName ?? newSessionDeviceOptions.find((device) => device.deviceId === deviceId)?.name ?? primaryDevice?.label);
     if (!deviceId) {
       setError(t('devices.list.error.noDevice'));
       return;
@@ -2477,6 +2512,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
+    if (nextPatch.teammateFilter !== undefined) setTeammateFilter(nextPatch.teammateFilter);
     if (nextPatch.projectFilter !== undefined) setProjectFilter(nextPatch.projectFilter);
     if (nextPatch.vendorFilter !== undefined) setVendorFilter(nextPatch.vendorFilter);
     if (nextPatch.lastActivityFilter !== undefined) setLastActivityFilter(nextPatch.lastActivityFilter);
@@ -2732,7 +2768,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       pathname: '/devices/[deviceId]',
       params: {
         deviceId,
-        name: session.deviceLinkDeviceName ?? deviceId,
+        name: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
         automationGroupKey: group.baseKey,
         automationName: group.title,
         ...(workingDir ? { automationWorkingDir: workingDir } : {}),
@@ -2899,13 +2935,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     groupDialogue,
     lastActivityFilter,
     projectFilter,
+    teammateFilter: effectiveTeammateFilter,
     projectOrder: displayedProjectOrder,
     sortBy,
     statusFilter,
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = statusFilter === 'archived';
@@ -2923,10 +2960,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         subtitle: selectedDeviceId ? undefined : project.deviceName || undefined,
         title: project.title,
       })),
+      teammates: teammateOptions,
       state: displayMenuState,
       t,
     }),
-    [displayMenuState, projectFilterUniverse.chats, projectFilterUniverse.projects, selectedDeviceId, t],
+    [displayMenuState, teammateOptions, projectFilterUniverse.chats, projectFilterUniverse.projects, selectedDeviceId, t],
   );
   const handleDisplayAction = useCallback((id: string) => {
     const patch = homeDisplayActionPatch(id, displayMenuState);
@@ -3303,15 +3341,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
             ) : null}
-            {/* 系统菜单不可用(未编进 MenuView 的旧 iOS 包)时退回同一份菜单模型的 Cindy 自绘菜单。 */}
-            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>
-              <HomeHeaderGlassButton accessibilityLabel={displayA11y} onPress={() => undefined} testID="home.displaySettingsButton">
-                <View>
-                  <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
-                  {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
-                </View>
-              </HomeHeaderGlassButton>
+            {/* 侧栏本地菜单完整保留分组和多层筛选;系统顶栏继续使用自己的原生菜单。 */}
+            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction} accessibilityLabel={displayA11y}>
+              <View>
+                <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+                {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
+                {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
+              </View>
             </HomeDisplayMenu>
           </View>
         )}
@@ -4409,6 +4445,7 @@ function HomeSessionRowInner({
   const latestItem = latestMobileSessionRow(item);
   // 伙伴开的或接手的任务:标题后带第一位伙伴的头像(与桌面侧栏「在跟进」同口径)。
   const followers = useTaskFollowers(latestItem.session);
+  const taskTeammate = (latestItem.session as RemoteSession).taskTeammate;
   const sessionIsRunning = useSessionRunning(latestItem.session.id);
   // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
   // sections 和其它任务行都保持原引用。
@@ -4463,14 +4500,16 @@ function HomeSessionRowInner({
   };
   const groupRowOpensPrimary = !!group && (attention || rightStatus === 'error') && !groupExpanded;
   const accessibilityTitle = sharedRole === 'owned' ? item.title + ', ' + t('sharedTask.roleHost') : item.title;
-  const followedBy = !group && followers.length
+  const attributedTo = !group && taskTeammate
+    ? ', ' + t((latestItem.session as RemoteSession).companion ? 'devices.list.a11y.ownedBy' : 'devices.list.a11y.createdBy', { name: taskTeammate.name }) : '';
+  const followedBy = !attributedTo && !group && followers.length
     ? t('devices.list.a11y.followedBy', { names: taskFollowerNames(followers, i18n.language) })
     : '';
   const accessibilityLabel = group
     ? groupRowOpensPrimary
       ? t('devices.list.a11y.openAutomationLatest', { title: accessibilityTitle })
       : t('devices.list.a11y.automationTask', { title: accessibilityTitle })
-    : t('devices.list.a11y.openConversation', { title: accessibilityTitle }) + followedBy;
+    : t('devices.list.a11y.openConversation', { title: accessibilityTitle }) + attributedTo + followedBy;
   const handlePress = selectionMode && onPressSelection
     ? onPressSelection
     : group
@@ -4606,7 +4645,10 @@ function HomeSessionRowInner({
                 {showPinned ? <Pin color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} /> : null}
               </View>
             ) : null}
-            {!group && followers[0] ? (
+            {!group && taskTeammate ? (
+              <TaskCreatorMark teammate={taskTeammate} deviceId={item.session.deviceLinkDeviceId ?? ''}
+                testID={`home.sessionCreatorMark.${item.session.id}`} />
+            ) : !group && followers[0] ? (
               <TaskFollowMark follower={followers[0]} testID={`home.sessionFollowMark.${item.session.id}`} />
             ) : null}
             {rightStatus === 'time' ? (
@@ -4857,26 +4899,6 @@ function AutomationGroupPreviewText({ item, sessionCount, style, testID }: {
 
 function pullDownActionsEqual(a: readonly NativePullDownAction[], b: readonly NativePullDownAction[]): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
-}
-
-/**
- * 显示菜单触发器:系统菜单可用时走 UIMenu / 安卓下拉;未编进 MenuView 的旧 iOS 包退回
- * 同一份菜单模型的 Cindy 自绘菜单,两条路径的选项与层级完全一致。
- */
-function HomeDisplayMenu({
-  actions,
-  children,
-  onAction,
-}: {
-  actions: readonly NativePullDownAction[];
-  children: ReactNode;
-  onAction(id: string): void;
-}) {
-  return usesNativePullDownMenu() ? (
-    <NativePullDownMenu actions={actions} onAction={onAction}>{children}</NativePullDownMenu>
-  ) : (
-    <AnchoredPullDownMenu actions={actions} onAction={onAction}>{children}</AnchoredPullDownMenu>
-  );
 }
 
 /** 该首页行是否以「块」呈现(上下全宽线):项目组,或自动化组行(顶层 asBlock)。 */

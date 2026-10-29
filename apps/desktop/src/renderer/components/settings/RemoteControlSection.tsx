@@ -24,6 +24,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from './MyDevicesPanel';
+import { RelayServicePanel, relaySummary, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
@@ -165,6 +166,10 @@ export function RemoteControlSection() {
   // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
   // 再把下方内容顶开一格。
   const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const relay = useSelfHostedRelayState(deviceLinkAvailable);
+  const [relayOpen, setRelayOpen] = useState(
+    () => new URLSearchParams(location.search).get('section') === 'remoteControl.relay',
+  );
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -185,6 +190,7 @@ export function RemoteControlSection() {
   useLayoutEffect(() => {
     if (entry?.targetId === 'settings-search-target-remote-ssh') setSshOpen(true);
     if (entry?.targetId === 'settings-search-target-remote-devices') setDevicesOpen(true);
+    if (entry?.targetId === 'settings-search-target-remote-relay') setRelayOpen(true);
   }, [entry, activation]);
 
   const collapseRequestedRef = useRef(false);
@@ -291,6 +297,17 @@ export function RemoteControlSection() {
                 focusDeviceId={focusDeviceId}
                 focusRequestKey={focusRequestKey}
               />
+            </CollapsibleSubSection>
+            <div className="h-px w-full bg-[var(--border-default)]" />
+            <CollapsibleSubSection
+              id="settings-search-target-remote-relay"
+              title={t('settings.remoteControl.sections.relay')}
+              summary={relaySummary(relay.state, t)}
+              dotColor={null}
+              open={relayOpen}
+              onToggle={() => setRelayOpen((value) => !value)}
+            >
+              <RelayServicePanel controller={relay} />
             </CollapsibleSubSection>
             <div className="h-px w-full bg-[var(--border-default)]" />
           </>

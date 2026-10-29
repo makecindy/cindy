@@ -201,7 +201,7 @@ export function searchCachedDeviceSessions(
 
   const hits: ConversationSearchResultItem[] = [];
   sessions.forEach((session, index) => {
-    if ((!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || session.orcaRole === 'worker') return;
+    if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) return;
     if (!sessionBelongsToDevice(session, origin.deviceId)) return;
     const alias = session.workspaceKind === 'project'
       ? resolveProjectAliasForSessions([session], projectAliases, origin.deviceId ?? undefined) : undefined;
@@ -272,20 +272,6 @@ export type ConversationSearchListItem = RemoteSessionListItem & {
   searchCompanion?: ConversationSearchSessionSummary['companion'];
   searchLocallyCached: boolean;
 };
-
-/** Keep the exact transcript selected by search, including an archived personal thread. */
-export function conversationSearchCompanionParams(item: object): Record<string, string> {
-  const companion = (item as Partial<ConversationSearchListItem>).searchCompanion;
-  if (!companion) return {};
-  return {
-    resourceCollectionId: 'teammates',
-    resourceKind: 'bot',
-    resourceId: companion.id,
-    ...(companion.readOnly
-      ? { resourceHistorySessionId: (item as ConversationSearchListItem).session.id }
-      : {}),
-  };
-}
 
 export function conversationSearchSessionCacheKey(
   session: Pick<RemoteSession, 'id'> & {

@@ -34,6 +34,7 @@ export function MarkdownFileReader({
   targetLine,
   testID,
   viewportInsets,
+  imageSources,
 }: {
   markdown: string;
   /** 由文件预览 pager 消费的明确横向翻页；纵向移动会让该手势失败给 WebView。 */
@@ -44,6 +45,7 @@ export function MarkdownFileReader({
   targetLine?: number | null;
   testID?: string;
   viewportInsets?: BrowserInsets;
+  imageSources?: ReadonlyMap<string, { uri: string }>;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -57,6 +59,7 @@ export function MarkdownFileReader({
     [t],
   );
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
+    ...(imageSources ? { imageSources } : {}),
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
     inlineCodeColor: colors.chatInlineCodeText,
@@ -79,7 +82,7 @@ export function MarkdownFileReader({
     },
     textColor: colors.textPrimary,
     ...(targetLine ? { targetLine } : {}),
-  }), [colors, markdown, targetLine]);
+  }), [colors, imageSources, markdown, targetLine]);
 
   // 回调走 ref:onQuoteSelection 引用变化(页面重渲)不应重建 handler,
   // 更不应让 WebView 重载。

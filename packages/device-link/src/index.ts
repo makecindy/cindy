@@ -62,6 +62,9 @@ export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
 export * from "./clipboardTransfer.js";
 
+export * from "./selfHostedRelay.js";
+export * from "./selfHostedRelayAuth.js";
+
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
 export * from "./pluginAuthorization.js";

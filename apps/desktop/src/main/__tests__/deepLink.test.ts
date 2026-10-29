@@ -20,6 +20,11 @@ vi.mock('electron', () => ({
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
 const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => logs }));
+const owner = vi.hoisted(() => ({ generation: 1 }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: String(owner.generation) }),
+  isDataOwnerBroadcastScopeCurrent: (scope: { ownerScopeKey?: string }) => scope.ownerScopeKey === String(owner.generation),
+}));
 
 import { vi } from 'vitest';
 import {
@@ -27,6 +32,7 @@ import {
   buildFocusDeepLink,
   buildProjectDeepLink,
   buildSessionDeepLink,
+  buildHistorySessionDeepLink,
   buildSessionMessageDeepLink,
   findDeepLinkInArgv,
   redactConsumedDeepLinkInArgv,
@@ -38,6 +44,8 @@ import {
   focusMainWindow,
   handleIncomingDeepLink,
   openMainWindowVoiceSettings,
+  openMainWindowSession,
+  openMainWindowRemoteControlSettings,
   setDeepLinkMainWindow,
   takePendingDeepLink,
   takePendingDeepLinkFromRenderer,
@@ -58,6 +66,19 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   };
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
+
+describe('history task links', () => {
+  it.each([
+    ['task/一', 'host', 'task/一', 'host'],
+    ['local::task', 'host', 'task', 'host'],
+    ['other::task', 'host', 'task', 'other'],
+  ])('routes %s to its owning computer', (key, localDeviceId, sessionId, deviceId) => {
+    const url = buildHistorySessionDeepLink(key, localDeviceId);
+    expect(parseDeepLink(url)).toEqual({ type: 'session', id: sessionId, deviceId });
+    expect(new URL(url).searchParams.get('device')).toBe(deviceId);
+    expect(url).not.toContain('::');
+  });
+});
 
 describe('chat invitation handoff', () => {
   const token = 'synthetic-invitation-'.padEnd(43, 'a');
@@ -175,7 +196,7 @@ describe('user-initiated main-window focus', () => {
 });
 
 describe('internal main-window navigation', () => {
-  it('focuses the main window and routes voice settings to the requested tab', () => {
+  it.each(['providers', 'remote-control'] as const)('focuses the main window and routes settings to %s', (tab) => {
     const send = vi.fn();
     const mainWindow = {
       isDestroyed: () => false,
@@ -193,7 +214,8 @@ describe('internal main-window navigation', () => {
     };
     setDeepLinkMainWindow(mainWindow as unknown as BrowserWindow);
 
-    openMainWindowVoiceSettings('providers');
+    if (tab === 'remote-control') openMainWindowRemoteControlSettings();
+    else openMainWindowVoiceSettings(tab);
 
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
@@ -207,7 +229,7 @@ describe('internal main-window navigation', () => {
     }
     expect(send).toHaveBeenCalledWith('deep-link:navigate', {
       type: 'settings',
-      tab: 'providers',
+      tab,
     });
     setDeepLinkMainWindow(null);
   });
@@ -274,12 +296,11 @@ describe('parseDeepLink', () => {
     });
   });
 
-  it('tolerates the device-frozen link format when routing a click', () => {
-    // 远程会话深链带 `?device=`(renderer 生成);main 端点击路由按 sessionId
-    // 导航即可,未知参数不拖累 session / message 解析。
+  it('preserves the owning device and message anchor when routing an external click', () => {
     expect(parseDeepLink(buildSessionDeepLink('abc-123', { deviceId: 'dev-1' }))).toEqual({
       type: 'session',
       id: 'abc-123',
+      deviceId: 'dev-1',
     });
     expect(
       parseDeepLink(buildSessionMessageDeepLink('abc-123', 'm1', { deviceId: 'dev-1' })),
@@ -287,6 +308,7 @@ describe('parseDeepLink', () => {
       type: 'session',
       id: 'abc-123',
       messageClientId: 'm1',
+      deviceId: 'dev-1',
     });
   });
 
@@ -406,6 +428,25 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
       expect(JSON.stringify(result)).not.toContain('sk-must-stay-in-main');
     },
   );
+
+  it('retains the original task host and reply anchor while the main renderer is unavailable', () => {
+    setDeepLinkMainWindow(null);
+    openMainWindowSession('original', { deviceId: 'studio', messageClientId: 'reply', islandEntryId: 'entry' });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'original', deviceId: 'studio', messageClientId: 'reply', islandEntryId: 'entry' });
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  // Notification clicks can be buffered during reload, then pulled after another
+  // account logs in. The public main-window entry must reject that stale intent.
+  it('drops an old owner notification from the pending queue without dropping later external links', () => {
+    setDeepLinkMainWindow(null);
+    openMainWindowSession('account-a-task', { deviceId: 'studio', messageClientId: 'reply' });
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toBeNull();
+    handleIncomingDeepLink('cindy://session/external-task', 'open-url');
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'external-task' });
+  });
 
   it('buffers only the opaque provider import id during cold start', () => {
     setDeepLinkMainWindow(null);
@@ -676,5 +717,38 @@ describe('findOpenShareFileInArgv', () => {
         '/tmp/team.cshare',
       ]),
     ).toBe('/tmp/team.cshare');
+  });
+});
+
+
+describe('public plugin links are navigation only', () => {
+  const id = 'c123456789012345678901234';
+  it('opens exactly the referenced market resource', () => {
+    expect(parseDeepLink(`cindy://plugin/${id}`)).toEqual({ type: 'plugin', pluginId: id });
+  });
+  it.each(['?install=1', '?url=https://example.test/package', '/releases/release', '#auto', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin/${id}${suffix}`)).toBeNull();
+  });
+  it('does not accept ghost names as server resource IDs', () => {
+    expect(parseDeepLink('cindy://plugin/cindy-github')).toBeNull();
+  });
+});
+
+// A local share is a fixed package, never a market ID or an automatic install.
+// Unit: the real parser and pending handoff need no server or real Electron app.
+describe('fixed local plugin share navigation', () => {
+  const snapshotId = 'a'.repeat(32);
+  it('keeps the exact snapshot through the loaded login page', () => {
+    const window = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), focus: vi.fn(),
+      restore: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send: vi.fn() } } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(window);
+    handleIncomingDeepLink(`cindy://plugin-share/${snapshotId}`, 'open-url');
+    expect(takePendingDeepLink()).toEqual({ type: 'local-plugin-share', snapshotId });
+    expect(takePendingDeepLink()).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+  it.each(['?install=1', '?url=https://example.test/file', '#auto', '/other', '/../other'])('rejects extra behavior %s', suffix => {
+    expect(parseDeepLink(`cindy://plugin-share/${snapshotId}${suffix}`)).toBeNull();
   });
 });

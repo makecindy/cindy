@@ -30,6 +30,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Check, ChevronLeft, ChevronRight, Minus } from "lucide-react-native";
 import { Text } from "@/components/AppText";
+import { FilterReminderDot } from "@/components/FilterReminderDot";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import type { NativePullDownAction } from "@/platform/chrome/NativePullDownMenu";
 import {
@@ -434,6 +435,7 @@ function MenuRow({
           </Text>
         ) : null}
       </View>
+      {action.filterReminder ? <FilterReminderDot /> : null}
       {submenu ? (
         <ChevronRight
           color={colors.textTertiary}

@@ -15,6 +15,7 @@
     "ko": "locales/ko.json"
   },
   "version": "1.0.0",
+  "releaseNotes": "新增图片编辑工具。", // 可选；更新说明要求见 §7.3
   "minCindyVersion": "1.2.3", // 示例；v3 必填:本插件实际依赖的首个 Cindy 正式版本(SemVer)
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:插件只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(详情页会如实标注"常驻运行",绝大多数插件不需要,仅订阅型/需秒响应的场景用)

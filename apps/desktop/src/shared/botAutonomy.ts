@@ -102,6 +102,8 @@ export interface WatchedSession {
   online: boolean;
   title: string;
   workingDir: string | null;
+  /** Executing model explicitly reported final delivery for this execution. */
+  finalDelivery?: boolean;
   phase: WatchedPhase;
   /** 进入当前 phase 的时刻（ms）。同一 (phase, phaseSince) 只发布一次事件。 */
   phaseSince: number;

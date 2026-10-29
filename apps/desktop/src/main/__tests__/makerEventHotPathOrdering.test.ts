@@ -409,11 +409,12 @@ describe('maker:event hot path ordering', () => {
     const started = new Promise<void>((resolve) => { releaseStart = resolve; });
     const waitForStart = vi.fn(() => started);
     const handleWorkerTerminalTurn = vi.fn(async (_terminal: { capture: unknown }) => undefined);
+    const noteWorkerProductTerminal = vi.fn();
     const finalize = new Function(
       'workerTurnStartSequencer',
       'orcaTeamServiceForEvents',
       `${js}\nreturn ${name};`,
-    )({ waitForStart }, { handleWorkerTerminalTurn }) as (
+    )({ waitForStart }, { handleWorkerTerminalTurn, noteWorkerProductTerminal }) as (
       sessionId: string,
       payload: unknown,
     ) => void;
@@ -423,6 +424,8 @@ describe('maker:event hot path ordering', () => {
     };
 
     finalize('worker-session', payload);
+    // Releasing a deferred failure closes A's report ownership before B can start.
+    expect(noteWorkerProductTerminal).toHaveBeenCalledExactlyOnceWith(capture);
     expect(waitForStart).toHaveBeenCalledWith('worker-session');
     expect(handleWorkerTerminalTurn).not.toHaveBeenCalled();
     releaseStart();

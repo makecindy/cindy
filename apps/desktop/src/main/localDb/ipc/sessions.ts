@@ -1,4 +1,6 @@
+import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
+import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
   claimOwnedProvisionalSession,
@@ -45,6 +47,7 @@ import { sessions, messages } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
   selectSessionListRows,
+  ordinaryTaskListFilter,
   selectSessionWithCount,
   selectSessionsByIds,
   flattenSessionReadRow,
@@ -83,7 +86,6 @@ import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/share
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
-  DESKTOP_TASK_LIST_SESSION_SOURCES,
   DESKTOP_VISIBLE_SESSION_SOURCES,
   isRetainableProjectSession,
 } from '../../../shared/sessionSource.js';
@@ -110,7 +112,7 @@ import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
-import { ensureHiddenSessionRegistryLoaded } from '../hiddenSessionRegistry.js';
+import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
@@ -1139,8 +1141,41 @@ export async function getSessionFsSnapshot(id: string): Promise<{
   }
 }
 
+export async function touchSessionActivityInDb(
+  id: string,
+  atMs = Date.now(),
+  skipActiveGoal = false,
+): Promise<void> {
+  if (isEndedWriteSuppressed()) return;
+  const ownerScope = captureOwnerScope();
+  try {
+    const db = getDbClient().drizzle;
+    const updated = await db.update(sessions)
+      .set({
+        lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${atMs})`,
+        updatedAt: sql`MAX(COALESCE(${sessions.updatedAt}, 0), ${atMs})`,
+      })
+      .where(and(
+        eq(sessions.id, id),
+        sql`COALESCE(${sessions.lastActivityAt}, 0) < ${atMs}`,
+        skipActiveGoal
+          ? sql`NOT EXISTS (SELECT 1 FROM session_goals WHERE session_id = ${id} AND status = 'active')`
+          : undefined,
+      ))
+      .returning({ lastActivityAt: sessions.lastActivityAt, updatedAt: sessions.updatedAt });
+    if (updated[0]?.lastActivityAt != null && isOwnerScopeCurrent(ownerScope)) {
+      broadcastSessionPatched(id, {
+        lastActivityAt: new Date(updated[0].lastActivityAt).toISOString(),
+        updatedAt: new Date(updated[0].updatedAt).toISOString(),
+      }, ownerScope);
+    }
+  } catch (error) {
+    log.warn('Failed to persist session list activity', { sessionId: id, error: String(error) });
+  }
+}
+
 /**
- * 内部 API：标记用户显式发送时间。
+ * 内部 API：标记用户显式发送时间，同时推进列表最近活动时间。
  *
  * 过去这一步由 renderer 在 sendMessage 里直接调 IPC。队列 / 插话迁到 main 事务
  * 协调器后，renderer 只发 intent，真正“这条输入已进入事务”的时间必须跟 main
@@ -1157,36 +1192,30 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   // 通过旧值检查后都执行 UPDATE，后写入的更早时间戳会覆盖已写入的更新值。
   // WHERE 条件由 SQLite 行锁原子执行，消除竞态窗口。
   // updatedAt 用 MAX 防止 run 完成路径写入 finishedAt 后被更早的 firedAt 回退。
-  // 同步 bump updatedAt:侧栏时间轴统一读 sessions.updatedAt("最近有动静的会话"),
-  // 用户按下发送就是最典型的"有动静"—— userSendAt 保持"用户发送时刻"专用语义,
-  // updatedAt 表示"任意路径下这个 session 最近一次被推进",两者语义正交但需同刷。
-  await db
+  // 保留 updatedAt 的既有写入；列表活动时间与真人发送时间在同一条 UPDATE 中推进。
+  const updated = await db
     .update(sessions)
-    .set({ userSendAt: ts, updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})` })
+    .set({
+      userSendAt: ts,
+      lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${ts})`,
+      updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})`,
+    })
     .where(
       and(
         eq(sessions.id, id),
         sql`(${sessions.userSendAt} IS NULL OR ${sessions.userSendAt} < ${ts})`,
       ),
-    );
-  // 验证 UPDATE 是否落地，避免向 renderer 广播过时值。
-  // WHERE 条件为假时（并发写入已领先，或 userSendAt 已 >= ts）UPDATE 为 no-op；
-  // 此时 DB 里的 userSendAt ≠ ts，SELECT 返回空，正确跳过广播。
-  // 通过 SELECT 拿回实际落库的 updatedAt（已经是 MAX'd 结果）用于广播，
-  // 避免把旧 ts 当作 updatedAt 广播给 renderer。
-  const updated = await db
-    .select({
+    )
+    .returning({
       userSendAt: sessions.userSendAt,
+      lastActivityAt: sessions.lastActivityAt,
       updatedAt: sessions.updatedAt,
       workingDir: sessions.workingDir,
       workspaceKind: sessions.workspaceKind,
       remoteHostId: sessions.remoteHostId,
       source: sessions.source,
       orcaRole: sessions.orcaRole,
-    })
-    .from(sessions)
-    .where(and(eq(sessions.id, id), eq(sessions.userSendAt, ts)))
-    .limit(1);
+    });
   if (updated.length === 0) return;
   // 广播 sessions:patched,让 renderer 把刚发过消息的会话从「草稿(未分类)」即时重归到
   // 项目分组下(projectGrouping 的草稿兜底:userSendAt==null && messages==0 → unclassified)。
@@ -1200,6 +1229,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       id,
       {
         userSendAt: new Date(updated[0].userSendAt!).toISOString(),
+        lastActivityAt: new Date(updated[0].lastActivityAt!).toISOString(),
         updatedAt: new Date(updated[0].updatedAt).toISOString(),
       },
       ownerScope,
@@ -1531,8 +1561,9 @@ export function registerSessionIpc(
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
-      // 首次 list 即账号库就绪:预热插件后台任务索引,灵动岛/通知的同步判定从此可用。
-      void ensureHiddenSessionRegistryLoaded();
+      // 首次 list 即账号库就绪:预热 session 标记索引(插件后台隐藏 + 消息免打扰),
+      // 灵动岛/通知的同步判定从此可用。
+      void ensureSessionFlagRegistryLoaded();
       // 同一时机清掉上次运行没来得及删的未发送任务；先等它清完再读列表，残留不会被列出来。
       // 每个账号库只真正清理一次，之后直接返回同一个结果。
       await sweepLeftoverProvisionalSessions().catch(() => undefined);
@@ -1582,10 +1613,7 @@ export function registerSessionIpc(
         // 只从来源任务的审查卡片打开,不进普通任务列表(用量历史仍包含)。
         // 插件后台隐藏任务(hidden_at 非空)同样不进任务列表,只在插件详情页「后台任务」
         // 查看与接手;手机/远控经 device-link 调同一 handler,口径一致。
-        const sourceFilter = and(
-          inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
-          isNull(sessions.hiddenAt),
-        );
+        const sourceFilter = ordinaryTaskListFilter();
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
         const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere(), ids ? inArray(sessions.id, ids) : undefined), cap, before);
@@ -2088,6 +2116,11 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
+    // renderer payload 不可信:静音是 boolean 语义,字符串 "false" 进 mapper 会被 `!!`
+    // 存成 true(开关反转)。出现就必须是真 boolean,与 set-pinned-card-summaries 同口径。
+    if (p.notificationsMuted !== undefined && typeof p.notificationsMuted !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'notificationsMuted must be a boolean');
+    }
     return updateSessionInDb(sid, p, opts);
   });
 
@@ -2110,9 +2143,7 @@ export function registerSessionIpc(
   // 业务函数 forkSessionAtMessage 仍在 apps/desktop/src/main/maker-orchestration/fork.ts, 内部 SDK 调用
   // 走 maker-core 的 Maker.forkSdkSession (Codex 自动抛 NotSupportedError)。
 
-  // 单字段 bump：把 user_send_at 设为 now。fire-and-forget，不返回 row。
-  // 故意与 sessions:update 解耦——update 会同步刷 updated_at（mapper.ts:165），
-  // 那是给"字段类改动"用的；touchUserSend 只标记"对话活跃"，绝不污染 updated_at。
+  // 用户发送同时推进 user_send_at、last_activity_at 和既有 updated_at，不返回 row。
   ipcMain.handle(
     'local-db:sessions:touchUserSend',
     async (_e, id: unknown, atMs: unknown): Promise<void> => {
@@ -2147,6 +2178,23 @@ export function registerSessionIpc(
  * (GUI 侧栏、MCP 工具、device-link)一并生效;GUI 侧的预检只为及时反馈,规则
  * 以本函数为准,不得在入口层另立一份。
  */
+
+/** Pre-lock cancellation is limited to validated terminal intent; commit/cleanup stay locked. */
+async function cancelValidatedCreation(
+  dbClient: DbClient, sessionId: string, status: unknown,
+  assertCurrent: () => void,
+): Promise<void> {
+  if (status !== 'archived' && status !== 'deleted') return;
+  const cancel = captureSessionCreationCancellation(dbClient, sessionId);
+  const [target] = await dbClient.drizzle.select({ source: sessions.source })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
+  await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId);
+  assertCurrent();
+  if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+  cancel();
+}
+
 export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
@@ -2330,6 +2378,7 @@ export async function updateSessionInDb(
       'extraDirs',
       'writableDirs',
       'pinnedAt',
+      'notificationsMuted',
       'workingDir',
       'workspaceKind',
       'title',
@@ -2389,6 +2438,10 @@ export async function updateSessionInDb(
     const previousContextWindowBudget: number | null = hasContextWindowBudgetChange
       ? readSessionContextWindowBudget(sid)
       : null;
+    await cancelValidatedCreation(dbClient, sid, p.status, () => {
+      moveGuard?.assertCurrent();
+      if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    });
     let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
     await withStatusWriteLock(
       db,
@@ -2448,6 +2501,13 @@ export async function updateSessionInDb(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
+    // 「消息免打扰」是通知面专用标记:同步给进程内索引,免得通知/灵动岛路径逐事件查库。
+    if (p.notificationsMuted !== undefined) {
+      noteSessionNotificationsMuted(sid, updated.notificationsMuted === true, dbClient);
+      // 岛面收敛:静音后要把已经上岛的任务从展示面收走,取消静音要放回来。只影响
+      // 展示面 —— 事件仍照常进状态机(侧栏实时活动就长在那份状态上)。
+      notifyAgentIslandSessionPatch(sid, { notificationsMuted: updated.notificationsMuted });
+    }
     if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
       clearSessionAttention(sid, 'explicit');
     }
@@ -2509,7 +2569,8 @@ export async function updateSessionInDb(
       settingsChanged ||
       titleChanged ||
       statusChanged ||
-      p.pinnedAt !== undefined
+      p.pinnedAt !== undefined ||
+      p.notificationsMuted !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, broadcastPatch, ownerScope);
@@ -2651,6 +2712,12 @@ export async function patchSessionMetaInDb(
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
+  await cancelValidatedCreation(dbClient, sessionId, patch.status, () => {
+    if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) {
+      throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+    }
+    options.beforeWrite?.();
+  });
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     options.beforeWrite?.();

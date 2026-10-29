@@ -1,6 +1,6 @@
 import { iconSize, spacing } from '@/theme';
-import { Fragment, useEffect } from 'react';
-import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle, useNativeState } from '@expo/ui/swift-ui';
+import { Fragment } from 'react';
+import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle } from '@expo/ui/swift-ui';
 import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteActionField } from '@cindy/device-link';
@@ -11,6 +11,7 @@ import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import type { CompanionProfileNativeViewProps } from './CompanionProfileNativeView';
 import type { ProfilePanel, ProfileValues } from './companionProfileData';
+import { useNativeTextDraft } from './nativeTextDraft';
 import { CompanionPortraitPicker } from './CompanionPortraitPicker';
 import { CompanionNativeContent } from './CompanionNativeContent.ios';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -20,15 +21,14 @@ export function CompanionNativeField({ field, values, onChange, busy }: { field:
   const { colors } = useTheme();
   const label = resolveRemoteText(field.label, i18n.language);
   const value = typeof values[field.id] === 'string' ? values[field.id] as string : '';
-  const text = useNativeState(value);
-  useEffect(() => { if (text.get() !== value) text.set(value); }, [value, text]);
-  const update = (value: string | boolean) => onChange({ ...values, [field.id]: value });
+  const update = (next: string | boolean) => onChange({ ...values, [field.id]: next });
+  const draft = useNativeTextDraft(value, next => update(next));
   if (field.id === 'avatarImageBase64') return <Section title={label}><CompanionNativeContent><CompanionPortraitPicker value={value} onChange={update} disabled={busy} /></CompanionNativeContent></Section>;
   if (field.kind === 'toggle') return <Toggle label={label} isOn={values[field.id] === true} onIsOnChange={update} modifiers={[disabled(busy), tint(colors.inputCaret)]} />;
   if (field.kind === 'select') return <Picker label={label} selection={value} onSelectionChange={next => update(String(next))} modifiers={[pickerStyle('menu'), disabled(busy)]}>
     {(field.options ?? []).map(option => <Text key={option.value} modifiers={[tag(option.value)]}>{resolveRemoteText(option.label, i18n.language)}</Text>)}
   </Picker>;
-  return <Section title={label}><TextField text={text} onTextChange={update} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
+  return <Section title={label}><TextField text={draft.text} onTextChange={draft.onTextChange} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
     maxLength={field.id === 'name' || field.id === 'confirmName' ? 200 : field.id === 'body' ? 55000 : 12000} testID={`companionProfile.field.${field.id}`}
     modifiers={[disabled(busy), accessibilityLabel(label), ...(field.kind === 'multiline' ? [lineLimit({ min: 3, max: 8 })] : [])]} /></Section>;
 }
@@ -65,7 +65,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
         modifiers={[tint(colors.inputCaret)]} testID="companionProfile.showReplyTarget" />
     </Section>
     {p.data?.panels.filter(item => item.id === 'projects' || item.id === 'followUp').flatMap(item => item.entries ?? [])?.map(entry => <Section key={entry.id}>{action(label(entry.title), () => p.onEditor(entry.resourceId), !p.online)}</Section>)}
-    <Section>{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
+    <Section>{row('channels', 'bubble.left.and.bubble.right')}{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
     {p.onHome ? <Section>{row('home', 'desktopcomputer', p.onHome)}</Section> : null}
     <Section>{p.data?.panels.filter(item => ['restart', 'resume', 'delete'].includes(item.id) && item.action).map(item => <Button key={item.id} onPress={() => p.onConfirm(item)} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), disabled(p.busy || !p.online), frame({ minHeight: 44 }), ...(item.id === 'delete' ? [foregroundStyle(colors.destructive)] : [])]}><HStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Text>{label(item.action!.label)}</Text><Spacer /></HStack></Button>)}</Section>
     {/* Same as Android: a host without the settings forms asks for a Cindy update on that computer. */}
@@ -87,6 +87,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       : p.page === 'models' ? <>{p.panel?.action ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : null}{p.panel?.action ? <Section>{action(tr('save'), () => p.onSubmit(p.panel!), !p.dirty || !p.online || p.conflict)}</Section> : note(p.panel?.text || tr('hostUpgrade'))}</>
       : p.page === 'settings' ? <Section>{row('permissions', 'hand.raised')}</Section>
       : p.page === 'skills' ? <>{p.data?.panels.find(item => item.id === 'skills')?.entries?.length ? <Section>{row('personalSkills', 'sparkles')}</Section> : note(p.data?.panels.find(item => item.id === 'skills')?.text || tr('skillsEmpty'))}{p.data?.panels.find(item => item.id === 'connections')?.entries?.length ? <Section>{row('connections', 'link')}</Section> : note(p.data?.panels.find(item => item.id === 'connections')?.text || tr('emptyEditor'))}</>
+      : p.page === 'channels' ? <Section><CompanionNativeContent>{p.channels}</CompanionNativeContent></Section>
       : p.page === 'artifacts' ? <Section><CompanionNativeContent>{p.artifacts}</CompanionNativeContent></Section> : p.page === 'memoryEntries' ? p.memoryPage
       : <>{p.page === 'profile' && p.data?.panels.find(item => item.id === 'avatar')?.entries?.length ? <Section>{row('avatar', 'person.crop.circle')}</Section> : null}{panel(p.panel)}
         {(p.page === 'profile' || p.page === 'memory') && p.panel && !p.panel.action ? note(tr('largeProfileRecovery')) : null}

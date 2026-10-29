@@ -9,13 +9,26 @@ const h = vi.hoisted(() => ({
   legacy: { items: [] as any[], loading: false, refreshing: false, error: null as string | null, isOnline: vi.fn(() => false), refresh: vi.fn() },
   targets: [] as { deviceId: string; deviceName: string }[],
   disk: new Map<string, string>(),
+  history: new Map<string, string>(),
   foreground: new Set<(state: string) => void>(),
 }));
+vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
+  read: async (key: string) => h.history.get(key) ?? null,
+  write: async (key: string, value: string) => { h.history.set(key, value); },
+  remove: async (key: string) => { h.history.delete(key); },
+  files: async () => [...h.history.keys()],
+}) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async (key: string) => h.disk.get(key) ?? null), setItem: vi.fn(async (key: string, value: string) => { h.disk.set(key, value); }), removeItem: vi.fn(async (key: string) => { h.disk.delete(key); }), getAllKeys: vi.fn(async () => [...h.disk.keys()]), multiRemove: vi.fn(async (keys: string[]) => { keys.forEach(key => h.disk.delete(key)); }) } }));
+vi.mock('@/session/mobileDurableOutbox', async () => {
+  const { createDurableOutbox } = await import('@/session/durableOutbox');
+  const { default: storage } = await import('@react-native-async-storage/async-storage');
+  return { mobileDurableOutbox: createDurableOutbox(storage) };
+});
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
+vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
@@ -25,6 +38,15 @@ vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 import { useBotGroupChat } from '@/session/useBotGroupChat';
 import { useBotGroupRoster } from '@/session/useBotGroupRoster';
 import { botGroupRoute } from '@/session/botGroupNavigation';
+import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
+import { createDurableOutbox } from '@/session/durableOutbox';
+import { enqueueChatMessage } from '@/chat/chatOutbox';
+import { createChatOutboxDelivery } from '@/chat/chatOutbox';
+import { createChatServerClient } from '@/chat/chatServerClient';
+import { forgetChatMessages } from '@/chat/chatMessageCache';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
+import { peekChatMessages } from '@/chat/chatMessageCache';
 import { isRemoteResourceUnread, clearRemoteResourceCache, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
@@ -37,15 +59,26 @@ let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
 function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : ''); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+async function send(input: Record<string, unknown>) {
+  await chat.act('send', input);
+  const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
+    client: createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, baseUrl: 'https://chat.example.invalid', assertCurrent() {} })),
+    current: () => true, canRun: () => true, accessLost: forgetChatMessages });
+  await runner.run();
+}
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
+  setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
+  await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
   vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
     if (path.startsWith('/v1/conversations?')) return [room];
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
+    if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
     if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
@@ -53,6 +86,39 @@ beforeEach(async () => {
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
   });
+});
+// Regression: entering a saved group must not depend on Chat Server latency.
+// Integration tier: real hook, real disk store, controlled native IO / HTTP.
+it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
+  setMobileAuthOwner('owner'); showChat = true; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  await act(async () => { root!.unmount(); root = undefined; });
+  h.auth.apiFetch.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(chat.state.kind).toBe('ready');
+  await act(async () => { root!.unmount(); root = undefined; });
+  // A new account generation drops the JS cache; the same account can still read its disk.
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  h.auth.apiFetch.mockRejectedValue({ status: 403 });
+  // Restart the mounted request too, since its earlier HTTP read intentionally never resolves.
+  await act(async () => { root!.unmount(); root = undefined; });
+  await render();
+  expect(chat.state.kind).toBe('missing');
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  h.auth.apiFetch.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(chat.state.kind).toBe('loading');
+});
+it('does not show one account\'s saved group to another account', async () => {
+  setMobileAuthOwner('owner'); showChat = true; await render();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner('other'); h.auth.user.id = 'other'; h.auth.accountGeneration++;
+  h.auth.apiFetch.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(chat.state.kind).toBe('loading');
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
 it('shows safe execution failures through the direct phone entry and removes them after retry', async () => {
@@ -83,8 +149,29 @@ it('lists and opens an existing joined server group with all computers and the r
   expect(chat.online).toBe(true);
   expect(h.link.invoke).not.toHaveBeenCalled(); expect(h.link.openLink).not.toHaveBeenCalled();
   expect(h.auth.apiFetch.mock.calls.every(([, options]) => options.baseUrl === 'https://chat.example.invalid')).toBe(true);
-  await act(async () => { await chat.act('send', { text: 'hello', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
+  await act(async () => { await send({ text: 'hello', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-operation', content: [{ type: 'text', text: 'hello' }], mentions: [] } }));
+});
+// #6907: the hook must pass direct-room scope to the real client's quote projection (unit tier).
+it('keeps the account owner label when quoting from a direct phone entry', async () => {
+  const botId = '00000000-0000-4000-8000-000000000003';
+  const owner = { id: self, kind: 'human', state: 'joined', name: 'Nickname A', ownerActorId: self, ownerName: '', role: 'member', avatar: null };
+  const bot = { ...owner, id: botId, kind: 'bot', name: 'Companion X', ownerName: 'Account B' };
+  const message = { id: self, seq: '1', authorId: botId, author: { kind: 'bot', name: bot.name }, content: [{ type: 'text', text: 'Example' }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/snapshot')) return { room: { ...room, kind: 'direct' }, members: [owner, bot], messages: [message], cursor: '1' };
+    if (path.endsWith('/members')) return [owner, bot];
+    if (path.endsWith('/messages/' + self)) return message;
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  await act(async () => { await send({ text: 'Agreed', clientId: 'direct-quote-scope', quote: { messageId: self }, mentions: { all: false, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({ method: 'POST', body: expect.objectContaining({
+    mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
+  }) }));
 });
 it('never includes the current human actor in explicit or everyone server mentions', async () => {
   const other = '00000000-0000-4000-8000-000000000003';
@@ -96,7 +183,7 @@ it('never includes the current human actor in explicit or everyone server mentio
   });
   showChat = true; await render();
   for (const all of [false, true]) {
-    await act(async () => { await chat.act('send', { text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
+    await act(async () => { await send({ text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
     expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
   }
 });
@@ -128,6 +215,43 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
   await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
   expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/read'))).toHaveLength(1);
 });
+// Unit: conversation head is unchanged by another device's personal read position.
+// The actual roster refresh must replace snapshot.reads even when message delta is empty.
+it.each(['refresh', 'read-event', 'reconnect'] as const)('refreshes personal read metadata with an unchanged room head on %s', async trigger => {
+  const sockets: Array<{ onmessage: ((event: { data: string }) => void) | null; send: ReturnType<typeof vi.fn> }> = [];
+  vi.stubGlobal('WebSocket', class {
+    readyState = 1; onmessage = null; onopen = null; onclose = null; onerror = null;
+    send = vi.fn(); close() {}
+    constructor() { sockets.push(this); }
+  });
+  const frame = async (value: unknown) => { await act(async () => { sockets.at(-1)!.onmessage!({ data: JSON.stringify(value) }); }); };
+  let readSeq = '0';
+  const reply = { id: self, seq: '5', authorId: id, author: { kind: 'human', name: 'Other' },
+    content: [{ type: 'text', text: 'reply' }], createdAt: '2026-10-09T10:00:00Z', deleted: false, threadRootId: id };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.startsWith('/v1/conversations?')) return [{ ...room, head: '5' }];
+    if (path.includes('/changes?')) return { head: '5', cursor: '5', changes: [], hasMore: false };
+    const value = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...value, messages: [reply], cursor: '5', reads: [
+      { thread_key: 'main', read_seq: '0' }, { thread_key: id, read_seq: readSeq, following: true },
+    ] } : value;
+  });
+  await render();
+  const unread = () => (roster.items[0].chatUnread?.threadCount ?? 0) > 0;
+  expect(unread()).toBe(true);
+  await frame({ type: 'ready', actorId: self });
+  expect(sockets[0].send.mock.calls.some(([body]) => JSON.parse(body).type === 'subscribe')).toBe(true);
+  readSeq = '5';
+  if (trigger === 'refresh') await act(async () => { await roster.refresh(); });
+  else if (trigger === 'read-event') await frame({ type: 'changes', scope: `actor:${self}`, cursor: '6',
+    changes: [{ type: 'read.changed', entityId: id, data: {} }] });
+  else {
+    await act(async () => { for (const listener of h.foreground) listener('active'); });
+    await frame({ type: 'ready', actorId: self });
+  }
+  expect(unread()).toBe(false);
+});
 it('resolves everyone using authorized members at send time instead of the displayed snapshot', async () => {
   const joined = '00000000-0000-4000-8000-000000000003';
   const invited = '00000000-0000-4000-8000-000000000004';
@@ -142,7 +266,7 @@ it('resolves everyone using authorized members at send time instead of the displ
     return original(path, options);
   });
   showChat = true; await render();
-  await act(async () => { await chat.act('send', { text: 'everyone', clientId: 'fixture-new-member', mentions: { all: true, botIds: [] } }); });
+  await act(async () => { await send({ text: 'everyone', clientId: 'fixture-new-member', mentions: { all: true, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-new-member', content: [{ type: 'text', text: 'everyone' }], mentions: [joined] } }));
 });
 
@@ -164,8 +288,9 @@ it.each([
   for (membership of ['left', 'removed', 'banned', 'invited', 'missing']) {
     for (const botIds of [[target], [available, target]]) {
       await act(async () => {
-        await expect(chat.act('send', { text: '@Ann hello', clientId: 'fixture-stale-target', mentions: { all, botIds } }))
-          .rejects.toThrow('MENTION_UNAVAILABLE');
+        await send({ text: '@Ann hello', clientId: 'fixture-stale-target', mentions: { all, botIds } });
+        expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'MENTION_UNAVAILABLE' });
+        await mobileDurableOutbox.remove(mobileDurableOutbox.getSnapshot()[0]);
       });
       expect(chat.online).toBe(true);
       expect(chat.state.kind).toBe('ready');
@@ -173,7 +298,7 @@ it.each([
     }
   }
   await act(async () => {
-    await chat.act('send', { text: '@Available hello', clientId: 'fixture-reselected', mentions: { all, botIds: [available] } });
+    await send({ text: '@Available hello', clientId: 'fixture-reselected', mentions: { all, botIds: [available] } });
   });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({
     method: 'POST', body: { operationId: 'fixture-reselected', content: [{ type: 'text', text: '@Available hello' }], mentions: [available] },
@@ -192,7 +317,7 @@ it('keeps REST sending available after the group WebSocket disconnects', async (
   expect(chat.online).toBe(true);
   await act(async () => { sockets[0].close(); });
   expect(chat.online).toBe(true);
-  await act(async () => { await chat.act('send', { text: 'REST works', clientId: 'fixture-ws-offline', mentions: { all: false, botIds: [] } }); });
+  await act(async () => { await send({ text: 'REST works', clientId: 'fixture-ws-offline', mentions: { all: false, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST' }));
   h.auth.apiFetch.mockRejectedValue(new Error('REST offline'));
   await act(async () => { chat.reload(); });
@@ -208,11 +333,12 @@ it.each([403, 404])('clears revoked access immediately when a send returns %s', 
     return original(path, options);
   });
   await act(async () => {
-    await expect(chat.act('send', { text: 'fixture', clientId: 'fixture-revoked', mentions: { all: false, botIds: [] } })).rejects.toMatchObject({ status });
+    await send({ text: 'fixture', clientId: 'fixture-revoked', mentions: { all: false, botIds: [] } });
+    expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', suspended: true });
   });
   expect(chat.state.kind).toBe('missing');
   expect(chat.online).toBe(false);
-  await expect(chat.act('send', { text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
+  await expect(send({ text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
 });
 it.each([403, 404])('clears revoked access when attachment authorization returns %s', async (status) => {
   showChat = true; await render();
@@ -238,12 +364,13 @@ it('clears access on everyone member-read rejection and ignores an older authori
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/members')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
     const value = await original(path, options);
-    if (path.endsWith('/snapshot')) await new Promise<void>(resolve => { finish = resolve; });
+    if (path.startsWith('/v1/changes?')) await new Promise<void>(resolve => { finish = resolve; });
     return value;
   });
   await act(async () => { chat.reload(); });
   await act(async () => {
-    await expect(chat.act('send', { text: 'everyone', clientId: 'fixture-member-rejected', mentions: { all: true, botIds: [] } })).rejects.toMatchObject({ status: 403 });
+    await send({ text: 'everyone', clientId: 'fixture-member-rejected', mentions: { all: true, botIds: [] } });
+    expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', suspended: true });
   });
   expect(chat.state.kind).toBe('missing');
   expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
@@ -253,6 +380,25 @@ it('clears access on everyone member-read rejection and ignores an older authori
   await act(async () => { chat.reload(); });
   expect(chat.state.kind).toBe('ready');
 });
+it('deduplicates computer copies before the server roster discovers a new group', async () => {
+  h.auth.accountGeneration++;
+  h.targets = ['mac', 'pc'].map(deviceId => ({ deviceId, deviceName: deviceId }));
+  h.legacy.isOnline.mockReturnValue(true);
+  h.legacy.items = h.targets.map(host => ({ key: host.deviceId, host, item: {
+    ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [],
+  } }));
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let finish!: (rooms: typeof room[]) => void;
+  const pending = new Promise<typeof room[]>(resolve => { finish = resolve; });
+  h.auth.apiFetch.mockImplementation((path, options) => path.startsWith('/v1/conversations?') ? pending : original(path, options));
+  await render();
+  expect(roster.items.map(row => row.item.ref.id)).toEqual([id]);
+  expect(roster.items[0].host.deviceId).toBe('mac');
+  await act(async () => { finish([room]); });
+  expect(roster.items.map(row => row.item.ref.id)).toEqual([id]);
+  expect(roster.items[0].host.deviceId).toBe('');
+});
+
 it('deduplicates server copies from multiple computers while retaining a local legacy group', async () => {
   h.legacy.items = ['mac', 'pc'].map(deviceId => ({ key: deviceId, host: { deviceId, deviceName: deviceId }, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [] } }));
   h.legacy.isOnline.mockReturnValue(true);
@@ -363,7 +509,7 @@ it('exposes an actor-scope personal hide to the current screen and clears it aft
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { conversationListStateVersion: 1 } };
     if (path.startsWith('/v1/conversation-list-state?')) return [];
-    if (path.startsWith('/v1/changes?')) return { head: '10' };
+    if (path.startsWith('/v1/changes?scope=actor:')) return { head: '10' };
     return allowed(path, options);
   });
   showChat = true; await render();
@@ -528,4 +674,80 @@ it.each(['missing', 'empty', 'read-error'] as const)('keeps initial loading corr
   expect(roster.loading).toBe(mode !== 'empty');
   await act(async () => finish([]));
   expect(roster.loading).toBe(false);
+});
+
+// Integration: the actual ledger and HTTP adapter survive a process restart after
+// a committed POST loses its response. Existing direct-send tests cannot cover it.
+it('persists the exact uncertain send across restart and never rebuilds its recipients', async () => {
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] } }, 1);
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', item: { text: 'saved offline' } });
+  const posted: unknown[] = [];
+  let memberReads = 0;
+  const client = createChatServerClient(async <T,>(path: string, method?: string, body?: unknown): Promise<T> => {
+    if (path === '/me') return { actor: { id: self, kind: 'human' } } as T;
+    if (path.endsWith('/members')) { memberReads++; return [{ id: self, state: 'joined' }, { id, state: 'joined' }] as T; }
+    if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
+    throw new Error('Unexpected request');
+  });
+  const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  await delivery().run();
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
+  store = createDurableOutbox(storage); await store.activate(account);
+  await delivery().run();
+  expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]); expect(memberReads).toBe(1);
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', chat: { messageId: self } });
+  await store.activate('other-account'); expect(store.getSnapshot()).toEqual([]);
+});
+
+// Review regression (integration): a definitive first-POST rejection is safe to cancel,
+// but a rejection after an unknown earlier outcome cannot revoke its dedup identity.
+it.each([400, 403])('can cancel a definitely refused %s send after reload and unblock the next message', async status => {
+  showChat = true; await render();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages') && options?.method === 'POST') throw Object.assign(new Error('Rejected'), { status });
+    return original(path, options);
+  });
+  await act(async () => { await send({ text: 'rejected', clientId: 'rejected-first', mentions: { all: false, botIds: [] } }); });
+  expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: false });
+  // Reauthorize/reopen the same group; do not silently send the suspended draft.
+  h.auth.apiFetch.mockImplementation(original);
+  await act(async () => { chat.reload(); });
+  const account = getMobileAuthOwner().accountKey;
+  await act(async () => { await mobileDurableOutbox.activate(''); await mobileDurableOutbox.activate(account); });
+  await act(async () => { await chat.pendingAction!('rejected-first', 'cancel'); });
+  expect(mobileDurableOutbox.getSnapshot()).toEqual([]);
+  await act(async () => { await send({ text: 'next', clientId: 'after-cancel', mentions: { all: false, botIds: [] } }); });
+  expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.endsWith('/messages') && options?.method === 'POST'
+    && options.body.operationId === 'after-cancel')).toHaveLength(1);
+  expect(mobileDurableOutbox.getSnapshot().some(row => row.item.clientId === 'rejected-first')).toBe(false);
+});
+
+it('keeps an uncertain send frozen and uncancellable when a later attempt is rejected', async () => {
+  showChat = true; await render();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let attempt = 0;
+  const posted: unknown[] = [];
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages') && options?.method === 'POST') {
+      posted.push(options.body); attempt++;
+      if (attempt === 1) throw new Error('response lost');
+      throw Object.assign(new Error('Rejected later'), { status: 400 });
+    }
+    return original(path, options);
+  });
+  await act(async () => { await send({ text: 'uncertain', clientId: 'uncertain-first', mentions: { all: false, botIds: [] } }); });
+  await act(async () => {
+    await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
+    // The background runner retries the already frozen POST using its original ID.
+    const client = createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, assertCurrent() {} }));
+    await createChatOutboxDelivery({ store: mobileDurableOutbox, client, current: () => true, canRun: () => true, accessLost: forgetChatMessages }).run();
+  });
+  expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
+  expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
+  await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
 });

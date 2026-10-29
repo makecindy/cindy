@@ -18,6 +18,7 @@ import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-sha
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { describe, expect, it, vi } from 'vitest';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { FORWARDED_REQUEST_RECEIPT, formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { appMessageInput, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
@@ -64,6 +65,35 @@ function withUiLanguageNote(content: string): string {
 function withUiLanguageUserMessage(content: string): { type: 'user'; content: string } {
   return { type: 'user', content: withUiLanguageNote(content) };
 }
+
+describe('local application task takeover', () => {
+  // #7631 review P0. Runtime tests do not cover the ordinary send transaction.
+  // Minimal regression (unit): a live external Session must be retired before
+  // selecting the send target; failed handoff must never dispatch Cindy input.
+  it.each([false, true])('does not reuse the external runtime (handoff fails=%s)', async (fails) => {
+    const { deps, session } = createDeps();
+    const replacement = createSession();
+    let live: typeof session | undefined = session;
+    deps.getSession = () => live;
+    deps.bootstrapSession = vi.fn(async () => {
+      live = replacement;
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    deps.prepareExternalInput = async () => {
+      if (fails) throw new Error('handoff unavailable');
+      live = undefined;
+    };
+    const send = createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'private Cindy input', { id: 'session-1', agentKind: 'codex', workingDir: '/repo' },
+    );
+    if (fails) await expect(send).rejects.toThrow('handoff unavailable');
+    else {
+      await send;
+      expect(replacement.send).toHaveBeenCalledOnce();
+    }
+    expect(session.send).not.toHaveBeenCalled();
+  });
+});
 describe('MCP App next-turn context', () => {
   it('keeps ordinary user intent when validating App context without a replacement intent', async () => {
     const assertCurrent = vi.fn(async () => {});
@@ -358,17 +388,23 @@ describe('MCP App message authorization', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('rechecks card authorization after accepted persistence and blocks vendor dispatch', async () => {
+  // PR #6830 / unit: route validation adds an await after persistence; card
+  // revocation during that await must still block the actual dispatch.
+  it.each(['persistence', 'route'] as const)('rechecks card authorization after %s and blocks vendor dispatch', async (stage) => {
     let visible = true;
     const dispatch = vi.fn();
     const guard = vi.fn(async () => { if (!visible) throw new Error('MCP_APP_CARD_UNAVAILABLE'); });
     const { deps, session } = createDeps({
       prepareProductTurn: () => dispatch,
-      createDbMessage: vi.fn(async () => { visible = false; }),
+      createDbMessage: vi.fn(async () => { if (stage === 'persistence') visible = false; }),
+      assertScheduledDispatchRoute: async () => { if (stage === 'route') visible = false; },
     });
     await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'App text', undefined, {
       [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
       [MCP_APP_MESSAGE_GUARD]: guard,
+      ...(stage === 'route' ? {
+        origin: { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'Follow up', runId: 'r' },
+      } : {}),
       persistUserMessage: { clientId: 'app-input', content: 'App text' },
     })).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
     expect(guard).toHaveBeenCalledTimes(2);
@@ -1216,11 +1252,13 @@ describe('maker SEND transaction', () => {
 
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {
     const events: string[] = [];
+    const controller = new AbortController();
     const beforeDispatchDirectUserTurn = vi.fn(async () => {
       events.push('baseline');
     });
     const session = createSession({
-      send: vi.fn(async () => {
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.(controller.signal);
         events.push('send');
         return { accepted: true } satisfies SessionSendResult;
       }),
@@ -1236,7 +1274,75 @@ describe('maker SEND transaction', () => {
     });
 
     expect(events).toEqual(['baseline', 'send']);
-    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
+    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1', controller.signal);
+  });
+
+  // #7259: unit tier, stalled snapshot metadata through the real send transaction.
+  // Previously no total deadline existed, so provider dispatch never happened.
+  it('continues direct sending once when the automatic snapshot budget expires', async () => {
+    vi.useFakeTimers();
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50,
+      recordTurnAttempt: async () => ({ attemptId: 'attempt-1', anchor: 'message-1' }),
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: () => new Promise(() => {}),
+      detectRepoRoot: vi.fn(), createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    });
+    try {
+      const vendor = vi.fn();
+      const session = createSession({ send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        vendor();
+        return { accepted: true } satisfies SessionSendResult;
+      }) });
+      const { deps } = createDeps({
+        getSession: () => session,
+        beforeDispatchDirectUserTurn: (sid, signal) => snapshots.onTurnStart(sid, signal),
+      });
+      const sending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vendor).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(sending).resolves.toMatchObject({ accepted: true });
+      expect(vendor).toHaveBeenCalledOnce();
+    } finally {
+      snapshots.onSessionClosed('session-1');
+      vi.useRealTimers();
+    }
+  });
+
+  // #7259 follow-up, unit: a late durable intent cannot resume a failed send.
+  it('never dispatches when recording the snapshot attempt exceeds the total budget', async () => {
+    vi.useFakeTimers();
+    let finishIntent!: (value: { attemptId: string }) => void;
+    const intent = new Promise<{ attemptId: string }>((resolve) => { finishIntent = resolve; });
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50, recordTurnAttempt: () => intent,
+      readAutoSnapshotEnabled: () => true, getSessionContext: vi.fn(), detectRepoRoot: vi.fn(),
+      createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(), oneShot: vi.fn(),
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    });
+    try {
+      const vendor = vi.fn();
+      const session = createSession({ send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        vendor();
+        return { accepted: true } satisfies SessionSendResult;
+      }) });
+      const { deps } = createDeps({ getSession: () => session,
+        beforeDispatchDirectUserTurn: (sid, signal) => snapshots.onTurnStart(sid, signal) });
+      const sending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+      const failed = expect(sending).rejects.toThrow('deadline');
+      await vi.advanceTimersByTimeAsync(50);
+      await failed;
+      finishIntent({ attemptId: 'late' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vendor).not.toHaveBeenCalled();
+    } finally {
+      snapshots.onSessionClosed('session-1');
+      vi.useRealTimers();
+    }
   });
 
   it('materializes direct OSS attachments after session/workdir preflight', async () => {
@@ -1504,9 +1610,10 @@ describe('maker SEND transaction', () => {
     const beforeDispatchDirectUserTurn = vi.fn(async () => {});
     const onUndispatchedDirectUserTurn = vi.fn();
     const session = createSession({
-      send: vi.fn(async () => (
-        { accepted: false, reason: 'cancelled-before-dispatch' } satisfies SessionSendResult
-      )),
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        return { accepted: false, reason: 'cancelled-before-dispatch' } satisfies SessionSendResult;
+      }),
     });
     const { deps } = createDeps({
       getSession: vi.fn(() => session),
@@ -1520,7 +1627,7 @@ describe('maker SEND transaction', () => {
       reason: 'cancelled-before-dispatch',
     });
 
-    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
+    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1', undefined);
     expect(onUndispatchedDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
@@ -1528,7 +1635,8 @@ describe('maker SEND transaction', () => {
     const beforeDispatchDirectUserTurn = vi.fn(async () => {});
     const onUndispatchedDirectUserTurn = vi.fn();
     const session = createSession({
-      send: vi.fn(async () => {
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
         throw new Error('start failed');
       }),
     });
@@ -1541,7 +1649,7 @@ describe('maker SEND transaction', () => {
 
     await expect(transaction.sendToAgentAccepted('session-1', 'hello')).rejects.toThrow('start failed');
 
-    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
+    expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1', undefined);
     expect(onUndispatchedDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
@@ -3372,6 +3480,30 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain('[Side chat context]');
   });
 
+  // Unit / #7253: only wire context explains delivery reporting. The previous
+  // source-note coverage did not protect all harnesses, dedupe, or persistence.
+  it.each(['claude-code', 'codex', 'pi'] as const)('adds deduplicated delivery context to %s without saving it as user text', async (agentKind) => {
+    const memory = createWireNoteMemory();
+    const session = createSession({ agentKind });
+    const note = '[Task delivery] Report newly delivered results before ending.';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readTaskDeliveryNote: async () => note,
+      planRepeatableWireNotes: (id, notes, opts) => memory.plan(id, notes, opts),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Complete the work', undefined, {
+      persistUserMessage: { clientId: 'delivery-1', content: 'Complete the work' },
+    });
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain(note);
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Complete the work');
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
+    memory.reset('session-1');
+    await transaction.sendToAgentAccepted('session-1', 'Continue after compaction');
+    expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');
@@ -3448,6 +3580,34 @@ describe('session-agent-switch handoff injection', () => {
     expect(stored?.agentMeta?.autoReviewUserText).toBe(` ${request}`);
     expect(restoreAutoReviewUserIntent([{ clientId: queued.clientId, role: 'user', content,
       agentMeta: stored!.agentMeta as Record<string, unknown> }])).toBe(request);
+  });
+
+  // #7424 / unit: the trusted queue and accepted transaction must persist the exact pasted owner request.
+  // Adjacent reference tests did not cover paste ranges; the minimal old failure stamps '' for text + ranges.
+  it.each([false, true])('preserves pasted authorization through queue and persistence (deviceLink=%s)', async deviceLink => {
+    const text = '允许本地修改和测试，但不要 push、不要发布。';
+    const content = { text, pastedTextRanges: [{ start: 0, end: text.length }] };
+    const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-request', text,
+      persistedContent: content, files: [],
+    } as unknown as AgentInputQueuedMessage, deviceLink);
+    expect(queued.autoReviewUserText).toBe(text);
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', text, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: queued.autoReviewUserText,
+      persistUserMessage: { clientId: queued.clientId, content, delivery: 'turn' },
+    });
+    expect(vi.mocked(session.send).mock.lastCall?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe(text);
+    expect(vi.mocked(deps.createDbMessage).mock.lastCall?.[1].agentMeta?.autoReviewUserText).toBe(text);
+  });
+
+  it.each([false, true])('rejects pasted authorization when persisted and wire text diverge (deviceLink=%s)', deviceLink => {
+    const persisted = { text: '允许 push。', pastedTextRanges: [{ start: 0, end: 6 }] };
+    for (const persistedContent of [persisted, JSON.stringify(persisted)]) {
+      const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-mismatch', text: '不要 push。',
+        persistedContent, files: [],
+      } as unknown as AgentInputQueuedMessage, deviceLink);
+      expect(queued.autoReviewUserText).toBe('');
+    }
   });
 
   // unit: a forwarded quote must survive persistence without becoming permission.
@@ -3529,6 +3689,32 @@ describe('session-agent-switch handoff injection', () => {
       await pending;
       expect(vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
     }
+  });
+
+  // PR #6830 / unit: the accepted queue callback runs before history/vision
+  // preparation. Existing cases changed only permissions. A remote source
+  // suspended during history loading must reject the transaction before vendor send.
+  it('rejects a scheduled remote route disabled after acceptance', async () => {
+    let suspended = false;
+    const vendor = vi.fn();
+    const { deps, session } = createDeps({
+      readAutoReviewHistory: async () => { suspended = true; return []; },
+      assertScheduledDispatchRoute: async (sessionId) => {
+        expect(sessionId).toBe('session-1');
+        if (suspended) throw new Error('REMOTE_AGENT_UNAVAILABLE');
+      },
+    });
+    vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      await opts?.resolveAutoReviewUserIntent?.();
+      opts?.onDispatching?.();
+      vendor();
+      return { accepted: true };
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Follow up', undefined, {
+      origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'Follow up', runId: 'r' },
+    })).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+    expect(vendor).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('restores scheduled intent from owner history, not the prompt (unavailable=%s)', async (unavailable) => {

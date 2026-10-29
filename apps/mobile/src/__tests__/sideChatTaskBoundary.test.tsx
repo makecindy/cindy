@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
   replace: vi.fn(),
   dismissKeyboard: vi.fn(),
   listeners: new Set<(deviceId: string, sessionId: string) => void>(),
-  route: { deviceId: 'host', sessionId: 'child' },
+  route: { deviceId: 'host', sessionId: 'child' } as Record<string, string>,
   sidebar: null as ComponentProps<typeof SessionListDrawer> | null,
   source: 'local',
   replaceParams: vi.fn(),
@@ -64,7 +64,6 @@ vi.mock('@/platform/AdaptiveWindowContext', () => ({
 }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: { surface: 'white' } }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('../session/conversationSearch', () => ({ conversationSearchCompanionParams: () => ({}) }));
 vi.mock('../session/SessionListDrawer', () => ({ SessionListDrawer: (props: ComponentProps<typeof SessionListDrawer>) => {
   state.sidebar = props;
   return <textarea aria-label="Sidebar search" />;
@@ -216,6 +215,29 @@ describe('side chat task lifecycle', () => {
     await act(async () => pending[1]!.reject(new Error('current task failed')));
     expect(host.querySelector('button')!.disabled).toBe(false);
     expect(host.textContent).toBe('current task failed');
+  });
+
+  it('normalizes old history links before mounting the task contents', () => {
+    state.route = { deviceId: 'host', sessionId: 'old', resourceHistorySessionId: 'old', resourceId: 'bot', resourceKind: 'bot', focusClientId: 'message' };
+    act(() => root.render(<SessionTaskLayout>{() => <textarea aria-label="Legacy history" />}</SessionTaskLayout>));
+    expect(host.querySelector('textarea')).toBeNull();
+    expect(state.replaceParams).toHaveBeenCalledWith({ deviceId: 'host', deviceName: 'another computer', sessionId: 'old', focusClientId: 'message' });
+  });
+
+  // #7105: a same-ID search hit must exit the companion resource skin, whereas
+  // selecting the already-open ordinary row is a no-op. Unit, actual layout consumer.
+  it.each([false, true])('handles the current task selected from search=%s', (search) => {
+    state.route = { deviceId: 'host', sessionId: 'child', resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot' };
+    act(() => root.render(<SessionTaskLayout>{() => <textarea />}</SessionTaskLayout>));
+    const target = {
+      session: { id: 'child', canonicalDeviceId: 'host' },
+      ...(search ? { searchLocallyCached: false } : {}),
+    } as unknown as RemoteSessionListItem;
+    act(() => state.sidebar!.onSelectSession!(target));
+    if (search) expect(state.replaceParams).toHaveBeenCalledExactlyOnceWith({
+      deviceId: 'host', deviceName: 'another computer', sessionId: 'child',
+    });
+    else expect(state.replaceParams).not.toHaveBeenCalled();
   });
 
   it('discards the outgoing attachment scope before sidebar navigation and preserves search focus', () => {

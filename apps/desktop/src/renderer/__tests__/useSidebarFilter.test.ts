@@ -15,6 +15,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CREATORS_KEY,
+  loadCreators,
+  persistCreators,
+  nextCreatorsAfterToggle,
   STATUS_KEY,
   VENDOR_KEY,
   loadVendor,
@@ -882,5 +886,29 @@ describe('Harness filter persistence', () => {
     expect(loadVendor()).toBe('all');
     localStorage.setItem(VENDOR_KEY, 'unknown');
     expect(loadVendor()).toBe('all');
+  });
+});
+
+describe('creator filter selection and owner persistence', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+  it('starts at all, selects one or several, and returns to all when the last choice is removed', () => {
+    expect(loadCreators(OWNER_ID)).toBe('all');
+    expect(nextCreatorsAfterToggle('all', 'a')).toEqual(['a']);
+    expect(nextCreatorsAfterToggle(['a'], 'b')).toEqual(['a', 'b']);
+    expect(nextCreatorsAfterToggle(['a', 'b'], 'a')).toEqual(['b']);
+    expect(nextCreatorsAfterToggle(['b'], 'b')).toBe('all');
+    persistCreators(['a', 'b'], OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toEqual(['a', 'b']);
+    expect(loadCreators('owner-b')).toBe('all');
+    persistCreators('none', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('none');
+    expect(nextCreatorsAfterToggle('none', 'a')).toEqual(['a']);
+    persistCreators('all', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('all');
+  });
+  it('recovers from an invalid saved choice', () => {
+    localStorage.setItem(ownerKey(CREATORS_KEY), '{');
+    expect(loadCreators(OWNER_ID)).toBe('all');
   });
 });

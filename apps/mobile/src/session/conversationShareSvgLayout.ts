@@ -1,3 +1,8 @@
+import { hasRichAnswer } from "@cindy/maker-shared/rich-answer";
+import {
+  conversationShareReadableBody,
+  type ShareVector,
+} from "./conversationShareRichAnswer";
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 import { summarizeMessageBubblePresentation } from "@cindy/maker-shared/message-presentation";
 
@@ -21,13 +26,13 @@ import {
   type ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
 import { buildMessageContentLayout } from "@/session/messageContentLayout";
-import { spacing } from "@/theme/tokens";
+import { spacing, typeScale, lineHeight } from "@/theme/tokens";
 
 const PADDING_X = CONVERSATION_SHARE_PADDING_X;
 const PADDING_Y = CONVERSATION_SHARE_PADDING_Y;
 const MESSAGE_GAP = spacing.lg;
-const TEXT_FONT_SIZE = 15;
-const TEXT_LINE_HEIGHT = 22;
+const TEXT_FONT_SIZE = typeScale.bodyLarge;
+const TEXT_LINE_HEIGHT = lineHeight.bodyLarge;
 const META_FONT_SIZE = 12;
 const META_LINE_HEIGHT = 18;
 const MAX_OUTPUT_PIXELS = 12_000_000;
@@ -48,6 +53,7 @@ export interface ConversationShareSvgTextBlock {
 
 export interface ConversationShareSvgBubble {
   rectangles?: ShareSvgRect[];
+  vectors?: ShareVector[];
   fill?: string;
   height: number;
   stroke?: string;
@@ -85,7 +91,10 @@ export function conversationShareSvgRenderSize(
     // SvgView allocates its bitmap in physical pixels, not React Native points.
     Math.sqrt(
       MAX_OUTPUT_PIXELS /
-        Math.max(1, layout.width * layout.height * Math.max(1, pixelRatio) ** 2),
+        Math.max(
+          1,
+          layout.width * layout.height * Math.max(1, pixelRatio) ** 2,
+        ),
     ),
   );
   return {
@@ -141,11 +150,14 @@ export function buildConversationShareSvgLayout({
       }).density === "compact";
     const paddingY = user ? (compact ? spacing.sm : spacing.md) : spacing.xs;
     const minBubbleHeight = user ? 20 + paddingY * 2 : 30;
-    const ownBubble = user && message.ownUserBubble ? colors.ownUserBubble : null;
+    const ownBubble =
+      user && message.ownUserBubble ? colors.ownUserBubble : null;
     const bubbleFill = user
       ? (ownBubble?.background ?? colors.surfaceElevated)
       : undefined;
-    const bubbleStroke = user ? (ownBubble?.border ?? colors.border) : undefined;
+    const bubbleStroke = user
+      ? (ownBubble?.border ?? colors.border)
+      : undefined;
     const textWidth = bubbleWidth - horizontalPadding * 2;
     const appendMetadata = (text: string, color: string, gap: number) => {
       const lines = wrapSvgText(
@@ -213,7 +225,11 @@ export function buildConversationShareSvgLayout({
     });
     // Preserve the existing whole-message redaction path for secrets spanning
     // formatting, paragraphs or images. Never redact isolated styled runs.
-    if (!needsRedaction && bodyParts.length > 0) {
+    if (
+      !needsRedaction &&
+      (bodyParts.length > 0 ||
+        (message.kind === "assistant" && hasRichAnswer(message.body)))
+    ) {
       const body = layoutConversationShareRichBody(
         message,
         colors,
@@ -231,6 +247,7 @@ export function buildConversationShareSvgLayout({
         stroke: bubbleStroke,
         textBlocks: body.textBlocks,
         rectangles: body.rectangles,
+        vectors: body.vectors,
       });
       images.push(...body.images);
       cursorY += height + MESSAGE_GAP;
@@ -330,7 +347,9 @@ function conversationShareBodyParts(
     else parts.push(part);
   };
   const markdown = (text: string) => {
-    for (const block of parseMobileMarkdown(text)) {
+    for (const block of parseMobileMarkdown(
+      conversationShareReadableBody(message, text),
+    )) {
       for (const part of markdownBlockParts(block, message.images))
         append(part);
       append({ text: "\n" });
@@ -448,7 +467,8 @@ function markdownInlineParts(
   let struck = false;
   for (const inline of inlines) {
     const image = inline.type === "image" ? images?.get(inline.url) : undefined;
-    const nextStruck = !image && mobileMarkdownInlineHasMark(inline, "strikethrough");
+    const nextStruck =
+      !image && mobileMarkdownInlineHasMark(inline, "strikethrough");
     if (struck !== nextStruck) {
       appendText("~~");
       struck = nextStruck;

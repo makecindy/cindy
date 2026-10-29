@@ -1,8 +1,8 @@
 {
   "title": "Group Chats",
   "memberSeparator": ", ",
-  "memberCount_one": "{{count}} teammate",
-  "memberCount_other": "{{count}} teammates",
+  "memberCount_one": "{{count}} member",
+  "memberCount_other": "{{count}} members",
   "organizer": "Organizer",
   "waitingConfirm": "{{name}} is waiting for your go-ahead",
   "loadFailedTitle": "Couldn’t Load This Group Chat",
@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "New Group Chat",
-    "description": "Put a few teammates in one group. Say something and they’ll chime in together.",
     "nameLabel": "Group Name",
     "namePlaceholder": "e.g. Weekend Trip",
     "nameRequired": "Enter a group name",
     "membersLabel": "Choose Teammates",
     "selectedCount_one": "{{count}} selected, up to {{max}}",
     "selectedCount_other": "{{count}} selected, up to {{max}}",
-    "minMembers": "Choose at least {{min}} teammates",
-    "notEnoughBots": "You need at least {{min}} available teammates to start a group chat. Add a teammate first.",
+    "close": "Close",
+    "submitShort": "Create",
     "submit": "Create Group Chat",
-    "failed": "Couldn’t create the group chat. Try again in a moment.",
-    "chooseComputer": "Choose a Computer",
-    "computerNote": "This group chat lives on {{deviceName}}, and its teammates work there."
+    "failed": "Couldn’t create the group chat. Try again in a moment."
   },
   "memberStatus": {
     "paused": "Paused",
@@ -97,15 +94,61 @@
     "stepTimeout": "{{name}} took too long, so this step was stopped",
     "stepUnavailable": "{{name}} is unavailable and can’t do this step",
     "runtimeFailure": {
-      "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
-      "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
-      "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
-      "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
-      "UPSTREAM_OVERLOADED": "{{name}} couldn't reply: the model service is temporarily overloaded.\nTry sending again later, or choose another available model.",
-      "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
-      "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
-      "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
-      "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.",
+        "advice": "Ask the teammate’s owner to archive unused sessions.",
+        "details": "Ask the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing."
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}} can’t reply: the remote computer has reached its total remote session limit.",
+        "advice": "Ask the remote computer’s owner to release unused sessions or raise the limit.",
+        "details": "Ask that computer’s owner to release unused sessions or raise the limit in Remote & sharing."
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}} could not reply: the current model does not support images.",
+        "advice": "Choose an image-capable model.",
+        "details": "Choose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again."
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}} could not reply: no model is available.",
+        "advice": "Choose an available model in teammate settings.",
+        "details": "Choose a connected, available model in the teammate settings, then send your message again."
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}} could not reply: the model connection needs authentication.",
+        "advice": "Reconnect the model provider.",
+        "details": "Reconnect the model provider in Settings, then send your message again."
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}} could not reply: too many model requests.",
+        "advice": "Send your message again later.",
+        "details": "Send your message again later, or choose another available model."
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}} couldn't reply: the model service is temporarily overloaded.",
+        "advice": "Send your message again later.",
+        "details": "Try sending again later, or choose another available model."
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}} could not reply: the model usage limit was reached.",
+        "advice": "Check the quota or choose another model.",
+        "details": "Check the provider quota, or choose another available model."
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}} could not reply: the network connection failed.",
+        "advice": "Check your network or proxy.",
+        "details": "Check your network or proxy, then send your message again."
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}} did not reply before the timeout.",
+        "advice": "Send your message again.",
+        "details": "Send your message again, or choose another available model."
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}} could not reply this time.",
+        "advice": "Send your message again.",
+        "details": "Send your message again. If it still fails, check the logs and report the issue."
+      }
     },
     "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },
@@ -141,6 +184,7 @@
     "allDone": "All done"
   },
   "speaking": {
+    "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
   },
@@ -197,20 +241,25 @@
     "add": "Add teammate",
     "projectDirOnComputer": "Choose or change it on your computer",
     "memberActions": "Actions for {{name}}",
-    "managementComputer": "Management computer",
     "retry": "Retry",
-    "reconnect": "Reconnect",
     "conflict": "Group settings changed. Review them before saving again. Your input was kept.",
     "archive": "Archive group chat",
     "archiveConfirmTitle": "Archive “{{name}}”?",
     "archiveNote": "Only a group owner can archive it. This stops new messages and keeps the history.",
-    "managementStatus": {
-      "ready": "Connected",
-      "loading": "Connecting…",
-      "noHost": "Disconnected",
-      "permission": "Read-only",
-      "upgrade": "Update needed",
-      "unavailable": "Settings unavailable"
+    "description": "Group Description",
+    "descriptionSaveFailed": "Couldn’t save the group description.",
+    "makeAdmin": "Make Admin",
+    "removeAdmin": "Remove Admin Role",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "guest": "Guest"
+    },
+    "cloudStatus": {
+      "loading": "Loading settings…",
+      "permission": "Only group owners and admins can change these settings.",
+      "unavailable": "Couldn’t load group settings. Try again."
     }
   },
   "errors": {
@@ -246,6 +295,15 @@
     "loadFailed": "Can’t load this group chat right now. Try again.",
     "loadOlder": "Load Earlier Messages",
     "attachmentFailed": "Couldn’t open the attachment. Try again.",
+    "attachmentPreviewLoading": "Loading attachment…",
+    "attachmentPreviewFailed": "Couldn’t preview this attachment. Try again.",
+    "attachmentPreviewTooLarge": "This file is larger than 10 MB and can’t be previewed here.",
+    "attachmentPreviewBinary": "This attachment isn’t readable text and can’t be previewed here.",
+    "attachmentPreviewTruncated": "Preview limited to 10,000 lines and 100,000 characters.",
+    "attachmentPreviewEmpty": "This file is empty.",
+    "attachmentPreviewRetry": "Try again",
+    "attachmentPreviewOpenOutside": "Open in browser",
+    "attachmentPreviewClose": "Close attachment preview",
     "previewUnavailable": "Preview unavailable",
     "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
   },

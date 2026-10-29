@@ -94,6 +94,7 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  errorMsg?: string;
   failureRecovered?: boolean;
 }
 
@@ -727,6 +728,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       firedAt: scheduleRuns.firedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
+      errorMsg: scheduleRuns.errorMsg,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
@@ -797,6 +799,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        errorMsg: row.errorMsg ?? undefined,
       } : {}),
     }));
 

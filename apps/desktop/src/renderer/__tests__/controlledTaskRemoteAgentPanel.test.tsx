@@ -41,8 +41,8 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   evictDeviceCapabilities: vi.fn(),
   prefetchDeviceCapabilities: vi.fn(async () => {}),
-  useAgentCapabilities: () => ({
-    capabilities: { hasFastMode: false, effortLevels: [], availableModels: [] },
+  useAgentCapabilities: (agent: string) => ({
+    capabilities: { hasFastMode: agent === 'codex', effortLevels: [], availableModels: [] },
     loading: false,
     error: null,
   }),
@@ -105,6 +105,15 @@ const catalogs = vi.hoisted(() => {
       'share:abc': [
         provider('s-shared', 'S Shared', [['s-model', 'S Model']], { remoteInvocationEnabled: true }),
       ],
+      'memory-device': [provider('memory-provider', 'Remembered', [], {
+        remoteInvocationEnabled: true,
+        agents: ['codex'],
+        routing: { codex: {} },
+        models: { codex: [{
+          id: 'memory-model', name: 'Remembered Model', contextWindow: 200000,
+          efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: true,
+        }] },
+      })],
     } as Record<string, unknown[]>,
   };
 });
@@ -150,8 +159,19 @@ vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
 vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
   useRemoteClaudeSubscriptionUsage: () => null,
 }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+    devices: [{ deviceId: 'memory-device', name: 'Remote' }],
+  }),
+}));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import {
+  agentDeviceModelMemoryAccessors,
+  __resetForTest as resetDeviceMemory,
+} from '@/state/agentDeviceModelMemory';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
 import { __resetForTest as resetRecentModels, listRecentModels } from '@/state/recentModels';
@@ -194,11 +214,54 @@ const list = () => screen.getByRole('listbox');
 beforeEach(() => {
   resetEnginePrefs();
   resetFavorites();
+  resetDeviceMemory();
   resetRecentModels();
 });
 
 afterEach(() => {
   cleanup();
+});
+
+// PR #6830 / Greptile r4359506145: existing panel cases inject remoteAgent directly,
+// so they missed the route wrapper dropping remembered effort/Fast. Exercise the
+// real wrapper and model selection callback (unit/jsdom), with an override that
+// differs from the catalog, both while browsing and when reopening that source.
+describe('统一入口保留远程模型偏好', () => {
+  it.each([null, 'memory-device'])('当前来源为 %s 时选择远程模型沿用其偏好', async (agentDeviceId) => {
+    const memory = agentDeviceModelMemoryAccessors('memory-device');
+    memory.setEffort('codex', 'memory-provider', 'memory-model', 'low');
+    memory.setFast('codex', 'memory-provider', 'memory-model', true);
+    // A matching local provider/model must not borrow this device's memory.
+    memory.setEffort('claude-code', 'a-local', 'a-model', 'low');
+    const onUnifiedSelect = vi.fn(async () => true);
+    render(<ModelRouteSelectorContent
+      agentDeviceId={agentDeviceId}
+      vendorKey="codex" modelId="" effort="high" fastMode={false}
+      onModelChange={vi.fn()} onEffortChange={vi.fn()}
+      onUnifiedSelect={onUnifiedSelect}
+    />);
+    if (!agentDeviceId) {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Remembered · Remote' }));
+      });
+    }
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('Remembered Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelId: 'memory-model', providerId: 'memory-provider', engine: 'codex',
+      effort: 'low', fast: true, agentDevice: { deviceId: 'memory-device', name: 'Remote' },
+    }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'A Local' }));
+    });
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('A Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelId: 'a-model', providerId: 'a-local', effort: 'high', fast: false,
+    }));
+  });
 });
 
 describe('被控电脑上的任务:模型面板列出第三台电脑的远程供应商', () => {

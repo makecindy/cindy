@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -46,7 +47,7 @@ function device(deviceId: string, name: string, isSelf = false): DeviceLinkDevic
 describe('MyDevicesPanel device identity', () => {
   afterEach(cleanup);
 
-  it('shows the reported versions and complete identities of same-name devices', () => {
+  it('shows versions and compact names without exposing device fingerprints', () => {
     const s = settings();
     s.devices = [
       { ...device('self', 'Mac Studio', true), appVersion: '0.1.76' },
@@ -58,7 +59,8 @@ describe('MyDevicesPanel device identity', () => {
 
     for (const d of s.devices) {
       const row = document.querySelector(`[data-device-id="${d.deviceId}"]`);
-      expect(row?.textContent).toContain(d.deviceId);
+      expect(row?.textContent).not.toContain(d.deviceId);
+      if (!d.isSelf && d.name === 'Mac Studio') expect(row?.textContent).toMatch(/Mac Studio \(\d\)/);
       if (d.appVersion) expect(row?.textContent).toContain(`Cindy ${d.appVersion}`);
       else {
         expect(row?.textContent).not.toContain('Cindy null');

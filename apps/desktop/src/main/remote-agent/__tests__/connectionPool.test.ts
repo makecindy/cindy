@@ -653,7 +653,10 @@ describe('remote connection pool with a real host', () => {
       expect(first[0].status).toBe('rejected');
       if (first[0].status !== 'rejected') throw new Error('Local cleanup failure must reach the owner');
       expect(first[0].reason).toBeInstanceOf(AggregateError);
-      expect((first[0].reason as AggregateError).errors).toEqual(failures);
+      const cleanupErrors = (first[0].reason as AggregateError).errors;
+      expect(cleanupErrors).toEqual([failures[0], failures[1], expect.any(AggregateError)]);
+      // Preparation now owns executor and MCP disposal; neither original failure may disappear.
+      expect((cleanupErrors[2] as AggregateError).errors).toEqual([failures[3], failures[2]]);
       const repeated = await Promise.allSettled([handle.detach!({ reason: 'account-boundary' })]);
       expect(repeated[0].status).toBe('rejected');
       if (repeated[0].status === 'rejected') expect(repeated[0].reason).toBe(first[0].reason);

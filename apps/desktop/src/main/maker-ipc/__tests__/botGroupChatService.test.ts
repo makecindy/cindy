@@ -478,11 +478,15 @@ describe('botGroupChatService', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, {
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness, ['mimi', 'abu']);
     await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'no-lane' });
@@ -628,6 +632,8 @@ describe('group mention and prompt helpers', () => {
     const twins = [{ botId: 'x1', name: '小满' }, { botId: 'x2', name: '小满' }];
     expect(resolveGroupMentions('@小满 在吗', { all: false, botIds: ['x2'] }, twins))
       .toEqual({ all: false, botIds: ['x2'] });
+    // Typed text alone cannot tell same-named members apart: all of them are addressed, never just the first.
+    expect(resolveGroupMentions('@小满 在吗', null, twins)).toEqual({ all: false, botIds: ['x1', 'x2'] });
     expect(resolveGroupMentions('@小满帮我查一下', null, members)).toEqual({ all: false, botIds: ['xiaoman'] });
     expect(resolveGroupMentions('@所有人看这里', null, members).all).toBe(true);
     expect(resolveGroupMentions('@Everyone look', null, members).all).toBe(true);
@@ -829,11 +835,15 @@ describe('botGroupChatService 分工', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', undefined],
-  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode, message) => {
     const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
-      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
     });
     const groupId = await createGroup(harness);
     const plan = await proposePlan(harness, groupId);

@@ -344,8 +344,7 @@ export function subscribeDraftContent(sessionId: string, handler: DraftListener)
   };
 }
 
-function recomputeDraftPresence(sessionId: string): void {
-  const key = draftKey(sessionId);
+function recomputeDraftPresence(sessionId: string, key = draftKey(sessionId)): void {
   const contentSet = contentListeners.get(key);
   if (contentSet)
     for (const fn of contentSet) {
@@ -442,7 +441,27 @@ export function saveDraft(
   draft: ComposerDraft,
   opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean },
 ): void {
-  const key = draftKey(sessionId);
+  saveDraftAtKey(sessionId, draftKey(sessionId), draft, opts);
+}
+
+/** Pin deferred recovery to the originating owner's namespace, even after switching accounts. */
+export function captureDraftRecoveryScope(sessionId: string) {
+  const token = captureDraftDiscardToken(sessionId);
+  return {
+    get: () => drafts.get(token.ownerScopedKey),
+    save: (draft: ComposerDraft) => {
+      if (!isDraftDiscardTokenCurrent(token)) return;
+      saveDraftAtKey(sessionId, token.ownerScopedKey, draft, {
+        silent: token.ownerScopedKey !== draftKey(sessionId),
+      });
+    },
+  };
+}
+
+function saveDraftAtKey(
+  sessionId: string, key: string, draft: ComposerDraft,
+  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean },
+): void {
   if (!opts?.silent && !opts?.preserveRemoteOptimisticRecovery) {
     remoteOptimisticRecoveries.delete(key);
   }
@@ -480,7 +499,7 @@ export function saveDraft(
   }
   // Presence notify is independent of `silent` — the sidebar must learn about
   // keystroke saves (which are silent) too.
-  recomputeDraftPresence(sessionId);
+  recomputeDraftPresence(sessionId, key);
   syncDraftUrlsToMain();
 }
 

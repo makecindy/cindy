@@ -11,6 +11,8 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+// Native playback is covered by NativeVideoPlayer/inlineVideoPlayer; retain this suite's message assertions.
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
@@ -25,11 +27,12 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style }: any) =>
     React.createElement(
       "div",
       {
         "data-testid": testID,
+        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
@@ -113,6 +116,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
   FileArchive: () => null,
@@ -311,6 +315,28 @@ beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
 });
 
+it('diagnoses a historical execution error through the real message renderer', () => {
+  const raw = 'provider mismatch api_key=private-history-value';
+  const onDiagnoseError = vi.fn();
+  const { host, unmount } = mount([{
+    ...msg('historical-error', JSON.stringify({ message: raw }), null), role: 'error',
+  }], { onDiagnoseError });
+  try {
+    expect(host.querySelector('[data-testid="agentError.diagnose"]')).toBeNull();
+    const toggle = [...host.querySelectorAll<HTMLElement>('div')].find(
+      (node) => node.textContent === i18n.t('session.tail.showErrorDetails') && node.onclick,
+    );
+    expect(toggle).toBeTruthy();
+    act(() => toggle!.click());
+    expect(host.textContent).toContain('provider mismatch');
+    expect(host.textContent).not.toContain('private-history-value');
+    act(() => host.querySelector<HTMLElement>('[data-testid="agentError.diagnose"]')!.click());
+    expect(onDiagnoseError).toHaveBeenCalledWith(expect.objectContaining({ details: raw }));
+  } finally {
+    unmount();
+  }
+});
+
 describe("device source label", () => {
   const fromPhone = msg("m1", "hi", {
     sourceDevice: { deviceId: "phone-a", name: "快照名", platform: "mobile" },
@@ -412,6 +438,30 @@ describe('completed message actions', () => {
     } finally { partial.unmount(); }
     const final = render([{ ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' }], props);
     expect(final).toContain('message.moreButton');
+  });
+
+  it('reserves the completed action row while an assistant reply streams', () => {
+    // A node-only assertion misses the regression where the empty row collapses.
+    // Compare production styles with the completed control's actual touch height.
+    const streaming = mount([
+      { ...msg('streaming', 'Working', { isStreaming: true }), role: 'assistant' },
+    ], { isSessionStreaming: true });
+    const completed = mount([
+      { ...msg('final', 'Done', { turnCompleted: true }), role: 'assistant' },
+    ]);
+    try {
+      const slot = streaming.host.querySelector('[data-testid="message.actionSlot"]');
+      const copy = completed.host.querySelector('[data-testid="message.copyButton"]');
+      expect(slot).not.toBeNull();
+      expect(copy).not.toBeNull();
+      const reservedHeight = Number(slot!.getAttribute('data-min-height'));
+      expect(reservedHeight).toBeGreaterThan(0);
+      expect(reservedHeight).toBe(Number(copy!.getAttribute('data-min-height')));
+      expect(streaming.host.querySelector('[data-testid="message.actionBar"]')).toBeNull();
+    } finally {
+      streaming.unmount();
+      completed.unmount();
+    }
   });
 
   it('places controls outside the bubble and forks the selected row exactly once', () => {

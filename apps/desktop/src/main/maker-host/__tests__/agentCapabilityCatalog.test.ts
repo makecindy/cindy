@@ -78,6 +78,49 @@ describe('shared runtime capability discovery', () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
+  // #7629: a session-scoped bridge legitimately has no tools outside its
+  // teammate environment. Unit tier: exercise index and query through the
+  // production catalog, not a second catalog implementation.
+  it('awaits session applicability for both the index and a direct query', async () => {
+    const provider = { name: 'session_bridge', toClaudeSdkConfig: vi.fn() };
+    const unavailable = async () => 'not-applicable-without-companion-environment';
+    const read = vi.fn(async () => ({ state: 'no-tools' as const, tools: [] }));
+    const index = await readAgentCapabilityCatalog([provider], context, {}, unavailable, read);
+    expect(index).toMatchObject({ capabilities: [{ server: 'session_bridge',
+      status: 'unavailable', reason: 'not-applicable-without-companion-environment' }] });
+    expect(await readAgentCapabilityCatalog([provider], context, { server: 'session_bridge' }, unavailable, read))
+      .toMatchObject({ ok: false, capability: { reason: 'not-applicable-without-companion-environment' } });
+    expect(read).not.toHaveBeenCalled();
+    expect(provider.toClaudeSdkConfig).not.toHaveBeenCalled();
+    const failed = await readAgentCapabilityCatalog([provider], context, {},
+      async () => { throw new Error('private-environment-secret'); });
+    expect(failed).toMatchObject({ capabilities: [{ status: 'unavailable', reason: 'provider-status-unavailable' }] });
+    expect(JSON.stringify(failed)).not.toContain('private-environment-secret');
+  });
+
+  // #7636 review: an unrelated companion read can queue behind environment
+  // writes. Unit tier: only the full index may request every provider's status.
+  it.each(['requested', 'codex_apps', 'unknown'])('does not read unrelated availability for a direct query: %s', async (server) => {
+    let release!: (reason: null) => void;
+    const saving = new Promise<null>((resolve) => { release = resolve; });
+    const availability = vi.fn((provider: { name: string }) => provider.name === 'companion_connections' ? saving : null);
+    const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'fixture_tool' }] }));
+    const pending = readAgentCapabilityCatalog([{ name: 'requested' }, { name: 'companion_connections' }],
+      { ...context, agentKind: 'codex' }, { server }, availability, read);
+    const checked = availability.mock.calls.map(([provider]) => provider.name);
+    release(null);
+    const result = await pending;
+    expect(checked).toEqual(server === 'requested' ? ['requested'] : []);
+    if (server === 'unknown') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CAPABILITY',
+        available: ['requested', 'companion_connections', 'codex_apps'] });
+      expect(read).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: true, tools: [{ name: 'fixture_tool' }] });
+      expect(read).toHaveBeenCalledWith(server);
+    }
+  });
+
   it('reads real schemas and builtin progressive metadata without executing business tools', async () => {
     const execute = vi.fn();
     const factory = () => {
@@ -111,6 +154,13 @@ describe('shared runtime capability discovery', () => {
 
   describe('servers the engine connects itself', () => {
     const custom = [{ name: 'custom_omc', toClaudeSdkConfig: vi.fn() }];
+
+    it('does not prescribe connection repair or a new task from an ambiguous empty catalog', async () => {
+      const result = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+        async () => ({ state: 'no-tools', tools: [] }));
+      expect(result).toMatchObject({ ok: false, errorCode: 'HARNESS_MCP_NOT_READY', engineState: 'no-tools' });
+      expect((result as { message: string }).message).not.toMatch(/修正后新建任务|检查该 MCP 的地址/);
+    });
 
     // Live Apps discovery produced ~60K tokens. Page/filter the actual engine
     // result so discovery stays bounded without hiding the remaining tools.

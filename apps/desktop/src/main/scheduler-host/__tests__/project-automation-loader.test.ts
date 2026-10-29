@@ -142,22 +142,25 @@ describe('project automation explicit Harness reconciliation', () => {
   it('detects marker-only changes, persists them, and clears them without losing the bound task', () => {
     const current: Schedule = { ...projectSchedule({ desktop: true, feishu: false }),
       agentKind: 'pi', model: 'test-model', persistentSession: true, targetSessionId: 'bound-codex' };
-    const config = projectConfig({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model', persistentSession: true });
+    const config = projectConfig({ agentKind: 'pi', modelAgentKind: 'pi', modelAgentDeviceId: 'shared:owner',
+      providerId: 'shared-source', model: 'test-model', persistentSession: true });
     expect(schedulesDiffer(current, config, workingDir)).toBe(true);
     const input = __testing.scheduleConfigToUpdateInput(config, workingDir);
     expect(input.modelAgentKind).toBe('pi');
+    expect(input.modelAgentDeviceId).toBe('shared:owner');
     const saved = scheduleToCamel({ ...scheduleCreateToRow(current),
-      ...schedulePatchToRow({ modelAgentKind: input.modelAgentKind }),
+      ...schedulePatchToRow({ modelAgentKind: input.modelAgentKind, modelAgentDeviceId: input.modelAgentDeviceId,
+        providerId: input.providerId }),
     } as Parameters<typeof scheduleToCamel>[0]);
     expect(saved).toMatchObject({ modelAgentKind: 'pi', persistentSession: true, targetSessionId: 'bound-codex' });
     expect(schedulesDiffer(saved, config, workingDir)).toBe(false);
 
-    const legacy = { ...config, modelAgentKind: undefined };
+    const legacy = { ...config, modelAgentKind: undefined, modelAgentDeviceId: undefined };
     expect(schedulesDiffer(saved, legacy, workingDir)).toBe(true);
     const clearInput = __testing.scheduleConfigToUpdateInput(legacy, workingDir);
     expect(clearInput).toHaveProperty('modelAgentKind', undefined);
     const cleared = scheduleToCamel({ ...scheduleCreateToRow(saved),
-      ...schedulePatchToRow({ modelAgentKind: clearInput.modelAgentKind }),
+      ...schedulePatchToRow({ modelAgentKind: clearInput.modelAgentKind, modelAgentDeviceId: clearInput.modelAgentDeviceId }),
     } as Parameters<typeof scheduleToCamel>[0]);
     expect(cleared.modelAgentKind).toBeUndefined();
     expect(cleared.targetSessionId).toBe('bound-codex');

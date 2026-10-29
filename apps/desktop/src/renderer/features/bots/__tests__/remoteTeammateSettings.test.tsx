@@ -8,10 +8,10 @@
  * - 最小失败输入:主机未声明 management:settings;caps 被旧主机拒绝;离线且从未探测;同一伙伴/其它伙伴的推送。
  * - tier:unit(jsdom + 假的主机客户端)。
  */
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { createIpcError } from '../../../../shared/ipc-errors';
 
 const h = vi.hoisted(() => ({
@@ -34,9 +34,9 @@ vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: ({ bot }: { bot: { d
 vi.mock('../BotsHomeView', async () => {
   const { useOptionalBotSettingsTarget } = await import('../botSettingsTarget');
   return {
-    BotSettings: ({ bot, initialPage }: { bot: { name: string }; initialPage: string }) => {
+    BotSettings: ({ bot, initialPage, onOpenSession }: { bot: { name: string }; initialPage: string; onOpenSession(id: string): void }) => {
       const target = useOptionalBotSettingsTarget();
-      return <div data-testid="pages" data-page={initialPage} data-target={`${target?.kind}:${target?.deviceId}`}>{bot.name}</div>;
+      return <div data-testid="pages" data-page={initialPage} data-target={`${target?.kind}:${target?.deviceId}`}>{bot.name}<button aria-label="Open channel task" onClick={() => onOpenSession('channel-task')} /></div>;
     },
   };
 });
@@ -47,6 +47,10 @@ const bot = { id: 'bot-1', deviceId: 'mac', deviceName: 'Studio', name: 'Sora', 
 const profile = (name: string) => ({ profile: { id: 'bot-1', name, description: '', avatar: '🙂', avatarColor: 'teal', status: 'active', skills: [], currentVersion: 1, createdAt: 1, sessions: [], capabilities: { harness: 'pi', model: 'm', modelChain: [], memory: true, permissions: 'ask' } } });
 const renderSettings = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 const props = { beforeCloseRef: { current: null }, onBack: vi.fn(), onDeleted: vi.fn() };
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="route">{location.pathname}{location.search}</output>;
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -76,6 +80,14 @@ it('renders the local pages against the teammate computer, opening the requested
 it('falls back to the home page when the host cannot serve the requested page', async () => {
   renderSettings(<RemoteTeammateSettings bot={bot} initialPage="channels" {...props} />);
   expect((await screen.findByTestId('pages')).getAttribute('data-page')).toBe('home');
+});
+
+// A channel selected from settings previously did nothing unless it was canonical/history.
+// Unit tier: the actual settings consumer must navigate to the original device's ordinary task.
+it('opens a selected task without requiring it in the loaded profile projection', async () => {
+  renderSettings(<><LocationProbe /><RemoteTeammateSettings bot={bot} {...props} /></>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open channel task' }));
+  expect(screen.getByTestId('route').textContent).toBe('/cc-agent/channel-task?device=mac');
 });
 
 it('keeps the generic form page for a host that predates teammate settings', async () => {

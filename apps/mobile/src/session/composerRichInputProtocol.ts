@@ -11,6 +11,7 @@ export type ComposerWebMessage =
   | { type: 'pong'; id: number }
   | { type: 'height'; height: number }
   | { type: 'change'; document: unknown; documentId?: number }
+  | { type: 'snapshot'; requestId: number; documentId: number; document: unknown; pendingPaste: boolean }
   | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
   | { type: 'paste-text-request'; requestId: string; text?: string }
   | { type: 'paste-images-start'; requestId: string; count: number }
@@ -55,6 +56,11 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
       if (message.documentId !== undefined && !isOffset(message.documentId)) return null;
       return { type: 'change', document: message.document,
         ...(message.documentId === undefined ? {} : { documentId: message.documentId as number }) };
+    }
+    if (message.type === 'snapshot') {
+      if (!isOffset(message.requestId) || !isOffset(message.documentId) || typeof message.pendingPaste !== 'boolean') return null;
+      return { type: 'snapshot', requestId: message.requestId, documentId: message.documentId,
+        document: message.document, pendingPaste: message.pendingPaste };
     }
     if (message.type === 'selection') {
       if (!isOffset(message.documentId) || !isPrefix(message.before) || !isPrefix(message.through)) return null;

@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `notifications_muted` integer DEFAULT false NOT NULL;

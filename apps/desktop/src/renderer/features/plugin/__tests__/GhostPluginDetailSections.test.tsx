@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import path from 'node:path';
 import type { InstalledGhost } from '../../../../shared/ghost';
+import type { PreparedPluginContribution } from '../../../../shared/pluginContributions';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
@@ -251,6 +252,73 @@ describe('Ghost plugin detail sections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Permissions: Read service' }));
     expect(within(await screen.findByRole('dialog')).getByText('Only the declared service')).toBeTruthy();
   });
+  it('keeps installed use details focused on the plugin without a version and publishing section', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Only version changes', tools: [{ name: 'example', description: 'Example tool' }] }} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
+      onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.getByText(detail.description)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.queryByText('Only version changes')).toBeNull();
+  });
+
+
+  it.each(['pending', 'approved', 'rejected', 'cancelled'] as const)(
+    'hides a submission that cannot be repeated for the %s version without showing publishing details', (status) => {
+      vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+      const publish = vi.fn();
+      const preview: PreparedPluginContribution = {
+        preparedId: 'preview', instanceId: 'instance', pluginId: 'plugin', ghostId: 'example',
+        name: detail.name, description: detail.description, version: '1.0.0', sha256: 'a'.repeat(64),
+        sizeBytes: 100, releaseNotes: 'Complete package release notes', expiresAt: '2026-10-16T00:00:00.000Z',
+        preflight: {
+          subject: { authority: 'https://auth.example', membershipId: 'member' },
+          queriedAt: '2026-10-16T00:00:00.000Z', policyVersion: 2,
+          target: { pluginId: 'plugin', ghostId: 'example', version: '1.0.0', expectedRelease: null },
+          pendingRelease: status === 'pending' ? { releaseId: 'release', version: '1.0.0' } : null,
+          blockers: [{ code: 'VERSION_ALREADY_SUBMITTED', message: 'Change the version before publishing again' }],
+          actions: { canSubmit: false },
+        },
+      };
+      const view = (prepared: PreparedPluginContribution) => <GhostPluginDetailView
+        ghost={null} detail={detail} panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()}
+        onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
+        onContribute={publish} publishingPreview={prepared}
+        contributionUnavailableReason={prepared.preflight?.actions.canSubmit ? undefined : 'Change the version before publishing again'} />;
+      const { rerender } = render(view(preview));
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
+      expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+      expect(screen.queryByText('Change the version before publishing again')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.contribution.versionConsumedHint')).toBeNull();
+      expect(screen.queryByText('Complete package release notes')).toBeNull();
+      expect(publish).not.toHaveBeenCalled();
+      // A previous cancelled/rejected/approved result does not hide a new eligible version.
+      rerender(view({ ...preview, version: '1.1.0', preflight: { ...preview.preflight!, target: { ...preview.preflight!.target, version: '1.1.0' }, pendingRelease: null, blockers: [], actions: { canSubmit: true } } }));
+      const submit = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
+      expect(submit).toHaveProperty('disabled', false);
+      fireEvent.click(submit);
+      expect(publish).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps the local publishing entry in the use header without a publishing section', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const publish = vi.fn();
+    render(<GhostPluginDetailView ghost={null} detail={detail} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
+      onContribute={publish} />);
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }).closest('header')).toBeTruthy();
+    const chat = screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' });
+    expect(within(chat.closest('.plugin-detail-actions') as HTMLElement).getByRole('switch')).toBeTruthy();
+    expect(screen.getByText('Example plugin')).toBeTruthy();
+    const action = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
+    fireEvent.click(action);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it('does not advertise host login for a locally imported unverified GitHub plugin', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -616,7 +684,7 @@ describe('Ghost plugin detail sections', () => {
     expect(topBarFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
-    expect(detailActions?.className).toContain('flex-nowrap');
+    expect(detailActions?.className).toContain('flex-wrap');
   });
 
   it('routes a projected detail icon failure to market recovery', () => {

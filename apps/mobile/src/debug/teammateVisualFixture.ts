@@ -1,5 +1,7 @@
 import {
   REMOTE_RESOURCE_LIST_CHANNEL,
+  REMOTE_RESOURCE_GET_CHANNEL,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_MANIFEST_CHANNEL,
   REMOTE_RESOURCE_PROTOCOL_VERSION,
   type RemoteCollectionItem,
@@ -7,15 +9,17 @@ import {
   type RemoteResourceManifestResponse,
 } from '@cindy/device-link';
 import { UI_MOCK_ID_PREFIX } from '@cindy/maker-shared/ui-mock';
+import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 
 /**
  * `--mock` teammates (docs/dev-rules/ui-mock-data.md): the roster the teammate home and the task
  * home's teammate section read. Invented names and previews only; the three presets ship with the app.
  */
 const TEAMMATES = 'teammates';
+export const VISUAL_TEAMMATE_SESSION_ID = 'visual-teammate-session';
 const MINUTE = 60_000;
 const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minutesAgo: number; avatar: RemoteCollectionItem['display']['avatar']; working?: boolean; following?: string[] }> = [
-  { id: 'visual-bot-cindy', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
+  { id: 'cindy-default', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
     avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' }, working: true,
     // Task rows show the follow mark (`ui-mock` tasks): one shared with LiZi, so the mark picks by name.
     following: ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`] },
@@ -34,14 +38,98 @@ const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minu
 
 // Fixed per process: a moving clock would make every row look unread again on each read.
 const FIXTURE_NOW = Date.now();
+// In-memory mock state only: exercises the real glance actions without a host or automation.
+let dailyTodoCheck = true;
+let todoDeleted = false;
+const glanceTodo = {
+  id: 'visual-glance-todo', revision: 1, key: 'visual-review', origin: 'assigned',
+  title: '确认登录页的验收截图', progress: '', outcome: '', value: '', next: null,
+  sources: [], associations: [], status: 'open', createdAt: new Date(FIXTURE_NOW).toISOString(),
+  updatedAt: new Date(FIXTURE_NOW).toISOString(),
+  sourceDeadline: { kind: 'instant', date: new Date(FIXTURE_NOW + 60 * MINUTE).toISOString().slice(0, 10), timeZone: 'UTC', at: new Date(FIXTURE_NOW + 60 * MINUTE).toISOString() },
+  deadlineCandidate: null,
+  suggestedDate: null, decision: null, history: [], action: null,
+};
 
 export function teammateVisualFixture(channel: string, args: unknown[], now = FIXTURE_NOW): unknown {
+  if (channel === 'git-context:pr-refs:list') return args[0] === `${UI_MOCK_ID_PREFIX}rich-answer`
+    ? [{ id: 'visual-pr', sessionId: args[0], owner: 'example', repo: 'demo', prNumber: 7, lastSeenAt: now }] : [];
+  if (channel === 'git-context:pr-status') return [{ owner: 'example', repo: 'demo', prNumber: 7, ok: true,
+    status: 'merged', title: '修复登录页在窄窗口下的布局' }];
+  if (channel === 'maker:bot-delegations:list') {
+    const bot = teammates.find(item => args[0] === `${VISUAL_TEAMMATE_SESSION_ID}:${item.id}`);
+    const ids = bot?.id === 'cindy-default' ? ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`]
+      : bot?.id === 'visual-bot-lizi' ? [`${UI_MOCK_ID_PREFIX}english`, `${UI_MOCK_ID_PREFIX}archived`] : [];
+    return { ok: true, delegations: ids.map(childSessionId => ({ requestingBotId: bot!.id, childSessionId })) };
+  }
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
       actions: [{ id: 'open-create', label: 'New teammate' }] }],
   } satisfies RemoteResourceManifestResponse;
-  const request = args[0] as { collectionId?: string } | undefined;
+  const request = args[0] as { collectionId?: string; ref?: { collectionId?: string; id?: string }; resourceRef?: { id?: string }; actionId?: string; query?: string; input?: { enabled?: boolean; operation?: string; op?: string; args?: { id?: string } } } | undefined;
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.id === 'todos:cindy-default') {
+    const query = JSON.parse(request.query ?? '{}');
+    const items = query.view === 'done' || todoDeleted ? [] : [glanceTodo];
+    return { ref: { collectionId: TEAMMATES, kind: 'bot', id: request.ref.id }, revision: 'visual-1',
+      display: { title: 'Todos' }, actions: [], links: [],
+      blocks: [{ id: 'todos', primitive: 'teammate-todos', fallbackMarkdown: glanceTodo.title, data: { items, total: items.length, dailyCheck: dailyTodoCheck } }] };
+  }
+  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.resourceRef?.id === 'todos:cindy-default' && request.actionId === 'todo-daily-check') {
+    dailyTodoCheck = request.input?.enabled === true;
+    return { effects: [], dailyCheck: dailyTodoCheck };
+  }
+  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.resourceRef?.id === 'todos:cindy-default' && request.actionId === 'todo-update') {
+    if (request.input?.operation === 'delete') todoDeleted = true;
+    if (request.input?.operation === 'restore') todoDeleted = false;
+    return { effects: [], todo: glanceTodo };
+  }
+  // Nine members from three accounts: the header shows a member count, not every name.
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-crowded-group') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'visual-1', display: { title: 'Design review' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
+      id: request.ref.id, name: 'Design review',
+      members: ['Aster (Ada)', 'Nova (Leo)', 'Leo', 'Mira (Ada)', 'Orin (Kai)', 'Quill', 'Ada', 'Kai', 'Rhea (Ada)']
+        .map((name, index) => ({ botId: `visual-crowd-${index}`, name, status: 'active' })),
+      messages: [{ id: 'visual-crowd-message', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'visual-crowd-0',
+        authorName: 'Aster (Ada)', content: '首页改版的稿子我放在群文件夹里了，大家看一下。', createdAt: now }],
+      plans: [], createdAt: now, updatedAt: now,
+    } }],
+  };
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-session-process') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'visual-1', display: { title: '任务入口演示群' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
+      id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }],
+      messages: [], plans: [], createdAt: now, updatedAt: now,
+      round: { status: 'running', canContinue: false, speakers: [{ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
+    } }],
+  };
+  // Existing connection/session records for exercising both native settings entries.
+  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.collectionId === TEAMMATES) {
+    const op = request.input?.op;
+    const botId = request.resourceRef?.id;
+    const value = op === 'caps' ? { version: 1, ops: ['channels.im.list', 'channels.im.listLanes'] }
+      : op === 'channels.im.list' ? { connections: [{ id: 'visual-im', botId, channel: 'telegram', identity: { username: 'demo_partner' } }] }
+      : op === 'channels.im.listLanes' && request.input?.args?.id === 'visual-im'
+        ? { connectionId: 'visual-im', lanes: [{ sessionId: VISUAL_TEAMMATE_SESSION_ID, kind: 'group', name: '演示群任务', chatId: 'demo-group', state: 'idle', lastActivityAt: now, contextMessageCount: 2 }] }
+        : undefined;
+    if (value !== undefined) return { result: { ok: true, value }, effects: [] };
+  }
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === TEAMMATES) {
+    const id = request.ref.id?.replace(/^settings:/, '');
+    const bot = teammates.find(item => item.id === id);
+    if (bot) return {
+      ref: { collectionId: TEAMMATES, kind: 'bot', id: request.ref.id }, revision: 'visual-1',
+      display: { title: bot.name, avatar: bot.avatar },
+      links: [{ rel: 'conversation', target: { kind: 'session', sessionId: VISUAL_TEAMMATE_SESSION_ID } },
+        ...(id === 'cindy-default' ? [{ rel: 'todos', target: { kind: 'resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: 'todos:cindy-default' } } }] : [])],
+      actions: [], blocks: [{ id: 'profile', primitive: 'markdown', fallbackMarkdown: bot.preview }],
+    };
+  }
   if (channel !== REMOTE_RESOURCE_LIST_CHANNEL || request?.collectionId !== TEAMMATES) return undefined;
   return {
     collectionId: TEAMMATES,
@@ -56,7 +144,10 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
         avatar: bot.avatar,
         ...(bot.working ? { generation: { phase: 'replying', startedAt: now - MINUTE } } : {}),
       },
-      links: (bot.following ?? []).map((sessionId) => ({ rel: 'following', target: { kind: 'session' as const, sessionId } })),
+      links: [
+        { rel: 'conversation', target: { kind: 'session' as const, sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } },
+        ...(bot.following ?? []).map((sessionId) => ({ rel: 'following', target: { kind: 'session' as const, sessionId } })),
+      ],
       revision: 'visual-1',
     })),
   } satisfies RemoteCollectionListResponse;

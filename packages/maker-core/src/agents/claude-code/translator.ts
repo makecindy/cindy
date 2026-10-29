@@ -351,6 +351,7 @@ function ccLiveStatus(
       openStartedAt: ctx.rt.generation.startedAt,
       reliable: ctx.rt.generation.reliable,
     }),
+    requestUsage: ctx.tracker.getRequestMetering(),
     isRunning,
   };
 }
@@ -2580,6 +2581,7 @@ function handleResult(
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,
+    requestUsage: ctx.tracker.getRequestMetering(),
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,

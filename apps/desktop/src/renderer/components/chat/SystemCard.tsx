@@ -1197,10 +1197,10 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
               </span>
             </>
           )}
-          {Boolean(data?.resumed) && (
+          {(Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
             <>
               <span className="opacity-50">·</span>
-              <span>{t('chat.systemCard.agentSwitch.resumedBadge')}</span>
+              <span className="shrink-0 whitespace-nowrap">{t(data?.nativeHistory === 'fallback' ? 'chat.systemCard.agentSwitch.fallbackBadge' : 'chat.systemCard.agentSwitch.resumedBadge')}</span>
             </>
           )}
           {handoff && (

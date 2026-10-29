@@ -1280,10 +1280,10 @@ describe('switching accounts between messages to balance quota', () => {
     return { ...h, usage };
   }
 
-  it('offers the account to use first and moves there on the next message only after the user confirms', async () => {
+  it('automatically offers native relocation and binds the move to the next user message', async () => {
     const h = paced();
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({
-      kind: 'ask',
+      kind: 'auto',
       memberKey: MINI.key,
       quota: { usedPercent: 20, resetAtMs: 87_400_000 },
     });
@@ -1357,7 +1357,7 @@ describe('switching accounts between messages to balance quota', () => {
     await h.service.rebalanceDecision('s1', MINI.key, true, 'message-a');
     expect(h.deps.writeAutoRebalance).toHaveBeenCalledWith('s1');
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
-    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'ask', memberKey: MINI.key });
+    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
   });
 
   // §6.2：A 确认后离开而未发送，B 取消或没有提议时不能继承 A 的换号；此前只按任务 id 暂存。
@@ -1498,6 +1498,29 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     await flush();
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.deps.fallback).toHaveBeenCalledWith('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
+  });
+
+  it('requests an O-issued switch for a live direct executor failure', async () => {
+    const h = guestHarness();
+    const direct = { ownerRoute: SHARE_ROUTE, requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa') };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => direct });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    expect(service.mayHandleTurnError('s1', signals)).toBe(true);
+    await service.onTurnError('s1', signals, 7);
+    expect(direct.requestSwitch).toHaveBeenCalledTimes(1);
+    expect(h.guestSwitch.takeForOpen('s1')).toBe('token-direct-aaaaaaaaaaaa');
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the direct error back when O declines the switch', async () => {
+    const h = guestHarness();
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => ({ ownerRoute: SHARE_ROUTE, requestSwitch: async () => undefined }) });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    await service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
   });
 
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {

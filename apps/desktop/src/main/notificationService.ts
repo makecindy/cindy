@@ -3,8 +3,7 @@
  * ---------------------------------------------------------------------------
  * 主进程层。提供单一 IPC handler `notification:show-session-event`：
  *   - macOS / Linux / Windows：统一走 Electron 原生 `Notification`。
- *   - 点通知后把窗口拉到前台，并通过 `notification:focus-session` 把 sessionId
- *     广播给 renderer，由 renderer 路由跳转。
+ *   - 点通知后通过持久到 renderer 就绪的 deep-link 队列打开原任务及其所属电脑。
  *   - 飞书通道：payload.channels.feishu === true 时通过 feishuIm 给当前 owner
  *     私聊发通知。伙伴回复用纯文本，普通任务沿用 markdown；复用现有 IM API。
  *
@@ -30,12 +29,15 @@ import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
 import { companionAvatarThumbnail } from './agent-island/companionIdentity';
-import { getDeepLinkMainWindow, openMainWindowChatMessage } from './deepLink';
+import { getDeepLinkMainWindow, openMainWindowChatMessage, openMainWindowSession } from './deepLink';
+import { isSessionNotificationsMutedSync } from './localDb/sessionFlagRegistry';
 import type { ChatMessageNotification } from './maker-ipc/chatMessageNotifications';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
+import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
 import { drainPersistQueue } from './messagePersistBroadcaster';
+import { getInputHandoffNoticeOwnership } from './im/shared/inputHandoffChannelNotice';
 import { createLogger } from './logger';
 import {
   getNotificationImageLabel,
@@ -118,6 +120,8 @@ interface ShowSessionEventPayload {
   sessionId: string;
   title: string;
   kind: SessionEventKind;
+  /** Local handoff event identity, verified against Main's request-scoped notice record. */
+  inputHandoffRequestId?: string;
   /**
    * 渠道偏好。renderer 侧 gate 后填入,缺省时按"仅桌面"兼容,防御漏传——
    * 当前唯一 invoke 调用方 CCAgentSidebarUpper.tsx 总是显式传 channels,
@@ -176,29 +180,6 @@ function isFeishuReplyPending(key: string, eventId: string | undefined): boolean
 const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
 
 /**
- * 把窗口拉到前台并广播 sessionId 给 renderer 路由跳转。
- *
- * Windows 防焦点劫持：非前台进程直接 `focus()` 会被系统拒绝，只让任务栏图标
- * 闪烁不抢前台。绕过办法：先 `setAlwaysOnTop(true)` 触发系统允许该窗口前置，
- * `show() + focus()` 之后立刻 `setAlwaysOnTop(false)` 回到正常 z-order，但
- * 焦点已经成功转移过来了。这是 Electron 社区在 Windows 上的稳定 hack。
- *
- * macOS 的 SetForegroundWindow 等价物是 `app.focus({ steal: true })`，但 Mac
- * 默认 `focus()` 行为已经够强，不需要多余处理；这里的 alwaysOnTop 在 Mac 上
- * 是无害 no-op（窗口本来就允许前置）。
- */
-function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): void {
-  const win = getWindow();
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.setAlwaysOnTop(true);
-  win.show();
-  win.focus();
-  win.setAlwaysOnTop(false);
-  if (sessionId) win.webContents.send('notification:focus-session', sessionId);
-}
-
-/**
  * 从 main 内其它模块发送与会话通知同语义的桌面 toast。
  * Scheduler 运行在 main，必须直接调用此入口；`webContents.send` 同名 IPC 只会
  * 发给 renderer，不会命中 main 的 `ipcMain.handle`。
@@ -206,6 +187,8 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
   payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
+    deviceId?: string;
+    messageClientId?: string;
     body?: string;
     teammate?: boolean;
     avatarJpeg?: string;
@@ -214,9 +197,21 @@ export function showDesktopSessionEvent(
   },
 ): boolean {
   const { sessionId, title, kind } = payload;
-  if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
+  const isLocalSession = !!sessionId && payload.markAttention !== false;
+  if (isLocalSession) markSessionNeedsAttention(sessionId);
+  // 「消息免打扰」门放在这个**公共出口**上：scheduler、伙伴自主跟进等 main 内
+  // 直接调用方都不经过 IPC handler 的那道判定，只挡 handler 会漏出系统 toast。
+  // 其它设备的任务（markAttention === false）不查本机静音标记。
+  if (isLocalSession && isSessionNotificationsMutedSync(sessionId)) return false;
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
-  return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate, payload.avatarJpeg);
+  const owner = captureDataOwnerBroadcastScope();
+  return showDesktopToast(safeTitle, kind, () => {
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
+    if (sessionId) openMainWindowSession(sessionId, {
+      ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
+      ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
+    });
+  }, payload.body, payload.teammate, payload.avatarJpeg);
 }
 
 /**
@@ -225,11 +220,12 @@ export function showDesktopSessionEvent(
  */
 export function showDeviceSessionDesktopEvent(
   getWindow: () => BrowserWindow | null,
-  event: { sessionId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
+  event: { sessionId: string; deviceId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
 ): void {
   if (!desktopNotificationsEnabled) return;
   showDesktopSessionEvent(getWindow, {
     sessionId: event.sessionId,
+    deviceId: event.deviceId,
     title: [event.title ?? getSessionNotificationUntitled(), event.deviceName].filter(Boolean).join(' · '),
     kind: event.kind,
     markAttention: false,
@@ -259,7 +255,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 
   ipcMain.handle(
     'notification:show-session-event',
-    async (_event, payload: ShowSessionEventPayload): Promise<void> => {
+    async (event, payload: ShowSessionEventPayload): Promise<void> => {
+      // 这条 handler 的 channels / markAttention 全由 renderer 自报,先验来源:只认 Cindy
+      // 自有顶层 renderer(插件 webview 等其它 webContents 一律 PERMISSION_DENIED)。
+      assertTrustedAppRendererEvent(event);
       // renderer payload 不可信:mobile 通道会把 title/kind 送出本机(经 relay/APNs),
       // main 必须做运行时形状校验,TS 类型不算(electron-security 规则)。正文摘要
       // 不来自 renderer(main 侧读库),relay 有 per-user 频控、main 侧另有 5s
@@ -279,6 +278,12 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
+      // 「消息免打扰」任务不再走任何外向提醒通道（系统 toast / 灵动岛 / 手机 / 飞书）；
+      // 未读与角标已在上一行照常记账，任务内的提醒不受影响。静音标记属于本机那行任务，
+      // 其它设备的任务（markAttention === false）可能与本机有同 id 的无关任务行，不查。
+      // main 没有远端任务的权威映射（device-link 镜像在 renderer），这一位仍由 renderer 报，
+      // 来源边界靠上面那道 assertTrustedAppRendererEvent。
+      if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
 
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
@@ -376,6 +381,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           const afterHandoffSignal = getSessionNotificationTurnSignal(sessionId);
           if (afterHandoffSignal?.id !== signal?.id || (afterHandoffSignal && !afterHandoffSignal.ended)) return;
         }
+        // 取正文 / 等交接判定期间用户可能刚开了免打扰:真正发之前再确认一次。
+        // 手机通道在 sendMobileSessionNotify 内另有同一道门。
+        if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
         if (kind === 'done' && handledByTeammate) {
           // Consume this event in the existing per-channel ledger. Removing a
           // delegation later must not replay a completion already handed off.
@@ -390,6 +398,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
+              messageClientId: preview?.reply?.clientId,
               body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
             if (kind === 'done' && accepted) {
@@ -406,6 +415,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
               ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
+              ...(markAttention ? {} : { muteExempt: true }),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
@@ -434,6 +444,17 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
       if (wantFeishu && kind !== 'done') {
+        if (payload.inputHandoffRequestId) {
+          const ownership = getInputHandoffNoticeOwnership(sessionId, payload.inputHandoffRequestId);
+          // Unknown/expired events cannot invent a new fallback. A known event
+          // keeps its actual routing decision even after the handoff ends.
+          if (!ownership || await ownership.catch(err => {
+            log.warn('[notification] handoff routing unavailable', err);
+            return true;
+          })) return;
+          if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || getWindow()?.isFocused()
+            || isSessionNotificationsMutedSync(sessionId)) return;
+        }
         await sendFeishuMessage(feishuIm, safeTitle, kind);
       }
     },
@@ -460,7 +481,11 @@ function assertValidSessionEventPayload(
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
     (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
-    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean')
+    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean') ||
+    (p.inputHandoffRequestId !== undefined && (
+      p.kind !== 'needs-reply' || typeof p.inputHandoffRequestId !== 'string'
+      || p.inputHandoffRequestId.length === 0 || p.inputHandoffRequestId.length > 256
+    ))
   ) {
     throw new TypeError('invalid session event payload');
   }

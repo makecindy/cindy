@@ -28,10 +28,16 @@ describe('capRenderedText', () => {
     if (amp !== -1) expect(out.slice(amp)).toContain(';');
   });
 
-  it('嵌套标签按栈序逆序闭合', () => {
+  it.each([
+    [10, '<b>…</b>'],
+    [15, '<b><i>…</i></b>'],
+    [20, '<b><i>zzzzz…</i></b>'],
+    [30, '<b><i>zzzzzzzzzzzzzzz…</i></b>'],
+  ])('嵌套标签按栈序逆序闭合且不超过上限: %s', (maxChars, expected) => {
     const html = `<b><i>${'z'.repeat(40)}</i></b>`;
-    const out = capRenderedText(html, 15);
-    // 先闭合内层 i 再闭合外层 b
-    expect(out.endsWith('…</i></b>')).toBe(true);
+    const out = capRenderedText(html, maxChars);
+    // 省略号和闭合标签都必须计入长度预算；嵌套标签按栈序逆序闭合。
+    expect(out).toBe(expected);
+    expect(out.length).toBeLessThanOrEqual(maxChars);
   });
 });

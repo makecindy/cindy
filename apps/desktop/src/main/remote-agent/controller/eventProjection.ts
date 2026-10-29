@@ -90,21 +90,38 @@ export function localPlanReview<T extends { kind: string }>(request: T, workspac
   };
 }
 
-/** 只暂存末尾未闭合的路径，避免地址被多个 delta 切开后漏掉映射。 */
-function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
-  let pending = text.length;
-  const prefixes = workspace.agentPathPrefixes().flatMap((prefix) => {
+interface PendingPrefix { prefix: string; insensitive: boolean; target: string }
+
+/** 前缀展开只与别名数组有关，按 agentPathPrefixes() 返回的数组引用缓存(#7710)：每个 delta 都要判断。 */
+const pendingPrefixCache = new WeakMap<readonly string[], PendingPrefix[]>();
+
+function pendingPrefixes(workspace: ExecutorWorkspace): PendingPrefix[] {
+  const aliases = workspace.agentPathPrefixes();
+  let cached = pendingPrefixCache.get(aliases);
+  if (cached) return cached;
+  const prefixes = aliases.flatMap((prefix) => {
     const forward = prefix.replace(/\\/g, '/');
     const backward = forward.replace(/\//g, '\\');
     return [forward, backward, backward.replace(/\\/g, '\\\\')];
   });
-  if (!prefixes.length) return pending;
   // 完整 URL 出现前保留 scheme，才能在后续 delta 中判断文件 URL 或外部 URL。
-  prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'http://', 'https://', 'cindy-media://');
-  for (const prefix of prefixes) {
+  if (prefixes.length) prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'http://', 'https://', 'cindy-media://');
+  cached = prefixes.map((prefix) => {
     const insensitive = /^[A-Za-z]:|^[a-z-]+:\/\//i.test(prefix);
-    const source = insensitive ? text.toLowerCase() : text;
-    const target = insensitive ? prefix.toLowerCase() : prefix;
+    return { prefix, insensitive, target: insensitive ? prefix.toLowerCase() : prefix };
+  });
+  pendingPrefixCache.set(aliases, cached);
+  return cached;
+}
+
+/** 只暂存末尾未闭合的路径，避免地址被多个 delta 切开后漏掉映射。 */
+function pendingPathIndex(text: string, workspace: ExecutorWorkspace): number {
+  let pending = text.length;
+  const prefixes = pendingPrefixes(workspace);
+  if (!prefixes.length) return pending;
+  let lowered: string | undefined;
+  for (const { prefix, insensitive, target } of prefixes) {
+    const source = insensitive ? lowered ??= text.toLowerCase() : text;
     let start = -1;
     while ((start = source.indexOf(target[0], start + 1)) >= 0) {
       if (start && /[A-Za-z0-9_]/.test(text[start - 1])) continue;

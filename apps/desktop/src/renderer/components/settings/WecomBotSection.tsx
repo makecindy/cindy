@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Eye, EyeOff, Send, Trash2 } from 'lucide-react';
@@ -197,10 +198,12 @@ export function WecomBotSection({
               {showSecret ? <Eye size={18} /> : <EyeOff size={18} />}
             </button>
           </div>
-          {validationError || status.kind === 'error' ? (
+          {validationError ? (
             <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {validationError ?? (status.kind === 'error' ? status.reason : '')}
+              {validationError}
             </p>
+          ) : status.kind === 'error' ? (
+            <ImConnectionError details={status.reason} />
           ) : (
             <p className="text-12 text-[var(--settings-source-meta)]">
               {t('settings.wecomBot.ownerHint')}
@@ -208,17 +211,16 @@ export function WecomBotSection({
           )}
           <div className="flex flex-col gap-2 sm:flex-row">
             {botId.trim() && !secret.trim() ? (
-              <Button
+              <ImReconnectButton
                 variant="cta"
                 size="lg"
                 loading={isSaving || status.kind === 'connecting'}
-                type="button"
-                onClick={() => void reconnect()}
+                onReconnect={reconnect}
                 disabled={!canReconnect}
                 className="flex-1"
               >
                 {t('settings.wecomBot.reconnect')}
-              </Button>
+              </ImReconnectButton>
             ) : (
               <Button
                 variant="cta"
@@ -341,10 +343,7 @@ export function WecomBotSection({
               disabled={wecomGroup.busy || !webhookUrl.trim()}
               onClick={() => {
                 void wecomGroup
-                  .saveAndTest(
-                    webhookUrl.trim(),
-                    t('settings.notifications.wecomGroupTestMessage'),
-                  )
+                  .saveAndTest(webhookUrl.trim(), t('settings.notifications.wecomGroupTestMessage'))
                   .then(() => {
                     setWebhookUrl('');
                     toast.success(t('settings.notifications.wecomGroupSaveSuccess'));

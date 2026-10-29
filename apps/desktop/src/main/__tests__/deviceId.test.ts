@@ -9,10 +9,28 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import { ensureSystemBinPathForMachineId } from '../deviceId.js';
 
 const PATCHES_PATH = process.platform === 'darwin' || process.platform === 'linux';
+
+// Execute the production IPC registration adapter without booting Electron.
+// A sandbox's auth identity can differ from the raw hardware id; renderer link
+// comparisons must receive the same identity that auth uses to register it.
+it('get-device-id exposes the auth device identity, including an isolated override', () => {
+  const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  // Device ID');
+  const end = source.indexOf('  // CC 网络调试开关', start);
+  if (start < 0 || end <= start) throw new Error('device id IPC registration not found');
+  let handler!: () => string;
+  new Function('ipcMain', 'authManager', 'machineIdSync', source.slice(start, end))(
+    { handle: (_name: string, callback: () => string) => { handler = callback; } },
+    { getDeviceId: () => 'isolated-device-override' },
+    () => 'raw-hardware-id',
+  );
+  expect(handler()).toBe('isolated-device-override');
+});
 
 describe('ensureSystemBinPathForMachineId', () => {
   const originalPath = process.env.PATH;

@@ -1741,6 +1741,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 再开后 Lead 工具仍指向第一次的 workflow / worker"的 bug。必须用 Object.assign
     // 原地改, 让所有持有这个 ref 的闭包共享同一份最新状态。
     const vo: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
+    const requireNativeResume = vo._cindyRequireNativeResume === true && !!opts.resumeSessionId;
 
     log.info('startSession', {
       model: sdkModel,
@@ -1765,8 +1766,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     let makerMemoryRules = '';
     let makerMemoryIndex = '';
     let memoryFlushController: MemoryFlushController | null = null;
-    const getAutoCompactThresholdPct = (): number | undefined =>
-      this.deps.runtimeConfig.autoCompactThresholdPct;
+    let mutableModel = opts.model;
+    let mutableProviderId = opts.providerId ?? null;
+    const getAutoCompactThresholdPct = (
+      model = mutableModel,
+      provider = mutableProviderId,
+    ): number | undefined =>
+      this.deps.resolveModelCompactionPct?.(provider, model)
+        ?? this.deps.runtimeConfig.autoCompactThresholdPct;
     const autoCompactController =
       getAutoCompactThresholdPct() === undefined
         ? null
@@ -1905,7 +1912,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
-      if (client) {
+      if (client && (!hosted || client.hostToolsOnly)) {
         hostMcpServerNames = new Set([client.mcpName ?? 'client']);
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
@@ -2975,8 +2982,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     // model / effort / permissionMode 在 setX 后会变, handle 通过 getter 读 mutable 引用;
     // translator ctx 也通过 getter 读, 让 turn start/end 日志反映"当前真实值"而不是创建时的值。
     // 必须在 buildQuery / forward loop 之前声明, 否则 ctx getter 会捕获到 TDZ。
-    let mutableModel = opts.model;
-    let mutableProviderId = opts.providerId ?? null;
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
@@ -3131,6 +3136,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           sessionId: sid,
           agentKind: 'claude-code',
           model: toolLoopGuardModelForScope(parentToolUseId),
+          userIntent: currentAutoReviewIntent,
         }),
         // 复核结果晚到时,guard 可能已随新 turn 重置;只处理仍在位的同一 monitor。
         onReviewedStop: (verdict) => {
@@ -3698,8 +3704,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       const currentSdkModel = sdkModelFor(mutableModel);
       const workingWindow = resolveModelContextWindow(mutableModel);
       appliedContextWindow = workingWindow;
-      applyClaudeContextWindow(env, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
-      if (remoteEnv) applyClaudeContextWindow(remoteEnv, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
+      applyClaudeContextWindow(env, workingWindow, getAutoCompactThresholdPct());
+      if (remoteEnv) applyClaudeContextWindow(remoteEnv, workingWindow, getAutoCompactThresholdPct());
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort, mutableProviderId);
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
@@ -4503,7 +4509,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { disallowedTools: [...claudeDisallowedTools] }
             : {}),
           // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
-          ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
+          ...(hosted?.guest && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+            ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
@@ -5426,6 +5433,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           continuationTerminalBoundaryEvents.add(e);
           pendingContinuationTerminalBoundaries += 1;
         }
+        if (e.type === 'text' && turnInFlight && !turnState.interruptRequested) {
+          const data = e.data as { text?: unknown; isFinal?: unknown } | undefined;
+          const text = data?.text;
+          const parent = e.agentMeta?.parentUuid;
+          if (typeof text === 'string') {
+            getToolLoopMonitor(typeof parent === 'string' && parent ? parent : undefined).onAssistantText(text, data?.isFinal === true);
+          }
+        }
         const accepted = pushForwardedEvent(e);
         if (!accepted && createdContinuationClaim) {
           // A claim minted for a boundary that the host can never observe has
@@ -6013,7 +6028,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       expectedResumeSessionId: string,
       source: 'transcript_preflight' | 'sdk_runtime',
     ): Promise<boolean> {
-      if (resumeRecoveryAttempted || !opts.onInvalidResumeSession) return false;
+      // Transferred history belongs to the host switch transaction. It must
+      // choose/confirm fallback; the adapter cannot silently erase that history.
+      if ((requireNativeResume && resumeValidationPending)
+        || resumeRecoveryAttempted || !opts.onInvalidResumeSession) return false;
       try {
         const cleared = await opts.onInvalidResumeSession(expectedResumeSessionId);
         if (!cleared) {
@@ -7407,9 +7425,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       requiresModelSwitchRebuild: (model, target) => {
         const provider = target?.providerId !== undefined ? target.providerId : mutableProviderId;
         const window = resolveModelContextWindow(model, provider);
-        const expected = typeof window === 'number' && window > 0 ? String(Math.floor(window)) : undefined;
+        const expected: Record<string, string> = {};
+        // Use the spawn normalizer, including native scaling for windows below 100K.
+        applyClaudeContextWindow(expected, window, getAutoCompactThresholdPct(model, provider));
         const liveEnv = opts.remoteHostId ? remoteEnv : env;
-        return expected !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+        return expected.CLAUDE_CODE_AUTO_COMPACT_WINDOW !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+          || expected.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE !== liveEnv?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
       },
 
       async setModel(
@@ -7917,6 +7938,19 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
     };
 
+    if (requireNativeResume) {
+      try {
+        // query() returns before resume is checked; the CLI rejects a bad resume
+        // through initializationResult(), even with no user turn dispatched.
+        await q.initializationResult();
+        if (closed || sdkSessionId !== opts.resumeSessionId) {
+          throw new Error('Native history resume did not restore the transferred session');
+        }
+      } catch (error) {
+        await handle.close();
+        throw error;
+      }
+    }
     return handle;
   }
 

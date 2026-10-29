@@ -426,6 +426,11 @@ export interface InteractionDismissedEvent {
  * 注: isRunning / status text 不属于 usage, 由 translator 在 emit status event 时单独拼。
  */
 export interface UsageSnapshot {
+  /** Optional, runtime-cumulative provider receipts; older hosts can ignore this field. */
+  requestUsage?: {
+    epoch: string;
+    models: Array<{ model?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreateTokens?: number }>;
+  };
   tokenUsage: number;
   contextTokens: number;
   contextWindow: number;

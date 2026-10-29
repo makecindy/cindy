@@ -1,3 +1,6 @@
+import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
+import { MAKER_INVOKE } from '../../../maker-ipc/channels';
+import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../sessionOpening';
 /**
  * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
@@ -199,7 +202,9 @@ import {
   setSessionWorktreeRecycle,
   updateSessionInDb,
   touchUserSendInDb,
+  touchSessionActivityInDb,
 } from '../sessions';
+import { markSessionTurnEnded, drainSessionActiveTurnWrites, beginSessionTurnEndedSuppression } from '../../sessionActiveTurn';
 import {
   clearAllSessionAttention,
   getAttentionCount,
@@ -216,6 +221,8 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
@@ -252,10 +259,12 @@ function createDb(): void {
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,
@@ -1062,6 +1071,56 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'cc-local' }),
     );
+  });
+
+  it('advances the bounded-list clock monotonically on handoffs without changing the last human send', async () => {
+    const before = h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local');
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000);
+    await touchSessionActivityInDb('codex-local', 1_786_500_040_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
+    expect(h.sqlite!.prepare('SELECT last_activity_at, updated_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000, updated_at: 1_786_500_050_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: {
+        lastActivityAt: new Date(1_786_500_050_000).toISOString(),
+        updatedAt: new Date(1_786_500_050_000).toISOString(),
+      },
+    }));
+    await invokeUpdate('codex-local', { title: 'Renamed', status: 'archived' });
+    markSessionTurnEnded('codex-local');
+    await drainSessionActiveTurnWrites('codex-local');
+    const releaseSuppression = beginSessionTurnEndedSuppression();
+    try {
+      await touchSessionActivityInDb('codex-local', 1_786_500_070_000);
+    } finally {
+      releaseSuppression();
+    }
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000 });
+  });
+
+  it('writes human send and activity together without rewinding a newer handoff', async () => {
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000);
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at, last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ user_send_at: 1_786_500_050_000, last_activity_at: 1_786_500_060_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+      patch: expect.objectContaining({ lastActivityAt: new Date(1_786_500_060_000).toISOString() }),
+    }));
+    h.tapWindowBroadcast.mockClear();
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not advance a terminal handoff while the goal is active', async () => {
+    h.sqlite!.exec("CREATE TABLE session_goals (session_id TEXT PRIMARY KEY, status TEXT); INSERT INTO session_goals VALUES ('codex-local', 'active')");
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: null });
+    h.sqlite!.prepare("UPDATE session_goals SET status = 'paused'").run();
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_060_000 });
   });
 
   it.each([
@@ -1915,4 +1974,133 @@ it('does not create a renderer task when common model admission fails', async ()
   setSessionOpeningModelAdmission(async () => { throw new Error('model unavailable'); });
   await expect(invokeCreate({ id: 'rejected-open', title: 'Rejected task' })).rejects.toThrow('model unavailable');
   expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('rejected-open')).toBeUndefined();
+});
+
+// DB tier, T08b/F6: real IPC and route lock; only bootstrap IO is deferred.
+// Previous tests began after creation, missing the terminal/create lock inversion.
+describe('terminal intent during session creation', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+  function creationFixture() {
+    const holds = new Map<string, ReturnType<typeof deferred>>();
+    const entered: string[] = [];
+    const broadcast = vi.fn();
+    registerMakerSessionCreateHandler({ handle: (name: string, handler: (...args: unknown[]) => unknown) => h.handlers.set(name, handler) } as never, {
+      creationOwner: () => h.client!, withSessionLock: withSendToSessionLock,
+      bootstrapSession: async opts => {
+        const hold = deferred(); holds.set(opts.id!, hold); entered.push(opts.id!);
+        await hold.promise;
+        return { session: { id: opts.id!, agentKind: 'codex', workDir: opts.workingDir, capabilities: {} },
+          didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      },
+      markOrcaRoleIfNeeded: async () => {}, markKnownNonOrcaIfApplicable() {},
+      sendWorkerReadyMessage: vi.fn(), broadcastSessionCreated: broadcast,
+      logCreateSession() {}, warnStderr() {},
+    });
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    return { holds, entered, broadcast,
+      start: (id = 'codex-local') => Promise.resolve(h.handlers.get(MAKER_INVOKE.CREATE_SESSION)!({}, {
+        id, agentKind: 'codex', model: 'm', workspaceKind: 'dialogue', workingDir: '/fixture',
+      })) };
+  }
+  it.each([['update', 'archived'], ['update', 'deleted'], ['patch-meta', 'archived'], ['patch-meta', 'deleted']] as const)('%s commits %s and rejects creation before held ensure finishes', async (surface, status) => {
+    const f = creationFixture(); let failure: unknown;
+    const opening = f.start().catch(error => { failure = error; });
+    await vi.waitFor(() => expect(f.entered).toEqual(['codex-local']), { interval: 1 });
+    const oldHold = f.holds.get('codex-local')!;
+    const terminal = surface === 'update' ? invokeUpdate('codex-local', { status }) : invokePatchMeta('codex-local', { status });
+    try {
+      await vi.waitFor(() => expect(String(failure)).toContain('REMOTE_AGENT_EXPIRED'), { interval: 1, timeout: 100 });
+      await terminal;
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').get('codex-local')).toEqual({ status });
+      expect(h.runtimeCleanup).toHaveBeenCalledExactlyOnceWith('codex-local');
+      expect(f.broadcast).not.toHaveBeenCalled();
+    } finally { oldHold.resolve(); await Promise.all([opening, terminal]); }
+    expect(f.broadcast).not.toHaveBeenCalled();
+  });
+  it('does not cancel for nonterminal or invalid updates', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start().then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    try {
+      await invokeUpdate('codex-local', { title: 'still active' });
+      await expect(invokeUpdate('codex-local', { status: 'archived', notificationsMuted: 'yes' })).rejects.toThrow();
+      await expect(invokeUpdate('codex-local', { status: 'deleted', contextWindowBudget: -1 })).rejects.toThrow();
+      expect(state).toBe('pending');
+    } finally { f.holds.get('codex-local')!.resolve(); await opening; }
+    expect(state).toBe('resolved');
+  });
+  it('rejects stale-owner and protected Bot terminal intent without cancellation', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start('codex-local').then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    const bot = f.start('bot-local');
+    await vi.waitFor(() => expect(f.entered).toHaveLength(2), { interval: 1 });
+    try {
+      await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow('PRECONDITION_FAILED');
+      h.captureOwnerScope = true; h.ownerCurrent = false;
+      await expect(invokeUpdate('codex-local', { status: 'deleted' })).rejects.toThrow('Session owner changed');
+      expect(state).toBe('pending');
+    } finally {
+      h.ownerCurrent = true; f.holds.get('bot-local')!.resolve(); f.holds.get('codex-local')!.resolve();
+      await Promise.all([opening, bot]);
+    }
+    expect(state).toBe('resolved');
+  });
+  it('does not cancel the prior owner when another account has the same UUID', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start().then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    const original = h.client!;
+    h.client = { drizzle: h.db! };
+    let queued!: () => void;
+    const locked = new Promise<void>(resolve => { queued = resolve; });
+    setSessionRouteLockImplementation((id, task) => { queued(); return withSendToSessionLock(id, task); });
+    const terminal = invokeUpdate('codex-local', { status: 'deleted' });
+    try {
+      await locked;
+      expect(state).toBe('pending');
+    } finally {
+      h.client = original; f.holds.get('codex-local')!.resolve();
+      await opening; await terminal;
+    }
+    expect(state).toBe('resolved');
+  });
+  it('late old ensure cannot publish or cancel a newer same-ID creation or sibling', async () => {
+    const f = creationFixture();
+    const old = f.start().catch(error => error);
+    const sibling = f.start('cc-local');
+    await vi.waitFor(() => expect(f.entered).toHaveLength(2), { interval: 1 });
+    const oldHold = f.holds.get('codex-local')!;
+    let archived = false;
+    const terminal = invokeUpdate('codex-local', { status: 'archived' }).then(() => { archived = true; });
+    try {
+      await vi.waitFor(() => expect(archived).toBe(true), { interval: 1, timeout: 100 });
+      expect(String(await old)).toContain('REMOTE_AGENT_EXPIRED');
+      const fresh = f.start();
+      await vi.waitFor(() => expect(f.entered).toHaveLength(3), { interval: 1 });
+      oldHold.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(f.broadcast).not.toHaveBeenCalled();
+      f.holds.get('codex-local')!.resolve(); f.holds.get('cc-local')!.resolve();
+      await Promise.all([fresh, sibling]);
+      expect(f.broadcast.mock.calls.map(call => call[0]).sort()).toEqual(['cc-local', 'codex-local']);
+    } finally { oldHold.resolve(); for (const hold of f.holds.values()) hold.resolve(); await Promise.all([old, sibling, terminal]); }
+  });
+  it('patch-meta checks authorization before cancelling a held creation', async () => {
+    const f = creationFixture(); let failure: unknown, denied: unknown;
+    const opening = f.start().catch(error => { failure = error; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    const terminal = patchSessionMetaInDb('codex-local', { status: 'deleted' }, {
+      beforeWrite: () => { throw new Error('not authorized'); },
+    }).catch(error => { denied = error; });
+    try {
+      await vi.waitFor(() => expect(String(denied)).toContain('not authorized'), { interval: 1, timeout: 100 });
+      expect(failure).toBeUndefined();
+      expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    } finally { f.holds.get('codex-local')!.resolve(); await Promise.all([opening, terminal]); }
+    expect(failure).toBeUndefined();
+  });
+
 });

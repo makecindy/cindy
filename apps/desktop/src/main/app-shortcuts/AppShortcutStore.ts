@@ -10,6 +10,7 @@ import {
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
   isAppShortcutId,
+  isGlobalAppShortcutComboUsable,
   normalizeAppShortcutCombo,
   normalizeAppShortcutOverrides,
   type AppShortcutCombo,
@@ -34,6 +35,7 @@ export type AppShortcutOverrideRejection =
   | 'not-bindable'
   | 'system-reserved'
   | 'menu-inexpressible'
+  | 'global-unusable'
   | 'conflict';
 
 export interface AppShortcutStoreOptions {
@@ -110,6 +112,9 @@ export class AppShortcutStore {
       comboToElectronAccelerator(normalized, 'darwin') === null
     ) {
       return 'menu-inexpressible';
+    }
+    if (def.scope === 'global' && !isGlobalAppShortcutComboUsable(normalized, this.options.platform)) {
+      return 'global-unusable';
     }
     const current = this.load();
     // 跨 id 冲突兜底 (renderer 已前置校验, 这里防多窗口并发 / 直调 IPC):

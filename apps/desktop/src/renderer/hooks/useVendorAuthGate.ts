@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 /**
  * useVendorAuthGate —— vendor 未就绪时弹通用 confirmDialog,确认后跳 settings。
  *
@@ -329,7 +330,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         // 直接说清哪台设备缺什么、去那台设备的哪个设置页处理:
         //   codex 二进制缺失 → 组件未就绪;来源未就绪 → 该 agent 暂无已连接的模型来源
         //   (去「设置 → 模型供应商」;codex / cc 文案对称)。
-        const device = remoteProjectsStore.getDeviceName(deviceId) ?? deviceId;
+        const device = deviceDisplayName(deviceId, remoteProjectsStore.getDeviceName(deviceId));
         let title: string;
         let description: string;
         if (remoteReadiness === 'binary-missing') {

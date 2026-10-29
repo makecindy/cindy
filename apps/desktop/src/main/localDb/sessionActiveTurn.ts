@@ -103,7 +103,7 @@ export function beginSessionTurnEndedSuppression(): () => void {
 }
 
 /** ended 写抑制判定:quit freeze 或任一在持有的 owner 边界抑制。 */
-function isEndedWriteSuppressed(): boolean {
+export function isEndedWriteSuppressed(): boolean {
   return _quitFrozen || _endedWriteSuppressions > 0;
 }
 

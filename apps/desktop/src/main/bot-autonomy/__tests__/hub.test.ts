@@ -8,13 +8,13 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { BotAutonomyRuntime } from '../runtime.js';
 import type { RoutineEngine } from '@cindy/maker-scheduler';
-import type { LocalSessionMeta } from '../taskWatch.js';
+import { TaskWatch, type LocalSessionMeta, type OwnershipSnapshot } from '../taskWatch.js';
 import type { BotGlance } from '../../../shared/botAutonomy.js';
 
 const h = vi.hoisted(() => ({
   scope: 'a', scheduler: 'sched' as string | null, ready: true,
   glance: vi.fn(), refreshRemote: vi.fn(),
-  readMetas: vi.fn(), readOwnership: vi.fn(), handled: vi.fn(),
+  readMetas: vi.fn(), readOwnership: vi.fn(), handled: vi.fn(), reportDelivery: vi.fn(),
 }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.scope, isAppSessionBoundaryPending: () => false,
@@ -28,7 +28,7 @@ vi.mock('../../maker-host/bot-autonomy-settings-store.js', () => ({
 vi.mock('../hostData.js', () => ({
   readLocalSessionMetas: h.readMetas, readTaskOwnership: h.readOwnership, readBotDirectory: vi.fn(),
 }));
-import { configureBotAutonomyHost, currentFollowUpEvents, getBotAutonomyGlance, setActiveBotAutonomy } from '../hub.js';
+import { configureBotAutonomyHost, reportTaskDelivery, readTaskDeliveryNote, currentFollowUpEvents, getBotAutonomyGlance, setActiveBotAutonomy } from '../hub.js';
 
 const meta = (id: string, source = 'desktop'): LocalSessionMeta => ({
   id, source, title: 'Completed task', workingDir: null, status: 'active', hiddenAt: null,
@@ -41,7 +41,8 @@ const events = ['mine', 'delegated', 'shared', 'deleted'].map(subject => ({
 beforeEach(() => {
   h.scope = 'a'; h.scheduler = 'sched'; h.ready = true;
   h.handled.mockReset().mockResolvedValue(false);
-  configureBotAutonomyHost({ isCompletionHandledByTeammate: h.handled });
+  h.reportDelivery.mockReset().mockReturnValue(true);
+  configureBotAutonomyHost({ isCompletionHandledByTeammate: h.handled, readSessionExecution: () => ({ instanceId: 'live', generation: 2 }) });
   h.refreshRemote.mockReset().mockResolvedValue(undefined);
   h.glance.mockReset().mockReturnValue({
     botId: 'sched', scope: 'all', waiting: [], working: [], lastSweepAt: 0, doneToday: 0, offlineDevices: [],
@@ -50,7 +51,7 @@ beforeEach(() => {
   h.readMetas.mockReset().mockResolvedValue([meta('mine'), meta('delegated'), meta('shared', 'shared')]);
   h.readOwnership.mockReset().mockResolvedValue({ bots, creatorBySession: new Map([['delegated', 'sched']]), responsibleByBot: new Map() });
   setActiveBotAutonomy({ scope: 'a', engine: {} as RoutineEngine,
-    runtime: { glance: h.glance, watch: { isReady: () => h.ready, getSchedulerBotId: () => h.scheduler, refreshRemote: h.refreshRemote, list: () => [], getBots: () => bots } } as unknown as BotAutonomyRuntime });
+    runtime: { glance: h.glance, watch: { reportDelivery: h.reportDelivery, isReady: () => h.ready, getSchedulerBotId: () => h.scheduler, refreshRemote: h.refreshRemote, list: () => [], getBots: () => bots } } as unknown as BotAutonomyRuntime });
 });
 afterEach(() => setActiveBotAutonomy(null));
 
@@ -154,4 +155,50 @@ it('keeps unattributed legacy completion events', async () => {
   const legacy = [{ ...events[1], event: { ...events[1].event, data: {} } }];
   expect((await currentFollowUpEvents('sched', legacy))?.events).toEqual(legacy);
   expect(h.handled).not.toHaveBeenCalled();
+});
+
+// Unit / #7253: no delivery context for unrelated work or the companion's own
+// main chat; explicit assignments still receive it while all-task follow is off.
+it('limits delivery reporting context to followed work and drops stale owner reads', async () => {
+  h.scheduler = null;
+  expect(await readTaskDeliveryNote('mine')).toBeNull();
+  expect(await readTaskDeliveryNote('delegated')).toContain('report_task_delivery');
+  h.readOwnership.mockImplementationOnce(async () => { h.scope = 'b'; return { bots: new Map(), creatorBySession: new Map() }; });
+  expect(await readTaskDeliveryNote('delegated')).toBeNull();
+});
+
+// Unit / #7253: a retired runtime cannot borrow a replacement's current turn.
+// Existing watch identity tests do not enter the Host callback with caller context.
+it('rejects a delivery call from a retired runtime before recording it', () => {
+  expect(reportTaskDelivery('delegated', true, 'retired')).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+  expect(h.reportDelivery).not.toHaveBeenCalled();
+  expect(reportTaskDelivery('delegated', true, 'live')).toEqual({ ok: true });
+  expect(h.reportDelivery).toHaveBeenCalledWith('delegated', { instanceId: 'live', generation: 2 }, true);
+});
+
+// Unit / #7253 live acceptance: starting the following companion refreshes
+// ownership while its notification is queued. Identical reads used to revoke
+// dispatch on every retry. Exercise the actual Host consent gate with TaskWatch;
+// then revoke responsibility without changing the bot directory to retain safety.
+it('keeps a final delivery dispatch valid across identical refreshes but revokes real ownership changes', async () => {
+  const readOwnership = async () => structuredClone(await h.readOwnership()) as OwnershipSnapshot;
+  const watch = new TaskWatch({ now: () => 10, onChange: () => {}, log: { info() {}, warn() {}, debug() {} },
+    getActivitySnapshots: () => [], isToolCallInFlight: () => false, getPendingInteractions: () => [],
+    readLocalSessions: h.readMetas, readInterruptedSessions: async () => [], readOwnership,
+    readSchedulerOverride: () => ({ customized: true, schedulerBotId: h.scheduler }),
+    listRemoteDevices: async () => null, invokeRemote: async () => null,
+  });
+  await watch.start();
+  setActiveBotAutonomy({ scope: 'a', engine: {} as RoutineEngine, runtime: { watch } as BotAutonomyRuntime });
+  try {
+    const batch = await currentFollowUpEvents('sched', events);
+    expect(batch?.canDispatch()).toBe(true);
+    await watch.refreshFollowers();
+    expect(batch?.canDispatch()).toBe(true);
+    const changed = await readOwnership();
+    changed.creatorBySession.set('delegated', 'another');
+    h.readOwnership.mockResolvedValue(changed);
+    await watch.refreshFollowers();
+    expect(batch?.canDispatch()).toBe(false);
+  } finally { watch.stop(); }
 });

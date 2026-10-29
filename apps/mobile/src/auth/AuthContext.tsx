@@ -122,9 +122,11 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { isSelfHostedRelayBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
+import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -895,6 +897,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages(),
+      clearMobileChatHistoryStore(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -2973,6 +2976,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[auth] speaker filter cleanup pending; will retry');
     });
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearMobileChatHistoryStore().catch(() => undefined);
     await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
@@ -3309,6 +3313,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
       opts.assertCurrent?.();
+      // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
+      // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+        return apiFetchRaw<T>(path, { ...opts, token: null });
+      }
       const token = await getAccessToken();
       opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');

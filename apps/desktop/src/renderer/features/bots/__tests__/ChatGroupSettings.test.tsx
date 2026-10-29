@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -35,6 +35,83 @@ vi.mock('../BotAvatar', () => ({ BotAvatar: () => null }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => true }));
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
+it('keeps saved fields until a newer snapshot arrives and retries the read without repeating the write', async () => {
+  const initial = { ...group(true), topic: 'Old topic', description: 'Old description' };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const name = screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement;
+  const topic = screen.getByRole('textbox', { name: key('topic') }) as HTMLInputElement;
+  const description = screen.getByRole('textbox', { name: key('description') }) as HTMLInputElement;
+  fireEvent.change(name, { target: { value: 'Saved name' } });
+  fireEvent.change(topic, { target: { value: 'Saved topic' } });
+  fireEvent.change(description, { target: { value: 'Saved description' } });
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+  expect([name.value, topic.value, description.value]).toEqual(['Saved name', 'Saved topic', 'Saved description']);
+  expect(name.disabled).toBe(true);
+  // A delayed/failed list read leaves the old projection; retry must not write with its stale CAS.
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial }} /></MemoryRouter>);
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+  expect(mocks.manage).toHaveBeenCalledOnce();
+  expect(name.value).toBe('Saved name');
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Saved name', topic: 'Saved topic', description: 'Saved description', revision: 2 }} /></MemoryRouter>);
+  expect(name.disabled).toBe(false);
+  fireEvent.change(topic, { target: { value: 'Next draft' } });
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
+  expect(mocks.manage.mock.calls[1]![0].action).toMatchObject({ name: 'Saved name', topic: 'Next draft', description: 'Saved description', expectedRevision: 2 });
+});
+it.each([false, true])('keeps fields paired with their revision when a remote update precedes the save response, edit again=%s', async editAgain => {
+  let completeSave!: (result: { ok: true }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { completeSave = resolve; }));
+  const initial = { ...group(true), topic: 'Initial topic', description: 'Initial description', replyMode: 'all' as const, speakingMode: 'auto' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const name = screen.getByRole('textbox', { name: key('name') });
+  fireEvent.change(name, { target: { value: 'My saved name' } });
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+  const remote = { ...initial, revision: 3, name: 'Remote name', topic: 'Remote topic', description: 'Remote description', replyMode: 'mentioned' as const, speakingMode: 'sequential' as const };
+  rerender(<MemoryRouter><ChatGroupSettings group={remote} /></MemoryRouter>);
+  expect((name as HTMLInputElement).value).toBe('My saved name');
+  await act(async () => { completeSave({ ok: true }); });
+  expect((name as HTMLInputElement).value).toBe(remote.name);
+  expect((screen.getByRole('textbox', { name: key('topic') }) as HTMLInputElement).value).toBe(remote.topic);
+  expect((screen.getByRole('textbox', { name: key('description') }) as HTMLInputElement).value).toBe(remote.description);
+  if (editAgain) fireEvent.change(name, { target: { value: 'My next draft' } });
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
+  expect(mocks.manage.mock.calls[1]![0].action).toEqual({ type: 'update', name: editAgain ? 'My next draft' : remote.name, topic: remote.topic, description: remote.description, responseMode: remote.replyMode, speakingMode: remote.speakingMode, expectedRevision: remote.revision });
+});
+// #6806: the update payload must follow refreshed data only when no draft is pending.
+it('uses the latest group revision when saving again after a successful save', async () => {
+  const initial = { ...group(true), replyMode: 'mentioned' as const, speakingMode: 'sequential' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  fireEvent.change(screen.getByRole('textbox', { name: key('name') }), { target: { value: 'Renamed' } });
+  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Renamed', revision: 2 }} /></MemoryRouter>);
+  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
+  expect(mocks.manage.mock.calls[1]![0].action.expectedRevision).toBe(2);
+});
+it.each([false, true])('preserves optimistic conflict detection after a remote refresh, pending draft=%s', async dirty => {
+  const initial = { ...group(true), replyMode: 'all' as const, speakingMode: 'auto' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  if (dirty) fireEvent.change(screen.getByRole('textbox', { name: key('name') }), { target: { value: 'My draft' } });
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Remote name', revision: 2 }} /></MemoryRouter>);
+  expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).value).toBe(dirty ? 'My draft' : 'Remote name');
+  if (dirty) mocks.manage.mockResolvedValue({ ok: false, errorCode: 'REVISION_CONFLICT' });
+  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+  expect(mocks.manage.mock.calls[0]![0].action).toMatchObject({ name: dirty ? 'My draft' : 'Remote name', expectedRevision: dirty ? 1 : 2 });
+  if (dirty) {
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).value).toBe('My draft');
+    fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+    await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
+    expect(mocks.manage.mock.calls[1]![0].action.expectedRevision).toBe(1);
+  }
+});
 function group(owned = false): BotGroupSummary {
   return { id: 'room', name: 'Team', serverBacked: true, revision: 1, members: [
     { actorId: 'me', botId: 'me', actorKind: 'human', isSelf: true, isOwned: true, name: 'My name', displayName: 'My name', role: 'member' },
@@ -125,7 +202,24 @@ it('lets a companion owner manage a group owned by their companion', async () =>
   expect(screen.getByRole('button', { name: key('configureCapabilities') })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /My name/ }));
   expect(screen.getByRole('button', { name: key('transfer') })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'me' } }));
   await waitFor(() => expect(mocks.ownedBots).toHaveBeenCalled());
+});
+// Unit: the real settings UI previously offered every non-owner as a recipient.
+// Human-owner rule (2026-10-28): a bot member must have no transfer action;
+// a human member must still be transferable through the confirmation and IPC.
+it('offers ownership transfer only to human members', async () => {
+  const value = group(true);
+  value.members[0]!.role = 'owner';
+  value.members[1]!.role = 'member';
+  value.members.push({ ...value.members[0]!, actorId: 'peer', botId: 'peer', name: 'Peer', isSelf: false, isOwned: false, role: 'member' });
+  render(<MemoryRouter><ChatGroupSettings group={value} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Partner/ }));
+  expect(screen.queryByRole('button', { name: key('transfer') })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Peer/ }));
+  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'peer' } }));
 });
 it('labels reply and speaking modes with the same words as the local group settings', () => {
   render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), replyMode: 'all', speakingMode: 'auto' }} /></MemoryRouter>);

@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   refresh: vi.fn(async () => 'ok'),
   translate: (key: string) => key,
   readCache: vi.fn(async (): Promise<import('@/features/device-link/mirrorCacheClient').CachedDeviceSessionsSnapshot[]> => []),
+  navigate: vi.fn(),
+  localSessions: [{ id: 'local-B', status: 'active', source: 'desktop' }] as import('@/lib/ccAgent.types').Session[],
+}));
+vi.mock('react-router-dom', () => ({ useNavigate: () => state.navigate }));
+vi.mock('@/hooks/useCCSessions', () => ({
+  useCCSessions: () => ({ sessions: state.localSessions, isLoading: false }),
 }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -46,16 +52,236 @@ import { clearCachedDevice } from '@/features/device-link/mirrorCacheClient';
 import { remoteProjectAliases } from '@/features/device-link/remoteProjectAliases';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
+import { CCAgentIndexRedirect } from '@/features/cc-agent/CCAgentIndexRedirect';
+import { clearLastView, saveLastChatView } from '@/features/cc-agent/lib/lastViewStore';
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  state.refresh.mockClear();
+  state.refresh.mockReset().mockResolvedValue('ok');
   state.readCache.mockReset().mockResolvedValue([]);
+  state.navigate.mockReset();
+  state.localSessions = [{ id: 'local-B', status: 'active', source: 'desktop' }] as import('@/lib/ccAgent.types').Session[];
+  clearLastView();
   vi.mocked(clearCachedDevice).mockClear();
   setDataOwnerGeneration(null, 0);
   resetRemoteDataOwnerPushFence();
   Reflect.deleteProperty(window, 'electronAPI');
+});
+
+// #7437 / unit: real startup hook + redirect + mirror. Earlier tests seeded
+// bootstrap before mount, missing local-B arriving before cache/device discovery.
+// Deferred IPC replies verify the visible route without network or real waits.
+// Standalone on Windows: 5.01s wall / 3.38s Vitest / 62ms tests (21 cases, one worker).
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function StartupRoute() {
+  useDeviceLinkRemoteProjects();
+  return <CCAgentIndexRedirect />;
+}
+
+function setupStartup() {
+  vi.useFakeTimers();
+  const cache = deferred<Awaited<ReturnType<typeof state.readCache>>>();
+  const link = deferred<{ linkStatus: string }>();
+  const directory = deferred<{ devices: Array<{
+    deviceId: string; name: string; online: boolean; remoteControlEnabled: boolean; isSelf: boolean;
+  }> }>();
+  state.readCache.mockReturnValue(cache.promise);
+  const listen = () => () => {};
+  let onStatus = (_event: { status: string }) => {};
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: {
+    getState: () => link.promise,
+    listDevices: () => directory.promise,
+    subscribe: async () => {},
+    unsubscribe: async () => {},
+    onPresenceChanged: listen,
+    onStatusChanged: (callback: typeof onStatus) => { onStatus = callback; return () => {}; },
+    onAccessRevoked: listen,
+    onControlTargetChanged: listen, onRemotePush: listen, onResponsivenessChanged: listen,
+  } } });
+  saveLastChatView({ kind: 'session', sessionId: 'remote-A' });
+  return { cache, link, directory, stop: () => onStatus({ status: 'stopped' }) };
+}
+
+it('waits for late cold cache after device discovery settles', async () => {
+  const { cache, link, directory } = setupStartup();
+  await act(async () => { render(<StartupRoute />); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    link.resolve({ linkStatus: 'connecting' });
+    directory.resolve({ devices: [{ deviceId: 'peer', name: 'Peer', online: false, remoteControlEnabled: false, isSelf: false }] });
+  });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    cache.resolve([{ deviceId: 'peer', deviceName: 'Peer', sessions: [
+      { id: 'remote-A', status: 'active', source: 'desktop' } as import('@/lib/ccAgent.types').Session,
+    ] }]);
+  });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/remote-A', { replace: true });
+});
+
+it('waits across delayed getState, device discovery and the first remote snapshot', async () => {
+  const { cache, link, directory } = setupStartup();
+  const snapshot = deferred<string>();
+  state.refresh.mockImplementationOnce(async () => {
+    await snapshot.promise;
+    remoteProjectsStore.setDeviceSessions('peer', 'Peer', [
+      { id: 'remote-A', status: 'active', source: 'desktop' } as import('@/lib/ccAgent.types').Session,
+    ]);
+    return 'ok';
+  });
+  await act(async () => { render(<StartupRoute />); cache.resolve([]); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => { link.resolve({ linkStatus: 'online' }); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    directory.resolve({ devices: [{ deviceId: 'peer', name: 'Peer', online: true, remoteControlEnabled: true, isSelf: false }] });
+  });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => { snapshot.resolve('ok'); });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/remote-A', { replace: true });
+});
+
+it.each(['empty', 'failed'] as const)('ends the initial wait when discovery is %s', async (outcome) => {
+  const { cache, link, directory } = setupStartup();
+  await act(async () => { render(<StartupRoute />); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    if (outcome === 'failed') {
+      // The real cache client resolves [] on failure (best-effort contract).
+      cache.resolve([]);
+      link.reject(new Error('state unavailable'));
+      // listDevices is invoked after getState settles; reject once subscribed.
+      await Promise.resolve();
+      await Promise.resolve();
+      directory.reject(new Error('directory unavailable'));
+    } else {
+      cache.resolve([]);
+      link.resolve({ linkStatus: 'connecting' });
+      directory.resolve({ devices: [] });
+    }
+  });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/local-B', { replace: true });
+});
+
+it('releases the initial wait when Device Link stops, ignoring late completion', async () => {
+  const { cache, link, directory, stop } = setupStartup();
+  await act(async () => { render(<StartupRoute />); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => { stop(); });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/local-B', { replace: true });
+  await act(async () => {
+    cache.resolve([]);
+    link.resolve({ linkStatus: 'connecting' });
+    directory.resolve({ devices: [] });
+  });
+  expect(state.navigate).toHaveBeenCalledTimes(1);
+});
+
+// PR #7453 / unit: the real directory IPC has no default network timeout.
+// Earlier failure cases rejected; an unresolved read must also release routing
+// without clearing other peers or navigating again when the late cache arrives.
+it.each(['cache', 'state', 'directory'] as const)('bounds initial discovery when %s never settles', async (pending) => {
+  const { cache, link, directory } = setupStartup();
+  await act(async () => {
+    render(<StartupRoute />);
+    remoteProjectsStore.setDeviceSessions('healthy', 'Healthy', [
+      { id: 'healthy-task', status: 'active', source: 'desktop' } as import('@/lib/ccAgent.types').Session,
+    ]);
+    if (pending !== 'cache') cache.resolve([]);
+    if (pending !== 'state') link.resolve({ linkStatus: 'connecting' });
+    if (pending !== 'directory') directory.resolve({ devices: [
+      { deviceId: 'healthy', name: 'Healthy', online: false, remoteControlEnabled: false, isSelf: false },
+      { deviceId: 'late', name: 'Late', online: false, remoteControlEnabled: false, isSelf: false },
+    ] });
+  });
+  const peers = remoteProjectsStore.getDeviceList();
+  await act(async () => { await vi.advanceTimersByTimeAsync(9_999); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/local-B', { replace: true });
+  expect(remoteProjectsStore.getDeviceList()).toEqual(peers);
+  expect(remoteProjectsStore.getSessionDeviceId('healthy-task')).toBe('healthy');
+  await act(async () => {
+    cache.resolve([{ deviceId: 'late', deviceName: 'Late', sessions: [
+      { id: 'remote-A', status: 'active', source: 'desktop' } as import('@/lib/ccAgent.types').Session,
+    ] }]);
+    link.resolve({ linkStatus: 'connecting' });
+    directory.resolve({ devices: [
+      { deviceId: 'healthy', name: 'Healthy', online: false, remoteControlEnabled: false, isSelf: false },
+      { deviceId: 'late', name: 'Late', online: false, remoteControlEnabled: false, isSelf: false },
+    ] });
+  });
+  expect(state.navigate).toHaveBeenCalledTimes(1);
+  if (pending === 'cache') expect(remoteProjectsStore.getSessionDeviceId('remote-A')).toBe('late');
+});
+
+it('does not let cancelled initialization settle a newly mounted synchronizer', async () => {
+  const old = setupStartup();
+  let view!: ReturnType<typeof render>;
+  await act(async () => { view = render(<StartupRoute />); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  view.unmount();
+  expect(remoteProjectsStore.getInitialDiscoverySettled()).toBe(true);
+  const current = setupStartup();
+  await act(async () => { render(<StartupRoute />); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    old.cache.resolve([]);
+    old.link.resolve({ linkStatus: 'connecting' });
+    old.directory.resolve({ devices: [] });
+  });
+  expect(state.navigate).not.toHaveBeenCalled();
+  expect(remoteProjectsStore.getInitialDiscoverySettled()).toBe(false);
+  await act(async () => {
+    current.cache.resolve([]);
+    current.link.resolve({ linkStatus: 'connecting' });
+    current.directory.resolve({ devices: [] });
+  });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/local-B', { replace: true });
+});
+
+it('restores a known local task while remote initialization is still pending', async () => {
+  setupStartup();
+  saveLastChatView({ kind: 'session', sessionId: 'local-B' });
+  await act(async () => { render(<StartupRoute />); });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/local-B', { replace: true });
+});
+
+// PR #7453: clear() leaves discovery settled after unmount/logout. With no local
+// rows, the child used to navigate synchronously before the parent's effect reset
+// discovery; local-B in earlier cases accidentally added an await to the fallback.
+it('waits for remote discovery after remount when the local task list is empty', async () => {
+  const previous = setupStartup();
+  state.localSessions = [];
+  let view!: ReturnType<typeof render>;
+  await act(async () => { view = render(<StartupRoute />); });
+  view.unmount();
+  state.navigate.mockClear();
+  const current = setupStartup();
+  await act(async () => { render(<StartupRoute />); });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    previous.cache.resolve([]);
+    previous.link.resolve({ linkStatus: 'connecting' });
+    previous.directory.resolve({ devices: [] });
+  });
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    current.link.resolve({ linkStatus: 'connecting' });
+    current.directory.resolve({ devices: [{ deviceId: 'peer', name: 'Peer', online: false, remoteControlEnabled: false, isSelf: false }] });
+    current.cache.resolve([{ deviceId: 'peer', deviceName: 'Peer', sessions: [
+      { id: 'remote-A', status: 'active', source: 'desktop' } as import('@/lib/ccAgent.types').Session,
+    ] }]);
+  });
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/remote-A', { replace: true });
 });
 
 it.each(['deleted', 'refused'] as const)('handles confirmed deletion before the old cold cache returns: %s', async (outcome) => {

@@ -2350,7 +2350,7 @@ describe('persistedUserContentToWireMessage', () => {
         files: [],
       }),
     ).toBe(
-      '请处理 [Referenced project]\nName: src\nWorking directory: /repos/cindy\n[/Referenced project]',
+      '请处理 [Referenced project]\nName: "src"\nWorking directory: "/repos/cindy"\n[/Referenced project]',
     );
   });
 });

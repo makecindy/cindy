@@ -13,6 +13,7 @@ vi.mock('@/platform/gestureHandler', () => {
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keeps the rendered React Native styles of the real file chip (#5875). Node has no Yoga, so the
 // content-sized width below applies Yoga's own flex-basis rule to those styles instead of a layout pass.
@@ -128,7 +129,7 @@ async function renderServerGroup(align: 'left' | 'right', name: string) {
   root = createRoot(host);
   await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
     messageId: 'message-1', align, attachments: [attachment],
-    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(),
+    onResolveRemoteMedia: vi.fn<ResolveRemoteMediaFn>(), resolveServerMedia: vi.fn(async () => attachment),
   })));
   return host.querySelector('[data-testid^="message.filePreviewButton"]')!;
 }

@@ -215,6 +215,14 @@ Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它�
 
 Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。
 
+### Cindy AI · Personal
+
+个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。
+
+### Cindy AI · XD
+
+心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。
+
 ### Cindy Codex home
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
@@ -451,6 +459,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。
 
+### Publish Plugin
+
+当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
+
 ### Nightly learning
 
 伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
@@ -495,6 +507,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 
 右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
 
+### Publish anonymously
+
+个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。
+
 ### Main view
 
 Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
@@ -502,6 +518,26 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 ### Manual
 
 插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
+
+### Audio
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Image
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Text
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Video
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Duration
+
+模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
 
 ### Process
 
@@ -614,6 +650,18 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 ### Run records
 
 日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
+
+### Scrolling Screenshot
+
+2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。
+
+### Relay service
+
+远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。
+
+### Mute notifications
+
+任务右键菜单里的通知开关，是普通句子不是品牌词，故 checkCase 为 false。开关两态成对出现：未静音时显示「消息免打扰」（点了就静音），已静音时显示「允许消息通知」（点了就恢复）；英文对为 Mute notifications / Allow notifications。与设置里的全局通知开关（ccAgent.settings.notifications）区分：这个是单个任务的。中文不用「免打扰模式」「静音」。「允许消息通知」是反面文案，未列入 translations，待五语用例变多后一并裁决。
 
 ### Share Link
 

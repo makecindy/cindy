@@ -30,6 +30,10 @@ pnpm install
 自动补下载，仍无法准备才会中止 dev 启动并给出明确错误。
 正常情况下无需手动安装二进制。
 
+macOS/Linux 的 `apps/codex-package-bin/<平台>/codex-path/codex` 由上述检查流程在
+完整包校验通过后补入，并更新目录清单；运行中的开发版不改包目录。脚本转发到同包的
+`bin/codex`，使任务里的 shell 使用与任务相同的版本；已有的非 Cindy 脚本不会被覆盖。
+
 postinstall 最后还会按 Electron `install.js` 的语义复核 `node_modules/electron/dist`，
 缺失或版本不符就补装（`node scripts/ensure-deps.mjs --electron-binary`；设置了
 `ELECTRON_SKIP_BINARY_DOWNLOAD` 或 `ELECTRON_OVERRIDE_DIST_PATH` 时跳过）。原因：pnpm 的

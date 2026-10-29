@@ -1,3 +1,5 @@
+import { AgentErrorDetails } from './AgentErrorDetails';
+import type { ErrorDiagnosisSource } from './errorDiagnosisPrompt';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   compareFailedScheduleRuns,
@@ -13,9 +15,11 @@ import { spacing } from '@/theme/tokens';
 export function FailedScheduleNotice({
   source,
   run,
+  onDiagnose,
 }: {
   source: string;
   run: FailedScheduleRunSnapshot;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
 }) {
   const key = `scheduleFailureDismissal:${source}`;
   const [loaded, setLoaded] = useState(false);
@@ -54,7 +58,7 @@ export function FailedScheduleNotice({
     return null;
   const dismiss = () => {
     setDismissed(run);
-    void AsyncStorage.setItem(key, JSON.stringify(run)).catch(() => undefined);
+    void AsyncStorage.setItem(key, JSON.stringify({ runId: run.runId, firedAt: run.firedAt })).catch(() => undefined);
   };
   return (
     <ErrorNotice
@@ -65,6 +69,12 @@ export function FailedScheduleNotice({
       )}
       onDismiss={dismiss}
       dismissLabel={t('session.failedScheduleNotice.dismissTitle')}
-    />
+    >
+      {run.errorMsg ? <AgentErrorDetails message={run.errorMsg}
+        onDiagnose={onDiagnose ? () => onDiagnose({
+          message: t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`),
+          details: run.errorMsg!,
+        }) : undefined} /> : null}
+    </ErrorNotice>
   );
 }

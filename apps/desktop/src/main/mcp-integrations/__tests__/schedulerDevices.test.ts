@@ -27,6 +27,62 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // PR #6830 / discussion_r4385260097, unit: the existing route/null tests omit
+  // explicit engine updates with inherited location. An old host silently drops
+  // modelAgentKind; the public adapter must reject before issuing that write.
+  it.each([
+    { capabilities: {}, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: false }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleAgentDeviceSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: true },
+    { capabilities: { supportsScheduleModelSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5', modelAgentDeviceId: '' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: true, supportsScheduleAgentDeviceSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5', modelAgentDeviceId: '' }, supported: true },
+  ])('checks explicit engine support before remote writes: $capabilities / $patch', async ({ capabilities, patch, supported }) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: capabilities });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', patch]);
+    expect(result).toMatchObject(supported ? { ok: true, data: { id: 's1' } } : { ok: false, code: 'REMOTE_UNSUPPORTED' });
+    expect(s.invoke.mock.calls[0].slice(0, 3)).toEqual(['mac', 'maker:get-capabilities', ['claude-code']]);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    if (supported) expect(s.invoke.mock.calls[1].slice(0, 3)).toEqual(['mac', 'maker:schedule:update', ['s1', patch]]);
+  });
+
+  it('does not send an engine update after the account changes during capability lookup', async () => {
+    const s = setup();
+    s.invoke.mockImplementationOnce(async () => {
+      s.changeOwner();
+      return { ok: true, result: { supportsScheduleModelSelection: true } };
+    });
+    expect(await s.remote.invoke('mac', 'update', ['s1', { modelAgentKind: 'codex', model: 'gpt-5' }]))
+      .toMatchObject({ ok: false });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities']);
+  });
+
+  // Unit: an old host ignores the new route field; reject before a write can run locally instead.
+  it.each([false, true])('checks remote schedule location support before writing (%s)', async (supported) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleAgentDeviceSelection: supported } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', { modelAgentDeviceId: 'shared:owner' }]);
+    expect(s.invoke.mock.calls[0].slice(0, 3)).toEqual(['mac', 'maker:get-capabilities', ['claude-code']]);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    expect(result.ok).toBe(supported);
+    if (!supported) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+  });
+  // PR #6830, unit: route clearing needs the same new-host capability as setting
+  // a location, including partial clears that omit the location field entirely.
+  it.each([false, true])('checks support before forwarding null model axes (%s)', async (supported) => {
+    const s = setup();
+    const patch = { modelAgentKind: null, model: null, providerId: null, effort: null };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleAgentDeviceSelection: supported } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', patch]);
+    expect(result.ok).toBe(supported);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    if (supported) expect(s.invoke.mock.calls[1].slice(0, 3)).toEqual(['mac', 'maker:schedule:update', ['s1', patch]]);
+    else expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+  });
   it('reuses the existing remote-control schedule channels with their argument shapes', async () => {
     const s = setup();
     await s.remote.invoke('mac', 'list', [{ status: 'active' }]);

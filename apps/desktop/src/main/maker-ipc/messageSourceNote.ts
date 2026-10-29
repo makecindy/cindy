@@ -35,7 +35,8 @@ export interface WireMessageSourceFields {
  * Its header calls the owner's words background; this host-verified fact says otherwise.
  */
 function forwardedRequestClause(receipt: unknown): string | null {
-  if (!receipt || typeof receipt !== 'object' || (receipt as { kind?: unknown }).kind !== 'agent-request') return null;
+  if (!receipt || typeof receipt !== 'object' ||
+    !['agent-request', 'delegated-continuation'].includes(String((receipt as { kind?: unknown }).kind))) return null;
   const source = readForwardedRequestSource((receipt as { request?: unknown }).request);
   if (!source || typeof source.userText !== 'string') return null;
   return source.ownerVerified
@@ -54,11 +55,14 @@ export function buildWireMessageSourceNote(
   opts: { visibleText?: string; autoResume?: boolean } = {},
 ): string | null {
   if (!fields || opts.autoResume) return null;
-  if (opts.visibleText !== undefined && isSyntheticTriggerText(opts.visibleText.trimStart()))
+  const clause = !fields.sourcePlugin && !fields.sharedTaskAuthor
+    ? forwardedRequestClause(fields.autoReviewUserText) : null;
+  // Peer inputs are hidden from the timeline, but their owner evidence must
+  // still reach the model. Other synthetic triggers remain unannotated.
+  if (!clause && opts.visibleText !== undefined && isSyntheticTriggerText(opts.visibleText.trimStart()))
     return null;
   const note = buildMessageSourceNote(messageSourceSenderFromMeta(fields));
-  const clause = note ? forwardedRequestClause(fields.autoReviewUserText) : null;
-  return clause ? `${note}${clause}` : note;
+  return clause ? `${note ?? '[消息来源] '}${clause}` : note;
 }
 
 /** 宽容读取主机透传的设备来源(未知平台 / 缺 id 返回 undefined)。 */

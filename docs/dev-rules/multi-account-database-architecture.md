@@ -301,3 +301,55 @@ family。客户端收到当前 family 失效时，只清理当前 Profile。
 
 下一步仍应为 Registry SQLite 适配器、Profile Context、Runtime Lease 和旁路文件建立单独
 任务；在这些边界得到实现验证前，不应创建新的业务表或批量 migration。
+
+## 11. 聊天数据投影补充（2026-10-26）
+
+> 状态：优化分支已实现首批 Chat 投影，尚未发布；没有迁移全库 Profile。11.2 的完整逻辑集合仍为后续设计，当前物理表见下文。
+> 当前路径与账号代次按 [modelDefaultsProfile.ts](../../apps/desktop/src/main/localDb/modelDefaultsProfile.ts) 和 [appSessionState.ts](../../apps/desktop/src/main/appSessionState.ts) 核对；消息同步、恢复与可靠发送见 [伙伴群聊](../product-rules/bot-group-chat.md) 第 11 节。
+
+### 11.1 账号分区
+
+复用当前账号数据库生命周期。当前实现路径来自 `ownerDatabasePath()`，格式为 `<userData>/<品牌前缀>-<ownerId>.db`；部分其他状态位于 `owners/<owner哈希>/`。不得把 本文架构基线 的未来 Profile 路径描述成已经全面实现，也不为本次改造批量给所有旧表加 owner_id。
+
+在账号库中增加 Chat namespace：可信服务端点／realm + 已验证 issuer + membership 身份映射。一个账号访问不同 Chat 服务的数据不得串用，同一房间在直连、device-link 两种路径上不得重复。`deviceId` 是执行地点，不能成为聊天归属主键；消息作者也不等于缓存所有者。
+
+本轮 Desktop 的具体实现是捕获当前 owner 的 `DbClient`，以规范化 endpoint、服务端 `/me` 验证的 human actor ID 和实际 reader actor ID 的 SHA256 作为 namespace。服务端 actor 已绑定 issuer-qualified membership；客户端不自行解析未验证 JWT 来建立归属。migration `0133` 新增：
+
+| 物理表 | 主键 | 内容 |
+| --- | --- | --- |
+| `chat_cache_rooms` | namespace + room_id | snapshot 元数据、cursor、reset generation、确切页覆盖、metadataDirty、CAS version |
+| `chat_cache_messages` | namespace + room_id + message_id | 当前服务器消息 JSON，保留 revision、十进制 seq、tombstone 和未知内容块 |
+
+两表由 `chatCache.execute` worker 事务原子读写；只更新发生变化的消息行。Desktop 与 Mobile 的单房间删除同写入一样校验 version + generation，旧实例不得删除另一实例刚提交或重建的投影；撤权清理碰到并发冲突时仍向当前调用者返回撤权错误，下次读取重新校验权限。账号退出的全量清理仍先失效实例并等待在途写入。查询范围由本地 coverage 决定，seq 用 BigInt 排序，不以 JSON 文本字符串顺序替代消息顺序。每房间最多 500 个已下载页；缺页从服务器补齐。缓存与 canonical messages、未确认发送、附件实际文件分离，reset 只清 Chat 投影。
+
+Mobile 使用现有文件缓存后端的 `cache/chat-history-v1/` 目录，以稳定 ownerId、realm、endpoint、human actor 和 roomId 的 SHA-256 作为文件名；不使用登录 generation 作为永久主键。一个房间的消息、页覆盖与游标放入同一原子替换文件，进程内按文件串行加 version + generation CAS，避免多个挂载回写旧版。正文不占用 AsyncStorage 的共享容量，不新增原生依赖。切账号和退出清理先同步撤销旧实例写权，等待在途文件操作结束后尝试删除全部文件；失败会保留待重试内容，下一次登录在激活身份前重新清理。系统回收可重建缓存后重新 bootstrap，服务器仍保存权威历史。
+
+运行时捕获 ownerGeneration 与数据库句柄；每次跨 await 的写入、事件分发、ACK 和 outbox 执行都复核当前代次。账号切换时停止旧发送和订阅，再切换读取。generation 是运行时代次，不能写进永久主键，避免再次登录制造新库。
+
+退出登录清除凭证并阻断读取；草稿、未确认发送等私有数据按现行账号保留／明确删除策略处理，不能为了重建缓存顺带删除。匿名／本地 Profile 不冒充服务器账号。首次账号映射或迁移有歧义时保留原库并停止关联，不能猜测合并。
+
+### 11.2 推荐表／集合
+
+下表是后续完整逻辑模型，不是本轮新增表清单或可直接执行的 migration。Desktop 与 Mobile 已共用 `maker-shared/chat-history` 算法、分别注入上述存储适配；未来新增原生 SQLite 依赖若触发 fingerprint 变化，仍须走 Mobile 冷更规则。
+
+| 建议集合 | 核心字段／索引 | 用途 |
+| --- | --- | --- |
+| `chat_namespaces` | local namespace id、可信 endpoint key、issuer、membership binding、schema version | 账号库内进一步区分服务器与身份域 |
+| `chat_actors` | namespace + actorId；kind、资料、owner、版本／同步代次 | 群与私聊复用参与者；不强绑本机 bot_profiles |
+| `chat_conversations` | namespace + conversationId；kind、状态、元数据版本、lastMessage、activity、summary version | 本地列表与打开入口；个人列表状态单独存 |
+| `chat_members` | conversation + actor；role/state/historyFrom/accessRevision | 可见性和权限投影；执行时仍由服务器核验 |
+| `chat_messages` | 稳定 localId、可空 serverId、conversation、author/requester、thread/reply、content、revision、createdSeq、createdAt、deleted | 唯一 serverId；按房间／话题和顺序分页；未知块保留原数据 |
+| `chat_message_sources` | namespace、sourceKind、sourceSessionId、sourceMessageId、partIndex、serverMessageId | 私聊镜像、长消息拆块与 canonical 主 Session 的精确映射 |
+| `chat_reactions`、`chat_reads` | message + actor + emoji；conversation + actor + thread + readSeq／个人标记 | 表情与读位独立更新，不能依赖正文 revision 一起增长 |
+| `chat_plans`、`chat_executions` | 服务端实体 ID、revision/epoch、状态、来源消息 | 安排卡与执行状态投影；不保存其他成员私有工具明细 |
+| `chat_media_refs` | message、server mediaId、本机引用、下载／校验状态 | 复用媒体仓；短期签名 URL 不作持久身份 |
+| `chat_sync_scopes` | namespace + scope；durableCursor、head/floor、bootstrap/reset generation、状态 | 持久化同步进度；每个 actor／房间独立 |
+| `chat_pending_refreshes` | scope、entity/range、目标版本／触发 cursor | 不能直接应用的变化先持久化为待补任务 |
+| `chat_history_ranges` | conversation、thread、order kind、边界、snapshot watermark、complete/stale | 区分已下载页面、缺口与需重新校验的旧范围 |
+| `chat_outbox` | stable clientId/operationId、immutable payload、目标身份、状态、retryAt、回执、附件引用 | 跨重启可靠发送与未知结果恢复；不随投影重建删除 |
+| `chat_drafts`、`chat_view_state` | conversation/thread、草稿、滚动锚点、设备内偏好 | 切群恢复；草稿默认仅本设备，跨端草稿另行定义 |
+| `chat_runtime_links` | conversation + companion + lane/grant → 本机 Session、执行地点 | 复用既有私聊主 Session、群主线／话题／分工 Session |
+
+sequence/cursor 在协议上保留十进制字符串，计算不得经过不安全的 JavaScript Number；本地索引使用经过范围校验的 64 位表示，或可保持数值顺序的编码，不能直接按可变长字符串排序。原始 JSON 不足以替代分页与关联索引。
+
+旧本地 `bot_group_members.lastSeenSequence` 是伙伴交付进度，不是用户已读；旧 bot_profile 外键无法代表跨账号人类成员。新模型需明确区分，不能只把旧表改名后直接作为统一 Chat 表。

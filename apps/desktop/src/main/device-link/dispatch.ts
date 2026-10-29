@@ -51,6 +51,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  */
 
 import { RemoteInvokeTiming } from './remoteInvokeTiming.js';
+import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -161,7 +162,7 @@ import {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import {
   remoteWorkingDirRejectionToIpcError,
-  type RemoteWorkingDirCheckResult,
+  type RemoteWorkingDirGuard,
 } from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
@@ -359,19 +360,17 @@ const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = ne
   ['worktree:sync-branch', 'baseRepo'],
 ]);
 
-type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
-
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
-let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
+let workingDirGuard: RemoteWorkingDirGuard | null = null;
 
 type RemoteReviewInputGuard = (sessionId: string) => void | Promise<void>;
 
 /** Main injects the DB-backed sessions.source authorization check once ready. */
 let remoteReviewInputGuard: RemoteReviewInputGuard | null = null;
 
-/** 注入远程 create-session/worktree:create 的本地目录校验器(register.ts 在 maker 就绪后接入)。 */
+/** 注入执行端点感知的目录校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
-  guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
+  guard: RemoteWorkingDirGuard | null,
 ): void {
   workingDirGuard = guard;
 }
@@ -394,6 +393,8 @@ export interface ProviderShareAccessPort {
   insights?(controller: string, request: unknown): Promise<unknown>;
   insightsCurrent?(controller: string, result: unknown): boolean;
   guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
+  /** Catalog invalidation comes only from the share owner, never a delegated executor. */
+  catalogGuestAccess?(controller: string): { shareId: string; memberId: string; providerId: string } | null;
   /** 不认识的受邀者连进来时按需刷新一次分享快照。 */
   ensureKnown(controller: string): Promise<void>;
   hasShares(): boolean;
@@ -413,7 +414,9 @@ function providerShareGuestAccess(controller: string): ReturnType<ProviderShareA
 /** Empty invalidation only, scoped to the currently authorized shared provider. Never subscribe guests to owner topics. */
 export function notifyProviderShareCatalogChanged(providerId: string): void {
   for (const peer of acceptedLinkControllers) {
-    if (!isProviderSharePeer(peer) || providerShareGuestAccess(peer)?.providerId !== providerId) continue;
+    const catalogAccess = providerShareAccess?.catalogGuestAccess
+      ? providerShareAccess.catalogGuestAccess(peer) : providerShareGuestAccess(peer);
+    if (!isProviderSharePeer(peer) || catalogAccess?.providerId !== providerId) continue;
     sendPushBestEffort(peer, 'maker:provider:changed', {});
   }
 }
@@ -2784,10 +2787,12 @@ function handleLinkOpen(
       });
       return;
     }
-    if (!providerShareGuestAccess(src)
-      || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
-      logProviderShareDenial(src, 'link-open', providerShareGuestAccess(src) ? 'missing-relay-capability' : undefined);
-      client.closeLink(src, 'revoked', 'inbound');
+    const guestAccess = providerShareGuestAccess(src);
+    if (!guestAccess || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
+      logProviderShareDenial(src, 'link-open', guestAccess ? 'missing-relay-capability' : undefined);
+      // A newly allocated M can see link-open before its delegated lease is
+      // installed. Lack of a lease is never a durable guest revocation.
+      client.closeLink(src, guestAccess ? 'revoked' : 'transport-timeout', 'inbound');
       return;
     }
     try {
@@ -4438,6 +4443,8 @@ async function runProviderShareInvoke(
     return PROVIDER_SHARE_ACCESS_FAILURE;
   }
   if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
+  // An executor's short lease authorizes only remote Agent execution, never the share owner's catalog or management reads.
+  if (delegatedProviderShareGuestAccess(src) && payload.channel !== REMOTE_AGENT_CHANNEL) return PROVIDER_SHARE_ACCESS_FAILURE;
   if (!PROVIDER_SHARE_CHANNELS.has(payload.channel)) {
     log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };
@@ -4755,40 +4762,52 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     }
   }
 
-  // 参数级收敛:create-session 的 workingDir / worktree:create 的 baseRepo 决定 agent
-  // 在哪个目录起进程或跑 git,allowlist 只挡 channel 不挡 args。路径必须在被控端
-  // 当前可访问且确为目录,历史记录不能替代实时探测。
-  const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
-  if (guardedField && workingDirGuard) {
-    const dir = extractGuardedPath(payload.args ?? [], guardedField);
-    const guardResult = dir ? await workingDirGuard(dir) : true;
-    if (guardResult === false) {
-      log.warn(`blocked remote ${payload.channel} to unknown ${guardedField} from ${shortId(src)}: ${dir}`);
-      return {
-        ok: false,
-        error: {
-          code: 'CHANNEL_NOT_ALLOWED',
-          message: `${guardedField} not allowed for remote ${payload.channel}`,
-        },
-      };
-    }
-    if (guardResult !== true && !guardResult.allowed) {
-      const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
-      log.warn(`blocked remote ${payload.channel} for ${guardedField} reason ${guardResult.reason} from ${shortId(src)}`);
-      return {
-        ok: false,
-        error: {
-          code: 'IPC_ERROR',
-          message: `[${rejection.code}] ${rejection.message}`,
-        },
-      };
-    }
-  }
-
   let handlerCompleted = false;
   try {
-    const args = payload.args ?? [];
+    let args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
+    // 参数级收敛:新建任务按实际执行端探测目录;worktree 等其它入口仍只接受本地目录。
+    // SSH 历史记录只能解析端点,不能替代实时探测;解析结果必须传入真正的创建 handler。
+    const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
+    if (guardedField && workingDirGuard) {
+      const dir = extractGuardedPath(args, guardedField);
+      const options = args[0] as Record<string, unknown> | undefined;
+      const guardResult = dir ? await workingDirGuard(dir, {
+        channel: payload.channel,
+        remoteHostId: options?.remoteHostId,
+        agentDeviceId: options?.agentDeviceId,
+      }) : true;
+      if (guardResult === false) {
+        log.warn(`blocked remote ${payload.channel} to unknown ${guardedField} from ${shortId(src)}: ${dir}`);
+        return {
+          ok: false,
+          error: {
+            code: 'CHANNEL_NOT_ALLOWED',
+            message: `${guardedField} not allowed for remote ${payload.channel}`,
+          },
+        };
+      }
+      if (guardResult !== true && !guardResult.allowed) {
+        const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+        log.warn(`blocked remote ${payload.channel} for ${guardedField} reason ${guardResult.reason} from ${shortId(src)}`);
+        return {
+          ok: false,
+          error: {
+            code: 'IPC_ERROR',
+            message: `[${rejection.code}] ${rejection.message}`,
+          },
+        };
+      }
+      if (guardResult !== true && guardResult.allowed && guardResult.source === 'ssh'
+        && payload.channel === 'maker:create-session') {
+        args = [{ ...options, remoteHostId: guardResult.remoteHostId, workingDir: guardResult.workingDir }, ...args.slice(1)];
+      }
+      if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)
+        || !readDeviceLinkSettings().remoteControlEnabled || isControllerRevoked(src)) {
+        return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'Remote control is no longer allowed' } };
+      }
+    }
+
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));

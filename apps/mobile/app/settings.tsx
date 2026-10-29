@@ -57,6 +57,7 @@ import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -139,7 +140,11 @@ export default function SettingsScreen() {
   const { locale, setLocale } = useLocale();
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const { status } = useDeviceLink();
+  const { status, connectionIssue } = useDeviceLink();
+  // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
+  const selfHostedRelay = useSelfHostedRelay();
+  const [relaySwitching, setRelaySwitching] = useState(false);
+  const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
@@ -384,6 +389,43 @@ export default function SettingsScreen() {
     router.push('/account-deletion');
   }, [router]);
 
+  // 切回官方中转:先确认(之后要再用这个中转得在电脑上重新加入);删掉本机设置与凭证,
+  // 连接随路由变化重建。不会自动切回,只在用户确认后执行。
+  const switchToOfficialRelay = useCallback(async () => {
+    if (relaySwitching) return;
+    setRelaySwitching(true);
+    setRelayMessage(null);
+    try {
+      await clearSelfHostedRelay();
+    } catch {
+      setRelayMessage(t('relay.settings.switchFailed'));
+    } finally {
+      setRelaySwitching(false);
+    }
+  }, [relaySwitching, t]);
+
+  const requestSwitchToOfficialRelay = useCallback(() => {
+    if (!selfHostedRelay || relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.confirmTitle'),
+      t('relay.settings.confirmBody', { name: selfHostedRelay.name }),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        { text: t('relay.settings.confirmAction'), style: 'destructive', onPress: () => void switchToOfficialRelay() },
+      ],
+    );
+  }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
+
+  // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
+  // 都要在这里给出原因,并配「切回官方中转」。
+  const relayIssueMessage = !selfHostedRelay
+    ? null
+    : selfHostedRelay.credential === null
+      ? t('relay.settings.credentialMissingHint')
+      : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
+        ? t('relay.settings.removedHint')
+        : null;
+
   // 任务完成通知开关:开 → 请求系统权限 + 注册 APNs token 到 device-link server;
   // 关 → 注销 token。开关状态本机持久化,server 注册表是唯一发送依据。
   useEffect(() => {
@@ -605,6 +647,38 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
+            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+        <SettingsGroup
+          footer={selfHostedRelay
+            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+            : t('relay.settings.officialHint')}
+          messages={[
+            relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
+            relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
+          ]}
+          testID="settings.relay"
+          title={t('relay.settings.sectionTitle')}
+        >
+          <InfoRow
+            key="relay-current"
+            label={t('relay.settings.currentLabel')}
+            testID="settings.relay.current"
+            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+          />
+          {selfHostedRelay ? (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.switchToOfficial')}
+              chevron={false}
+              disabled={relaySwitching}
+              key="relay-switch-official"
+              label={t('relay.settings.switchToOfficial')}
+              onPress={requestSwitchToOfficialRelay}
+              testID="settings.relay.switchToOfficial"
+            />
+          ) : null}
+        </SettingsGroup>
+
         {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
             更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}
         <SettingsGroup
@@ -657,7 +731,9 @@ export default function SettingsScreen() {
         {/* Notification permission and preview preferences belong to this installation. */}
         {isPushSupported() ? (
           <SettingsGroup
-            footer={t('settings.notifications.taskDoneHint') + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')}
+            footer={t('settings.notifications.taskDoneHint')
+              + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')
+              + (selfHostedRelay ? ` ${t('relay.settings.pushUnavailable')}` : '')}
             messages={[pushMessage ? { text: pushMessage, testID: 'settings.pushMessage' } : null]}
             title={t('settings.notifications.sectionTitle')}
           >

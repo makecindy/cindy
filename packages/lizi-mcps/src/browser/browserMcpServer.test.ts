@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserMcpServer } from './server.js';
 import { INLINE_IMAGE_TARGET_BYTES, type BrowserMcpDeps } from '../types.js';
+import type { Recipe } from './recipe-loader.js';
 
 // `respond` lets a test script the result per call (e.g. a navigate that returns
 // a swapped targetId); default echoes the request back as data.
@@ -41,6 +42,355 @@ async function makeHarness(
     },
   };
 }
+
+// New behavior through the public MCP boundary (unit): automatic discovery,
+// structural repetition, candidate lifecycle and recoverable result summaries.
+// Existing tests covered explicit siteguide/validated saves, not these paths.
+describe('browser experience cache', () => {
+  async function invoke(h: Awaited<ReturnType<typeof makeHarness>>, args: Record<string, unknown>) {
+    const r = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+    return JSON.parse((r.content as Array<{ text: string }>)[0].text);
+  }
+  const draft: Recipe = { id: 'experience-search', access: 'read', match: ['experience.test'], description: 'Search books',
+    inputs: { query: { required: true } }, steps: [{ action: 'evaluate', fn: '() => ({title: "found"})',
+      guard: { url: 'https://experience.test/' }, expect: { requiredFields: ['title'] }, as: 'items' }], output: '{{items}}' };
+  const readDraft: Recipe = { ...draft, steps: [{ action: 'extract', extract: { fields: { title: 'h1' } },
+    guard: { url: 'https://experience.test/' }, expect: { requiredFields: ['title'] }, as: 'items' }] };
+  const extracted = { ok: true, count: 1, records: [{ title: 'found' }] };
+
+  // Review regression, unit/MCP entry: metadata cannot authorize deferred
+  // mutations. Old coverage only rejected access=write, not mislabeled steps.
+  it.each([
+    { action: 'click' as const, selector: '#submit' },
+    { action: 'type' as const, selector: '#input', value: 'fake-value' },
+    { action: 'select' as const, selector: '#choice', values: ['fake-value'] },
+    { action: 'evaluate' as const, fn: "() => fetch('/write', {method:'POST'})" },
+    { action: 'wait' as const, fn: "() => { document.querySelector('form').submit(); return true; }" },
+  ])('rejects deferred $action capabilities at save, discovery and persisted execution', async step => {
+    const unsafe: Recipe = { ...readDraft, id: `unsafe-deferred-${step.action}`,
+      steps: [{ ...step, guard: { url: 'https://experience.test/' } }, ...readDraft.steps] };
+    let loaded: Recipe | undefined;
+    let saves = 0;
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: `unsafe-deferred-${step.action}-${Boolean(loaded)}`,
+        recipes: new Map(loaded ? [[loaded.id, loaded]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async () => { saves++; return { ok: true }; },
+    });
+    try {
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: unsafe, deferValidation: true })).ok).toBe(false);
+      expect(saves).toBe(0);
+      loaded = { ...unsafe, validation: { site: 'experience.test', state: 'candidate' } };
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toEqual([]);
+      expect((await invoke(h, { action: 'recipe', recipeId: unsafe.id, inputs: { query: 'book' } })).ok).toBe(false);
+      expect(h.calls).toHaveLength(0);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: omitted and explicit profile names must
+  // refer to the same host identity; changing the default must not widen scope.
+  it.each([true, false])('binds learned recipes to the resolved host profile (deferred=%s)', async deferred => {
+    const recipe = deferred ? readDraft : draft;
+    let profile = 'Cindy';
+    let stored: Recipe | undefined;
+    let version = 0;
+    const h = await makeHarness({
+      resolveProfile: requested => requested || profile,
+      getUserRecipes: async () => ({ version: `resolved-profile-${deferred}-${version}`,
+        recipes: new Map(stored ? [[stored.id, stored]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; version++; return { ok: true }; },
+    }, (_req, i) => ({ targetId: 'tab', result: deferred ? { matched: true, value: extracted } : i % 2 === 0 ? true : { title: 'found' } }));
+    try {
+      if (!deferred) {
+        expect((await invoke(h, { action: 'recipe', site: 'experience.test', recipeDraft: draft,
+          inputs: { query: 'book' } })).verified).toBe(true);
+        profile = 'Cindy-real';
+        expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(false);
+        profile = 'Cindy';
+      }
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: recipe,
+        profile: 'Cindy', deferValidation: deferred })).ok).toBe(true);
+      expect(stored?.validation?.profile).toBe('Cindy');
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toHaveLength(1);
+      profile = 'Cindy-real';
+      expect((await invoke(h, { action: 'siteguide', site: 'experience.test', intent: 'Search' })).recipes).toHaveLength(0);
+      const count = h.calls.length;
+      expect((await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).ok).toBe(false);
+      expect(h.calls).toHaveLength(count);
+      expect((await invoke(h, { action: 'recipe', recipeId: draft.id, profile: 'Cindy', inputs: { query: 'book' } })).ok).toBe(true);
+      expect(h.calls.slice(-2).every(req => (req as { profile: string }).profile === 'Cindy')).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: another task/Settings can change the
+  // shared host while this tool is idle or awaiting a protected-page check.
+  it.each(['idle', 'preflight', 'inflight'] as const)('invalidates original results after an external backend change (%s)', async timing => {
+    let scope = { lifecycle: {}, backend: {} };
+    let switchOnCheck = false;
+    const deps: Partial<BrowserMcpDeps> = {
+      getBackendScope: () => scope,
+      pageReadsRestricted: async () => { if (switchOnCheck) scope = { ...scope, lifecycle: {} }; return false; },
+    };
+    const h = await makeHarness(deps, () => {
+      if (timing === 'inflight') scope = { ...scope, lifecycle: {} };
+      return { targetId: 'tab', result: 'x'.repeat(17_000) };
+    });
+    try {
+      const result = await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } });
+      if (timing === 'inflight') {
+        expect(result.ok).toBe(true);
+        expect(result.fullResult).toBeUndefined();
+      } else {
+        expect(result.fullResult).toBeDefined();
+        if (timing === 'idle') scope = { ...scope, lifecycle: {} };
+        else switchOnCheck = true;
+        expect((await invoke(h, { action: 'readResult', resultId: result.fullResult.id })).ok).toBe(false);
+        switchOnCheck = false;
+        expect((await invoke(h, { action: 'readResult', resultId: result.fullResult.id })).ok).toBe(false);
+      }
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  it('rejects a backend change during recipe preflight without dispatch or suspension', async () => {
+    let scope = { lifecycle: {}, backend: {} };
+    const stored = { ...draft, validation: { site: 'experience.test', state: 'active' as const } };
+    let saves = 0;
+    const h = await makeHarness({
+      getBackendScope: () => scope,
+      pageReadsRestricted: async () => { scope = { ...scope, backend: {} }; return false; },
+      getUserRecipes: async () => ({ version: 'backend-preflight-rejection', recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async () => { saves++; return { ok: true }; },
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } });
+      expect(result.ok).toBe(false);
+      expect(h.calls).toHaveLength(0);
+      expect(saves).toBe(0);
+      expect(stored.validation.state).toBe('active');
+    } finally { await h.cleanup(); }
+  });
+
+  it('suggests matching recipes with navigation once per catalog version, without executing them', async () => {
+    let version = 0;
+    const stored = { ...draft, validation: { site: 'experience.test', state: 'active' as const, profile: '' } };
+    const h = await makeHarness({ getUserRecipes: async () => ({ version: `experience-discovery-${version}`,
+      recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }) }, () => ({ targetId: 'tab' }));
+    try {
+      const open = { action: 'navigate', url: 'https://experience.test/', intent: 'Search' };
+      expect((await invoke(h, open)).recipeSuggestions[0]).toMatchObject({ id: draft.id, access: 'read' });
+      expect((await invoke(h, open)).recipeSuggestions).toBeUndefined();
+      version++;
+      expect((await invoke(h, open)).recipeSuggestions).toHaveLength(1);
+      expect((await invoke(h, { ...open, url: 'https://experience.test.evil/' })).recipeSuggestions).toBeUndefined();
+      expect((await invoke(h, { ...open, profile: 'another-account' })).recipeSuggestions).toBeUndefined();
+      expect((await invoke(h, { ...open, intent: 'unrelated' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls).toHaveLength(6);
+      expect(h.calls.every(req => (req as { action: string }).action === 'navigate')).toBe(true);
+      expect(h.calls[0]).not.toHaveProperty('intent');
+    } finally { await h.cleanup(); }
+  });
+
+  it('records only structural steps and hints on repetition; errors and protected pages do not learn', async () => {
+    const recorded: unknown[] = [];
+    let restricted = false;
+    let failed = false;
+    const h = await makeHarness({
+      experienceStore: { list: async () => [], record: async input => {
+        recorded.push(input); return { ...input, observations: recorded.length, updatedAt: 1 };
+      } },
+      pageReadsRestricted: async () => restricted,
+    }, () => ({ targetId: 'tab', result: failed ? { ok: false } : { title: 'private-result' } }));
+    try {
+      const read = { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => "private-script"' } };
+      for (let i = 0; i < 2; i++) {
+        await invoke(h, { action: 'navigate', url: 'https://experience.test/private-path?token=secret' });
+        await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'type', selector: '#private-selector', text: 'private-input' } });
+        const result = await invoke(h, read);
+        expect(Boolean(result.learningOpportunity)).toBe(i === 1);
+      }
+      expect(recorded).toEqual(Array.from({ length: 2 }, () => ({ site: 'experience.test', actions: ['navigate', 'type', 'evaluate'] })));
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      failed = true;
+      await invoke(h, read);
+      failed = false;
+      await invoke(h, read);
+      expect(recorded).toHaveLength(2);
+      restricted = true;
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      await invoke(h, read);
+      expect(recorded).toHaveLength(2);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review regression, unit/MCP entry: a candidate finishing after another
+  // task's validated save must not overwrite that revision. Existing lifecycle
+  // tests ran only one tool instance and could not expose the stale write.
+  it.each([true, false])('keeps another task\'s newer revision when an older candidate finishes (ok=%s)', async ok => {
+    let stored: Recipe = { ...readDraft, validation: { site: 'experience.test', state: 'candidate' } };
+    let saves = 0;
+    let entered!: () => void;
+    let release!: () => void;
+    const dispatched = new Promise<void>(resolve => { entered = resolve; });
+    const finish = new Promise<void>(resolve => { release = resolve; });
+    const deps: Partial<BrowserMcpDeps> = {
+      getUserRecipes: async () => ({ version: `interleaved-candidate-${ok}-${saves}`, recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; saves++; return { ok: true }; },
+    };
+    const oldTask = await makeHarness({ ...deps, getRuntime: () => ({
+      call: async req => { entered(); await finish; return { ok: true, action: req.action, data: { result: { matched: ok, value: extracted } } }; },
+    }) });
+    const newTask = await makeHarness(deps, () => ({ result: { matched: true, value: extracted } }));
+    const pending = invoke(oldTask, { action: 'recipe', recipeId: readDraft.id, inputs: { query: 'book' } });
+    try {
+      await dispatched;
+      const revised: Recipe = { ...readDraft, steps: readDraft.steps.map(step => ({ ...step, extract: { fields: { title: 'h2' } } })) };
+      expect((await invoke(newTask, { action: 'recipe', site: 'experience.test', recipeDraft: revised, inputs: { query: 'book' } })).verified).toBe(true);
+      expect((await invoke(newTask, { action: 'saveRecipe', site: 'experience.test', recipeDraft: revised })).ok).toBe(true);
+      release();
+      expect((await pending).ok).toBe(ok);
+      expect(stored.steps).toEqual(revised.steps);
+      expect(saves).toBe(1);
+    } finally { release(); await pending; await oldTask.cleanup(); await newTask.cleanup(); }
+  });
+
+  it('validates a read candidate on later real use and enables it only on explicit save without replay', async () => {
+    const draft = readDraft;
+    let stored: Recipe | undefined;
+    let version = 0;
+    const deps: Partial<BrowserMcpDeps> = {
+      getUserRecipes: async () => ({ version: `experience-candidate-${version}`, recipes: new Map(stored ? [[stored.id, stored]] : []), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { stored = recipe; version++; return { ok: true }; },
+    };
+    const h = await makeHarness(deps);
+    try {
+      expect(await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft, deferValidation: true })).toMatchObject({ ok: true, state: 'candidate' });
+      expect(h.calls).toHaveLength(0);
+      expect(stored?.validation?.state).toBe('candidate');
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft, deferValidation: true })).ok).toBe(false);
+      expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: { ...draft, id: 'write', access: 'write' }, deferValidation: true })).ok).toBe(false);
+    } finally { await h.cleanup(); }
+    const next = await makeHarness(deps, () => ({ result: { matched: true, value: extracted } }));
+    try {
+      expect((await invoke(next, { action: 'recipe', recipeId: draft.id, profile: 'other', inputs: { query: 'book' } })).ok).toBe(false);
+      expect((await invoke(next, { action: 'recipe', recipeId: draft.id })).ok).toBe(false);
+      expect(next.calls).toHaveLength(0);
+      expect(await invoke(next, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).toMatchObject({ output: extracted, verified: true });
+      expect(next.calls).toHaveLength(1);
+      expect(stored?.validation?.state).toBe('candidate');
+      expect((await invoke(next, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(true);
+      expect(stored?.validation?.state).toBe('active');
+      expect(next.calls).toHaveLength(1);
+    } finally { await next.cleanup(); }
+  });
+
+  it.each(['guard', 'save'] as const)('keeps candidate %s failures honest without replay', async failure => {
+    const draft = readDraft;
+    let stored: Recipe = { ...draft, validation: { site: 'experience.test', state: 'candidate', profile: '' } };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: `experience-failure-${failure}`, recipes: new Map([[stored.id, stored]]), siteGuides: new Map() }),
+      saveUserRecipe: async ({ recipe }) => { if (failure === 'save') throw new Error('disk full'); stored = recipe; return { ok: true }; },
+    }, () => ({ result: { matched: failure !== 'guard', value: extracted } }));
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } });
+      if (failure === 'guard') {
+        expect(result.ok).toBe(false);
+        expect(stored.validation?.state).toBe('candidate');
+        expect((await invoke(h, { action: 'recipe', recipeId: draft.id, inputs: { query: 'book' } })).ok).toBe(false);
+        expect(h.calls).toHaveLength(1);
+      } else {
+        expect(result).toMatchObject({ ok: true, verified: true });
+        expect(result.maintenanceMessage).toBeUndefined();
+        expect((await invoke(h, { action: 'saveRecipe', site: 'experience.test', recipeDraft: draft })).ok).toBe(false);
+        expect(stored.validation?.state).toBe('candidate');
+        expect(h.calls).toHaveLength(1);
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it('reconstructs a large result byte-for-byte without replay, and blocks cached reads after secret handoff', async () => {
+    let restricted = false;
+    const original = { ok: true, action: 'act' as const, data: { targetId: 'tab', result: Array.from({ length: 200 }, (_, i) => ({ title: `item-${i}`, body: '引号"\\'.repeat(40) })) } };
+    const h = await makeHarness({ getRuntime: () => ({ call: async () => original }), pageReadsRestricted: async () => restricted });
+    try {
+      const result = await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } });
+      expect(JSON.stringify(result).length).toBeLessThan(10_000);
+      const id = result.fullResult.id;
+      let offset: number | null = 0;
+      let text = '';
+      while (offset !== null) {
+        const chunk = await invoke(h, { action: 'readResult', resultId: id, offset, maxChars: 12_000 });
+        text += chunk.text; offset = chunk.nextOffset;
+      }
+      expect(JSON.parse(text)).toEqual(original);
+      const other = await makeHarness({ getRuntime: () => ({ call: async () => original }) });
+      try {
+        await invoke(other, { action: 'act', request: { kind: 'evaluate', fn: '() => []' } });
+        // A stale reference must not silently resolve to a new session's first result.
+        expect((await invoke(other, { action: 'readResult', resultId: id })).ok).toBe(false);
+      } finally { await other.cleanup(); }
+      restricted = true;
+      expect((await invoke(h, { action: 'readResult', resultId: id })).ok).toBe(false);
+      restricted = false;
+      expect((await invoke(h, { action: 'readResult', resultId: id })).ok).toBe(false);
+    } finally { await h.cleanup(); }
+  });
+
+  it('never splits a UTF-16 surrogate pair across readResult pages, even at maxChars 1', async () => {
+    const original = { ok: true, action: 'act' as const, data: { targetId: 'tab', result: '😀'.repeat(9_000) } };
+    const h = await makeHarness({ getRuntime: () => ({ call: async () => original }) });
+    const loneSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+    try {
+      const id = (await invoke(h, { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } })).fullResult.id;
+      // 首个 emoji 从奇数位开始，12_000 的页尾正好切在代理对中间：页尾须退回一位。
+      const emoji = JSON.stringify(original).indexOf('😀');
+      expect((12_000 - emoji) % 2).toBe(1);
+      const first = await invoke(h, { action: 'readResult', resultId: id, offset: 0, maxChars: 12_000 });
+      expect(first.nextOffset).toBe(11_999);
+      // 每一页都必须是合法 Unicode，拼接后逐字节还原。
+      let offset: number | null = 0;
+      let text = '';
+      while (offset !== null) {
+        const chunk = await invoke(h, { action: 'readResult', resultId: id, offset, maxChars: 12_000 });
+        expect(chunk.text).not.toMatch(loneSurrogate);
+        text += chunk.text; offset = chunk.nextOffset;
+      }
+      expect(JSON.parse(text)).toEqual(original);
+      // maxChars=1 落在代理对上时整对返回并前进，不会卡在原地。
+      expect(await invoke(h, { action: 'readResult', resultId: id, offset: emoji, maxChars: 1 }))
+        .toMatchObject({ text: '😀', nextOffset: emoji + 2 });
+    } finally { await h.cleanup(); }
+  });
+
+  it('evicts old originals and preserves success with advisory warnings or failed experience storage', async () => {
+    let big = true;
+    const h = await makeHarness({
+      experienceStore: { list: async () => [], record: async () => { throw new Error('disk full'); } },
+    }, () => ({ targetId: 'tab', result: big ? 'x'.repeat(17_000) : [{ title: '', body: '<div>raw</div>' }, { title: '', body: '<div>raw</div>' }] }));
+    try {
+      const read = { action: 'act', targetId: 'tab', request: { kind: 'evaluate', fn: '() => []' } };
+      const first = await invoke(h, read);
+      for (let i = 0; i < 4; i++) await invoke(h, read);
+      expect((await invoke(h, { action: 'readResult', resultId: first.fullResult.id })).ok).toBe(false);
+      big = false;
+      await invoke(h, { action: 'navigate', url: 'https://experience.test/' });
+      const result = await invoke(h, read);
+      expect(result.ok).toBe(true);
+      expect(result.advisory).toEqual(expect.arrayContaining(['duplicate_records', 'empty_fields', 'markup']));
+      expect(result.learningOpportunity).toBeUndefined();
+    } finally { await h.cleanup(); }
+  });
+
+  it('reports successful oversized actions honestly when the full result exceeds the retention budget', async () => {
+    const h = await makeHarness({}, () => ({ blob: 'x'.repeat(2_000_001) }));
+    try {
+      const result = await invoke(h, { action: 'act', request: { kind: 'evaluate', fn: '() => []' } });
+      expect(result).toMatchObject({ ok: true, action: 'act', truncated: true });
+      expect(result.fullResult).toBeUndefined();
+      expect(JSON.stringify(result).length).toBeLessThanOrEqual(200_000);
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+});
 
 describe('createBrowserMcpServer', () => {
   // Historical form replay spent a second model call on every post-click read.
@@ -222,10 +572,13 @@ describe('createBrowserMcpServer', () => {
     };
     expect(parsed.ok).toBe(true);
     // the `browser` tool references the rule keys…
-    expect(parsed.tools.find((t) => t.name === 'browser')?.rules).toEqual(['browser-workflow', 'recipe-author']);
+    expect(parsed.tools.find((t) => t.name === 'browser')?.rules).toEqual(['browser-workflow']);
     // …and each full markdown body is bundled once at the top level.
     expect(parsed.rules?.['browser-workflow']).toContain('snapshot');
-    expect(parsed.rules?.['recipe-author']).toContain('saveRecipe');
+    expect(parsed.rules?.['recipe-author']).toBeUndefined();
+    const help = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'recipeHelp' } } });
+    expect(JSON.parse((help.content as Array<{ text: string }>)[0].text).rules).toContain('saveRecipe');
+    expect(h.calls).toHaveLength(0);
     await h.cleanup();
   });
 
@@ -482,7 +835,7 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 
-  it('compiles extract into an act:evaluate call', async () => {
+  it('sends a structured DOM read with an evaluate fallback for other runtimes', async () => {
     const h = await makeHarness();
     await h.client.callTool({
       name: 'call_tool',
@@ -501,6 +854,9 @@ describe('createBrowserMcpServer', () => {
     expect(call.action).toBe('act');
     expect(call.targetId).toBe('t1');
     expect(call.request?.kind).toBe('evaluate');
+    expect(call.request).toMatchObject({ domRead: { kind: 'extract',
+      extract: { from: '.book', multiple: true, fields: { title: 'h3', price: '.price_color' } },
+    } });
     // The compiled fn carries the field schema and is a function source.
     expect(call.request?.fn).toContain('querySelectorAll');
     expect(call.request?.fn).toContain('.book');
@@ -887,11 +1243,14 @@ describe('createBrowserMcpServer', () => {
     });
     const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text) as {
       truncated?: boolean;
-      bytes?: number;
-      limit?: number;
+      fullResult: { id: string; chars: number };
     };
     expect(parsed.truncated).toBe(true);
-    expect(parsed.bytes ?? 0).toBeGreaterThan(parsed.limit ?? 0);
+    expect(parsed.fullResult.chars).toBeGreaterThan(300_000);
+    const read = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'readResult', resultId: parsed.fullResult.id, offset: 0, maxChars: 1000 } } });
+    const original = JSON.parse((read.content as Array<{ text: string }>)[0].text);
+    expect(original.text).toContain('"blob":"xxxx');
+    expect(original.nextOffset).toBe(1000);
     await h.cleanup();
   });
 
@@ -1130,7 +1489,8 @@ describe('createBrowserMcpServer', () => {
       expect(parsed.loginWall).toBeUndefined();
     }
     // The check runs on the tab the snapshot came from.
-    expect(h.calls[1]).toMatchObject({ action: 'act', targetId: 't9', request: { kind: 'evaluate' } });
+    expect(h.calls[1]).toMatchObject({ action: 'act', targetId: 't9',
+      request: { kind: 'evaluate', domRead: { kind: 'login-wall' } } });
     await h.cleanup();
   });
 

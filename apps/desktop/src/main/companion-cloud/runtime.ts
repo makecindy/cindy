@@ -176,6 +176,8 @@ export function startCompanionCloud(input: {
   humanActorId: string;
   selfDeviceId?: string;
   current: () => boolean;
+  /** Durable Chat Server display projection; takeover and runtime reconstruction still read authoritative history. */
+  transcript?: (roomId: string, actorId: string, refresh: boolean) => Promise<CompanionTranscriptMessage[]>;
   /** Active local companions whose home is this computer (and not demoted). */
   bots: () => CompanionCloudBot[];
   /** A local companion the owner paused: not synced or moved, and a merge asks to resume it first. */
@@ -763,9 +765,11 @@ export function startCompanionCloud(input: {
       if (!actor) throw new Error('COMPANION_NOT_FOUND');
       const roomId = await mirror.ensureRoom(actor.externalId, actor.id, actor.name);
       // The room orders by arrival (older history may be uploaded later): read it whole, show it
-      // by message time. The first page re-reads; older pages reuse that read.
+      // by message time. The durable reader validates its cached scan against room
+      // changes; the legacy reader reuses a recent scan for older pages.
       const cached = transcripts.get(roomId);
-      const messages = before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
+      const messages = input.transcript ? await input.transcript(roomId, actor.id, !before)
+        : before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
         : await readAllRoomMessages(input.api, roomId, actor.id);
       transcripts.set(roomId, { at: Date.now(), messages });
       return transcriptPageOf(messages, before ? Number(before) : undefined);
@@ -780,7 +784,7 @@ export function startCompanionCloud(input: {
         const profile = await profileOf(actor.id).catch(() => null);
         if (isCindyCompanion(actor.externalId, profile)) copies.push({ botId: actor.externalId, name: actor.name, homeDeviceId: actor.homeDeviceId ?? null });
       }
-      return copies.length > 1 ? copies : [];
+      return copies;
     },
 
     async mergeCindy(keepBotId, fromBotIds) {

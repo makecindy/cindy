@@ -15,6 +15,11 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
 }));
+// Ordinary same-account dispatch has no delegated share lease. Keep the host account
+// boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
+vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
+  delegatedProviderShareGuestAccess: () => null,
+}));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
 vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
 vi.mock('../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: vi.fn(async () => []) }));

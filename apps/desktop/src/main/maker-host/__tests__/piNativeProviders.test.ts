@@ -52,6 +52,7 @@ import {
   pruneAnthropicCompatForGateway,
   type PiBundledModelInfo,
 } from '../pi-host.js';
+import * as gatewayModelCatalog from '../pi-gateway-model-catalog.js';
 import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
@@ -114,6 +115,9 @@ it('materializes a separate native ChatGPT provider for each independent account
   expect(account.inheritModels).toBe(false);
   expect(account.api).toBe('openai-codex-responses');
   expect(account.headers).toMatchObject({ 'x-cindy-pi-provider-id': 'openai-second' });
+  expect(account.apiKeyEnvVar).not.toBe(builtin.apiKeyEnvVar);
+  const placeholderAccount = (envKey: string) => JSON.parse(Buffer.from(result.env[envKey]!.split('.')[1], 'base64url').toString())['https://api.openai.com/auth'].chatgpt_account_id;
+  expect(placeholderAccount(account.apiKeyEnvVar!)).not.toBe(placeholderAccount(builtin.apiKeyEnvVar!));
   expect(account.models.length).toBeGreaterThan(0);
   expect(account.models.every((model) => model.api === 'openai-codex-responses')).toBe(true);
   expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));
@@ -252,6 +256,84 @@ describe('ChatGPT image capability authority (#2674)', () => {
       }
     },
   );
+});
+
+describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
+  // Test value: the production Gateway spec must enable Pi's native empty-reasoning fallback.
+  // Existing Gateway coverage omitted Flash/V4.1; the minimal input is either exact Chat ID
+  // with no native compat row. Unit tier: no binary, network or account access.
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-flash',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash-vision-exp',
+    'deepseek/deepseek-v4-flash',
+  ])('supplies replay compatibility for %s locally and remotely', (id) => {
+    setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+    for (const remote of [false, true]) {
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote })).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          requiresReasoningContentOnAssistantMessages: true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+    }
+  });
+
+  it.each([undefined, false, true])('fills only an undeclared replay flag (%s)', (replay) => {
+    const id = 'deepseek/deepseek-v4.1-flash';
+    const compat = {
+      supportsDeveloperRole: false,
+      ...(replay === undefined ? {} : { requiresReasoningContentOnAssistantMessages: replay }),
+    };
+    const profile = { api: 'openai-completions' as const, compat, thinkingLevelMap: { high: 'high' } };
+    const probe = vi.spyOn(gatewayModelCatalog, 'resolveBundledPiGatewayModelProfile').mockReturnValue(profile);
+    try {
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({
+        ...profile,
+        compat: {
+          ...compat,
+          requiresReasoningContentOnAssistantMessages: replay ?? true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+      expect(compat).not.toHaveProperty('sendSessionAffinityHeaders');
+      expect(compat.requiresReasoningContentOnAssistantMessages).toBe(replay);
+    } finally { probe.mockRestore(); }
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)(
+    'does not add Chat replay metadata to %s', (api) => {
+      const id = 'deepseek/deepseek-v4.1-flash';
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: {
+          schemaVersion: 3, updatedAt: '2026-10-26T00:00:00.000Z',
+          models: [{ id: 'xd/deepseek-fixture', name: 'DeepSeek fixture', nativeApi: api,
+            routes: [{ providerId: 'xd', modelId: id, agents: ['codex'] }] }],
+        },
+      });
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe(api);
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it.each(['other/deepseek-v4.1-flash', 'deepseek/future-model', 'deepseek-flash'])(
+    'does not infer replay compatibility from the name %s', (id) => {
+      setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe('openai-completions');
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it('does not make an unavailable Gateway model selectable', () => {
+    expect(resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4.1-flash')).toBeUndefined();
+  });
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
@@ -446,6 +528,82 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       expect(projected).toMatchObject({ wireId: 'k3.1-pro', contextWindow: 262144, maxTokens: 262144, input: ['text', 'image'] });
     },
   );
+
+  it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])(
+    'sends the Google Gemini API preset %s to the native /v1beta root', (id) => {
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+      const config = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: {
+        pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [{ id, name: id }] },
+      } };
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config, { presets: [preset] })] };
+      const { providers } = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      // Discovery keeps the OpenAI-compatible connection root; the native SDK must not inherit it.
+      expect(providers[0].baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai');
+      expect(providers[0].models[0]).toMatchObject({
+        api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      });
+    },
+  );
+
+  it('never rewrites a custom Gemini proxy endpoint', () => {
+    const baseUrl = 'https://proxy.example/v1beta/openai';
+    const { providers } = buildPiNativeProvidersFromConfigs([{ id: 'gemini-proxy', name: 'Proxy', runtimes: {
+      pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
+    } }], () => 'fixture-key');
+    expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
+  it('strips an inherited /v1 suffix for a model-level Anthropic route (#7258)', () => {
+    // Test value: the production launch mapper materializes models.json. Existing coverage only
+    // protects Google's endpoint rewrite; this same-provider cross-API route was missing.
+    // The minimum failure input is one Anthropic API override on an OpenAI provider /v1 URL;
+    // without a model baseUrl Pi appends /v1/messages to /v1 and gets /v1/v1/messages. Unit tier.
+    const baseUrl = 'http://127.0.0.1:8000/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-api',
+      name: 'Mixed API',
+      runtimes: {
+        pi: piRuntime({
+          baseUrl,
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'anthropic-api-override',
+              api: 'anthropic-messages',
+            },
+            {
+              id: 'anthropic-route-override',
+              route: { baseUrl, wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-custom-route',
+              route: { baseUrl: 'https://gateway.example/proxy/v1', wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-request-path',
+              api: 'anthropic-messages',
+              route: { baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages' },
+            },
+            { id: 'openai-model', name: 'OpenAI model' },
+          ],
+        }),
+      },
+    }], () => 'fixture-key');
+
+    expect(providers[0]).toMatchObject({
+      baseUrl,
+      api: 'openai-completions',
+      models: [
+        { id: 'anthropic-api-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-route-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-custom-route', api: 'anthropic-messages', baseUrl: 'https://gateway.example/proxy/v1' },
+        { id: 'anthropic-request-path', api: 'anthropic-messages' },
+        { id: 'openai-model' },
+      ],
+    });
+    expect(providers[0]?.models?.[3]).not.toHaveProperty('baseUrl');
+    expect(providers[0]?.models?.[4]).not.toHaveProperty('baseUrl');
+  });
 
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
     const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',

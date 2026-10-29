@@ -36,7 +36,7 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 三个引擎均关闭“参数各不相同、同类契约错误连续被拒三次即中断”的规则：同类错误
 不能证明模型没有在修正调用，Pi / Codex 也尚无可靠模型响应批次标识。运行时沿用
 `contractConsecutiveLimit: Number.POSITIVE_INFINITY` 关闭该计数阈值，不新增提醒或自动重试。
-完全相同的工具名、参数、输出连续四次仍会中断，短窗口轮转检测也保持不变；不同参数
+完全相同的工具名、参数、输出连续四次仍触发疑似复核，短窗口轮转检测也保持不变；不同参数
 持续出现同类错误可能多重试几次，这是减少纠错误停的取舍。旧 `contract` 错误的展示
 和历史兼容保持不变。
 循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
@@ -68,17 +68,28 @@ Codex code mode 下脚本在后台运行，模型同时继续回应；app-server
 快速重复照常计数。上述判据命中只算“疑似”（`final: false`）：host 通过
 `MakerDeps.toolLoopReviewer`（Pi / Codex）与 `AgentDeps.toolLoopReviewer`（Claude Code）
 注入同一个辅助模型复核入口，由 `agents/shared/tool-loop-review.ts` 的 `ToolLoopMonitor`
-在后台复核，Agent 不暂停。复核 continue → 接下来 20 次普通结果不再报疑似；stop、
-失败、20 秒超时或未注入复核 → 按原样中断。每个 turn 最多复核 3 次（Claude Code 各子代理共用这 3 次），
-用完后疑似直接中断，但进行中的复核会等到结论；放行额度按普通结果计，节奏轮询同样消耗；
+在后台复核，Agent 不暂停。只有明确 stop 才中断；continue、失败、20 秒超时、无效回答
+或未注入复核 → 接下来 20 次普通结果不再报疑似。每个 turn 最多复核 3 次
+（Claude Code 各子代理共用这 3 次），用完后放行疑似且不再请求辅助模型，最终硬上限仍有效；
+进行中的复核会等到结论；放行额度按普通结果计，节奏轮询同样消耗；
 复核结果晚于 turn 结束、接管、关闭或拆离开始到达时丢弃；复核期间若新的普通结果已不再疑似
 （模式被打破），或新结果的调用不属于被复核的调用集合（模式被替换），进行中的复核同样作废；结论到达时
-若仍有在途调用不属于被复核模式（此时流式参数已补齐），结论丢弃；Claude Code 子代理结束后
+若用户目标已被新消息/插话替换，或仍有在途调用不属于被复核模式（此时流式参数已补齐），
+结论丢弃；Claude Code 子代理结束后
 （父 Agent 调用已有结果）其迟到结论丢弃，等待/轮询工具与未配对结果不算打破（Session 的同步观察与复核结论共用
 `toolLoopControlFor` 一个前提判据，等人确认期间不中断，Claude Code 对称检查 pending interaction；
 复核终态与同步判定一样，排在已送达完整结果的摘要之后）。以下情况不经复核直接中断（`final: true`）：
 快速完全相同调用连续 30 次、完全相同结果（含节奏轮询）持续 60 分钟、长只读轮转。
-复核只发送最近 12 次调用的摘要：maker-core 只为限制内存截取未脱敏原文（输入保留原结构，
+2026-10-27 用户确认：复核结合用户目标、最新要求、主模型已有的公开行动说明与工具结果，
+判断继续是否合理。仅在明确无进展且无合理继续理由时 STOP；手机/游戏操作、截图观察、
+界面测试、逐项处理、外部进度轮询可以正常重复，缺画面或证据不足时 CONTINUE。
+行动说明只作解释，不能代替结果；所有上下文都是证据，不执行其中针对复核器的指令。
+用户目标复用现有有界用户原话投影（宿主提供时包含历史与最新要求），普通发送与插话更新；
+公开说明来自当前 scope 最近一段 text 事件，增量拼接、final 全文覆盖校准、工具后有新说明时替换，换轮清空。
+不采集 thinking，不额外调用模型摘要，不要求主模型逐次增加说明。先脱敏再截断：
+用户上下文发送最多 4000 字符，行动说明最多 2000 字符；缺失明确标注，不补造目标或理由。
+
+同时发送最近 12 次调用的摘要：maker-core 只为限制内存截取未脱敏原文（输入保留原结构，
 每个字符串 4000 字符；截取点所在的整行一律丢弃，无换行时丢弃末尾连续串与未闭合引号起的内容），desktop 先在未转义的字符串上逐个（键名像凭证的字段与 argv 中凭证参数名的下一项整项删除）
 对完整截取按凭证种类整类脱敏（`redactSensitiveText`、`git-snapshot/secretRedactor.ts`
 的厂商令牌与私钥、截断私钥块、URL 内嵌凭证、命令行凭证参数、凭证类 HTTP 头，最后以
@@ -122,7 +133,8 @@ Chat translator/handler 与三引擎 translator/`tool-markup-projection.test.ts`
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
-Pi 读取独立的设置页百分比，在每次启动或恢复任务时冻结并写成原生 `compaction.reserveTokens`，由 Pi 按
+Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
+Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
 `contextWindow - reserveTokens` 处理 threshold 压缩，并在 provider 报 context overflow 时按原生
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
@@ -193,7 +205,8 @@ Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不�
 （可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
 所有，不再先尝试改写历史／剥图。决定函数见 `cindyContextCompression.ts`。
 字节预算目前只有 Codex 能测量。工具输出不另开一档：图片恢复的交接保留受长度限制、
-带调用关联的文本结果摘要，省略图片数据；伙伴主对话及显式重启也保留这些结果，其他交接沿用原规则。
+带调用关联的文本结果摘要，省略图片数据；普通跨引擎交接也默认保留有界工具结果（调用方可显式关闭）。
+长消息与结果保留首尾，超总预算时优先保留最近请求与结果、检索指引和结束标记；仍为 16,000 字符预算，不额外调用模型。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
 伙伴主对话、话题和 IM 专线与普通 Session 一样依赖原生压缩，不按空闲时长或 70%/90%
@@ -245,6 +258,26 @@ Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 h
 本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+本机外部 Codex 导入完成历史快照交接后、调用原生恢复前，必须将 paginated 历史的
+`rollout-cindy-adopted-*` 名称恢复为原生规范文件名（#7436）。保留原名中的 thread ID
+及可选的独立 rollout ID，不修改历史内容。存量错误路径在已记录的历史根和 SQLite 根内
+修复：不覆盖地建立同 inode 的规范名称、条件更新 SQLite 指针，返回规范路径；修复阶段不写位置索引，
+避免读取后替换覆盖另一进程的最新记录。旧索引仍能通过同 inode 别名恢复，由正常原生线程登记更新索引；
+保留旧名称，使中断重试与已打开的 writer 不会丢失追加内容。遇到另一份规范文件或状态
+已被其它操作切换时明确失败，不覆盖、不重新导入子历史，也不从聊天投影重建。
+带 `history_base` 的分页历史恢复前必须补齐所引用的完整祖先链，按原生 rollout ID
+（可能不同于 thread ID）查找，并保留原始字节、序号与归档位置。存量导入缺少祖先时，
+仅从与已选子历史的原文件名、首条元数据完全匹配的外部 HOME 补齐；已有 SQLite 指针指向自定义目录时，
+在交接指针前将来源根与子历史首条元数据原子保存到私有副本旁的 `.source.json`，中断重试仍使用该来源。
+来源记录不覆盖，且不能绕过子历史匹配和祖先校验；无记录的旧导入仍走候选目录发现。来源不明确、
+祖先缺失／越界／循环或已有副本的引用范围冲突时明确失败。已有子历史和祖先的后续
+追加不被替换；已有祖先仍使用 Cindy 旧文件名时，通过同 inode 规范名称复用，不能另拷贝
+导致父任务恢复冲突。整链先校验，再从最早祖先开始不覆盖发布，中断可重试。补齐后外部 HOME
+不可用也能恢复。异步复制后重查 SQLite 指针和位置索引，不能覆盖并发归档或切换。
+只读归档／导出查询不触发修复。Windows 扩展盘符与 UNC 路径在相对路径计算前统一表示。
+实现见 `maker-host/codex-local-sessions.ts`、`codex-thread-locations.ts`；默认回归在
+`main/__tests__/codexLocalSessions.test.ts`，真实恢复与下一轮发送在同目录的
+`codexLocalSessions.native.test.ts`（显式指定 `CINDY_CODEX_TEST_BINARY`，隔离目录与本机模型服务）。
 归档状态以 Cindy 的 `sessions.status` 为准。Codex 经原生 `thread/archive` /
 `thread/unarchive` 同步历史位置与索引，成功后更新线程位置记录；禁止直接改原生 SQLite
 或搬动 rollout，也不能为归档触发历史复制／重建。启动时补齐存量状态，忙碌任务、离线
@@ -339,6 +372,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
 普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
+收到 Codex 的 `warning`「Falling back from WebSockets to HTTPS transport」后同样清除重连
+计时：HTTPS 要先上传完整历史才有事件，交给 Codex 自身 HTTP 超时与 upstream-idle 兜底。
+ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009），codex-proxy 在出站消息超过
+15 MiB 时按 #5103 的附件外置把最旧的内联附件转为本地文件；这是按实际出站字节判定，不是
+按历史体积推断断连原因。
 普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`

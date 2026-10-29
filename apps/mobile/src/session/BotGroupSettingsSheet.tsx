@@ -1,7 +1,7 @@
-/** 群设置由管理电脑保存；项目文件夹仅可查看。 */
+/** 云端群设置直连聊天服务；旧电脑入口保留原有资源协议。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { ChevronDown, Ellipsis, Folder, Plus } from 'lucide-react-native';
+import { Ellipsis, Folder, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
@@ -16,7 +16,7 @@ import {
 import { chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
-import { MainWindowOptionButton } from '@/components/MobilePrimitives';
+import { MainWindowActionButton, MainWindowOptionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { showConfirm } from '@/platform/chrome';
@@ -28,10 +28,11 @@ import { botGroupActionErrorText } from './botGroupCopy';
 import { CompanionSheet } from './CompanionSheet';
 import { useHostTeammates } from './useHostTeammates';
 import { BotGroupMenu } from './BotGroupMenu';
-import { useBotGroupSettingsManagement } from './useBotGroupSettingsManagement';
-import { canManageBotGroup } from './botGroupRemote';
+import { useBotGroupSettingsManagement, useCloudGroupCandidates, type GroupSettingsActionId } from './useBotGroupSettingsManagement';
+import { chatMemberAvatar } from '@/chat/chatServerClient';
+import { botGroupMemberAvatar, canManageBotGroup } from './botGroupRemote';
 
-type Busy = 'name' | 'members' | 'organizer' | 'replyMode' | 'speakingMode' | 'delete' | 'lifecycle' | null;
+type Busy = 'description' | 'name' | 'members' | 'organizer' | 'replyMode' | 'speakingMode' | 'delete' | 'lifecycle' | null;
 type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) => Promise<unknown>;
 
 type SettingsProps = {
@@ -49,19 +50,20 @@ type SettingsProps = {
   onRefresh?(): void;
 };
 
-/** Server chat remains direct; only the open settings sheet resolves a management host. */
+/** Direct server groups use the same account connection for chat and settings. */
 export function BotGroupSettingsSheet(props: SettingsProps) {
-  return props.readOnly ? <ServerGroupSettings {...props} /> : <BotGroupSettingsContent {...props} />;
+  const { accountGeneration } = useAuth();
+  const key = `${accountGeneration}:${props.group.id}`;
+  return props.readOnly ? <ServerGroupSettings key={key} {...props} /> : <BotGroupSettingsContent key={key} {...props} />;
 }
 
 function ServerGroupSettings(props: SettingsProps) {
-  const management = useBotGroupSettingsManagement(props.group.id, props.visible);
-  const host = management.selected?.host ?? props.host;
-  const group = management.selected?.group ?? props.group;
-  const lookup = useBotGroupIdentities(host.deviceId);
-  return <BotGroupSettingsContent {...props} group={group} host={host}
+  const management = useBotGroupSettingsManagement(props.group, props.visible);
+  const group = management.group ?? props.group;
+  const lookup = useBotGroupIdentities('');
+  return <BotGroupSettingsContent {...props} group={group}
     identityFor={(id, name) => lookup(id, name, group.members.find(member => member.botId === id))}
-    online={!!management.selected && !management.loading} readOnly={!management.selected || management.loading}
+    online={management.editable} readOnly={!management.editable}
     act={async (action, input) => { const receipt = await management.act(action, input); props.onRefresh?.(); return receipt; }}
     management={management} lifecycle={props} />;
 }
@@ -92,7 +94,20 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
   const nameFocused = useRef(false);
   const nameDirty = useRef(false);
   const nameRevision = useRef(group.revision);
-  const teammates = useHostTeammates(host, visible && picking && !readOnly, serverManaged ? memberQuery : '');
+  const teammates = useHostTeammates(host, !management && visible && picking && !readOnly, serverManaged ? memberQuery : '');
+  const cloudCandidates = useCloudGroupCandidates(!!management && visible && picking && !readOnly);
+  const choices = management ? cloudCandidates.rows.filter(row => row.name.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase()))
+    .map(row => {
+      const avatar = chatMemberAvatar(row.avatar);
+      return { id: row.id, name: row.name, avatar: botGroupMemberAvatar({ ...avatar, name: row.name, avatarColor: '' }), avatarUrl: avatar.avatarUrl };
+    })
+    : teammates.rows.map(row => ({ id: row.item.ref.id, name: resolveRemoteText(row.item.display.title, i18n.language), avatar: row.item.display.avatar, avatarUrl: undefined }));
+  const candidatesLoading = management ? cloudCandidates.loading : teammates.loading;
+  const candidatesFailed = management ? cloudCandidates.failed : teammates.failed;
+  const [description, setDescription] = useState(group.description ?? '');
+  const [descriptionDirty, setDescriptionDirty] = useState(false);
+  const descriptionRevision = useRef(group.revision);
+  useEffect(() => { if (!descriptionDirty) setDescription(group.description ?? ''); }, [group.description, descriptionDirty]);
 
   // Follow renames that land from the computer while the field is not being edited.
   useEffect(() => { if (!nameFocused.current && !nameDirty.current) setName(group.name); }, [group.name]);
@@ -107,13 +122,13 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
   const archivesGroup = (serverManaged && !leavesGroup) || management !== undefined;
   const canRemove = serverManaged || group.members.length > BOT_GROUP_MIN_MEMBERS;
   const canAdd = serverManaged || group.members.length < BOT_GROUP_MAX_MEMBERS;
-  const addable = teammates.rows.filter((row) => !memberIds.includes(row.item.ref.id));
+  const addable = choices.filter(row => !memberIds.includes(row.id));
   const permissionLocked = serverManaged && !canManageBotGroup(group);
   const unavailable = readOnly || permissionLocked || !online || !!lifecycleGroup.dissolvedAt;
   const locked = unavailable || busy !== null;
   const deleteLocked = leavesGroup ? readOnly || !online || busy !== null : locked || (serverManaged && !owner);
 
-  const run = async (section: Exclude<Busy, null>, actionId: BotGroupRemoteActionId, input: Record<string, unknown>, fallbackKey: string) => {
+  const run = async (section: Exclude<Busy, null>, actionId: GroupSettingsActionId, input: Record<string, unknown>, fallbackKey: string) => {
     const leaving = actionId === 'delete' && leavesGroup;
     if (readOnly || (permissionLocked && !leaving) || !online || busyRef.current) return false;
     const captured = scope;
@@ -121,7 +136,10 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
     setBusy(section);
     setErrors((current) => ({ ...current, [section]: undefined }));
     try {
-      await act(actionId, serverManaged && !leaving ? { expectedRevision: group.revision, ...input } : input);
+      if (actionId === 'set-member-role') {
+        if (!management) return false;
+        await management.act(actionId, input);
+      } else await act(actionId, serverManaged && !leaving ? { expectedRevision: group.revision, ...input } : input);
       // Legacy deletion reports success to the owning screen even if this sheet unmounted.
       return true;
     } catch (error) {
@@ -142,6 +160,19 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
     const saved = await run('name', 'update', { name: trimmed, ...(serverManaged ? { expectedRevision: nameRevision.current } : {}) }, 'groupChat.settings.nameSaveFailed');
     if (saved) nameDirty.current = false;
   };
+
+  const saveDescription = async () => {
+    if (!descriptionDirty) return;
+    const captured = scope;
+    if (errors.description) descriptionRevision.current = group.revision;
+    const saved = await run('description', 'update', { description, expectedRevision: descriptionRevision.current }, 'groupChat.settings.descriptionSaveFailed');
+    if (saved && active.current === captured) setDescriptionDirty(false);
+  };
+
+  // Native dismissal can happen without TextInput.onBlur. Keep the draft visible until
+  // the user saves it or explicitly cancels, including after a rejected server write.
+  const preventDismiss = busy !== null || descriptionDirty;
+  const close = () => { if (!descriptionDirty) onClose(); };
 
   const setMembers = async (botIds: string[]) => {
     const saved = await run('members', 'set-members', { botIds }, 'groupChat.settings.membersSaveFailed');
@@ -187,30 +218,24 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
         style={[styles.segment, unavailable && styles.inheritedInactive]} testID={`botGroup.settings.${section}.${option.value}`} />)}
     </View>;
 
-  return <CompanionSheet visible={visible} title={t('groupChat.settings.title')} onClose={onClose} onClosed={onClosed}
-    preventDismiss={busy !== null} testID="botGroup.settings">
+  return <CompanionSheet visible={visible} title={t('groupChat.settings.title')} onClose={close} onClosed={onClosed}
+    preventDismiss={preventDismiss} testID="botGroup.settings"
+    footer={descriptionDirty ? <View style={styles.draftActions}>
+      <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy !== null,
+        onPress: () => { if (busyRef.current) return; setDescriptionDirty(false); setDescription(group.description ?? ''); onClose(); },
+        testID: 'botGroup.settings.descriptionCancel' }} />
+      <MainWindowActionButton action={{ label: t('devices.common.save'), tone: 'primary', busy: busy === 'description', disabled: locked,
+        onPress: () => void saveDescription(), testID: 'botGroup.settings.descriptionSave' }} />
+    </View> : undefined}>
     <View style={styles.content}>
-      {management ? <View style={styles.managementRow} testID="botGroup.settings.management">
-        {management.managers.length > 1 ? <View style={styles.computerSlot}><BotGroupMenu title={t('groupChat.settings.managementComputer')} disabled={busy !== null}
-          testID="botGroup.settings.computerMenu" sections={[{ id: 'computers', options: management.managers.map(manager => ({
-            id: manager.host.deviceId, title: manager.host.deviceName,
-          })) }]} onSelect={management.select}>
-          {open => <Pressable accessibilityRole="button" disabled={busy !== null} onPress={open} style={styles.computerPicker}>
-            <Text numberOfLines={1} style={[styles.managementText, styles.flex]}>{management.selected?.host.deviceName}</Text>
-            <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
-          </Pressable>}
-        </BotGroupMenu></View> : <Text numberOfLines={1} style={[styles.managementText, styles.flex]} testID="botGroup.settings.computerName">
-          {management.displayHost?.deviceName ?? t('groupChat.settings.managementComputer')}
-        </Text>}
-        {management.loading ? <ActivityIndicator size="small" color={colors.textSecondary} testID="botGroup.settings.connecting" />
-          : !unavailable ? <View style={styles.connectedDot} testID="botGroup.settings.connectedDot" /> : null}
-        <Text style={styles.managementText} testID="botGroup.settings.managementStatus">
-          {t(`groupChat.settings.managementStatus.${management.loading ? 'loading' : !unavailable ? 'ready' : management.reason ?? 'unavailable'}`)}
+      {management && (management.loading || management.reason) ? <View style={styles.managementRow} testID="botGroup.settings.management">
+        {management.loading ? <ActivityIndicator size="small" color={colors.textSecondary} testID="botGroup.settings.connecting" /> : null}
+        <Text style={[styles.managementText, styles.flex]} testID="botGroup.settings.managementStatus">
+          {t(`groupChat.settings.cloudStatus.${management.loading ? 'loading' : management.reason}`)}
         </Text>
-        {unavailable && !management.loading ? <Pressable accessibilityRole="button" onPress={management.refresh}
+        {!management.loading ? <Pressable accessibilityRole="button" onPress={() => void management.refresh()}
           style={styles.reconnect} testID="botGroup.settings.retry">
-          <Text style={styles.reconnectText}>{t(management.reason === 'noHost' || management.reason === 'unavailable'
-            ? 'groupChat.settings.reconnect' : 'groupChat.settings.retry')}</Text>
+          <Text style={styles.reconnectText}>{t('groupChat.settings.retry')}</Text>
         </Pressable> : null}
       </View> : null}
       <View style={[styles.settingsBody, unavailable && styles.inactive]} testID="botGroup.settings.body">
@@ -227,6 +252,15 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
         {error('name')}
       </View>
 
+      {management ? <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{t('groupChat.settings.description')}</Text>
+        <TextInput accessibilityLabel={t('groupChat.settings.description')} value={description} maxLength={2000} multiline
+          editable={!locked} style={[styles.input, styles.description]} testID="botGroup.settings.description"
+          onChangeText={value => { if (!descriptionDirty || errors.description) descriptionRevision.current = group.revision;
+            setDescriptionDirty(true); setDescription(value); setErrors(current => ({ ...current, description: undefined })); }} />
+        {error('description')}
+      </View> : null}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('groupChat.settings.members')}</Text>
         <View style={styles.group}>
@@ -238,6 +272,8 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
               && (!serverManaged || (!member.isSelf && (owner || member.role !== 'owner')));
             const organizer = member.botId === group.organizerBotId;
             const options = [
+              ...(management && active && member.actorId && member.role !== 'owner' && !member.isSelf
+                ? [{ id: `role:${member.botId}`, title: t(member.role === 'admin' ? 'groupChat.settings.removeAdmin' : 'groupChat.settings.makeAdmin') }] : []),
               ...(!organizer && canOrganize ? [{ id: `organizer:${member.botId}`, title: t('groupChat.settings.setOrganizer') }] : []),
               {
                 id: `remove:${member.botId}`, title: t('groupChat.settings.remove'), destructive: true, disabled: !removable,
@@ -250,7 +286,8 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
               testID={`botGroup.settings.memberMenu.${member.botId}`}
               sections={[{ id: 'member', options }]}
               onSelect={(id) => {
-                if (id.startsWith('organizer:')) void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed');
+                if (id.startsWith('role:')) void run('members', 'set-member-role', { actorId: member.actorId, role: member.role === 'admin' ? 'member' : 'admin' }, 'groupChat.settings.membersSaveFailed');
+                else if (id.startsWith('organizer:')) void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed');
                 else if (id.startsWith('remove:')) {
                   if (group.supportsMemberRemoval && member.actorId)
                     void run('members', 'remove-member', { actorId: member.actorId }, 'groupChat.settings.membersSaveFailed');
@@ -267,6 +304,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
                 <View style={styles.memberName}>
                   <Text numberOfLines={1} style={styles.rowTitle}>{identity.name}</Text>
                   {organizer ? <BotGroupOrganizerTag /> : null}
+                  {management && member.role ? <Text style={styles.rowMeta}>{t(`groupChat.settings.roles.${member.role}`)}</Text> : null}
                   {!active ? <Text numberOfLines={1} style={styles.rowMeta}>
                     {t(member.status === 'paused' ? 'groupChat.memberStatus.paused' : 'groupChat.memberStatus.unavailable')}
                   </Text> : null}
@@ -291,18 +329,18 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
               accessibilityLabel={t('devices.companions.search')} placeholder={t('devices.companions.search')}
               placeholderTextColor={colors.textPlaceholder} autoCorrect={false} returnKeyType="search"
               style={[styles.input, styles.searchInput]} testID="botGroup.settings.memberSearch" /> : null}
-            {teammates.loading && addable.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
-            {!teammates.loading && addable.length === 0
-              ? <Text style={styles.note}>{t(teammates.failed ? 'devices.resources.loadFailed' : 'groupChat.settings.noMoreBots')}</Text>
+            {candidatesLoading && addable.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
+            {!candidatesLoading && addable.length === 0
+              ? <Text style={styles.note}>{t(candidatesFailed ? 'devices.resources.loadFailed' : 'groupChat.settings.noMoreBots')}</Text>
               : null}
             {addable.map((row, index) => {
-              const title = resolveRemoteText(row.item.display.title, i18n.language);
-              return <Pressable key={row.key} accessibilityRole="button" accessibilityLabel={title} disabled={locked}
-                onPress={() => { if (serverManaged) void run('members', 'add-member', { botId: row.item.ref.id }, 'groupChat.settings.membersSaveFailed').then(saved => { if (saved) setPicking(false); });
-                  else void setMembers([...memberIds, row.item.ref.id]); }}
+              const title = row.name;
+              return <Pressable key={row.id} accessibilityRole="button" accessibilityLabel={title} disabled={locked}
+                onPress={() => { if (serverManaged) void run('members', 'add-member', { botId: row.id }, 'groupChat.settings.membersSaveFailed').then(saved => { if (saved) setPicking(false); });
+                  else void setMembers([...memberIds, row.id]); }}
                 style={({ pressed }) => [styles.memberRow, pressed && mobileInteractionStyles.pressed]}
-                testID={`botGroup.settings.addable.${row.item.ref.id}`}>
-                <BotGroupAvatar deviceId={host.deviceId} identity={{ botId: row.item.ref.id, name: title, avatar: row.item.display.avatar }}
+                testID={`botGroup.settings.addable.${row.id}`}>
+                <BotGroupAvatar deviceId={host.deviceId} identity={{ botId: row.id, name: title, avatar: row.avatar, avatarUrl: row.avatarUrl }}
                   size={BOT_GROUP_ROW_AVATAR_SIZE} online={online} />
                 <Text numberOfLines={1} style={[styles.rowTitle, styles.flex]}>{title}</Text>
                 <Plus size={iconSize.sm} color={colors.textTertiary} />
@@ -316,7 +354,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
         {error('organizer')}
       </View>
 
-      <View style={styles.section}>
+      {!management ? <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('groupChat.settings.projectDir')}</Text>
         <View style={[styles.group, styles.memberRow]} testID="botGroup.settings.projectDir">
           <Folder size={iconSize.md} color={colors.textSecondary} />
@@ -324,7 +362,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
           <Text numberOfLines={1} style={styles.rowMeta}>{t('groupChat.settings.projectDirOnComputer')}</Text>
         </View>
         <Text style={styles.note}>{t('groupChat.settings.projectDirNote')}</Text>
-      </View>
+      </View> : null}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('groupChat.settings.replyMode')}</Text>
@@ -384,17 +422,16 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { gap: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.xl },
   settingsBody: { gap: spacing.xl },
+  draftActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
   managementRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   managementText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  computerSlot: { flex: 1, minWidth: 0 },
-  computerPicker: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  connectedDot: { width: 6, height: 6, borderRadius: radius.pill, backgroundColor: colors.statusDone },
   reconnect: { minHeight: 44, minWidth: 44, justifyContent: 'center', alignItems: 'center' },
   reconnectText: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   section: { gap: spacing.sm },
   sectionTitle: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
   input: { minHeight: 44, borderRadius: radius.pill, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.lg, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, fontSize: typeScale.body },
+  description: { minHeight: 100, borderRadius: radius.control, paddingVertical: spacing.md, textAlignVertical: 'top', lineHeight: lineHeight.body },
   searchInput: { fontSize: typeScale.bodySmall },
   group: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, overflow: 'hidden' },

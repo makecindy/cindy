@@ -456,6 +456,53 @@ describe('ask_user 与 done 的时序', () => {
     expect(pendingAskStatuses()).toEqual(['expired']);
   });
 
+  // #7144: the live IPC path must retain submitted answers after a stale close.
+  // Existing tests cover pending expiry, but not answered -> empty dismissal.
+  // Unit: two questions, one skipped, turn done before submitting the answer.
+  it.each(['resolved-push', 'accepted-receipt'] as const)(
+    'keeps an answered cross-turn card after an empty dismissal (%s)',
+    async (completion) => {
+      makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+      emitAskUserRequest('answered-card', [{ question: 'First?' }, { question: 'Second?' }]);
+      emitDone('codex');
+      const answers = { 'First?': 'Custom answer', 'Second?': '' };
+      makerChatStore.answerUserQuestion(SESSION_ID, 'answered-card', answers);
+      if (completion === 'resolved-push') {
+        onInteractionDismissed?.({
+          sessionId: SESSION_ID, requestId: 'answered-card', reason: 'resolved',
+          decision: { kind: 'ask_user_question', answers },
+        });
+      }
+      await vi.waitFor(() => expect(pendingAskStatuses()).toEqual(['answered']));
+      const answered = makerChatStore.getSnapshot(SESSION_ID).messages.find(
+        (m) => m.askUserRequestId === 'answered-card',
+      );
+
+      onInteractionDismissed?.({
+        sessionId: SESSION_ID, requestId: 'answered-card',
+        reason: 'server_request_resolved', resolvedAs: 'deny',
+      });
+
+      const after = makerChatStore.getSnapshot(SESSION_ID);
+      expect(after.pendingAskUser).toBeNull();
+      expect(after.messages.find((m) => m.askUserRequestId === 'answered-card')).toBe(answered);
+      expect(pendingAskStatuses()).toEqual(['answered']);
+      expect(answered?.askUserAnswers).toEqual(answers);
+      expect(answered?.askUserReply).toBe('First?: Custom answer\nSecond?: (skipped)');
+      expect(updateMessageContent).not.toHaveBeenCalled();
+
+      // A real winning decision remains authoritative even for answered rows.
+      const winningAnswers = { 'First?': 'Winning answer', 'Second?': '' };
+      onInteractionDismissed?.({
+        sessionId: SESSION_ID, requestId: 'answered-card', reason: 'resolved',
+        decision: { kind: 'ask_user_question', answers: winningAnswers },
+      });
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages.find(
+        (m) => m.askUserRequestId === 'answered-card',
+      )).toMatchObject({ askUserStatus: 'answered', askUserAnswers: winningAnswers });
+    },
+  );
+
   it('codex:答题只走 resolveInteraction，不本地落库', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitAskUserRequest('ask-4');

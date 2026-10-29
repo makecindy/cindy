@@ -67,8 +67,8 @@ import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryP
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
-import { serverApiFetch } from '../serverApiClient';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -168,7 +168,9 @@ import {
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
-import { getClientEndpoint } from '../clientEndpointsService';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
+import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
+import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import {
   handleContactsDeviceLinkStatusChanged,
   handleContactsPeerPresenceChanged,
@@ -202,7 +204,8 @@ const WS_PATH = '/api/device-link/ws';
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
 export function deviceLinkApiBase(): string {
-  return getClientEndpoint('deviceLinkApiBaseUrl');
+  // 自建中转(docs/self-hosted-relay-plan.md)时指向用户自己的中转,否则走官方清单。
+  return resolveDeviceLinkApiBase();
 }
 
 type DeviceDirectoryResponse = {
@@ -332,8 +335,7 @@ async function runControllerDisplayNamesFromDirectory(
   presenceRequestEpoch: number,
 ): Promise<void> {
   try {
-    const result = await serverApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', {
-      baseUrl: deviceLinkApiBase,
+    const result = await deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', {
       timeoutMs: 10_000,
     });
     if (
@@ -616,6 +618,9 @@ let relayAuthRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
  * refresh 路径自己走会话过期出口(清会话 + 弹重登),auth 监听随后会停掉本服务。
  */
 function recoverFromRelayAuthFailure(): void {
+  // 自建中转拒绝的是中转凭证,与 Cindy 账号无关:不刷新、不轮换账号 token。
+  // 界面经 connection issue 提示「已被移出中转」,由用户重新加入或切回官方。
+  if (activeSelfHostedRelay()) return;
   const now = Date.now();
   const elapsed = now - lastRelayAuthRecoveryAt;
   if (elapsed < RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS) {
@@ -686,6 +691,8 @@ function wsUrl(): string {
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
+  /** Host chrome follows the same controller set as CONTROLLED_STATE. */
+  onControlledStateChanged?: () => void;
 }
 
 let stopNetworkWatch: (() => void) | null = null;
@@ -710,9 +717,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     directRuntime: desktopDirectRuntime,
     getWsUrl: wsUrl,
     transferCodec: desktopTransferCodec,
+    // 自建中转用中转凭证(CindyRelay),官方中转用账号 token(Bearer);两者每次建连前同一轮取值。
+    authorizationScheme: () => (activeSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
+    // 自建中转:每条对端消息签名,收到的对端消息核对签名(中转无法冒充设备);官方中转返回 null,行为不变。
+    frameAuth: currentRelayFrameAuth,
     getToken: async () => {
       // Prepare the name before the first hello without blocking Electron's main thread.
       await deviceNameReady;
+      const relay = activeSelfHostedRelay();
+      if (relay) return authManager.getAuthState().isAuthenticated ? relay.credential : null;
       const token = authManager.getAccessToken();
       if (token) return token;
       // 无现值(冷启动竞态/过期被清):尝试 refresh 一次,失败则跳过本轮重连
@@ -1016,6 +1029,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
   setControllersChangedListener((controllers, updateRelaunchControllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    options.onControlledStateChanged?.();
     updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
     notifyUpdateRelaunchBusy();
   });
@@ -1346,6 +1360,24 @@ function restartDeviceLinkForAuthRealmChange(): void {
       ) {
         return;
       }
+      arbiter?.start();
+    });
+}
+
+/**
+ * 切换中转(官方 ↔ 自建,或换一个自建中转)后重连:与换区相同,先完整释放持有权并拆掉旧链路,
+ * 再按最新地址 / 凭证重新参与仲裁。不重连就会一直连着旧中转。
+ */
+export function restartDeviceLinkForRelayChange(): void {
+  if (!client || !arbiter) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  const generation = ++authRealmReconnectGeneration;
+  void stopArbitrationAndTeardown()
+    .catch((error) => {
+      log.warn('device-link ownership release during relay switch failed', error);
+    })
+    .then(() => {
+      if (generation !== authRealmReconnectGeneration || !authManager.getAuthState().isAuthenticated) return;
       arbiter?.start();
     });
 }
@@ -1732,8 +1764,9 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
  */
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
-async function ensureOnlineForRequest(): Promise<void> {
-  if (!client || client.getStatus() === 'online') return;
+async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
+  if (!client || client.getStatus() === 'online'
+    || (deviceId && client.hasOfflineDirectPath(deviceId))) return;
   await client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
@@ -1926,12 +1959,12 @@ export async function remoteInvoke(
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
-    await ensureOnlineForRequest();
+    await ensureOnlineForRequest(deviceId);
     // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(复验
     // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
     preSend();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    // 共享任务与供应商分享的对端是另一个账号：只走 relay，不尝试点对点直连。
+    // 同账号专用的 tryPeerInvoke 不用于 scoped peer；供应商分享直连由 DeviceLinkClient 的可靠传输层处理。
     if (!isScopedPeer(deviceId)) {
       // 直连会保存这个回调，之后在空闲关闭等定时器里调用（届时 preSend 可能已失效）。
       // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
@@ -1985,7 +2018,7 @@ export async function remoteBackgroundInvoke(
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
   const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
   options?.preSend?.();
-  const shared = deviceId !== agentDeviceId;
+  const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
@@ -2055,7 +2088,7 @@ export async function remoteSubscribe(
   // CLOSE_LINK 的在途调用;之后的新调用(重放重试 / 用户重开)按新代次照常。
   const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const run = async (): Promise<InvokeResultPayload> => {
-    await ensureOnlineForRequest();
+    await ensureOnlineForRequest(deviceId);
     let liveTopics = liveTopicsNow();
     if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
@@ -2110,6 +2143,7 @@ const mobileNotifyDeduper = new MobileNotifyDeduper();
  * 会话终态时给本账号已注册推送 token 的手机发系统推送(fire-and-forget)。
  * 静默跳过的场景(返回 false):
  *  - relay 未连接 / server 未声明 notify capability(老 relay,黑洞防护)
+ *  - 该任务开了「消息免打扰」(含代输入等不走会话终态路径的调用方)
  *  - 有控制端正订阅该会话的实时流(session:<id> topic)——人已经在手机上看着这
  *    个会话,系统推送只会重复打扰
  *  - 同 session + kind 5s 短窗去重
@@ -2132,8 +2166,16 @@ export function sendMobileSessionNotify(payload: {
    * 过期丢弃,不得把旧账号的通知发进新账号的链路。
    */
   generation?: number;
+  /**
+   * 这条提醒来自其它设备(device-link)的任务:本机上可能恰有同 id 的无关任务行,
+   * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
+   */
+  muteExempt?: boolean;
 }): boolean {
   if (!client) return false;
+  // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
+  // notification:show-session-event,这里是所有发起方的唯一出口。
+  if (!payload.muteExempt && isSessionNotificationsMutedSync(payload.sessionId)) return false;
   if (payload.generation !== undefined && payload.generation !== mobileNotifyGeneration) {
     log.debug(
       `mobile notify dropped: link generation changed (account/ownership boundary), session=${payload.sessionId.slice(0, 8)}`,

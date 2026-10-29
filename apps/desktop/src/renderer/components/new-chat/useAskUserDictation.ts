@@ -63,14 +63,17 @@ export function useAskUserDictation(
   options?: UseAskUserDictationOptions,
 ): {
   state: VoiceInputState;
+  captureReady: boolean;
   isBusy: boolean;
   liveText: string | null;
   lastError: string | null;
   start: () => boolean;
   stop: () => Promise<boolean>;
+  cancel: () => Promise<void>;
 } {
   const { t } = useTranslation();
   const [state, setState] = useState<VoiceInputState>('idle');
+  const [captureReady, setCaptureReady] = useState(false);
   const [liveText, setLiveText] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
@@ -132,9 +135,15 @@ export function useAskUserDictation(
     if (!engine) return;
     try {
       await engine.drainBufferedAudio();
-      await engine.stop();
+    } catch (error) {
+      log.warn('drain microphone failed', error instanceof Error ? error.message : String(error));
     } finally {
+      // Retain ownership while draining the final PCM, then revoke it before
+      // stop waits on getUserMedia so a late capture cannot reopen this take.
       if (engineRef.current === engine) engineRef.current = null;
+      await engine.stop().catch((error) => {
+        log.warn('stop microphone failed', error instanceof Error ? error.message : String(error));
+      });
     }
     try {
       await window.electronAPI.voiceInput.drainAudioQueue?.();
@@ -145,6 +154,7 @@ export function useAskUserDictation(
 
   const fail = useCallback(async (message: string) => {
     attemptRef.current += 1;
+    const runId = runIdRef.current;
     runIdRef.current = null;
     anchorRef.current = null;
     setLiveText(null);
@@ -153,7 +163,7 @@ export function useAskUserDictation(
     await stopEngine();
     await restoreMute();
     try {
-      await window.electronAPI.voiceInput.cancel();
+      if (runId) await window.electronAPI.voiceInput.cancel({ runId });
     } catch {
       /* The run may never have started. */
     }
@@ -166,7 +176,7 @@ export function useAskUserDictation(
       if (!shouldHandleVoiceInputEvent(
         runIdRef.current,
         event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
+        anchorRef.current !== null && isVoiceInputEventScopeActive(stateRef.current),
       )) return;
       if (event.type === 'draft') {
         const anchor = anchorRef.current;
@@ -215,6 +225,7 @@ export function useAskUserDictation(
         return;
       }
       if (event.type === 'state') {
+        if (event.state === 'listening' && stopInFlightRef.current) return;
         setVoiceState(event.state);
         if (event.state === 'done' || event.state === 'error') {
           anchorRef.current = null;
@@ -266,6 +277,7 @@ export function useAskUserDictation(
     completionRef.current = { promise: completion, resolve: resolveCompletion };
     runIdRef.current = null;
     setLastError(null);
+    setCaptureReady(false);
     setLiveText(null);
     setVoiceState('listening');
     let resolveStartReady: () => void = () => undefined;
@@ -276,17 +288,41 @@ export function useAskUserDictation(
     void (async () => {
       try {
       const settings = getVoiceInputSettings();
+      // Like the composer, retain opening words while readiness is checked.
+      const capturePromise = startVoiceInputCaptureSession({
+        label: 'ask-user',
+        workletUrl: getVoiceInputWorkletUrl(),
+        deviceId: settings.microphoneDeviceId ?? undefined,
+        fastActivationEnabled: settings.fastActivationEnabled,
+        getRunId: () => runIdRef.current,
+        setEngine: (engine) => { engineRef.current = engine; },
+        isCurrentEngine: (engine) => attemptRef.current === attempt && engineRef.current === engine,
+        onCaptureReady: () => {
+          if (attemptRef.current === attempt && stateRef.current === 'listening') setCaptureReady(true);
+        },
+        appendAudioChunk: (chunk) => { api.appendAudio(chunk); },
+        onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message); },
+        onStateChange: () => undefined,
+        getFallbackMessage: () => t('settings.voiceInput.microphone.errors.fallbackToAuto'),
+        onFallback: (message) => toast.warning(message),
+        formatStartError: (error) => error instanceof Error ? error.message : String(error),
+      });
+      let feedback: Promise<unknown> = Promise.resolve();
       if (settings.playInteractionSound) {
         prepareVoiceInputCues();
-        void playVoiceInputStartCue();
+        feedback = playVoiceInputStartCue();
       }
       if (settings.muteSystemAudio && supportsSystemAudioMute()) {
-        const muteRequest = api.muteSystemAudio().then((result) => {
+        const muteRequest = feedback.catch(() => undefined).then(async () => {
+          if (attemptRef.current !== attempt || stateRef.current !== 'listening') return;
+          const result = await api.muteSystemAudio();
           if (result.ok) mutedRef.current = true;
         }).catch(() => undefined).finally(() => {
           if (pendingMuteRef.current === muteRequest) pendingMuteRef.current = null;
         });
         pendingMuteRef.current = muteRequest;
+      } else {
+        void feedback.catch(() => undefined);
       }
 
       let guards: Awaited<ReturnType<typeof resolveVoiceInputStartGuards>>;
@@ -304,6 +340,7 @@ export function useAskUserDictation(
           : guards.permission.error;
         setVoiceState('error');
         anchorRef.current = null;
+        await stopEngine();
         if (!guards.permission.ok) {
           await optionsRef.current?.onPermissionRequired?.(guards.permission.error);
         } else {
@@ -313,27 +350,7 @@ export function useAskUserDictation(
         return;
       }
 
-      const capture = await startVoiceInputCaptureSession({
-        label: 'ask-user',
-        workletUrl: getVoiceInputWorkletUrl(),
-        deviceId: settings.microphoneDeviceId ?? undefined,
-        fastActivationEnabled: settings.fastActivationEnabled,
-        getRunId: () => runIdRef.current,
-        setEngine: (engine) => {
-          engineRef.current = engine;
-        },
-        isCurrentEngine: (engine) => engineRef.current === engine,
-        appendAudioChunk: (chunk) => {
-          window.electronAPI.voiceInput.appendAudio(chunk);
-        },
-        onInterrupted: (message) => {
-          if (attemptRef.current === attempt) void fail(message);
-        },
-        onStateChange: () => undefined,
-        getFallbackMessage: () => t('settings.voiceInput.microphone.errors.fallbackToAuto'),
-        onFallback: (message) => toast.warning(message),
-        formatStartError: (error) => (error instanceof Error ? error.message : String(error)),
-      });
+      const capture = await capturePromise;
       if (attemptRef.current !== attempt) return;
       if (!capture.ok) {
         if (capture.cancelled) {
@@ -385,22 +402,30 @@ export function useAskUserDictation(
       }
       runIdRef.current = started.runId;
       capture.drainPendingChunks();
+      } catch (error) {
+        if (attemptRef.current === attempt) await fail(formatError(error instanceof Error ? error.message : String(error)));
       } finally {
         resolveStartReady();
       }
     })();
     return true;
-  }, [fail, formatError, reportError, restoreMute, setVoiceState, t]);
+  }, [fail, formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
 
   const stop = useCallback(async () => {
     if (stopInFlightRef.current) return stopInFlightRef.current;
+    const attempt = attemptRef.current;
+    if (!isVoiceInputEventScopeActive(stateRef.current)) return stateRef.current === 'done';
+    setVoiceState('submitting');
     const stopping = (async () => {
       try {
+        const completion = completionRef.current;
         // Capture may already be live while the service is connecting. Stop it
         // before awaiting startup so post-press speech is not included.
         await stopEngine();
-        await startReadyRef.current;
-        const completion = completionRef.current;
+        // Cancellation/unmount settles completion even if startup IPC has not
+        // returned. Release the submitter now; startup still cancels a late run.
+        await (completion ? Promise.race([startReadyRef.current, completion.promise]) : startReadyRef.current);
+        if (attemptRef.current !== attempt) return false;
         const settings = getVoiceInputSettings();
         if (settings.playInteractionSound) playVoiceInputEndCue();
         // Also release an engine whose startup finished after the first stop.
@@ -408,6 +433,7 @@ export function useAskUserDictation(
         if (runIdRef.current) {
           if (stateRef.current === 'listening') setVoiceState('submitting');
           const result = await window.electronAPI.voiceInput.stop();
+          if (attemptRef.current !== attempt) return false;
           if (!result.ok) {
             await fail(formatError(result.error));
             return false;
@@ -417,21 +443,50 @@ export function useAskUserDictation(
         // the terminal event proves that setText has received the final text.
         return completion ? await completion.promise : false;
       } catch (error) {
-        await fail(formatError(error instanceof Error ? error.message : String(error)));
+        if (attemptRef.current === attempt) await fail(formatError(error instanceof Error ? error.message : String(error)));
         return false;
       } finally {
-        await restoreMute();
-        targetRef.current.focus();
+        if (attemptRef.current === attempt) {
+          await restoreMute();
+          targetRef.current.focus();
+        }
       }
     })();
-    stopInFlightRef.current = stopping.finally(() => {
-      stopInFlightRef.current = null;
+    const finishing = stopping.finally(() => {
+      if (stopInFlightRef.current === finishing) stopInFlightRef.current = null;
     });
-    return stopInFlightRef.current;
+    stopInFlightRef.current = finishing;
+    return finishing;
   }, [fail, formatError, restoreMute, setVoiceState, stopEngine]);
+
+  const cancel = useCallback(async () => {
+    const attempt = ++attemptRef.current;
+    const runId = runIdRef.current;
+    runIdRef.current = null;
+    anchorRef.current = null;
+    draftTextRef.current = null;
+    completionRef.current?.resolve(false);
+    setLiveText(null);
+    // Retain committed text, discard only the unsubmitted live preview.
+    setVoiceState('submitting');
+    try {
+      await stopEngine();
+    } finally {
+      await restoreMute();
+      if (runId) await window.electronAPI.voiceInput.cancel({ runId }).catch(() => undefined);
+      if (attemptRef.current === attempt) {
+        // Only the stopping promise releases its lock: main's old stop cleanup
+        // must finish before another recording can become active.
+        setVoiceState('idle');
+        targetRef.current.focus();
+      }
+    }
+  }, [restoreMute, setVoiceState, stopEngine]);
 
   useEffect(() => () => {
     attemptRef.current += 1;
+    stateRef.current = 'idle';
+    anchorRef.current = null;
     completionRef.current?.resolve(false);
     const runId = runIdRef.current;
     runIdRef.current = null;
@@ -442,10 +497,12 @@ export function useAskUserDictation(
 
   return {
     state,
+    captureReady,
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
     liveText,
     lastError,
     start,
     stop,
+    cancel,
   };
 }

@@ -203,24 +203,30 @@ function nonEmptyRolloutStillMatches(
 }
 
 /** Bounded-memory equality check used only for Cindy-owned immutable candidates. */
-function filesHaveSameContents(leftPath: string, rightPath: string): boolean {
+function filesHaveSameContents(leftPath: string, rightPath: string, prefixBytes?: number): boolean {
   let leftFd: number | null = null;
   let rightFd: number | null = null;
   try {
     const leftStat = fs.statSync(leftPath);
     const rightStat = fs.statSync(rightPath);
-    if (!leftStat.isFile() || !rightStat.isFile() || leftStat.size !== rightStat.size) return false;
+    if (!leftStat.isFile() || !rightStat.isFile()) return false;
+    if (prefixBytes === undefined ? leftStat.size !== rightStat.size
+      : leftStat.size < prefixBytes || rightStat.size < prefixBytes) return false;
     leftFd = fs.openSync(leftPath, 'r');
     rightFd = fs.openSync(rightPath, 'r');
     const left = Buffer.allocUnsafe(64 * 1024);
     const right = Buffer.allocUnsafe(64 * 1024);
-    for (;;) {
-      const leftRead = fs.readSync(leftFd, left, 0, left.length, null);
-      const rightRead = fs.readSync(rightFd, right, 0, right.length, null);
+    let remaining = prefixBytes ?? leftStat.size;
+    while (remaining > 0) {
+      const length = Math.min(left.length, remaining);
+      const leftRead = fs.readSync(leftFd, left, 0, length, null);
+      const rightRead = fs.readSync(rightFd, right, 0, length, null);
       if (leftRead !== rightRead) return false;
-      if (leftRead === 0) return true;
+      if (leftRead === 0) return false;
       if (!left.subarray(0, leftRead).equals(right.subarray(0, rightRead))) return false;
+      remaining -= leftRead;
     }
+    return true;
   } catch {
     return false;
   } finally {
@@ -455,6 +461,14 @@ export function readCodexThreadStorageForArchive(threadId: string): {
 
 /** Ensure a Codex thread from another local CODEX_HOME is visible to xdt-maker's app-server. */
 export async function prepareExternalCodexSessionForResume(threadId: string): Promise<string | undefined> {
+  const prepared = await prepareExternalCodexSessionStorage(threadId);
+  // Keep the existing snapshot/namespace handoff intact. Its Cindy-owned stage
+  // must be promoted before native resume (and repaired after an interrupted
+  // promotion), since paginated Codex derives rollout identity from the basename.
+  return prepared ? prepareCodexRolloutForResume(threadId, prepared, getDesktopCodexHome(), true) : prepared;
+}
+
+async function prepareExternalCodexSessionStorage(threadId: string): Promise<string | undefined> {
   if (!isLikelyThreadId(threadId)) return;
   const targetHome = getDesktopCodexHome();
   const targetDbPath = findLatestStateDb(targetHome);
@@ -630,6 +644,11 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
         );
         if (!adopted) {
           throw resumePreparationBlocked(threadId, 'external rollout changed during private adoption');
+        }
+        // Save the exact source before SQLite stops pointing at it. A custom
+        // history root need not be discoverable, including after a failed retry.
+        if (readPaginatedBase(threadId, adopted.path)) {
+          rememberCodexHistorySource(threadId, targetHome, adopted.path, targetRollout);
         }
         if (handoffThreadToCopiedRollout(
           targetDbPath,
@@ -1213,7 +1232,10 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
 
 /** 为外部 thread 派生当前 Codex HOME 内的稳定 rollout 路径。 */
 function targetRolloutPathForExternalThread(thread: CodexThreadSummary, targetHome: string): string {
-  const relative = path.relative(thread.sourceHome, thread.rolloutPath);
+  const relative = path.relative(
+    normalizeCodexWindowsPath(thread.sourceHome),
+    normalizeCodexWindowsPath(thread.rolloutPath),
+  );
   const firstSegment = relative.split(path.sep)[0];
   const isSafeCodexRelativePath = relative !== ''
     && relative !== '..'
@@ -1225,6 +1247,281 @@ function targetRolloutPathForExternalThread(thread: CodexThreadSummary, targetHo
   const directory = thread.archived ? 'archived_sessions' : 'sessions';
   const filename = path.basename(thread.rolloutPath) || `rollout-migrated-${thread.threadId}.jsonl`;
   return path.join(targetHome, directory, filename);
+}
+
+/** Normalize only Win32 filesystem aliases, including extended UNC paths. */
+export function normalizeCodexWindowsPath(value: string): string {
+  if (/^\\\\\?\\UNC\\/i.test(value)) return `\\\\${value.slice(8)}`;
+  return /^\\\\\?\\[a-z]:\\/i.test(value) ? value.slice(4) : value;
+}
+
+function originalCodexRolloutName(file: string): string {
+  return path.basename(file).replace(/^(?:rollout-cindy-(?:adopted|empty-recovery|synthetic)(?:-\d+)?-)+/, '');
+}
+
+function nativeRolloutIdentity(file: string): { threadId: string; rolloutId: string } | undefined {
+  const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  const match = originalCodexRolloutName(file).match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, 'i'));
+  return match ? { threadId: match[1]!.toLowerCase(), rolloutId: (match[2] ?? match[1])!.toLowerCase() } : undefined;
+}
+
+interface CodexHistoryBase {
+  thread_id: string;
+  end_ordinal_exclusive: number;
+  end_byte_offset: number;
+}
+
+function readPaginatedBase(threadId: string, file: string): CodexHistoryBase | undefined {
+  const line = readFirstLineSync(file);
+  if (!line) return;
+  let record: unknown;
+  try { record = JSON.parse(line); } catch { return; }
+  if (!isRecord(record) || record.type !== 'session_meta' || !isRecord(record.payload)
+    || record.payload.history_mode !== 'paginated' || record.payload.history_base == null) return;
+  const base = record.payload.history_base;
+  if (!isRecord(base) || typeof base.thread_id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(base.thread_id)
+    || !Number.isSafeInteger(base.end_ordinal_exclusive) || (base.end_ordinal_exclusive as number) <= 0
+    || !Number.isSafeInteger(base.end_byte_offset) || (base.end_byte_offset as number) <= 0) {
+    throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor reference');
+  }
+  return base as unknown as CodexHistoryBase;
+}
+
+/** Finish a native history handoff before resume, including old indexed imports. */
+export async function prepareCodexRolloutForResume(
+  threadId: string, rolloutPath: string, sqliteHome: string, verifyExternalSource = false,
+): Promise<string> {
+  const dbPath = findLatestStateDb(sqliteHome);
+  const expected = dbPath ? readThreadRolloutPath(dbPath, threadId) : null;
+  await ensureCodexHistoryAncestors(threadId, rolloutPath, verifyExternalSource);
+  if (dbPath && readThreadRolloutPath(dbPath, threadId) !== expected) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed during ancestor import');
+  }
+  return repairCodexRolloutPath(threadId, rolloutPath, sqliteHome);
+}
+
+function rememberCodexHistorySource(threadId: string, targetHome: string, rolloutPath: string, sourcePath: string): void {
+  const file = `${rolloutPath}.source.json`;
+  const contents = JSON.stringify({ sourceHome: historyHomeForRollout(sourcePath), rootLine: readFirstLineSync(rolloutPath) });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
+    try { fs.linkSync(temporary, file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    if (!readPrivateNonEmptyRolloutSnapshot(targetHome, file) || fs.readFileSync(file, 'utf8') !== contents) {
+      throw resumePreparationBlocked(threadId, 'conflicting paginated history source');
+    }
+  } finally { fs.rmSync(temporary, { force: true }); }
+}
+
+async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string, verifyExternalSource: boolean): Promise<void> {
+  const targetHome = historyHomeForRollout(rolloutPath);
+  const rootSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, rolloutPath);
+  if (!rootSnapshot) return; // Preserve existing missing/empty/unsafe recovery behavior.
+  // Most histories are self-contained. Do not scan external homes on this path.
+  let base = readPaginatedBase(threadId, rolloutPath);
+  if (!base) return;
+  const rootLine = readFirstLineSync(rolloutPath);
+  const rootIdentity = nativeRolloutIdentity(rolloutPath);
+  if (!rootIdentity || rootIdentity.threadId !== threadId.toLowerCase()) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated history has an invalid identity');
+  }
+  const filesByHome = new Map<string, string[]>();
+  const files = (home: string) => {
+    let value = filesByHome.get(home);
+    if (!value) { value = collectRolloutFiles(home, samePath(home, targetHome)); filesByHome.set(home, value); }
+    return value;
+  };
+  let sourceHome: string | undefined;
+  let searchedSource = false;
+  const source = () => {
+    if (!searchedSource) {
+      searchedSource = true;
+      // Anchor recovery to the exact imported child's immutable metadata and
+      // rollout identity. Never pick a similarly named thread or reimport its tail.
+      const sourceFile = `${rolloutPath}.source.json`;
+      let candidates: string[];
+      if (fs.existsSync(sourceFile)) {
+        if (!readPrivateNonEmptyRolloutSnapshot(targetHome, sourceFile)) {
+          throw resumePreparationBlocked(threadId, 'unsafe paginated history source');
+        }
+        const saved: unknown = JSON.parse(fs.readFileSync(sourceFile, 'utf8'));
+        if (!isRecord(saved) || typeof saved.sourceHome !== 'string' || !path.isAbsolute(saved.sourceHome)
+          || saved.rootLine !== rootLine) {
+          throw resumePreparationBlocked(threadId, 'invalid paginated history source');
+        }
+        candidates = [saved.sourceHome];
+      } else {
+        candidates = discoverExternalCodexHomesSync();
+      }
+      const homes = candidates.filter(home => !samePath(home, targetHome)
+        && files(home).some(file => path.basename(file) === originalCodexRolloutName(rolloutPath)
+          && !!readPrivateNonEmptyRolloutSnapshot(home, file) && readFirstLineSync(file) === rootLine));
+      if (homes.length > 1) throw resumePreparationBlocked(threadId, 'ambiguous paginated history source');
+      sourceHome = homes[0];
+    }
+    return sourceHome;
+  };
+  if (verifyExternalSource) source();
+  const find = (home: string, id: string) => {
+    const matches = files(home).filter(file => nativeRolloutIdentity(file)?.rolloutId === id.toLowerCase())
+      .sort((a, b) => Number(path.basename(a) !== originalCodexRolloutName(a)) - Number(path.basename(b) !== originalCodexRolloutName(b)));
+    if (matches.some(file => !sameRegularFileIdentity(file, matches[0]!))) {
+      throw resumePreparationBlocked(threadId, 'ambiguous paginated history ancestor');
+    }
+    return matches[0];
+  };
+  const seen = new Set([rootIdentity.rolloutId]);
+  const plan: Array<{ sourcePath?: string; localAlias?: string; destination: string; snapshot: NonEmptyRolloutSnapshot }> = [];
+  while (base) {
+    const id = base.thread_id.toLowerCase();
+    if (seen.has(id)) throw resumePreparationBlocked(threadId, 'cyclic paginated history ancestry');
+    seen.add(id);
+    const local = find(targetHome, id);
+    if (!local) source();
+    const external = sourceHome ? find(sourceHome, id) : undefined;
+    const selected = external ?? local;
+    const home = external ? sourceHome! : targetHome;
+    if (!selected) throw resumePreparationBlocked(threadId, 'missing paginated history ancestor');
+    const snapshot = readPrivateNonEmptyRolloutSnapshot(home, selected);
+    if (!snapshot || snapshot.size < base.end_byte_offset) {
+      throw resumePreparationBlocked(threadId, 'paginated history ancestor is unsafe or shorter than its referenced range');
+    }
+    const metaLine = readFirstLineSync(selected);
+    let meta: unknown;
+    try { meta = metaLine ? JSON.parse(metaLine) : undefined; }
+    catch { throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor metadata'); }
+    if (!isRecord(meta) || meta.type !== 'session_meta' || !isRecord(meta.payload)
+      || meta.payload.history_mode !== 'paginated' || typeof meta.payload.id !== 'string'
+      || meta.payload.id.toLowerCase() !== nativeRolloutIdentity(selected)?.threadId) {
+      throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor metadata');
+    }
+    if (local && external) {
+      const localSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, local);
+      if (!localSnapshot || !filesHaveSameContents(local, external, base.end_byte_offset)
+        || !nonEmptyRolloutStillMatches(local, localSnapshot) || !nonEmptyRolloutStillMatches(external, snapshot)) {
+        throw resumePreparationBlocked(threadId, 'paginated history ancestor conflicts with local history');
+      }
+      plan.push({ localAlias: local, destination: path.join(path.dirname(local), originalCodexRolloutName(local)), snapshot: localSnapshot });
+    } else if (local) {
+      plan.push({ localAlias: local, destination: path.join(path.dirname(local), originalCodexRolloutName(local)), snapshot });
+    } else {
+      const relative = path.relative(normalizeCodexWindowsPath(home), normalizeCodexWindowsPath(selected));
+      const destination = path.join(targetHome, relative);
+      if (!isPathInside(targetHome, destination)) throw resumePreparationBlocked(threadId, 'invalid paginated ancestor destination');
+      plan.push({ sourcePath: selected, destination, snapshot });
+    }
+    base = readPaginatedBase(threadId, selected);
+  }
+  // Validate the entire chain before publishing anything. Ancestors are published
+  // oldest-first without replacement; interrupted attempts can reuse exact copies.
+  const publications: PrivateRolloutPublication[] = [];
+  for (const entry of plan.reverse()) {
+    if (!entry.sourcePath) {
+      if (entry.localAlias && !samePath(entry.localAlias, entry.destination)) {
+        // A parent may itself be an old imported task with a live writer/index.
+        // Give that same inode a native name; copying would strand its own resume.
+        const original = { path: entry.localAlias, created: false, snapshot: entry.snapshot };
+        if (!privateRolloutPublicationStillMatches(targetHome, original)
+          || !isPathInside(targetHome, entry.destination)) {
+          throw resumePreparationBlocked(threadId, 'paginated history ancestor changed before publication');
+        }
+        try { await fsp.link(entry.localAlias, entry.destination); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+        if (!privateRolloutPublicationOwnsPath(targetHome, original, entry.destination)) {
+          throw resumePreparationBlocked(threadId, 'paginated history ancestor conflicts with local history');
+        }
+        publications.push(original);
+      }
+      publications.push({ path: entry.destination, created: false, snapshot: entry.snapshot });
+      continue;
+    }
+    if (!nonEmptyRolloutStillMatches(entry.sourcePath, entry.snapshot)) {
+      throw resumePreparationBlocked(threadId, 'paginated history ancestor changed during import');
+    }
+    const publication = await copyExternalRolloutAtomically(entry.sourcePath, entry.destination, threadId,
+      { allowSibling: false, targetHome, sourceSnapshot: entry.snapshot });
+    if (!publication) throw resumePreparationBlocked(threadId, 'paginated history ancestor changed or conflicts during import');
+    publications.push(publication);
+  }
+  if (!privateRolloutPublicationOwnsPath(targetHome, { path: rolloutPath, created: false, snapshot: rootSnapshot })
+    || readFirstLineSync(rolloutPath) !== rootLine
+    || publications.some(publication => !privateRolloutPublicationStillMatches(targetHome, publication))) {
+    throw resumePreparationBlocked(threadId, 'paginated history changed before resume');
+  }
+}
+
+/**
+ * Repair #7436 at the native-resume boundary, using only the selected history.
+ * A hard link keeps both names on the same inode: interrupted index publication
+ * and an already-open writer cannot strand newer bytes on an obsolete copy.
+ * Never overwrite a conflicting canonical file or rediscover an external HOME.
+ */
+export function repairCodexRolloutPath(threadId: string, rolloutPath: string, sqliteHome: string): string {
+  const originalName = path.basename(rolloutPath);
+  if (!originalName.startsWith('rollout-cindy-')) return rolloutPath;
+  const historyHome = historyHomeForRollout(rolloutPath);
+  const snapshot = readPrivateNonEmptyRolloutSnapshot(historyHome, rolloutPath);
+  // Missing/empty paths retain the existing native recovery behavior. Never
+  // read metadata through a final symlink or an escaped sessions ancestor.
+  if (!snapshot) {
+    if (readPrivateRolloutPathState(historyHome, rolloutPath) === 'unsafe') {
+      throw resumePreparationBlocked(threadId, 'the selected rollout is not a private regular file');
+    }
+    return rolloutPath;
+  }
+  const line = readFirstLineSync(rolloutPath);
+  if (!line) return rolloutPath;
+  let meta: unknown;
+  try { meta = JSON.parse(line); } catch { return rolloutPath; }
+  if (!isRecord(meta) || meta.type !== 'session_meta' || !isRecord(meta.payload)
+    || meta.payload.history_mode !== 'paginated') return rolloutPath;
+  if (meta.payload.id !== threadId) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated rollout belongs to another thread');
+  }
+
+  const filename = originalCodexRolloutName(rolloutPath);
+  // Native revert uses <threadId>_<rolloutId>. Preserve both IDs, not a newly
+  // generated UUID or the last UUID extracted by the legacy scanner.
+  const match = filename.match(/^rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?\.jsonl$/i);
+  const timestamp = match?.[1]?.replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+  if (!match || match[2]!.toLowerCase() !== threadId.toLowerCase() || !timestamp
+    || !Number.isFinite(Date.parse(`${timestamp}Z`))
+    || new Date(`${timestamp}Z`).toISOString().slice(0, 19) !== timestamp) {
+    throw resumePreparationBlocked(threadId, 'the original paginated rollout filename cannot be recovered');
+  }
+
+  const canonical = path.join(path.dirname(rolloutPath), filename);
+  if (!isPathInside(historyHome, canonical)) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated rollout is not a private regular file');
+  }
+  const dbPath = findLatestStateDb(sqliteHome);
+  if (!dbPath) throw resumePreparationBlocked(threadId, 'the selected Codex state database is unavailable');
+  const current = readThreadRolloutPath(dbPath, threadId);
+  const normalized = (value: string) => path.resolve(normalizeCodexWindowsPath(value));
+  if (!current || (normalized(current) !== normalized(rolloutPath) && normalized(current) !== normalized(canonical))) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed before filename repair');
+  }
+
+  try { fs.linkSync(rolloutPath, canonical); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw resumePreparationBlocked(threadId, 'the canonical rollout could not be published');
+    }
+  }
+  const publication: PrivateRolloutPublication = { path: canonical, created: false, snapshot };
+  const validateIdentity = () => {
+    if (!privateRolloutPublicationOwnsPath(historyHome, publication)
+      || !privateRolloutPublicationOwnsPath(historyHome, publication, rolloutPath)) {
+      throw resumePreparationBlocked(threadId, 'the canonical rollout conflicts with the selected history');
+    }
+  };
+  validateIdentity();
+  if (!handoffThreadToNativeRollout(dbPath, threadId, historyHome, current, publication, validateIdentity)) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed during filename repair');
+  }
+  validateIdentity();
+  return canonical;
 }
 
 /** Resolve a missing path through its nearest existing ancestor, including symlinks. */
@@ -1476,12 +1773,12 @@ async function copyExternalRolloutAtomically(
   sourcePath: string,
   preferredPath: string,
   threadId: string,
-  opts: { allowSibling: boolean; skipPreferred?: boolean },
+  opts: { allowSibling: boolean; skipPreferred?: boolean; targetHome?: string; sourceSnapshot?: NonEmptyRolloutSnapshot },
 ): Promise<PrivateRolloutPublication | null> {
   if (samePath(sourcePath, preferredPath)) return null;
-  const targetHome = getDesktopCodexHome();
+  const targetHome = opts.targetHome ?? getDesktopCodexHome();
   if (!isPathInside(targetHome, preferredPath)) return null;
-  const sourceSnapshot = readNonEmptyRolloutSnapshot(sourcePath);
+  const sourceSnapshot = opts.sourceSnapshot ?? readNonEmptyRolloutSnapshot(sourcePath);
   if (!sourceSnapshot) return null;
 
   await fsp.mkdir(path.dirname(preferredPath), { recursive: true });
@@ -4028,7 +4325,7 @@ function isCindyRolloutArtifactFileName(name: string): boolean {
     || name.startsWith('.cindy-state-less-recovery');
 }
 
-function collectRolloutFiles(home: string): string[] {
+function collectRolloutFiles(home: string, includeCindyArtifacts = false): string[] {
   const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
   const files: Array<{ file: string; mtime: number }> = [];
   const visit = (dir: string, depth: number) => {
@@ -4047,7 +4344,7 @@ function collectRolloutFiles(home: string): string[] {
         entry.isFile()
         && entry.name.endsWith('.jsonl')
         && entry.name.includes('rollout-')
-        && !isCindyRolloutArtifactFileName(entry.name)
+        && (includeCindyArtifacts || !isCindyRolloutArtifactFileName(entry.name))
       ) {
         try {
           files.push({ file: full, mtime: fs.statSync(full).mtimeMs });

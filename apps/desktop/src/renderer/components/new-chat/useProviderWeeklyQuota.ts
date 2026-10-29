@@ -165,6 +165,7 @@ export function useProviderUsageSnapshots(
   const remoteCodex = useRemoteCodexAccountUsage(
     source === 'codex' ? remoteDeviceId : null,
     provider.id,
+    { live: true, web },
   );
   const remoteClaude = useRemoteClaudeSubscriptionUsage(
     source === 'claude' ? remoteDeviceId : null,

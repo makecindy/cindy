@@ -1,4 +1,5 @@
 import { VideoSitePreview } from './VideoSitePreview';
+import { InlineVideoPlayer } from './InlineVideoPlayer';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
@@ -11,10 +12,12 @@ import { MessageListVisibility, MessageListVisibilityContext, useMessageListItem
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
+import type { ErrorDiagnosisSource } from './errorDiagnosisPrompt';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
@@ -472,7 +475,10 @@ const MOBILE_MESSAGE_DRAW_DISTANCE = 800;
 const FOLDABLE_HEADER_HIT_SLOP = { bottom: 10, left: 4, right: 4, top: 10 };
 
 function mobileMessageListItemType(item: MobileMessageRenderItem): MobileMessageRenderItem['type'] {
-  return item.type;
+  // A confirmed local send keeps the same logical row as its optimistic bubble.
+  // Reusing the message pool preserves the measured height while the item data
+  // changes from pending_send to the persisted message.
+  return item.type === 'pending_send' ? 'message' : item.type;
 }
 
 function resolveMobileMessageHistoryAnchorOffset(
@@ -691,6 +697,7 @@ interface MessageActions {
   /** Insert this message's anchored link as an atom in the active composer. */
   onAddMessageToComposer?: (clientId: string) => void;
   onSideChatMessage?: (text: string) => void;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /**
    * chat-text-quote:选中消息文字 → 系统选择菜单「添加到对话」项的采集回调
    * (会话页写入 chatQuoteStore)。未传时选区采集整体关闭(context 为 null,
@@ -765,6 +772,7 @@ export function MessageRenderer({
   onCopyMessageLink,
   onAddMessageToComposer,
   onSideChatMessage,
+  onDiagnoseError,
   onForkMessage,
   onDeleteMessage,
   onLoadEarlier,
@@ -1831,6 +1839,7 @@ export function MessageRenderer({
     remoteDeviceId,
     onAddMessageToComposer,
     onSideChatMessage,
+    onDiagnoseError,
     onCopyMessageLink,
     onForkMessage,
     onDeleteMessage,
@@ -1883,6 +1892,7 @@ export function MessageRenderer({
     onCopyMessageLink,
     onAddMessageToComposer,
     onSideChatMessage,
+    onDiagnoseError,
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
@@ -3562,7 +3572,7 @@ function MessageBubble({
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
-  // 流式回复不挂操作行或状态占位；任务运行状态由底部状态栏展示。
+  // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
@@ -3684,6 +3694,11 @@ function MessageBubble({
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0 || canShare;
+  const reserveActionSlot = !shareSelectionActive
+    && !actions.companion
+    && isStreamingAssistant
+    && !item.message.systemCardType
+    && !hasActions;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
@@ -3939,6 +3954,7 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
@@ -3954,6 +3970,7 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
+            codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
             allowIosUITextView={!shouldCollapseLongMessage || actions.companion === true}
@@ -4085,7 +4102,10 @@ function MessageBubble({
       ) : null}
       {item.message.role === 'error' ? (
         <ErrorNotice message={displayBubbleBody}>
-          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
+          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError}
+            onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
+              message: displayBubbleBody, details: item.message.rawError!,
+            }) : undefined} /> : null}
         </ErrorNotice>
       ) : bubbleShown ? bubble : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
@@ -4127,15 +4147,16 @@ function MessageBubble({
           else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
-        }} /> : hasActions ? (
+        }} /> : hasActions || reserveActionSlot ? (
         <View
           style={[
             styles.messageActionBar,
+            reserveActionSlot && styles.messageActionSlot,
             actionBar.align === 'right' ? styles.userMessageActionBar : styles.agentMessageActionBar,
           ]}
-          testID="message.actionBar"
+          testID={hasActions ? 'message.actionBar' : 'message.actionSlot'}
         >
-          {actionBar.items.map((id) => {
+          {hasActions ? actionBar.items.map((id) => {
             if (id === 'time') return timeText;
             if (id === 'cost') return costText;
             if (id === 'more') {
@@ -4187,8 +4208,8 @@ function MessageBubble({
               );
             }
             return null;
-          })}
-          {canShare && !actionBar.items.includes('copy') ? (
+          }) : null}
+          {hasActions && canShare && !actionBar.items.includes('copy') ? (
             <MessageShareButton
               buttonSize={actionBar.buttonSize}
               iconSize={actionBar.iconSize}
@@ -5474,10 +5495,10 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
               <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
             </>
           ) : null}
-          {resumed ? (
+          {resumed || data?.nativeHistory === 'fallback' ? (
             <>
               <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t('message.renderer.sessionResumedPill')}</Text>
+              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
             </>
           ) : null}
           {handoff ? (
@@ -5782,6 +5803,7 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
 function MarkdownBodyBase({
   allowIosUITextView = true,
+  codeCopyEnabled = true,
   boundTextRuns = false,
   markdownImageCacheKey,
   layout,
@@ -5810,6 +5832,8 @@ function MarkdownBodyBase({
    * 气泡(长代码围栏横向裁切 + 纵向巨高空白)。
    */
   pinContentWidth?: boolean;
+  /** 分享图片选择态关闭块级操作,避免把按钮带进导出内容。 */
+  codeCopyEnabled?: boolean;
   /** 完成态消息为 true:各块 Text 开原生选中(含内嵌图片 View 的块除外,Android 上有风险)。 */
   selectable?: boolean;
   /** 消息流式中:文件 chip 层跳过远端验证。 */
@@ -6061,14 +6085,17 @@ function MarkdownBodyBase({
     if (block.type === 'code') {
       // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
       // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
+      const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
-                paddingVertical: layout.codePaddingVertical,
+                paddingBottom: layout.codePaddingVertical,
+                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
               },
             ]}
           >
@@ -6207,7 +6234,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}
@@ -6323,6 +6350,7 @@ function LinkPathChipSpan({
   return (
     <ChatPathChipSpan
       candidate={candidate}
+      explicitLink={!bare}
       chipStyle={
         codeStyled
           ? [baseStyle, styles.markdownInlineCode, underlineDecoration(styles, baseStyle, styles.markdownPathChip)]
@@ -6627,6 +6655,8 @@ export function AttachmentStrip({
   layout,
   onOpen,
   onOpenFile,
+  onImageError,
+  imageReloadKeys,
   onResolveRemoteMedia,
   usePreviewState = useRecyclingState,
 }: {
@@ -6639,6 +6669,10 @@ export function AttachmentStrip({
   onOpen?: (payload: MessagePayload) => void;
   /** Index within this strip's file chips, for callers that resolve files by ID on tap. */
   onOpenFile?: (index: number) => void;
+  /** Index within this strip's images, for owners that refresh short-lived authorization. */
+  onImageError?: (index: number) => void;
+  /** Reset only the failed image when authorization returns the same URL. */
+  imageReloadKeys?: readonly number[];
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   usePreviewState?: MediaPreviewStateHook;
 }) {
@@ -6659,13 +6693,14 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}`}
+          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
           media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
+          onImageError={onImageError ? () => onImageError(index) : undefined}
           variant="attachment"
           usePreviewState={usePreviewState}
         />
@@ -6854,6 +6889,7 @@ function MediaPreview({
   label,
   onOpen,
   onResolveRemoteMedia,
+  onImageError,
   variant = 'card',
   presentationOnly = false,
   localPreview,
@@ -6864,6 +6900,7 @@ function MediaPreview({
   label: string;
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  onImageError?: () => void;
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
@@ -6931,6 +6968,7 @@ function MediaPreview({
   const handleImageError = useCallback(() => {
     if (media.previewable) {
       setResolveState({ status: 'error' });
+      onImageError?.();
       return;
     }
     if (imageRetryUsedRef.current) {
@@ -6939,7 +6977,7 @@ function MediaPreview({
     }
     imageRetryUsedRef.current = true;
     resolveThumbnail(true);
-  }, [media.previewable, resolveThumbnail]);
+  }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
   // decode SVG. Reuse the decoded dimensions without a second image request.
@@ -9397,6 +9435,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     marginTop: 0,
   },
+  // Keep the row occupied while a reply streams so completion controls can appear
+  // without changing the message's measured height in the middle of a turn.
+  messageActionSlot: { minHeight: MESSAGE_CONTROL_TOUCH_SIZE },
   userMessageActionBar: { justifyContent: 'flex-end' },
   agentMessageActionBar: { justifyContent: 'flex-start' },
   messageIconAction: {
@@ -9946,13 +9987,15 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
 function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0] }) {
   const origin = useContext(ChatFilePathContext);
   const resolver = useContext(MarkdownRemoteMediaContext);
+  const visible = useContext(MessageHeavyContentVisibilityContext);
   const [width, setWidth] = useState(0);
   const raw = richMediaSource(node);
   if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
   if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
   const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
-  const url = direct ? raw : mobileMarkdownManagedImagePreviewUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
-  // Outside-workdir files retain the existing explicit-open path; never fetch them automatically.
+  const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
+  const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
+  // Images outside workdir retain explicit-open. Video resolves only on explicit play.
   if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
   const label = richString(node, 'alt', node.kind);
   const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
@@ -9971,7 +10014,9 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
     imagePreviewHeight: imageHeight,
     mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
   return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    {width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
+    {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
+      width={width} visible={visible} resolve={resolver} />
+      : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
       onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}
   </View>;

@@ -2195,6 +2195,107 @@
           "modelsUrl": "https://ai-gateway.vercel.sh/v1/models"
         }
       }
+    },
+    {
+      "id": "agnes",
+      "name": "Agnes AI",
+      "docsUrl": "https://wiki.agnes-ai.com/en/docs/overview",
+      "regionHint": "global",
+      "models": [
+        {
+          "id": "agnes-3.0-flash",
+          "name": "Agnes 3.0 Flash",
+          "contextWindow": 512000,
+          "supportsImageInput": true,
+          "maxOutput": 65536,
+          "engineOverrides": {
+            "pi": {
+              "piApi": "anthropic-messages",
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        },
+        {
+          "id": "agnes-2.5-pro",
+          "name": "Agnes 2.5 Pro",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "maxOutput": 65536,
+          "engineOverrides": {
+            "pi": {
+              "piApi": "anthropic-messages",
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        },
+        {
+          "id": "agnes-2.5-pro-beta",
+          "name": "Agnes 2.5 Pro Beta",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "maxOutput": 65536,
+          "engineOverrides": {
+            "pi": {
+              "piApi": "anthropic-messages",
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        },
+        {
+          "id": "agnes-2.5-flash",
+          "name": "Agnes 2.5 Flash",
+          "contextWindow": 512000,
+          "supportsImageInput": true,
+          "maxOutput": 65536,
+          "engineOverrides": {
+            "pi": {
+              "piApi": "anthropic-messages",
+              "reasoning": true,
+              "reasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://apihub.agnes-ai.com",
+          "modelsUrl": "https://apihub.agnes-ai.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://apihub.agnes-ai.com/v1",
+          "modelsUrl": "https://apihub.agnes-ai.com/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://apihub.agnes-ai.com",
+          "modelsUrl": "https://apihub.agnes-ai.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        }
+      }
     }
   ]
 }

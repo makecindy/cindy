@@ -113,6 +113,24 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### Android 组字与发送快照
+
+WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
+DOM，保留输入法组字与光标。点击发送后，在发送防重锁内等待编辑器返回当前完整
+`ComposerDocument`，再做空内容判断、命令解析和入队，不依赖失焦或 `compositionend` 的顺序。
+等待期间账号、设备、任务、编辑器或排队编辑目标变化时取消本次提交；读取失败、超时或
+粘贴尚未替换完成时保留输入并提示重试，不回退到旧草稿发送。语音结果、独立快捷发送和
+显式传入的文档保持各自的快照来源，iOS 原生编辑器保留现有原生路径。
+快照回包在写回编辑器状态或草稿之前核对调用方作用域；不能只在 `await` 返回后检查，
+否则取消排队编辑与下一帧渲染之间到达的旧快照会覆盖已恢复的原草稿。
+取消排队编辑时同步向编辑器应用暂存的个人草稿，立即轮换文档标识；不能只等待下一帧
+传入新 props，否则迟到的普通 `change` 消息也可能写回旧内容。恢复不主动聚焦或弹出键盘。
+
+实现：`ComposerRichInput.tsx`、`composerRichInputHtml.ts` 与 `app/sessions/[sessionId].tsx`；
+回归：`composerRichInputLifecycle.test.tsx`、`composerRichInputHtml.test.ts`。Android 模拟器
+可用 mock 模式配合 CDP `Input.imeSetComposition` 检查点击原生发送按钮后的完整文本；
+它不替代三星真机键盘或真实跨设备送达验收。
+
 ### 相册选图与 iCloud 原图
 
 iOS 的系统选图器在确认后立即把选中项交给现有附件队列。首帧预览只读取本机小缩略图，
@@ -365,8 +383,9 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 - **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
   确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
   Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
-  确认。未确认前不进入自动审查与自动合并路径;判定、hold 与放行走与技术架构变更门同一套
-  机制(讨论 issue + 转 draft + 确认后放行),名单与细则属维护者内部 gate。
+  确认。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论 issue 或转为
+  draft;冷更确认可直接留在 PR 中。未确认前不得合并(包括自动合并),把关人名单与确认
+  判定细则属维护者内部 gate。若同时命中其他独立的讨论或草稿门禁,仍按对应规则处理。
 - 提交前自查:在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。

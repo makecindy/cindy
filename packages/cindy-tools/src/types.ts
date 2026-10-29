@@ -505,6 +505,15 @@ export interface CindyGhostsMcpDeps {
   forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
+  /** Ordinary personal community author capability, separate from organization Forge publishing. */
+  communityContribution?(request:
+    | { action: 'prepare'; ghostId: string; namespace?: string | null }
+    | { action: 'submit' | 'status' | 'cancel'; id: string }
+    | { action: 'list'; query?: string; filter?: 'all' | 'pending' | 'needs_action' | 'published'; cursor?: string }
+    | { action: 'detail'; pluginId: string; cursor?: string }
+    | { action: 'submission'; pluginId: string; submissionId: string }
+    | { action: 'cancel-review'; pluginId: string; release: { releaseId: string; sha256: string; revision: string } }
+  ): Promise<unknown>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

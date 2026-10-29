@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   refreshCodexRateLimits: vi.fn(),
   resetSnapshot: null as MobileCodexRateLimitsResult | null,
   consumeReset: vi.fn(),
+  fetchProviderAccountUsage: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -272,9 +273,10 @@ beforeEach(() => {
   mocks.codexAuthInjection = null;
   mocks.providers = [];
   mocks.accountSnapshots = {};
+  mocks.fetchProviderAccountUsage.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { openExternal: mocks.openExternal, maker: { usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
+    value: { openExternal: mocks.openExternal, maker: { fetchProviderAccountUsage: mocks.fetchProviderAccountUsage, usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
   });
 });
 
@@ -283,6 +285,53 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+// PR #7031: replace the brittle three-route source regex with actual navigation.
+// Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
+it.each<{
+  vendorKey: 'cc' | 'codex' | 'pi';
+  providerId: string;
+  upstream?: string;
+  label: string;
+  url: string | null;
+}>([
+  { vendorKey: 'cc', providerId: 'anthropic', label: '打开 Claude 用量页面', url: 'https://claude.ai/settings/usage' },
+  { vendorKey: 'codex', providerId: 'openai', label: '打开 Codex 用量页面', url: 'https://chatgpt.com/codex/settings/usage' },
+  { vendorKey: 'pi', providerId: 'xai', label: '打开 Grok 用量页面', url: 'https://grok.com' },
+  { vendorKey: 'pi', providerId: 'deepseek', upstream: 'https://api.deepseek.com', label: 'providerAccountUsage.openDashboard', url: 'https://platform.deepseek.com/usage' },
+  { vendorKey: 'pi', providerId: 'glm', upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://www.bigmodel.cn/coding-plan/personal/usage' },
+  { vendorKey: 'pi', providerId: 'zai', upstream: 'https://api.z.ai/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://z.ai/manage-apikey/coding-plan/personal/my-plan' },
+  { vendorKey: 'cc', providerId: 'xd', label: '用量明细', url: null },
+])('opens the selected $providerId account dashboard', async ({ vendorKey, providerId, upstream, label, url }) => {
+  if (upstream) {
+    mocks.providers = [{
+      id: providerId, auth: { method: 'apiKey' },
+      routing: { pi: { upstream, authStrategy: 'api-key-header' } },
+    } as ProviderView];
+    mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error: 'auth', dashboardUrl: url });
+  }
+  render(<TodaySpendChip vendorKey={vendorKey} providerId={providerId} sessionId="session-1" />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  if (url) expect(mocks.openExternal).toHaveBeenCalledExactlyOnceWith(url);
+  else expect(mocks.openExternal).not.toHaveBeenCalled();
+});
+
+// PR #7031: service error mapping alone does not verify the real chip's visible
+// result. Unit/jsdom, no saved snapshot + an auth/network failure must end waiting.
+it.each(['auth', 'network'])('shows API account %s errors instead of waiting forever', async (error) => {
+  mocks.providers = [{
+    id: 'deepseek', auth: { method: 'apiKey' },
+    routing: { pi: { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error });
+  render(<TodaySpendChip vendorKey="pi" providerId="deepseek" sessionId="session-1" />);
+  await act(async () => {});
+  act(() => screen.getByRole('button', { name: 'providerAccountUsage.openDashboard' }).focus());
+  const card = screen.getByTestId('quota-hover-card');
+  expect(within(card).getByText(`providerAccountUsage.error.${error}`)).toBeTruthy();
+  expect(within(card).queryByText('等待额度数据')).toBeNull();
 });
 
 // #4907: QuotaHoverCard tests cover the threshold, but the real chip never supplied

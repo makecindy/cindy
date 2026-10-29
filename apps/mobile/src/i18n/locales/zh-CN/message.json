@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本机应用「{{name}}」发送",
+    "sourceLocalAppId": "应用 ID：{{id}}",
     "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "moreActions": "更多消息操作",
     "reply": "回复",
@@ -69,6 +71,7 @@
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
+    "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -103,6 +106,7 @@
     "subagentSummary": "Subagent 小结",
     "agentSwitchLabel": "已从 {{from}} 切换到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，查看交接内容",
+    "sessionFallbackPill": "已用摘要接续",
     "sessionResumedPill": "已续接原任务",
     "handoffContentDesc": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
     "handoffContentDescEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文（不计入对话记录，仅在此展示）",

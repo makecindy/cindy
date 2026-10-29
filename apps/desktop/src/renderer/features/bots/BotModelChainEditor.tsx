@@ -69,7 +69,6 @@ export function BotModelChainEditor({
 }) {
   const { t } = useBotTranslation();
   const catalog = useDeviceProviders(deviceId);
-  const [expanded, setExpanded] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<BotModelRoute | null>(null);
   const routes = value.slice(0, BOT_MODEL_CHAIN_MAX);
   // Picker content may be portaled outside a form's disabled fieldset.
@@ -124,7 +123,7 @@ export function BotModelChainEditor({
         effort={route.effort}
         currentProviderId={route.providerId}
         agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
-        triggerVariant="toolbar"
+        triggerVariant="settings"
         popoverSide="bottom"
         ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
         excludeSubscriptionDirect={remote && !deviceId}
@@ -149,6 +148,7 @@ export function BotModelChainEditor({
           });
         }}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+        unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
       />
       {deviceId && !route.agentDeviceId && route.providerId
         ? (() => {
@@ -169,8 +169,8 @@ export function BotModelChainEditor({
   const fallbackRows = routes.slice(1).map((route, fallbackIndex) => {
     const index = fallbackIndex + 1;
     return (
-      <div key={index} className="flex min-w-0 items-center gap-2">
-        <span className="w-4 shrink-0 text-11">{index}</span>
+      <div key={index} className="flex min-w-0 items-start gap-2">
+        <span className="w-4 shrink-0 pt-1 text-11 leading-5">{index}</span>
         {picker(route, index)}
         <div className="flex shrink-0 gap-1">
           <button
@@ -208,7 +208,7 @@ export function BotModelChainEditor({
   });
   const pendingRow: ReactNode =
     pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-start gap-2">
         {picker(pendingRoute, routes.length)}
         <Button
           variant="secondary"
@@ -235,14 +235,14 @@ export function BotModelChainEditor({
     const listItems = [...fallbackRows, ...(pendingRow ? [pendingRow] : [])];
     return (
       <div className="min-w-0" data-testid="bot-model-chain-editor">
-        <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row')}>
+        <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row flex-wrap')}>
           <div className="flex min-w-0 flex-col gap-1">
             <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {settingsRows.primaryLabel}
             </p>
             <p className={SETTINGS_ROW_HINT_CLASS}>{settingsRows.primaryHint}</p>
           </div>
-          <div className="flex min-w-0 shrink-0 items-center gap-2">
+          <div className="flex min-w-0 max-w-full items-start gap-2">
             {onRestoreDefault ? (
               <DefaultOverrideControls
                 isCustomized
@@ -293,54 +293,52 @@ export function BotModelChainEditor({
 
   return (
     <div className="min-w-0" data-testid="bot-model-chain-editor">
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-start gap-3">
         {label ? (
-          <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label}</span>
+          <span className="shrink-0 pt-1 text-12 leading-5 text-[var(--text-secondary)]">{label}</span>
         ) : null}
         {picker(primaryRoute, 0)}
       </div>
-      {allowFallbacks && <details
+      {allowFallbacks && <div
         className="mt-1 text-12 text-[var(--text-tertiary)]"
-        onToggle={(event) => setExpanded(event.currentTarget.open)}
+        data-testid="bot-model-fallbacks"
       >
-        <summary className="cursor-pointer py-2">
+        <p className="py-2">
           {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
-        </summary>
-        {expanded ? (
-          <div className="space-y-2 pt-2">
-            {fallbackRows}
-            {pendingRow}
+        </p>
+        <div className="space-y-2 pt-2">
+          {fallbackRows}
+          {pendingRow}
+          <Button
+            variant="secondary"
+            size="md"
+            tone="quiet"
+            compact
+            type="button"
+            disabled={addDisabled}
+            onClick={add}
+          >
+            <Plus size={14} />
+            {t('bots.modelChain.add')}
+          </Button>
+          {onRestoreDefault ? (
             <Button
               variant="secondary"
               size="md"
               tone="quiet"
               compact
               type="button"
-              disabled={addDisabled}
-              onClick={add}
+              disabled={disabled}
+              onClick={() => {
+                if (!disabled) onRestoreDefault();
+              }}
+              className="ml-2"
             >
-              <Plus size={14} />
-              {t('bots.modelChain.add')}
+              {t('bots.model.restoreDefault')}
             </Button>
-            {onRestoreDefault ? (
-              <Button
-                variant="secondary"
-                size="md"
-                tone="quiet"
-                compact
-                type="button"
-                disabled={disabled}
-                onClick={() => {
-                  if (!disabled) onRestoreDefault();
-                }}
-                className="ml-2"
-              >
-                {t('bots.model.restoreDefault')}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-      </details>}
+          ) : null}
+        </div>
+      </div>}
     </div>
   );
 }

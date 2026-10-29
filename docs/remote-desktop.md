@@ -1,5 +1,35 @@
 # Remote desktop
 
+## Idle protection
+
+Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
+Security panel. Each controller remembers its setting per computer: 1, 5 (default),
+10, 15, 30 minutes, or Never. The host must advertise `idleLock`; older hosts and
+platforms without native screen locking show this setting as unsupported.
+This is separate from default-off lock-on-exit and privacy-screen preferences.
+
+The host counts elapsed time since actual remote input or manual clipboard actions.
+Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
+reset it. Viewing a static desktop or video without input still counts as idle.
+When the deadline expires, the host revokes input, requests native locking and
+ends the remote desktop. It rejects automatic recovery until a new explicit start.
+Lock failures are logged; the viewer reports disconnection without claiming that
+an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
+
+Desktop controller lock/suspend retires its viewer immediately and requests a host
+lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests a lock; temporary inactive states (such as biometric prompts)
+do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
+remote desktop when the controller returns. The lock request is retained for any
+in-flight start reply. Background PiP failure or preparation timeout follows the
+same protected exit. Automatic Mobile recovery
+does not use a saved password; deliberate reconnects may still auto-unlock.
+If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
+locks the protected lease. A transient
+media reconnect preserves the live host lease and its idle deadline until resume;
+failed recovery reaches heartbeat expiry instead of renewing the idle budget.
+Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
 ## Desktop viewer
 
 The desktop interaction hierarchy follows a canvas-first approach: device and

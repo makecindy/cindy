@@ -14,6 +14,10 @@ import type {
   TurnPermissionOrigin,
 } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from './sharedPermission';
+import {
+  isUnattendedTurn,
+  noteUnattendedPlanReviewDeclined,
+} from '../mcp-integrations/unattendedTurn.js';
 
 export type TurnOrigin = TurnPermissionOrigin;
 
@@ -198,6 +202,20 @@ class SessionInteractionRouter {
     if (signal?.aborted) return safeDecision(request, 'session_aborted');
     if (this.pending.has(request.requestId)) {
       return safeDecision(request, 'duplicate_request_id');
+    }
+    // Scheduled fires have no one to answer. Resolve as a system dismissal
+    // instead of opening a card nothing can resolve: ask/plan deliberately have
+    // no timeout, so the run would otherwise hang until the 60min stall guard.
+    if (isUnattendedTurn(this.session.id)) {
+      if (request.kind === 'ask_user_question') {
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      }
+      if (request.kind === 'plan_review') {
+        // Deny, not allow: plan mode means "act only after the owner approves".
+        // The runner surfaces this in the run result so the empty run is legible.
+        noteUnattendedPlanReviewDeclined(this.session.id);
+        return { kind: 'plan_review', behavior: 'deny', dismissed: true, reason: 'unattended_scheduled_run' };
+      }
     }
 
     const active = this.activeRoute;

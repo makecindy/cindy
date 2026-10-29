@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import {
   REMOTE_DESKTOP_VIDEO_QUALITIES,
+  REMOTE_DESKTOP_IDLE_MINUTES,
+  REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
   type RemoteDesktopDisplayMode,
   type RemoteDesktopVideoQuality,
 } from '@cindy/device-link';
@@ -732,6 +734,37 @@ export function RemoteDesktopViewerWindow() {
           >
             {preference('privacyScreen')}
             {preference('lockOnExit')}
+            <FormField
+              label={t('remoteDesktop.idleLock')}
+              className="remote-viewer-field"
+              hint={
+                state?.caps && !state.caps.idleLock
+                  ? t('remoteDesktop.settingUnsupported')
+                  : undefined
+              }
+            >
+              {(field) => (
+                <Select
+                  {...field}
+                  label={t('remoteDesktop.idleLock')}
+                  value={String(
+                    state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
+                  )}
+                  disabled={!state?.ready || state.closing || !state.caps?.idleLock}
+                  options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
+                    value: String(minutes),
+                    label:
+                      minutes === 0
+                        ? t('remoteDesktop.idleNever')
+                        : t('remoteDesktop.idleMinutes', { count: minutes }),
+                  }))}
+                  onValueChange={(value) =>
+                    void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
+                  }
+                  onOpenChange={onSelectOpenChange}
+                />
+              )}
+            </FormField>
             <div className="remote-viewer-panel-section">
               {state && (
                 <>

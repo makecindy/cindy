@@ -221,6 +221,26 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Integration: schema parsing used to strip the Agent location. Follow the real
+  // MCP dispatcher through create/update and verify the saved route and null clear.
+  it('persists shared model selections and clears their location through MCP', async () => {
+    try {
+      const route = { modelAgentKind: 'codex', modelAgentDeviceId: 'shared:owner',
+        model: 'shared-model', providerId: 'remote-provider', fastMode: 'ultrafast' };
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, ...route },
+      } });
+      expect(result.isError).not.toBe(true);
+      const [created] = await h.storage.list();
+      expect(created).toMatchObject(route);
+      const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_update', args: { id: created.id, modelAgentDeviceId: null },
+      } });
+      expect(updated.isError).not.toBe(true);
+      expect(await h.storage.get(created.id)).toMatchObject({ ...route, modelAgentDeviceId: undefined });
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools without category returns the scheduler category', async () => {
     const result = await h.client.callTool({ name: 'list_tools', arguments: {} });
     const first = (result.content as Array<{ type: string; text: string }>)[0];
@@ -609,6 +629,18 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     const result = await h.client.callTool({
       name: 'call_tool',
       arguments: { name: 'schedule_run_now', args: { id: 'does-not-exist' } },
+    });
+    const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    if (env.ok) throw new Error('unreachable');
+    expect(env.message).toMatch(/not found/i);
+    await h.cleanup();
+  });
+
+  it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
     expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });

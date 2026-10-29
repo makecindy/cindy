@@ -39,6 +39,8 @@ export interface MobileRemoteMediaPresignResult {
 }
 
 export interface MobileResolvedRemoteMedia {
+  /** Local-only consumer lease; never serialized over device-link. */
+  protectLocalFile?(): () => void;
   url: string;
   /** inline 缩略图 / 本地磁盘缓存命中没有在世 OSS 对象,为空串(退屏清理跳过 DELETE)。 */
   ossKey: string;
@@ -69,6 +71,8 @@ export interface MobileRemoteMediaFetchOptions {
 
 export interface MobileRemoteMediaResolverDeps {
   findLocalImage?(url: string): Promise<{ uri: string; mimeType: string; size: number } | null>;
+  /** Retain completed video bytes before releasing the peer's short-lived staging file. */
+  retainLocalVideo?(media: MobileResolvedRemoteMedia): Promise<MobileResolvedRemoteMedia>;
   fetchRemoteMedia(
     url: string,
     opts?: MobileRemoteMediaFetchOptions,
@@ -192,6 +196,15 @@ export async function resolveMobileRemoteMedia(
   deps: MobileRemoteMediaResolverDeps,
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {
+  const retainVideo = media.kind === 'video' ? deps.retainLocalVideo : undefined;
+  // Complete-file reads can use authenticated peer transport. Playback must own
+  // a durable copy first: peer staging files expire after five minutes.
+  const stream = retainVideo ? false : opts?.stream;
+  const retain = async (resolved: MobileResolvedRemoteMedia) => {
+    if (!retainVideo) return resolved;
+    try { return await retainVideo(resolved); }
+    finally { releasePeerMedia(resolved.url); }
+  };
   if (media.kind === 'image' && !opts?.skipCache) {
     // Shared by task history, group chat and file viewers. Keeping this here
     // avoids fixing thumbnails in one screen while original-image reads still go online.
@@ -208,19 +221,21 @@ export async function resolveMobileRemoteMedia(
     throw new Error(i18n.t("composer.attachments.notFetchableMedia"));
   }
   const fetchOpts = {
-    ...(opts?.revalidate ? { revalidate: true } : {}),
+    // Old peer caches may carry octet-stream for a video. Revalidate metadata,
+    // not bytes: a matching version still reuses the downloaded local file.
+    ...(opts?.revalidate || media.kind === 'video' ? { revalidate: true } : {}),
     ...(opts?.beforeFetch ? { beforeFetch: opts.beforeFetch } : {}),
-    ...(opts?.stream === false ? { retainBackground: async (result: MobileRemoteMediaFetchResult, isCurrent?: () => boolean) => {
+    ...(stream === false ? { retainBackground: async (result: MobileRemoteMediaFetchResult, isCurrent?: () => boolean) => {
       if (!result.ossKey || isCurrent?.() === false) return;
       try {
         const signed = await deps.presignGet(result.ossKey);
         const copy = await result.cacheDownload?.(signed.getUrl);
         const uri = copy && peerMediaUri(copy);
         if (uri) releasePeerMedia(uri);
-      } finally { if (isCurrent?.() !== false) opts.discardBackgroundOssKey?.(result.ossKey); }
+      } finally { if (isCurrent?.() !== false) opts?.discardBackgroundOssKey?.(result.ossKey); }
     } } : {}),
     ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
-    ...(opts?.stream !== undefined ? { stream: opts.stream } : {}),
+    ...(stream !== undefined ? { stream } : {}),
     ...(opts?.onOssKey ? { onDiscardOssKey: opts.onOssKey } : {}),
     ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),
@@ -232,14 +247,14 @@ export async function resolveMobileRemoteMedia(
   );
   const local = peerMediaUri(fetched);
   if (local)
-    return {
+    return retain({
       url: local,
       ossKey: "",
       size: fetched.size,
       mimeType: fetched.mimeType,
       expiresAt: peerMediaExpiry(fetched)!,
       previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
-    };
+    });
   // inline 回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
   // 缩略图给 data:image;小音视频若仍以内联回包到达,也走 data URI,由播放器直接打开。
   // 图片宿主(会话屏)会把字节落盘并换成 file://。
@@ -280,11 +295,11 @@ export async function resolveMobileRemoteMedia(
   }
   const downloaded = await fetched.cacheDownload?.(signed.getUrl);
   const downloadedUri = downloaded && peerMediaUri(downloaded);
-  if (downloadedUri) return {
+  if (downloadedUri) return retain({
     url: downloadedUri, ossKey: fetched.ossKey, mimeType: fetched.mimeType, size: fetched.size,
     expiresAt: peerMediaExpiry(downloaded!)!,
     previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
-  };
+  });
   if (media.kind !== "image")
     mobileDebugLog("debug", "files", "remote media presigned", {
       kind: media.kind,

@@ -1705,10 +1705,11 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
-  it('documents optional Host task card visibility separately from task capabilities', () => {
+  it('documents plugin-level defaults independently of Host authorization', () => {
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": false');
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": true');
-    expect(FORGE_GUIDE).toContain('任务 API、已有配置的读取和执行规则、权限检查均保持原样');
+    expect(FORGE_GUIDE).toContain('且不读取其旧模型、目录、权限配置；其它插件不受影响');
+    expect(FORGE_GUIDE).toContain('Host 仍独立检查能力批准、任务归属、目录和任务当前权限');
   });
 
   it('账号业务元数据使用插件 KV，不声明 Host 昵称接口', () => {

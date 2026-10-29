@@ -292,7 +292,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('cancelled-before-dispatch');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).toHaveBeenCalledWith('fake-session-1');
     expect(h.session.sent).toHaveLength(1);
     expect(order).toEqual(['persist', 'baseline', 'abort']);
@@ -312,7 +312,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('model failed');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).not.toHaveBeenCalled();
   });
 

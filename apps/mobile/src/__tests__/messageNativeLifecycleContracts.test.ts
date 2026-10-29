@@ -64,6 +64,10 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     expect(perfHarness).toContain("const recycle = params.recycle === '1';");
     expect(listSource).toContain('recycleItems={recycleItems}');
     expect(listSource).toContain('getItemType={mobileMessageListItemType}');
+    // Confirmation must stay in the same LegendList pool as the optimistic row;
+    // changing its type would discard the measured cell just as the persisted
+    // message replaces the pending bubble.
+    expect(source).toContain("return item.type === 'pending_send' ? 'message' : item.type;");
     expect(source).toContain('useRecyclingState');
     // 可见性必须由 cell 自己订阅。把可见 key 集合放进 React Context 会在每个
     // onViewableItemsChanged 回调里广播给所有已挂载长消息，快滑时造成整窗重渲染、GC 和白屏。
@@ -371,9 +375,11 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(source).not.toContain('scrollEnabled={!textSelectionActive}');
 
     // e2e 流程与新交互对齐:长按正文文字 → 系统选择菜单 → Copy。
+    // 精确匹配系统菜单项,避免代码块新增的 Copy Code 按钮抢先命中,让这条
+    // 原生选择回归重新退化成验证整块复制。
     expect(flowSource).toContain('id: "message.markdownBody"');
-    expect(flowSource).toContain('visible: "Copy"');
-    expect(flowSource).toContain('- tapOn: "Copy"');
+    expect(flowSource).toContain('text: "^Copy$"');
+    expect(flowSource).toContain('- tapOn:\n    text: "^Copy$"');
     expect(flowSource).not.toContain('message.textSelectionModal');
     expect(flowSource).not.toContain('message.selectableMarkdownBody');
   });

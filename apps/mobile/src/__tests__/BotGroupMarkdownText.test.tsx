@@ -107,6 +107,19 @@ it('keeps component literal punctuation and Markdown formatting distinct', async
   expect(node.textContent).not.toContain('"op":"create"');
 });
 
+// #7492: media src filtering removed the only visible access path for public URLs.
+it('keeps public component media URLs readable without exposing internal sources', async () => {
+  const sources = ['https://example.test/image.png', 'https://example.test/video.mp4', 'https://example.test/audio.mp3'];
+  const content = '```cindy-ui\n' + [
+    ...sources.map((src, i) => ({ seq: i + 1, version: 1, op: 'create', id: `public${i}`, kind: ['image', 'video', 'audio'][i], props: { src } })),
+    { seq: 4, op: 'create', id: 'local', kind: 'image', props: { src: 'cindy-media://blobs/private.png', alt: 'Local description' } },
+  ].map(item => JSON.stringify(item)).join('\n') + '\n```';
+  await act(async () => root.render(createElement(BotGroupMarkdownText, { content, authorKind: 'bot' })));
+  for (const src of sources) expect(node.textContent).toContain(src);
+  expect(node.textContent).toContain('Local description');
+  expect(node.textContent).not.toContain('cindy-media://');
+});
+
 // #6716 review: group images render as alt text, not 150px native previews.
 it.each([['x', ''], ['a long image description that wraps inside its column', 'y']])(
   'measures image cells like their visible fallback text (%s / %s)', async (alt, otherAlt) => {

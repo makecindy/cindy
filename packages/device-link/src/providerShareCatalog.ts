@@ -86,7 +86,7 @@ const MAX_SHARES = 64;
 const EMAIL_LIKE = /[^\s@＠<>()[\]{},;:"'`·]+[@＠][^\s@＠<>()[\]{},;:"'`·]+/g;
 const EDGE_SEPARATORS = /^[\s·•|:：\-–—/]+|[\s·•|:：\-–—/]+$/g;
 // 登录后自动生成的名称「<供应商> · <登录名>」，截到 50 字符后可能只剩半个登录名(也可能不是邮箱)。
-const GENERATED_ACCOUNT_NAME = /^(?:OpenAI|Anthropic|Claude|xAI|Grok)\s*·/;
+const GENERATED_ACCOUNT_NAME = /^(?:OpenAI|Anthropic|Claude|xAI|Grok|Cindy AI)\s*·/;
 // 同名时自动追加的序号「 (2)」：保留，同一台电脑分享的两个同类账号才分得清。
 const COPY_SUFFIX = /\s\((?:[2-9]|[1-9]\d+)\)$/;
 // 登录名去掉后留下的空括号。
@@ -133,7 +133,7 @@ function stripNestedUrlSecrets(value: unknown, depth: number): unknown {
 }
 
 /**
- * 分享给他人的供应商名称：去掉分享者的账号身份(订阅或 ChatGPT 登录名、任何邮箱)。
+ * 分享给他人的供应商名称：去掉分享者的账号身份(订阅或 ChatGPT 登录名、任何邮箱、Cindy AI 个人/企业后缀)。
  * 例如自动命名的「OpenAI · alice@example.com」→「OpenAI」。带账号身份的供应商、或名称是
  * 自动生成的形状时，第一个「·」之后的部分整段去掉(登录名可能被截断，按原文匹配不到)。
  * 去空后用 fallback。

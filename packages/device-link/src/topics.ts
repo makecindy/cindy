@@ -54,6 +54,8 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Optional display-text marker; absent/unknown uses legacy Markdown recovery. */
+  summaryFormat?: 'plain-text';
   /** Optional owner-issued completion identity. Old hosts omit it; never infer one. */
   completionToken?: string;
   /** Completion notification policy only; activity/attention remains unchanged.

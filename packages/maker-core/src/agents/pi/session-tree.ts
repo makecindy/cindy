@@ -140,7 +140,7 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   return { roots, leafId, activePathIds: reversed.reverse() };
 }
 
-/** Retry empty failures, allowing native model/effort changes that do not produce output. */
+/** Retry empty failures, allowing model/effort changes and omission-only context edits that do not produce output. */
 export function piRetryBranch(data: unknown, entryId: string): {
   parentId: string | null; requestTooLarge: boolean;
 } | null {
@@ -159,6 +159,11 @@ export function piRetryBranch(data: unknown, entryId: string): {
     // Native navigateTree replaces messages only; it keeps the currently selected
     // model and thinking level. Their history entries are not generated output.
     if (item?.type === 'model_change' || item?.type === 'thinking_level_change') continue;
+    // Pi appends context_edit(replacement=null) after an empty failed reply so the
+    // next automatic attempt omits it. That edit is not output: raw history stays,
+    // and navigating before it restores the original target. A content replacement
+    // is session state and must still block retry.
+    if (item?.type === 'context_edit' && item.replacement === null) continue;
     const message = recordOf(item?.message);
     if (item?.type !== 'message' || message?.role !== 'assistant' ||
         message.stopReason !== 'error' || !Array.isArray(message.content) || message.content.length !== 0) {

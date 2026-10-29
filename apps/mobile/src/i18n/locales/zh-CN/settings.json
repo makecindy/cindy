@@ -96,9 +96,7 @@
   "betaChannel": {
     "title": "Beta 测试渠道",
     "badge": "Beta",
-    "description": "提前接收即将发布的客户端更新。",
-    "restartHint": "Beta 测试渠道需要重启客户端后才能生效，请重启应用。",
-    "ok": "我知道了",
+    "description": "提前接收即将发布的客户端更新。内容更新在下次检查时获取，下载后重启应用生效。",
     "saveFailed": "保存 Beta 测试渠道设置失败",
     "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。"
   },

@@ -770,3 +770,13 @@ describe('merging copies of Cindy', () => {
     expect(await t.runtime.flushHere('cindy-default')).toEqual({ ok: true });
   });
 });
+
+// Filtering still needs Cindy's identity after all cloud copies have already been merged.
+it('lists a single remaining Cindy by profile identity, without running a merge', async () => {
+  const t = setup({ home: 'laptop', handler: (route, method) => {
+    if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }];
+    throw new Error(`unexpected ${method} ${route}`);
+  } });
+  expect(await t.runtime.cindyCopies()).toEqual([{ botId: 'bot_mia', name: 'Mia', homeDeviceId: 'laptop' }]);
+  expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+});

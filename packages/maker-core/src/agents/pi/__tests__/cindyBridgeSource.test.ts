@@ -1624,6 +1624,13 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
+    // Post-compaction amnesia drives voluntary re-inspection: the persisted
+    // disclosure set is re-surfaced as a one-shot custom message on the first run
+    // after each successful compaction, never as a per-run system-prompt edit.
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on?.('session_compact'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on?.('before_agent_start'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("customType: 'cindy-mcp-disclosure-state'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('disclosedKeysForPrompt');
     // 披露按 schema 指纹持有 + 自愈放行（2026-10-13 pi 升级后整片失效、模型反复
     // 撞墙后放弃的真机事故）；权限/采集分类只认“解析成功”，不再按披露状态。
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private schemaFingerprint(');
@@ -2314,6 +2321,68 @@ describe('cindy-bridge extension source', () => {
   );
 });
 
+it('re-surfaces the disclosure set once after compaction instead of editing every run prompt', () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+    createHash,
+  };
+  runInNewContext(compiled, context);
+  const handlers = new Map<string, (event: any) => any>();
+  const gateway = new context.Gateway();
+  gateway.register({ registerTool: () => {}, on: (event: string, cb: (event: any) => any) => handlers.set(event, cb) });
+  expect(handlers.has('session_compact')).toBe(true);
+  expect(handlers.has('before_agent_start')).toBe(true);
+
+  // No compaction yet: the run prompt stays untouched (zero per-run token cost).
+  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+
+  // A successful compaction arms exactly one reminder with the current keys.
+  const client = { request: async () => ({ content: [] }) };
+  const callTool = { name: 'call_tool', description: 'd', inputSchema: { type: 'object' } };
+  const sendWorker = { name: 'send_to_worker', description: 'd', inputSchema: { type: 'object' } };
+  gateway.add('cindy_memory', client, [callTool]);
+  gateway.add('cindy_orca', client, [sendWorker]);
+  gateway.disclosedSchemas.set('cindy_memory\u0000call_tool', gateway.schemaFingerprint(callTool));
+  gateway.disclosedSchemas.set('cindy_orca\u0000send_to_worker', gateway.schemaFingerprint(sendWorker));
+  handlers.get('session_compact')!({ reason: 'threshold' });
+  const note = handlers.get('before_agent_start')!({ systemPrompt: 'base' });
+  expect(note?.message?.customType).toBe('cindy-mcp-disclosure-state');
+  expect(note?.message?.display).toBe(false);
+  const text = note?.message?.content?.[0]?.text ?? '';
+  expect(text).toContain('cindy_memory/call_tool');
+  expect(text).toContain('cindy_orca/send_to_worker');
+  // 压缩可能模糊参数细节：提醒软化为「参数记得就直接调，模糊了按需重查」，
+  // 不再绝对化禁止重查（Greptile P2：否则模型只能猜参数或违背提醒）。
+  expect(text).toContain('Call them directly while you still remember their parameter shapes');
+  expect(text).toContain('re-inspect just the tools you need via cindy_mcp_list_tools instead of guessing');
+  // One-shot: the second run after the same compaction stays clean.
+  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+
+  // A removed tool or a drifted schema must not be advertised as safe to call:
+  // only keys whose tool still exists with a matching fingerprint are listed.
+  gateway.disclosedSchemas.set('cindy_ghosts\u0000gone_tool', gateway.schemaFingerprint(callTool));
+  gateway.disclosedSchemas.set('cindy_memory\u0000call_tool', 'stale-fingerprint');
+  handlers.get('session_compact')!({ reason: 'manual' });
+  const filtered = handlers.get('before_agent_start')!({ systemPrompt: 'base' });
+  const filteredText = filtered?.message?.content?.[0]?.text ?? '';
+  expect(filteredText).toContain('cindy_orca/send_to_worker');
+  expect(filteredText).not.toContain('gone_tool');
+  expect(filteredText).not.toContain('cindy_memory/call_tool');
+
+  // An empty disclosure set consumes the flag without emitting an empty note.
+  gateway.disclosedSchemas.clear();
+  handlers.get('session_compact')!({ reason: 'manual' });
+  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+});
+
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
@@ -2428,7 +2497,7 @@ describe('Pi same-turn library native mapping', () => {
 });
 
 
-it('applies native Fast only to the exact declared connection and fails closed on invalid host replies', async () => {
+it.each(['openai-responses', 'openai-codex-responses'])('applies native Fast only to the exact declared %s connection and fails closed on invalid host replies', async api => {
   const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(');
   const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
   const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
@@ -2440,7 +2509,7 @@ it('applies native Fast only to the exact declared connection and fails closed o
   } });
   const ctx = { ui: { input: async () => { if (reply instanceof Error) throw reply; return reply; } } };
   const original = { model: 'gpt-6-sol', reasoning: { effort: 'high' }, input: 'hello' };
-  const model = { provider: 'relay-a', id: 'gpt-6-sol', api: 'openai-responses' };
+  const model = { provider: 'relay-a', id: 'gpt-6-sol', api };
   expect(await adapt(original, model, ctx)).toEqual({ ...original, service_tier: 'priority' });
   expect(await adapt(original, { ...model, provider: 'relay-b' }, ctx)).toBeUndefined();
   expect(await adapt(original, { ...model, id: 'other-model' }, ctx)).toBeUndefined();

@@ -50,6 +50,18 @@ const TARGETS = [
     destFile: 'file-service.mjs',
   },
   {
+    // 自建中转:部署到用户服务器的同一个中转内核(docs/self-hosted-relay-plan.md)。
+    pkgName: '@cindy/device-link-relay',
+    dependencyDirs: [
+      resolve(MONOREPO_ROOT, 'packages', 'device-link'),
+      resolve(MONOREPO_ROOT, 'packages', 'device-link-protocol'),
+    ],
+    pkgDir: resolve(MONOREPO_ROOT, 'packages', 'device-link-relay'),
+    bundleFile: 'dist/relay.mjs',
+    destDir: resolve(DESKTOP_ROOT, 'resources', 'device-link-relay'),
+    destFile: 'relay.mjs',
+  },
+  {
     pkgName: '@cindy/maker-pi-manager',
     pkgDir: resolve(MONOREPO_ROOT, 'packages', 'maker-pi-manager'),
     bundleFile: 'dist/pi-manager.mjs',
