@@ -176,14 +176,20 @@ describe('model advanced editor', () => {
       view.rerender(drawer());
       expect(ratio().value).toBe('70');
 
-      // A release writes once; a burst collapses into the last value.
+      // A release writes right away (drag latency); a burst inside the window
+      // collapses into one trailing write of the last value.
       fireEvent.change(ratio(), { target: { value: '80' } });
       fireEvent.blur(ratio());
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(80);
+
       fireEvent.change(ratio(), { target: { value: '81' } });
       fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '82' } });
+      fireEvent.blur(ratio());
       await act(async () => { await vi.advanceTimersByTimeAsync(350); });
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
-      expect(mocks.setCompaction).toHaveBeenCalledWith(81);
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(82);
 
       fireEvent.click(screen.getByRole('button', {
         name: 'settings.providers.models.advanced.compaction.restoreAria',

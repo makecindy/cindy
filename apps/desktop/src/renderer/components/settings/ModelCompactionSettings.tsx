@@ -9,7 +9,7 @@ import {
 } from '../../../shared/modelContextLimit';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
-/** 键盘连按会连续触发提交；沿用旧全局压缩设置的写盘去抖窗口。 */
+/** 连续提交（键盘连按）的合并窗口：一次按键风暴最多落一次盘。 */
 const COMMIT_DEBOUNCE_MS = 300;
 
 /** One supplier/model preference shared by every harness. */
@@ -27,6 +27,7 @@ export function ModelCompactionSettings({
   // Drag preview stays local; only the released value is persisted.
   const [draft, setDraft] = useState<number | null>(null);
   const pending = useRef<{ pct: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const lastWriteAt = useRef(0);
   const value = draft ?? policy.pct;
 
   // 策略一变（保存落地、还原默认、换模型、外部改写）就丢弃本地预览：
@@ -37,16 +38,28 @@ export function ModelCompactionSettings({
     setDraft(null);
   }, [policy.pct, policy.isCustomized]);
 
+  const write = async (pct: number) => {
+    lastWriteAt.current = Date.now();
+    await onChange(pct);
+    // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
+    setDraft((current) => (current === pct ? null : current));
+  };
   const commit = (pct: number) => {
+    const since = Date.now() - lastWriteAt.current;
     if (pending.current) clearTimeout(pending.current.timer);
+    if (since >= COMMIT_DEBOUNCE_MS) {
+      // 距上次写入够久：立刻落盘（拖拽只有一次提交，不该让人等窗口）。
+      pending.current = null;
+      void write(pct);
+      return;
+    }
+    // 窗口内的连续提交（键盘连按）：合并成窗口末尾的一次写入。
     pending.current = {
       pct,
-      timer: setTimeout(async () => {
+      timer: setTimeout(() => {
         pending.current = null;
-        await onChange(pct);
-        // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
-        setDraft((current) => (current === pct ? null : current));
-      }, COMMIT_DEBOUNCE_MS),
+        void write(pct);
+      }, COMMIT_DEBOUNCE_MS - since),
     };
   };
   const restoreDefault = () => {
