@@ -11,6 +11,10 @@
  *  - 应用重启丢回注:注册表只在内存。进程本身不杀(POSIX detached / Windows
  *    无父子连带),日志保留在磁盘,重启后模型可凭 log_path 自行读取。
  *  - 不跨电脑:命令在会话所属的本机运行;远程会话由工具层直接拒绝。
+ *  - 命令自行脱离的后代(`&`/`start /b`)只占名额,不保证被清理:POSIX 上
+ *    detached 进程组在硬顶到点时随组被杀;Windows 上 shell 退出后宿主不再按
+ *    PID 查杀(仓库既有约定,防 PID 复用误杀),这类后代不受硬顶治理。工具描述
+ *    已把「不要自行后台化」写成使用约束。
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -347,10 +351,17 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       let timedOut = false;
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
+        // child 已退出时 killProcessTree 不再按 PID 查杀后代(仓库既有约定,防
+        // PID 复用误杀):Windows 上自行脱离的后代因此不受硬顶治理,记日志留痕。
+        const childAlive =
+          typeof child.exitCode !== 'number' && typeof child.signalCode !== 'string';
         killProcessTree(child.pid, child, () => {});
-        deps.logger.warn?.('[background-command] killed after hard cap (descendants included)', {
-          runId,
-        });
+        deps.logger.warn?.(
+          childAlive
+            ? '[background-command] killed after hard cap (process tree included)'
+            : '[background-command] hard cap reached after command exit; detached descendants are not tracked',
+          { runId, platform: process.platform },
+        );
         releaseSlot();
       }, timeoutMs);
       timeoutTimer.unref?.();
