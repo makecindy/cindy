@@ -30,6 +30,7 @@ const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
 const startupReadyTimeoutMs = 120_000;
+const startupBuildTimeoutMs = 180_000;
 export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
 const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
@@ -1183,11 +1184,42 @@ function attachStartupFailure(error, status) {
   return error;
 }
 
-export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+export async function waitForDesktopStartup(statusPath, {
+  startedAtMs = Date.now(),
+  buildTimeoutMs = startupBuildTimeoutMs,
+  readyTimeoutMs = startupReadyTimeoutMs,
+  expectedRootDir = rootDir,
+} = {}) {
+  const buildDeadline = startedAtMs + buildTimeoutMs;
+  let readyDeadline = null;
+  while (true) {
     const status = readDesktopStartupStatus(statusPath);
-    if (status?.state === 'ready') {
+    const now = Date.now();
+    const instance = status?.instance;
+    // The private per-launch status file is the generation boundary. Only a
+    // matching, newly registered main process may start the second budget.
+    const validInstance = instance && Number.isSafeInteger(status.pid) && status.pid > 0
+      && instance.pid === status.pid && typeof instance.instanceId === 'string'
+      && instance.instanceId.length > 0 && typeof instance.rootDir === 'string'
+      && path.resolve(instance.rootDir) === path.resolve(expectedRootDir)
+      && Number.isFinite(instance.startedAtMs)
+      && instance.startedAtMs >= startedAtMs && instance.startedAtMs <= now;
+    if (readyDeadline === null && validInstance && instance.startedAtMs <= buildDeadline) {
+      // The ready budget anchors to registration completion, not process start,
+      // so a concurrent migration's lock wait does not consume it. Legacy
+      // records without a finite registeredAtMs fall back to startedAtMs.
+      const registrationAtMs =
+        Number.isFinite(instance.registeredAtMs) && instance.registeredAtMs >= instance.startedAtMs
+          ? instance.registeredAtMs
+          : instance.startedAtMs;
+      readyDeadline = registrationAtMs + readyTimeoutMs;
+      console.log('DESKTOP_DEV_STEP=waiting-ready');
+      console.log(`==> Desktop main registered; waiting up to ${Math.round(readyTimeoutMs / 1000)}s from registration for window + auth/local database.`);
+    }
+    if (now >= (readyDeadline ?? buildDeadline)) break;
+    // Legacy ready-only writers remain usable, but malformed/foreign records
+    // cannot finish this launch. Repeated registration never extends a budget.
+    if (status?.state === 'ready' && (!instance || validInstance)) {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
       return status;
@@ -1205,15 +1237,21 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
   }
   // Keep a tombstone so a late Electron startup signal cannot recreate a stale
   // status file after this waiter has already reported timeout to its caller.
-  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
+  const phase = readyDeadline === null ? 'build' : 'ready';
+  const timeoutMs = phase === 'build' ? buildTimeoutMs : readyTimeoutMs;
+  const message = phase === 'build'
+    ? `Desktop dev did not finish build/main-process bootstrap within ${Math.round(timeoutMs / 1000)}s.`
+    : `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s after main-process registration.`;
+  writeDesktopStartupStatus(statusPath, { state: 'abandoned', phase, at: Date.now() });
   throw attachStartupFailure(
     new Error(
-      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+      `${message} Check the dev terminal and apps/desktop/logs/.`,
     ),
     {
       state: 'failed',
       code: 'STARTUP_TIMEOUT',
-      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
+      message,
+      detail: { phase, buildTimeoutMs, readyTimeoutMs },
     },
   );
 }
@@ -1619,9 +1657,11 @@ async function main() {
   if (!preserveRunning) clearDesktopDevCaches(rootDir);
 
   let startupStatusPath = null;
+  let startupRequestedAt = null;
   if (waitReady) {
     startupStatusPath = createStartupStatusPath();
-    writeDesktopStartupStatus(startupStatusPath, { state: 'pending', at: Date.now() });
+    startupRequestedAt = Date.now();
+    writeDesktopStartupStatus(startupStatusPath, { state: 'pending', at: startupRequestedAt });
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = startupStatusPath;
   }
   if (isolatedAuthAuthorizedByRestart) {
@@ -1643,7 +1683,7 @@ async function main() {
   };
   if (startupStatusPath) {
     try {
-      await waitForDesktopStartup(startupStatusPath);
+      await waitForDesktopStartup(startupStatusPath, { startedAtMs: startupRequestedAt });
       const report = collectDesktopWhoamiReport({
         rootDir,
         userDataDir: process.env.XDT_USER_DATA_DIR,

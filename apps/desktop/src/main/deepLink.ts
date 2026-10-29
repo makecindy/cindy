@@ -42,6 +42,7 @@
  */
 
 import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { isExternalTaskLink, parseExternalTaskLink, type ExternalTaskPayload } from '../shared/externalTask';
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
@@ -69,6 +70,7 @@ export const OPEN_FOLDER_FLAG = '--open-folder';
 export const OPEN_SHARE_FILE_FLAG = '--open-share-file';
 
 export type DeepLinkPayload =
+  | ExternalTaskPayload
   | { type: 'chat-invite'; token: string }
   /** 点开的群邀请链接口令残缺或被改动：不带任何链接内容，只让 Renderer 明确告知。 */
   | { type: 'chat-invite-malformed' }
@@ -119,6 +121,7 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  if (isExternalTaskLink(url)) return parseExternalTaskLink(url);
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
   if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
@@ -316,8 +319,11 @@ let pendingDeepLink: DeepLinkPayload | null = null;
 // Internal notification ownership stays in Main; external URLs keep their
 // existing ability to survive login without binding to the signed-out owner.
 let pendingDeepLinkOwner: DataOwnerBroadcastScope | undefined;
-// Invitation targets must survive unrelated navigation and login focus callbacks.
-const pendingChatInvitations: Array<Extract<DeepLinkPayload, { type: 'chat-invite' | 'chat-invite-malformed' }>> = [];
+// Retained invitations and external drafts survive unrelated navigation and login focus callbacks.
+const pendingRetainedDeepLinks: Array<{
+  payload: Extract<DeepLinkPayload, { type: 'chat-invite' | 'chat-invite-malformed' }> | ExternalTaskPayload;
+  owner?: DataOwnerBroadcastScope;
+}> = [];
 let mainWindowRef: BrowserWindow | null = null;
 
 export function setDeepLinkMainWindow(win: BrowserWindow | null): void {
@@ -485,7 +491,7 @@ export function sendMainWindowMessage(channel: string, payload: unknown): boolea
 
 function safeDeepLinkLog(payload: DeepLinkPayload) {
   // 口令不进日志。
-  return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'local-plugin-share' ? { type: payload.type } : payload;
+  return payload.type === 'external-task' || payload.type === 'external-task-error' || payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'local-plugin-share' ? { type: payload.type } : payload;
 }
 
 function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: DataOwnerBroadcastScope): void {
@@ -496,13 +502,48 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: 
   }
   const win = mainWindowRef;
   const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
-  if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
-    if (!pendingChatInvitations.some(invitation => invitation.type === payload.type
-      && (payload.type === 'chat-invite-malformed' || (invitation.type === 'chat-invite' && invitation.token === payload.token)))) {
-      pendingChatInvitations.push(payload);
+  if (payload.type === 'external-task' || payload.type === 'external-task-error'
+    || payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+    // Reuse the retained navigation queue: login pages and ordinary navigation cannot consume it.
+    // External requests are bounded and never replace another pending request.
+    const scope = payload.type === 'external-task' ? captureDataOwnerBroadcastScope() : undefined;
+    for (let i = pendingRetainedDeepLinks.length - 1; i >= 0; i--) {
+      const entry = pendingRetainedDeepLinks[i];
+      if (entry.payload.type === 'external-task'
+        && (entry.payload.request.expires <= Date.now() || (entry.owner && !isDataOwnerBroadcastScopeCurrent(entry.owner)))) {
+        pendingRetainedDeepLinks.splice(i, 1);
+      }
+    }
+    if (payload.type === 'external-task') {
+      const request = payload.request;
+      const previous = pendingRetainedDeepLinks.find(entry => entry.payload.type === 'external-task'
+        && entry.payload.request.id === request.id)?.payload;
+      if (previous?.type === 'external-task' && (previous.request.question !== request.question
+        || previous.request.context !== request.context || previous.request.source !== request.source)) {
+        payload = { type: 'external-task-error' };
+      }
+    }
+    const retainedPayload = payload;
+    const duplicate = pendingRetainedDeepLinks.some(({ payload: previous }) =>
+      previous.type === retainedPayload.type && (retainedPayload.type === 'chat-invite'
+        ? previous.type === 'chat-invite' && previous.token === retainedPayload.token
+        : retainedPayload.type === 'external-task'
+          ? previous.type === 'external-task' && previous.request.id === retainedPayload.request.id
+          : true));
+    if (!duplicate) {
+      if (retainedPayload.type === 'external-task' && pendingRetainedDeepLinks.filter(e => e.payload.type === 'external-task').length >= 8) {
+        if (!pendingRetainedDeepLinks.some(e => e.payload.type === 'external-task-error')) {
+          pendingRetainedDeepLinks.push({ payload: { type: 'external-task-error' } });
+        }
+      } else {
+        pendingRetainedDeepLinks.push({ payload: retainedPayload,
+          ...(retainedPayload.type === 'external-task' && scope?.ownerStamp?.dataOwnerId ? { owner: scope } : {}) });
+      }
     }
     if (shouldFocus) focusMainWindow();
-    if (windowReady) win!.webContents.send('deep-link:navigate', payload);
+    // The event is a wake-up only; retain sensitive text in Main until the primary frame takes it.
+    if (windowReady) win!.webContents.send('deep-link:navigate',
+      retainedPayload.type === 'external-task' ? { type: 'external-task-error' } : retainedPayload);
     return;
   }
   // A loaded login/LocalDbGate page has no MainLayout listener yet. These intents stay
@@ -558,8 +599,14 @@ export function takePendingDeepLinkFromRenderer(
  * (已删除) consumePendingDeepLink push 路径搞混。
  */
 export function takePendingDeepLink(): DeepLinkPayload | null {
-  const invitation = pendingChatInvitations.shift();
-  if (invitation) return invitation;
+  while (pendingRetainedDeepLinks.length) {
+    const entry = pendingRetainedDeepLinks.shift()!;
+    if (entry.owner && !isDataOwnerBroadcastScopeCurrent(entry.owner)) continue;
+    if (entry.payload.type === 'external-task' && entry.payload.request.expires <= Date.now()) {
+      return { type: 'external-task-error' };
+    }
+    return entry.payload;
+  }
   if (!pendingDeepLink) return null;
   const payload = pendingDeepLink;
   const owner = pendingDeepLinkOwner;
@@ -594,7 +641,7 @@ export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string):
   for (let i = argv.length - 1; i >= 0; i -= 1) {
     const arg = argv[i];
     const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
-    if (arg !== deepLink && !(prefix && /^(chat-invite\/|provider\/|provider-share\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
+    if (arg !== deepLink && !(prefix && /^(new-task(?:[/?#]|$)|chat-invite\/|provider\/|provider-share\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
     argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
   }
 }

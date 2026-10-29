@@ -53,6 +53,13 @@ pnpm restart:desktop:remote -- --shared
 失败时把 `code` / `message` 交给用户。若有 `next=` 且用户没有点名必须共享，
 可以执行那条 next 命令重试。不要给启动命令接会吞退出码的管道。
 
+安全包装从请求启动起，先给构建与 main 进程引导 **180 秒**；同一轮新 main 实例注册后，
+再给窗口与既有认证／本地库就绪 **120 秒**，请求启动后的总上限为 **300 秒**。
+明确失败立即退出，不等满预算；重复注册不续期。超时仍报 `STARTUP_TIMEOUT`，
+`message` 区分 build/main-process bootstrap 与注册后的 window/auth/database 阶段。
+迟到的就绪不改写已经失败的回执。`ready` 沿用宿主就绪合同，不保证完整 React 页面已经
+显示；完整界面、登录及发送仍须按验收范围另行验证。
+
 Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows）窗口里运行。macOS 上
 该窗口的输出同时写入当前 checkout 的 `apps/desktop/logs/dev-terminal.log`（每次启动覆盖，
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。

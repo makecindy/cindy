@@ -18236,5 +18236,17 @@
     "title": "Confirm Attachment Access",
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
+  },
+  "externalTask": {
+    "title": "Question From Another App",
+    "description": "Review the content, then add it to a new task draft. You send it yourself. Paths in reference data are not read automatically.",
+    "source": "App name (self-reported, unverified): {{source}}",
+    "question": "Question",
+    "context": "Reference Data",
+    "occupied": "A new task draft already exists. Cancel this handoff, finish or clear that draft, then open the handoff again from the other app.",
+    "failed": "Could not add the draft. Check the existing draft and the link expiry.",
+    "invalid": "Could not receive this handoff: the link is invalid or expired, or pending handoffs are full. Start again from the original app.",
+    "cancel": "Cancel Handoff",
+    "openDraft": "Add to New Task Draft"
   }
 }

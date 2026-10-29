@@ -82,7 +82,7 @@ describe('PastedTextChipNode', () => {
       }),
     ).toBe(true);
     const attrs = firstInline(editor)?.attrs;
-    expect(attrs).toEqual({ text: edited, display: '粘贴的文本(3 行)' });
+    expect(attrs).toEqual({ text: edited, display: '粘贴的文本(3 行)', externalReference: false });
 
     const restored = makeEditor();
     restored.commands.setContent(editor.getHTML());

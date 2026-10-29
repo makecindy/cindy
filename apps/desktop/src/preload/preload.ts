@@ -1,3 +1,4 @@
+import { isExternalTaskRequest, type ExternalTaskPayload } from '../shared/externalTask';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
@@ -4062,6 +4063,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
+        | ExternalTaskPayload
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'plugin'; pluginId: string }
@@ -4077,6 +4079,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       if (!payload || typeof payload !== 'object') return;
       const p = payload as {
         type?: unknown;
+        request?: unknown;
         id?: unknown;
         workingDir?: unknown;
         filePath?: unknown;
@@ -4096,7 +4099,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         messageId?: unknown;
         threadRootId?: unknown;
       };
-      if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
+      if (p.type === 'external-task-error') {
+        callback({ type: 'external-task-error' });
+      } else if (p.type === 'external-task' && isExternalTaskRequest(p.request)) {
+        callback({ type: 'external-task', request: p.request });
+      } else if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
         callback({
           type: 'session',
           id: p.id,
@@ -4180,6 +4187,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
+        | ExternalTaskPayload
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
     | { type: 'plugin'; pluginId: string }

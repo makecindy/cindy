@@ -63,3 +63,47 @@ describe('resetDraftWorkspaceTargets', () => {
     expect(getDraft()).toEqual(first);
   });
 });
+
+// #7631 unit: external draft admission must actually clear prior directory access.
+// Existing tests call reset directly, so they would miss a handoff that forgot the call.
+// Minimum: empty composer + old project/extra/write dirs + one confirmed external request.
+it('external handoff clears old workspace authority through the production admission path', async () => {
+  const { setDataOwnerGeneration, getDataOwnerGeneration } =
+    await import('@/contexts/dataOwnerGeneration');
+  const { clearDraft, setComposerDraftOwner } = await import('@/lib/composerDraftStore');
+  const { NEW_MAKER_DRAFT_KEY } = await import('@/features/cc-agent/newMakerDraftKeys');
+  const { acceptExternalTaskDraft, clearExternalTasks, getExternalTask, requestExternalTask } =
+    await import('@/features/external-task/externalTaskHandoff');
+  const previousOwner = getDataOwnerGeneration();
+  setDataOwnerGeneration('handoff-workspace-guard', 1);
+  setComposerDraftOwner('handoff-workspace-guard');
+  clearDraft(NEW_MAKER_DRAFT_KEY);
+  patchDraft({
+    workingDir: '/old-project',
+    extraDirs: ['/old-reference'],
+    writableDirs: ['/old-write'],
+  });
+  try {
+    requestExternalTask({
+      type: 'external-task',
+      request: {
+        id: 'workspace-guard',
+        expires: Date.now() + 60_000,
+        question: 'Help with this app',
+      },
+    });
+    expect(acceptExternalTaskDraft(getExternalTask()!, 'Help with this app', 'References')).toBe(
+      true,
+    );
+    expect(getDraft().workingDir).toBeNull();
+    expect(getDraft().extraDirs).toEqual([]);
+    expect(getDraft().writableDirs).toEqual([]);
+    expect(getDraft().remoteHostId).toBeNull();
+    expect(getDraft().deviceLinkDeviceId).toBeNull();
+  } finally {
+    clearDraft(NEW_MAKER_DRAFT_KEY);
+    clearExternalTasks();
+    setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
+    setComposerDraftOwner(previousOwner.dataOwnerId);
+  }
+});

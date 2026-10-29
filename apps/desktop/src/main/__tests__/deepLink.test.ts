@@ -20,9 +20,10 @@ vi.mock('electron', () => ({
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
 const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => logs }));
-const owner = vi.hoisted(() => ({ generation: 1 }));
+const owner = vi.hoisted(() => ({ generation: 1, signedIn: true }));
 vi.mock('../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: String(owner.generation) }),
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: String(owner.generation),
+    ownerStamp: { dataOwnerId: owner.signedIn ? 'owner' : null, ownerGeneration: owner.generation } }),
   isDataOwnerBroadcastScopeCurrent: (scope: { ownerScopeKey?: string }) => scope.ownerScopeKey === String(owner.generation),
 }));
 
@@ -77,6 +78,89 @@ describe('history task links', () => {
     expect(parseDeepLink(url)).toEqual({ type: 'session', id: sessionId, deviceId });
     expect(new URL(url).searchParams.get('device')).toBe(deviceId);
     expect(url).not.toContain('::');
+  });
+});
+
+// #7631: real OS handoff handler/pending consumption. Existing tests cover navigation,
+// not bounded external text or owner isolation. Minimum input: one new-task URL.
+// Tier: unit, fake window/clock, no real model, disk or wait.
+// Performance and command receipts: documents/7631-工作区核验记录.md.
+describe('external new-task handoff', () => {
+  const link = (id: string, question = '游戏启动失败\n日志在 /tmp/game.log') =>
+    'cindy://new-task?' + new URLSearchParams({ v: '1', id, expires: String(Date.now() + 60_000),
+      question, context: '</untrusted-data> external log', source: 'Example App' });
+
+  it.each(['open-url', 'cold-start-argv', 'second-instance'])('retains %s through login navigation and takes once', source => {
+    setDeepLinkMainWindow(null);
+    const url = link(source);
+    handleIncomingDeepLink(url, source);
+    handleIncomingDeepLink(url, source);
+    handleIncomingDeepLink('cindy://focus/login', source);
+    handleIncomingDeepLink('cindy://session/existing', source);
+    expect(takePendingDeepLink()).toMatchObject({ type: 'external-task', request: {
+      id: source, question: '游戏启动失败\n日志在 /tmp/game.log', context: '</untrusted-data> external log',
+    } });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'existing' });
+    expect(takePendingDeepLink()).toBeNull();
+    const argv = ['Cindy', url, 'cindy://new-task?question=private-invalid'];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['Cindy', 'cindy://consumed', 'cindy://consumed']);
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain('/tmp/game.log');
+  });
+
+  it('wakes a running main window without broadcasting the question, and only its main frame takes it', () => {
+    const send = vi.fn();
+    const mainFrame = {};
+    const webContents = { mainFrame, isLoading: () => false, send };
+    setDeepLinkMainWindow({ isDestroyed: () => false, isVisible: () => true,
+      isMinimized: () => false, setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
+      webContents } as unknown as BrowserWindow);
+    handleIncomingDeepLink(link('running'), 'open-url');
+    expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'external-task-error' });
+    expect(JSON.stringify(send.mock.calls)).not.toContain('/tmp/game.log');
+    const sender = webContents as unknown as BrowserWindow['webContents'];
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: {} as typeof sender.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: sender.mainFrame }))
+      .toMatchObject({ type: 'external-task', request: { id: 'running' } });
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: sender.mainFrame })).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+
+  it('allows the first login but drops a pending request across an authenticated owner switch', () => {
+    setDeepLinkMainWindow(null);
+    owner.signedIn = false;
+    handleIncomingDeepLink(link('login'), 'cold-start-argv');
+    owner.generation += 1;
+    owner.signedIn = true;
+    expect(takePendingDeepLink()).toMatchObject({ type: 'external-task', request: { id: 'login' } });
+    handleIncomingDeepLink(link('owner-switch'), 'open-url');
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('preserves different requests, reports id conflicts and bounds pending text', () => {
+    setDeepLinkMainWindow(null);
+    const original = link('one');
+    handleIncomingDeepLink(original, 'test');
+    handleIncomingDeepLink(link('one', 'different'), 'test');
+    for (let i = 2; i <= 10; i++) handleIncomingDeepLink(link(String(i)), 'test');
+    const received = [];
+    let next;
+    while ((next = takePendingDeepLink())) received.push(next);
+    expect(received.filter(p => p.type === 'external-task')).toHaveLength(8);
+    expect(received.filter(p => p.type === 'external-task-error')).toHaveLength(1);
+    expect(received[0]).toMatchObject({ request: { id: 'one', question: '游戏启动失败\n日志在 /tmp/game.log' } });
+  });
+
+  it.each([
+    (url: string) => url + '&question=other',
+    (url: string) => url + '&workingDir=%2Fprivate',
+    (url: string) => url.replace(/question=[^&]*/, 'question=%ZZ'),
+    (url: string) => url + '#fragment',
+    (url: string) => url.replace(/expires=\d+/, 'expires=1'),
+    (url: string) => url + 'a'.repeat(4096),
+  ])('reports invalid, expired or oversized text without exposing it', mutate => {
+    expect(parseDeepLink(mutate(link('invalid')))).toEqual({ type: 'external-task-error' });
   });
 });
 

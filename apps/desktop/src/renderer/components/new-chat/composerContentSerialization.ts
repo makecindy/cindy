@@ -29,6 +29,7 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 
 import type { MentionChipAttrs } from './MentionChipNode';
 import type { PastedTextChipAttrs } from './PastedTextChipNode';
+import { pastedTextForSend } from './pastedTextPayload';
 import { getDecoratedSlashCommandMatches, type SlashCommandMatch } from './SlashCommandDecoration';
 import { serializeSessionChipText } from './sessionLinkPaste';
 import { serializeProjectChipText } from './pastePipeline';
@@ -217,7 +218,7 @@ function serializeComposerDocument(
         const childText = child.isText
           ? (child.text ?? '')
           : child.type.name === 'pastedTextChip'
-            ? String((child.attrs as PastedTextChipAttrs).text ?? '')
+            ? pastedTextForSend(String(child.attrs.text ?? ''), child.attrs.externalReference === true)
             : '';
         const alreadyIndented = child.isText && childText.startsWith(continuationAfterQuote);
         const textAfterIndent = alreadyIndented
@@ -407,10 +408,11 @@ function serializeComposerDocument(
 
       if (child.type.name === 'pastedTextChip') {
         const attrs = child.attrs as PastedTextChipAttrs;
+        const text = pastedTextForSend(attrs.text, attrs.externalReference);
         const start = buffer.length;
         buffer += continuationIndent
-          ? attrs.text.replace(/\n/g, `\n${continuationIndent}`)
-          : attrs.text;
+          ? text.replace(/\n/g, `\n${continuationIndent}`)
+          : text;
         bufferPastedTextRanges.push({ start, end: buffer.length, display: attrs.display });
         return;
       }

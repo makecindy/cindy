@@ -3085,6 +3085,7 @@ interface ElectronAPI {
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
+        | import('../shared/externalTask').ExternalTaskPayload
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
@@ -3108,6 +3109,7 @@ interface ElectronAPI {
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
+        | import('../shared/externalTask').ExternalTaskPayload
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
     | { type: 'shared-task-join'; invitation: string; server: string }

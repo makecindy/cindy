@@ -1,6 +1,6 @@
 /**
- * Atomic long-paste chip for the composer. The full text remains the payload
- * sent to the Agent; the NodeView only collapses its editable presentation.
+ * Atomic long-paste chip for the composer. Ordinary paste text is sent unchanged;
+ * external references retain readable text and are wrapped at the send boundary.
  */
 import { Node, mergeAttributes, type Editor } from '@tiptap/core';
 import { closeHistory } from '@tiptap/pm/history';
@@ -9,12 +9,15 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tip
 import { FileText } from 'lucide-react';
 
 import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
+import { pastedTextForSend } from './pastedTextPayload';
 
 export interface PastedTextChipAttrs {
-  /** Full original text, inlined unchanged when the message is sent. */
+  /** Readable original text; ordinary pastes are inlined unchanged on send. */
   text: string;
   /** Localized compact label, including line count. */
   display: string;
+  /** External handoff data is wrapped at serialization, including after edits/copying. */
+  externalReference?: boolean;
 }
 
 /** Update or delete one captured long-paste atom without touching neighbours. */
@@ -63,10 +66,12 @@ export function replacePastedTextChipWithPlainText(
   const hardBreak = editor.state.schema.nodes.hardBreak;
   if (!hardBreak) return false;
   const nodes: ProseMirrorNode[] = [];
-  nextText.split('\n').forEach((line, index) => {
-    if (index > 0) nodes.push(hardBreak.create());
-    if (line) nodes.push(editor.state.schema.text(line));
-  });
+  pastedTextForSend(nextText, current.attrs.externalReference === true)
+    .split('\n')
+    .forEach((line, index) => {
+      if (index > 0) nodes.push(hardBreak.create());
+      if (line) nodes.push(editor.state.schema.text(line));
+    });
   const tr = editor.state.tr.replaceWith(
     nodePos,
     nodePos + current.nodeSize,
@@ -85,6 +90,7 @@ function PastedTextChipNodeView({ node, selected }: NodeViewProps) {
       data-pasted-text-chip=""
       data-pasted-text={attrs.text}
       data-display={attrs.display}
+      data-external-reference={attrs.externalReference ? 'true' : undefined}
       data-drag-handle=""
       draggable={true}
       contentEditable={false}
@@ -128,6 +134,12 @@ export const PastedTextChipNode = Node.create<Record<string, never>, Record<stri
         default: '',
         parseHTML: (element) => element.getAttribute('data-display') ?? '',
         renderHTML: (attrs) => ({ 'data-display': attrs.display }),
+      },
+      externalReference: {
+        default: false,
+        parseHTML: (element) => element.getAttribute('data-external-reference') === 'true',
+        renderHTML: (attrs) =>
+          attrs.externalReference ? { 'data-external-reference': 'true' } : {},
       },
     };
   },

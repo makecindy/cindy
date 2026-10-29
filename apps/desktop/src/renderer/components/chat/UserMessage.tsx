@@ -8,6 +8,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { hasEmbeddedImPrompt } from './userMessageDisplayText';
+import { pastedTextForDisplay } from '../new-chat/pastedTextPayload';
 /**
  * UserMessage
  * ---------------------------------------------------------------------------
@@ -774,12 +775,13 @@ export function renderContent(
       );
     }
     if (token.kind === 'pasted') {
+      const readableText = pastedTextForDisplay(token.text);
       return (
         <InlineReferenceChip
           key={`pasted-chip-${index}`}
           label={token.display}
           icon={<FileText aria-hidden />}
-          tooltip={token.text}
+          tooltip={readableText}
           tooltipMono
           tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
           ariaLabel={token.display}
@@ -789,7 +791,7 @@ export function renderContent(
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
           {...(interactive && onPastedTextChipClick
             ? {
-                onClick: (event) => onPastedTextChipClick(token.text, event.currentTarget),
+                onClick: (event) => onPastedTextChipClick(readableText, event.currentTarget),
               }
             : {})}
         />

@@ -1,3 +1,6 @@
+import { ExternalTaskHost } from '@/features/external-task/ExternalTaskHost';
+import { requestExternalTask } from '@/features/external-task/externalTaskHandoff';
+import type { ExternalTaskPayload } from '../../../shared/externalTask';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -725,6 +728,7 @@ export function MainLayout() {
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
+        | ExternalTaskPayload
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
@@ -735,6 +739,10 @@ export function MainLayout() {
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
+      if (payload.type === 'external-task' || payload.type === 'external-task-error') {
+        requestExternalTask(payload);
+        return;
+      }
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
         if (payload.threadRootId) search.set('threadRootId', payload.threadRootId);
@@ -816,13 +824,19 @@ export function MainLayout() {
 
   // The invitation host owns its target outside the account-scoped router. A
   // response arriving during login/owner unmount is retained for the next host.
-  const pullChatInvitations = useCallback(() => drainPendingDeepLinks(
-    () => window.electronAPI.takePendingDeepLink(), handleDeepLinkPayload,
-  ), [handleDeepLinkPayload]);
+  const pullChatInvitations = useCallback(() => {
+    const owner = getDataOwnerGeneration();
+    return drainPendingDeepLinks(async () => {
+      const payload = await window.electronAPI.takePendingDeepLink();
+      if ((payload?.type === 'external-task' || payload?.type === 'external-task-error')
+        && !isDataOwnerGenerationCurrent(owner)) return null;
+      return payload;
+    }, handleDeepLinkPayload);
+  }, [handleDeepLinkPayload]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
-      if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+      if (payload.type === 'external-task' || payload.type === 'external-task-error' || payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
         void pullChatInvitations();
         return;
       }
@@ -1995,6 +2009,7 @@ export function MainLayout() {
       {/* 副窗支持管理页手动审批；自动提醒与受邀申请仍只由主窗口处理。 */}
       <ProviderShareGlobalHost manualOnly={isSecondaryWindow()} />
       {!isSecondaryWindow() && <ChatInviteHost />}
+      {!isSecondaryWindow() && <ExternalTaskHost />}
       {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}

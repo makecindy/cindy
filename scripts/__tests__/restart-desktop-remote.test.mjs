@@ -742,6 +742,11 @@ test("desktop restart process-control phase does not initialize startup configur
 test("desktop restart rejects an unmerged migration before the kill step when --shared is explicit", () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
 	const calls = [];
+	// This fixture owns a separate repository. Never stage into the caller's
+	// worktree/index when an embedded session supplies Git context variables.
+	const gitContext = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"];
+	const inheritedGitContext = new Map(gitContext.map((key) => [key, process.env[key]]));
+	for (const key of gitContext) delete process.env[key];
 	try {
 		fs.mkdirSync(path.join(repo, "apps", "desktop", "drizzle"), { recursive: true });
 		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0000_init.sql"), "SELECT 0;\n");
@@ -765,6 +770,10 @@ test("desktop restart rejects an unmerged migration before the kill step when --
 		);
 		assert.deepEqual(calls, []);
 	} finally {
+		for (const [key, value] of inheritedGitContext) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
@@ -844,7 +853,7 @@ test("desktop readiness waiter removes an acknowledged ready status", async () =
 	const statusPath = fileURLToPath(new URL(`./startup-ready-${process.pid}.json`, import.meta.url));
 	try {
 		fs.writeFileSync(statusPath, '{"state":"ready","pid":123}\n');
-		await waitForDesktopStartup(statusPath, 10);
+		await waitForDesktopStartup(statusPath, { buildTimeoutMs: 10 });
 		assert.equal(fs.existsSync(statusPath), false);
 	} finally {
 		fs.rmSync(statusPath, { force: true });
@@ -864,7 +873,7 @@ test("desktop readiness waiter keeps waiting after ready-to-show and surfaces da
 		}, 10);
 
 		await assert.rejects(
-			waitForDesktopStartup(statusPath, 1_000),
+			waitForDesktopStartup(statusPath, { buildTimeoutMs: 1_000 }),
 			/MIGRATE_FAILED.*seq 77.*0077_nebulous_veda\.sql/,
 		);
 		assert.equal(fs.existsSync(statusPath), false);
@@ -877,12 +886,113 @@ test("desktop readiness timeout leaves an abandoned tombstone for late Electron 
 	const statusPath = fileURLToPath(new URL(`./startup-timeout-${process.pid}.json`, import.meta.url));
 	try {
 		fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-		await assert.rejects(waitForDesktopStartup(statusPath, 0), /did not finish window\/auth\/database startup/);
+		await assert.rejects(waitForDesktopStartup(statusPath, { buildTimeoutMs: 0 }), /did not finish build\/main-process bootstrap/);
 		assert.equal(readDesktopStartupStatus(statusPath)?.state, "abandoned");
 	} finally {
 		fs.rmSync(statusPath, { force: true });
 	}
 });
+
+// Unit regression for the observed #7631 dev timeouts: exercise the real waiter
+// with private status files and a fake clock, not minutes of real waiting.
+// Existing coverage had one shared budget and no registration/late-marker boundary.
+function startupBudgetFixture(t) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-startup-budget-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000 });
+	const statusPath = path.join(dir, "status.json");
+	const start = Date.now();
+	const expectedRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+	const instance = { pid: 123, instanceId: "first", rootDir: expectedRootDir, startedAtMs: start };
+	const write = (value) => fs.writeFileSync(statusPath, JSON.stringify(value));
+	const marker = (changes = {}) => ({ state: "pending", phase: "main-started", pid: 123, instance: { ...instance, ...changes } });
+	return { statusPath, start, instance, write, marker, options: { expectedRootDir } };
+}
+
+test("startup split budgets allow 170s bootstrap then 119s host readiness", async (t) => {
+	const f = startupBudgetFixture(t);
+	f.write({ state: "pending" });
+	const pending = waitForDesktopStartup(f.statusPath);
+	const marker = f.marker({ startedAtMs: f.start + 170_000 });
+	f.write(marker);
+	t.mock.timers.tick(170_000);
+	await Promise.resolve();
+	f.write({ ...marker, state: "ready" });
+	t.mock.timers.tick(119_000);
+	assert.equal((await pending).state, "ready");
+	assert.equal(fs.existsSync(f.statusPath), false);
+});
+
+test("startup ready budget anchors to registration, not process start (migration-lock wait)", async (t) => {
+	const f = startupBudgetFixture(t);
+	f.write({ state: "pending" });
+	const pending = waitForDesktopStartup(f.statusPath);
+	// The main process started at +170s but only registered at +195s because a
+	// concurrent migration held the barrier for 25s. The 120s ready budget must
+	// start from registration, so 119s after registration is still within it.
+	const marker = f.marker({ startedAtMs: f.start + 170_000, registeredAtMs: f.start + 195_000 });
+	f.write(marker);
+	t.mock.timers.tick(195_000);
+	await Promise.resolve();
+	f.write({ ...marker, state: "ready" });
+	t.mock.timers.tick(119_000);
+	assert.equal((await pending).state, "ready");
+	assert.equal(fs.existsSync(f.statusPath), false);
+});
+
+for (const invalid of ["missing", "stale", "foreign", "late", "pid-mismatch"]) {
+	test(`startup split budgets reject ${invalid} registration at build deadline`, async (t) => {
+		const f = startupBudgetFixture(t);
+		f.write({ state: "pending" });
+		const rejection = assert.rejects(waitForDesktopStartup(f.statusPath), (error) => {
+			assert.equal(error.startupStatus.code, "STARTUP_TIMEOUT");
+			assert.equal(error.startupStatus.detail.phase, "build");
+			return true;
+		});
+		const changes = invalid === "stale" ? { startedAtMs: f.start - 1 }
+			: invalid === "foreign" ? { rootDir: path.join(f.options.expectedRootDir, "other") }
+			: invalid === "late" ? { startedAtMs: f.start + 180_001 }
+			: { pid: 124 };
+		if (invalid !== "missing") f.write(f.marker(changes));
+		t.mock.timers.tick(180_001);
+		await rejection;
+		assert.equal(readDesktopStartupStatus(f.statusPath)?.state, "abandoned");
+		assert.equal(readDesktopStartupStatus(f.statusPath)?.phase, "build");
+	});
+}
+
+for (const replacement of [false, true]) {
+	test(`startup split budgets do not renew readiness on ${replacement ? "replacement" : "repeated"} registration`, async (t) => {
+		const f = startupBudgetFixture(t);
+		f.write(f.marker());
+		const rejection = assert.rejects(waitForDesktopStartup(f.statusPath), (error) => {
+			assert.equal(error.startupStatus.code, "STARTUP_TIMEOUT");
+			assert.equal(error.startupStatus.detail.phase, "ready");
+			return true;
+		});
+		f.write(f.marker({ instanceId: replacement ? "second" : "first", startedAtMs: f.start + 60_000 }));
+		t.mock.timers.tick(60_000);
+		await Promise.resolve();
+		// A window-only signal must not bypass the fixed host readiness deadline.
+		f.write({ ...f.marker(), state: replacement ? "ready" : "window-ready" });
+		t.mock.timers.tick(60_000);
+		await rejection;
+		assert.equal(readDesktopStartupStatus(f.statusPath)?.phase, "ready");
+	});
+}
+
+
+for (const registered of [false, true]) {
+	test(`startup split budgets preserve immediate failure ${registered ? "after" : "before"} registration`, async (t) => {
+		const f = startupBudgetFixture(t);
+		f.write({ ...(registered ? f.marker() : {}), state: "failed", code: "MIGRATE_FAILED", message: "synthetic migration failure" });
+		await assert.rejects(waitForDesktopStartup(f.statusPath), (error) => {
+			assert.equal(error.startupStatus.code, "MIGRATE_FAILED");
+			return true;
+		});
+		assert.equal(fs.existsSync(f.statusPath), false);
+	});
+}
 
 test("structured startup failures keep their actionable reason", () => {
 	assert.equal(

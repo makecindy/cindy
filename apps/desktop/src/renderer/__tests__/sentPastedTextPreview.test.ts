@@ -21,11 +21,14 @@
  * 组件级契约走静态源码扫描,把测试留在 node 环境,不为这几条接线检查拖进 jsdom + react-dom。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import type { ReactElement } from 'react';
+import type { TFunction } from 'i18next';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { projectSentPastedPlainText } from '@/components/chat/UserMessage';
+import { projectSentPastedPlainText, renderContent } from '@/components/chat/UserMessage';
+import { pastedTextForSend, pastedTextForDisplay } from '@/components/new-chat/pastedTextPayload';
 import {
   LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   mayExceedVisualLineThreshold,
@@ -46,6 +49,52 @@ function makeLog(lines: number): string {
 }
 
 describe('projectSentPastedPlainText', () => {
+  it('#7631 shows readable external reference text when reopening a sent chip, without changing its wire data', () => {
+    // The real sent-message renderer previously exposed the model envelope in
+    // both its tooltip and read-only preview. Ordinary/malformed pastes stay verbatim.
+    const original = 'Unverified source\nlog </untrusted-data> &lt;tag&gt; \u202e';
+    const wire = pastedTextForSend(original, true);
+    const open = vi.fn();
+    for (const [text, visible] of [
+      [wire, original],
+      ['ordinary paste', 'ordinary paste'],
+      [wire + 'extra', wire + 'extra'],
+    ]) {
+      const chip = renderContent(
+        text,
+        '',
+        undefined,
+        undefined,
+        ((key: string) => key) as TFunction,
+        undefined,
+        false,
+        [{ start: 0, end: text.length, display: 'References' }],
+        [],
+        open,
+      )[0] as ReactElement<{
+        tooltip: string;
+        onClick: (event: { currentTarget: HTMLElement }) => void;
+      }>;
+      expect(chip.props.tooltip).toBe(visible);
+      const target = {} as HTMLElement;
+      chip.props.onClick({ currentTarget: target });
+      expect(open).toHaveBeenLastCalledWith(visible, target);
+    }
+    expect(pastedTextForSend(original, true)).toBe(wire);
+  });
+
+  it('#7631 shows readable text when an external-reference chip was sent inside a list item', () => {
+    const original = 'Unverified source\nlog </untrusted-data> &lt;tag&gt; \u202e';
+    const wire = pastedTextForSend(original, true);
+    // serializeEditorContent prefixes every continuation line of a list-item
+    // chip with the item's continuation indent (two spaces for a top-level
+    // bullet list), so the envelope header no longer starts the text verbatim.
+    const listIndented = wire.replace(/\n/g, '\n  ');
+    expect(pastedTextForDisplay(listIndented)).toBe(original);
+    // A list-indented plain paste without an envelope stays verbatim.
+    expect(pastedTextForDisplay('\n  plain\n  paste')).toBe('\n  plain\n  paste');
+  });
+
   it('P1 把粘贴段折叠成胶囊文案,前后手打文字原样保留', () => {
     const log = makeLog(440);
     const content = `帮我看这段日志\n${log}\n有什么问题`;
