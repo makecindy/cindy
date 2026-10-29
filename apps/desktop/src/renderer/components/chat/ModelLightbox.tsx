@@ -40,7 +40,11 @@ import type { ModelViewerInstance } from 'mivo-model-viewer';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { loadModelViewerSdk } from '@/lib/model3d/modelViewerSdk';
-import { Model3DTooLargeError, readModel3DBlob } from '@/lib/model3d/readModel3DBlob';
+import {
+  Model3DTooLargeError,
+  readModel3DBlob,
+  type ModelBlob,
+} from '@/lib/model3d/readModel3DBlob';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -141,6 +145,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     if (!host) return;
     let cancelled = false;
     let viewer: ModelViewerInstance | null = null;
+    let model: ModelBlob | null = null;
     const controller = new AbortController();
     const fail = (error: unknown) => {
       if (cancelled) return;
@@ -153,11 +158,16 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     };
     void (async () => {
       try {
-        const [sdk, model] = await Promise.all([
+        const [sdk, loadedModel] = await Promise.all([
           loadModelViewerSdk(),
           readModel3DBlob(sourceRef.current, { signal: controller.signal }),
         ]);
-        if (cancelled) return;
+        model = loadedModel;
+        if (cancelled) {
+          loadedModel.dispose();
+          model = null;
+          return;
+        }
         viewer = sdk.createModelViewer(host, {
           locale,
           // 颜色全部取 lightbox 工具栏那一族 token(图片预览浮在遮罩上的控件用的同一套,
@@ -188,16 +198,23 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           },
           onLoadError: fail,
         });
-        await viewer.load(model.blob, { fileName: model.fileName });
+        await viewer.load(loadedModel.blob, { fileName: loadedModel.fileName });
+        loadedModel.dispose();
+        model = null;
         if (!cancelled) setLoadState('ready');
       } catch (error) {
         if (controller.signal.aborted) return;
         fail(error);
+      } finally {
+        model?.dispose();
+        model = null;
       }
     })();
     return () => {
       cancelled = true;
       controller.abort();
+      model?.dispose();
+      model = null;
       viewer?.dispose();
       viewer = null;
     };

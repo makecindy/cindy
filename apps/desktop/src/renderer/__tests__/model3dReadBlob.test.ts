@@ -15,6 +15,8 @@ const HASH = 'a'.repeat(64);
 const readModelFileBytes = vi.fn();
 const readModelFileResourceBytes = vi.fn();
 const statPath = vi.fn();
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
 
 beforeEach(() => {
   readModelFileBytes.mockReset();
@@ -23,9 +25,37 @@ beforeEach(() => {
   const api = { readModelFileBytes, readModelFileResourceBytes, fsBrowse: { statPath } };
   vi.stubGlobal('electronAPI', api);
   (window as unknown as { electronAPI: unknown }).electronAPI = api;
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    writable: true,
+    value: vi.fn((blob: Blob) => `blob:model-resource-${blob.size}`),
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
 });
 
 afterEach(() => {
+  if (originalCreateObjectURL) {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: originalCreateObjectURL,
+    });
+  } else {
+    Reflect.deleteProperty(URL, 'createObjectURL');
+  }
+  if (originalRevokeObjectURL) {
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: originalRevokeObjectURL,
+    });
+  } else {
+    Reflect.deleteProperty(URL, 'revokeObjectURL');
+  }
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -112,14 +142,15 @@ describe('readModel3DBlob — local source', () => {
       .mockResolvedValueOnce({ bytes: new Uint8Array([1, 2, 3]), size: 3 })
       .mockResolvedValueOnce({ bytes: new Uint8Array([4, 5]), size: 2 });
 
-    const { blob, fileName } = await readModel3DBlob({ kind: 'local', absPath: '/work/ship.gltf' });
+    const model = await readModel3DBlob({ kind: 'local', absPath: '/work/ship.gltf' });
+    const { blob, fileName } = model;
     const inlined = JSON.parse(await blob.text()) as {
       buffers: Array<{ uri: string }>;
       images: Array<{ uri: string }>;
     };
     expect(fileName).toBe('ship.gltf');
-    expect(inlined.buffers[0].uri).toBe('data:application/octet-stream;base64,AQID');
-    expect(inlined.images[0].uri).toBe('data:image/png;base64,BAU=');
+    expect(inlined.buffers[0].uri).toBe('blob:model-resource-3');
+    expect(inlined.images[0].uri).toBe('blob:model-resource-2');
     expect(readModelFileResourceBytes).toHaveBeenNthCalledWith(1, {
       modelPath: '/work/ship.gltf',
       relativePath: 'meshes/ship.bin',
@@ -128,6 +159,32 @@ describe('readModel3DBlob — local source', () => {
       modelPath: '/work/ship.gltf',
       relativePath: 'textures/albedo.png',
     });
+    model.dispose();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops reading companion resources when the load is aborted', async () => {
+    const gltf = new TextEncoder().encode(
+      JSON.stringify({
+        asset: { version: '2.0' },
+        buffers: [{ uri: 'meshes/ship.bin', byteLength: 3 }],
+        images: [{ uri: 'textures/albedo.png' }],
+      }),
+    );
+    readModelFileBytes.mockResolvedValue({ bytes: gltf, size: gltf.byteLength });
+    let resolveResource!: (result: { bytes: Uint8Array; size: number }) => void;
+    readModelFileResourceBytes.mockReturnValue(
+      new Promise((resolve) => {
+        resolveResource = resolve;
+      }),
+    );
+    const controller = new AbortController();
+    const pending = readModel3DBlob({ kind: 'local', absPath: '/work/ship.gltf' }, { signal: controller.signal });
+    await vi.waitFor(() => expect(readModelFileResourceBytes).toHaveBeenCalledTimes(1));
+    controller.abort();
+    resolveResource({ bytes: new Uint8Array([1, 2, 3]), size: 3 });
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(readModelFileResourceBytes).toHaveBeenCalledTimes(1);
   });
 
   it('rejects results above the requested limit', async () => {

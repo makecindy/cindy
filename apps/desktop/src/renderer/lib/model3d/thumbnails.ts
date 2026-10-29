@@ -88,17 +88,21 @@ async function cacheKeyFor(source: Model3DSource): Promise<string> {
 }
 
 async function generate(source: Model3DSource): Promise<string> {
-  const { blob, fileName } = await readModel3DBlob(source, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES });
-  const renderer = await getRenderer();
-  const image = await renderer.render({
-    model: blob,
-    fileName: fileName || model3DFileName(source),
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
-    padding: THUMBNAIL_PADDING,
-    format: 'png',
-  });
-  return blobToDataUrl(image.blob);
+  const model = await readModel3DBlob(source, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES });
+  try {
+    const renderer = await getRenderer();
+    const image = await renderer.render({
+      model: model.blob,
+      fileName: model.fileName || model3DFileName(source),
+      width: THUMBNAIL_WIDTH,
+      height: THUMBNAIL_HEIGHT,
+      padding: THUMBNAIL_PADDING,
+      format: 'png',
+    });
+    return blobToDataUrl(image.blob);
+  } finally {
+    model.dispose();
+  }
 }
 
 function touch(key: string, entry: CacheEntry): void {

@@ -265,7 +265,11 @@ export async function readModelFileResourceBytes(
     throwIpcError('PERMISSION_DENIED', 'path is not allowed');
   }
 
-  const root = nodePath.dirname(realModelPath);
+  // Normalize the directory before resolving the relative URI. On Windows a
+  // POSIX-looking path from a test or an IPC boundary can otherwise leave the
+  // root with `/` while `path.resolve()` returns `\`, making the containment
+  // check reject a resource that is actually below the model directory.
+  const root = nodePath.resolve(nodePath.dirname(realModelPath));
   const resourcePath = nodePath.resolve(root, relativePath);
   const relativeToRoot = nodePath.relative(root, resourcePath);
   if (

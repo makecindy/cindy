@@ -3,6 +3,8 @@
  *  trustedAppRenderer.test; here we exercise every validation / policy /
  *  symlink / size-cap / sanitized-error path of the injectable core. */
 
+import * as nodePath from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -357,7 +359,7 @@ describe('readModelFileResourceBytes', () => {
       deps({ open }),
     );
     expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4]);
-    expect(open).toHaveBeenCalledWith('/home/user/models/textures/albedo.png');
+    expect(open).toHaveBeenCalledWith(nodePath.resolve('/home/user/models', 'textures/albedo.png'));
   });
 
   it('rejects traversal and absolute or URL-shaped resource paths', async () => {

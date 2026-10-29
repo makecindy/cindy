@@ -52,6 +52,8 @@ export interface ModelBlob {
   blob: Blob;
   /** 带扩展名的文件名：库按它选择加载器，Blob 本身不携带格式。 */
   fileName: string;
+  /** Revoke any temporary object URLs created for local glTF companions. */
+  dispose: () => void;
 }
 
 /** 来源对应的文件名（含扩展名）。 */
@@ -70,14 +72,6 @@ export function model3DFileName(source: Model3DSource): string {
 /** 来源的格式（小写扩展名）；不是 3D 模型返回 null。 */
 export function model3DSourceFormat(source: Model3DSource): string | null {
   return getModel3DFormat(model3DFileName(source));
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
 }
 
 function mimeTypeForResource(uri: string, declared?: unknown): string {
@@ -116,16 +110,24 @@ function localGltfResourceUri(uri: string): string | null {
 
 /**
  * A Blob has no directory for GLTFLoader to resolve external resources from.
- * Inline relative buffers/textures after they have been read through the
- * dedicated, directory-confined main-process IPC.
+ * Materialize relative buffers/textures as CSP-allowed object URLs after they
+ * have been read through the dedicated, directory-confined main-process IPC.
  */
 async function inlineLocalGltfResources(
   source: Extract<Model3DSource, { kind: 'local' }>,
   fileName: string,
   bytes: Uint8Array,
   maxBytes: number,
-): Promise<Uint8Array> {
-  if (getModel3DFormat(fileName) !== 'gltf') return bytes;
+  signal?: AbortSignal,
+): Promise<{ bytes: Uint8Array; dispose: () => void }> {
+  const objectUrls: string[] = [];
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    for (const url of objectUrls) URL.revokeObjectURL(url);
+  };
+  if (getModel3DFormat(fileName) !== 'gltf') return { bytes, dispose };
   let document: {
     buffers?: Array<{ uri?: unknown }>;
     images?: Array<{ uri?: unknown; mimeType?: unknown }>;
@@ -133,7 +135,7 @@ async function inlineLocalGltfResources(
   try {
     document = JSON.parse(new TextDecoder().decode(bytes)) as typeof document;
   } catch {
-    return bytes;
+    return { bytes, dispose };
   }
 
   const references: Array<{ target: { uri?: unknown; mimeType?: unknown }; uri: string }> = [];
@@ -142,28 +144,39 @@ async function inlineLocalGltfResources(
     const uri = localGltfResourceUri(target.uri);
     if (uri) references.push({ target, uri });
   }
-  if (references.length === 0) return bytes;
+  if (references.length === 0) return { bytes, dispose };
 
   const resources = new Map<string, string>();
   let totalBytes = bytes.byteLength;
-  for (const { target, uri } of references) {
-    let dataUri = resources.get(uri);
-    if (!dataUri) {
-      const resource = await window.electronAPI.readModelFileResourceBytes({
-        modelPath: source.absPath,
-        relativePath: uri,
-      });
-      totalBytes += resource.size;
-      if (totalBytes > maxBytes) throw new Model3DTooLargeError(totalBytes, maxBytes);
-      dataUri = `data:${mimeTypeForResource(uri, target.mimeType)};base64,${bytesToBase64(resource.bytes)}`;
-      resources.set(uri, dataUri);
+  try {
+    for (const { target, uri } of references) {
+      signal?.throwIfAborted?.();
+      let objectUrl = resources.get(uri);
+      if (!objectUrl) {
+        const resource = await window.electronAPI.readModelFileResourceBytes({
+          modelPath: source.absPath,
+          relativePath: uri,
+        });
+        signal?.throwIfAborted?.();
+        totalBytes += resource.size;
+        if (totalBytes > maxBytes) throw new Model3DTooLargeError(totalBytes, maxBytes);
+        objectUrl = URL.createObjectURL(
+          new Blob([resource.bytes as BlobPart], { type: mimeTypeForResource(uri, target.mimeType) }),
+        );
+        objectUrls.push(objectUrl);
+        resources.set(uri, objectUrl);
+      }
+      target.uri = objectUrl;
     }
-    target.uri = dataUri;
-  }
 
-  const inlined = new TextEncoder().encode(JSON.stringify(document));
-  if (inlined.byteLength > maxBytes) throw new Model3DTooLargeError(inlined.byteLength, maxBytes);
-  return inlined;
+    signal?.throwIfAborted?.();
+    const inlined = new TextEncoder().encode(JSON.stringify(document));
+    if (inlined.byteLength > maxBytes) throw new Model3DTooLargeError(inlined.byteLength, maxBytes);
+    return { bytes: inlined, dispose };
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 }
 
 export async function readModel3DBlob(
@@ -183,7 +196,7 @@ export async function readModel3DBlob(
     }
     const blob = await res.blob();
     if (blob.size > maxBytes) throw new Model3DTooLargeError(blob.size, maxBytes);
-    return { blob, fileName };
+    return { blob, fileName, dispose: () => undefined };
   }
 
   // 先 stat 再读：主进程对超过 128 MiB 的文件直接拒绝（PRECONDITION_FAILED），不先看大小的话
@@ -207,7 +220,12 @@ export async function readModel3DBlob(
   }
   options.signal?.throwIfAborted?.();
   if (read.size > maxBytes) throw new Model3DTooLargeError(read.size, maxBytes);
-  const bytes = await inlineLocalGltfResources(source, fileName, read.bytes, maxBytes);
-  options.signal?.throwIfAborted?.();
-  return { blob: new Blob([bytes as BlobPart]), fileName };
+  const inlined = await inlineLocalGltfResources(source, fileName, read.bytes, maxBytes, options.signal);
+  try {
+    options.signal?.throwIfAborted?.();
+    return { blob: new Blob([inlined.bytes as BlobPart]), fileName, dispose: inlined.dispose };
+  } catch (error) {
+    inlined.dispose();
+    throw error;
+  }
 }
