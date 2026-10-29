@@ -1217,6 +1217,25 @@ describe('path projection cost with many aliases', () => {
 
   const tick = () => new Promise<void>((resolve) => { setImmediate(resolve); });
 
+  it('resolves existing aliases once while registering a batch of PATH directories', () => {
+    vi.stubEnv('PATH', '');
+    try {
+      const { workspace } = manyAliasWorkspace(40);
+      const aliases = workspace.agentPathPrefixes().length;
+      const dirs = Array.from({ length: 12 }, (_, index) => path.join(root, 'path-' + index));
+      for (const dir of dirs) fs.mkdirSync(dir);
+      const batch = measure(() => workspace.virtualizeDirs(dirs));
+
+      expect(batch.realpaths).toBeLessThanOrEqual((aliases + dirs.length) * 2);
+      for (const [index, virtual] of batch.value.entries()) {
+        expect(workspace.resolve(virtual)).toBe(dirs[index]);
+        expect(workspace.mapTextForAgent(dirs[index])).toBe(virtual);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('sorts aliases and builds prefix patterns once however many short strings are projected', () => {
     const texts = (count: number) => Array.from({ length: count }, (_, index) => '第 ' + index + ' 条输出：ok');
     const single = manyAliasWorkspace().workspace;
@@ -1342,19 +1361,24 @@ describe('path projection cost with many aliases', () => {
     const project = path.join(root, 'work');
     const first = path.join(root, 'first');
     const second = path.join(root, 'second');
+    const registrations = [path.join(root, 'path-first'), path.join(root, 'path-second')];
     const link = path.join(root, 'link');
     const type = process.platform === 'win32' ? 'junction' : 'dir';
-    for (const dir of [project, first, second]) fs.mkdirSync(dir);
+    for (const dir of [project, first, second, ...registrations]) fs.mkdirSync(dir);
     try { fs.symlinkSync(first, link, type); }
     catch { return skip(); }
     const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: VIRTUAL + '/workspace', to: project }, { from: VIRTUAL + '/link', to: link }] });
     workspace.setVirtualRoot(VIRTUAL);
     // 按链接当前指向的真实路径(Windows 上为长文件名)写入，与 native realpath 的结果一致。
     const real = (dir: string) => path.join(fs.realpathSync.native(dir), 'f.txt');
+    workspace.virtualizeDirs([registrations[0]]);
+    expect(workspace.toAgentPath(real(first))).toBe(VIRTUAL + '/link/f.txt');
     expect(workspace.mapTextForAgent(real(first))).toBe(VIRTUAL + '/link/f.txt');
     fs.unlinkSync(link);
     fs.symlinkSync(second, link, type);
     await tick();
+    workspace.virtualizeDirs([registrations[1]]);
+    expect(workspace.toAgentPath(real(second))).toBe(VIRTUAL + '/link/f.txt');
     expect(workspace.mapTextForAgent(real(second))).toBe(VIRTUAL + '/link/f.txt');
   });
 });
